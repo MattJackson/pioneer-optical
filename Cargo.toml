@@ -1,0 +1,20 @@
+# Self-contained manifest (no workspace inheritance) so it packages for crates.io as-is.
+[package]
+name = "pioneer-optical"
+version = "0.5.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+authors = ["Matthew Jackson <1085847+MattJackson@users.noreply.github.com>"]
+description = "Vendor SCSI command catalogue for Pioneer optical (BD/DVD) drives: named, documented CDB constructors for identity, gated memory reads, the read-unlock knock, the OEM update sequence, and the kernel-mode (write-unlock) handshake. Pure, no_std, no deps."
+repository = "https://github.com/MattJackson/pioneer-optical"
+homepage = "https://github.com/MattJackson/pioneer-optical"
+documentation = "https://docs.rs/pioneer-optical"
+readme = "README.md"
+keywords = ["pioneer", "optical", "scsi", "firmware", "bluray"]
+categories = ["hardware-support", "no-std::no-alloc"]
+
+[lib]
+name = "pioneer_optical"
+
+[dependencies]

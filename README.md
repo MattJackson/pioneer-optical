@@ -6,79 +6,71 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 [![MSRV 1.75](https://img.shields.io/badge/MSRV-1.75-blue.svg)](#minimum-supported-rust-version)
 
-The vendor SCSI command catalogue for **Pioneer optical drives** (BD/DVD), as
-named, documented CDB constructors.
-
-This is a **pure data** crate: every function returns the raw 10-byte CDB and
-performs no I/O. Any transport — a flasher, an unlocker, a diagnostic — can
-depend on it and issue the commands itself. It is `#![no_std]`, allocation-free,
-unsafe-free, and has **zero dependencies**. Its only job is to be the *single
-source of truth* for the Pioneer vendor command set, so no project has to carry
-magic CDB byte-arrays scattered through its code.
+The vendor protocol of **Pioneer optical drives** (BD/DVD): command encoding,
+response decoding, command sequences over any SCSI transport, and firmware
+image analysis.
 
 ```toml
 [dependencies]
-pioneer-optical = "0.5"
+pioneer-optical = { version = "0.8", features = ["drive"] }
 ```
 
-```rust
-use pioneer_optical as po;
-
-// Read-unlock, then read protected memory.
-dev.command_out(&po::knock(), &[])?;            // 3B 02 41 A5 AA AA
-let block = dev.command_in(&po::read_memory(0x010000, 0xA4), 0xA4)?; // 3C 02 B0 ...
-
-// Identity (no unlock needed).
-let id = dev.command_in(&po::vendor_identity(), 48)?;               // 3C 02 F1 ...
-```
-
-## The two independent privilege unlocks
-
-A Pioneer drive gates two capabilities behind two **distinct, independent** vendor
-unlocks:
-
-| | Command | Opens | Scope |
-|---|---|---|---|
-| **read unlock** (the "knock") | [`knock`] `3B 02 41 A5 AA AA` | `read_memory` (`3C 02 B0`) of protected memory above `0x8000`, to ceiling `0x880300` | reads only — proven firmware-wide read-only |
-| **write unlock** ("kernel mode") | [`kernel_mode_arm`] → [`kernel_mode_challenge`] → [`kernel_mode_response`] (`F3`/`F2`) | the OEM write-accept path (Kernel `07/FE` and Normal `07/F0`) | writes — challenge/response |
-
-Neither unlock enables the other; they set disjoint drive state. The knock is the
-only setter of the read-enable flag, and the vendor identity read (`3C 02 F1`)
-unlocks nothing.
-
-## Command catalogue
-
-All CDBs are 10 bytes; 24-bit offsets/lengths are big-endian.
-
-| Purpose | Constructor | CDB |
+| Module | Feature | Contents |
 |---|---|---|
-| Vendor identity (48 B) | `vendor_identity()` | `3C 02 F1 00 00 00 00 00 30 00` |
-| Gated memory read | `read_memory(off, len)` | `3C 02 B0 <off3> <len3> 00` |
-| Read-unlock knock | `knock()` | `3B 02 41 A5 AA AA 00 00 00 00` |
-| Enter update mode | `enter_update()` | `3B 04 FF 00 00 00 00 01 00 00` |
-| Transfer Kernel chunk | `transfer_kernel(off, len)` | `3B 07 FE <off3> <len3> 00` |
-| Transfer Normal chunk | `transfer_normal(off, len)` | `3B 07 F0 <off3> <len3> 00` |
-| Finish / commit | `finish()` | `3B 05 FF 00 00 00 00 01 00 00` |
-| Kernel-mode arm | `kernel_mode_arm()` | `3B 01 F3 00 00 00 00 00 00 00` |
-| Kernel-mode challenge | `kernel_mode_challenge()` | `3C 01 F2 00 00 00 00 04 00 00` |
-| Kernel-mode response | `kernel_mode_response()` | `3B 01 F2 00 00 00 00 01 00 00` |
-| INQUIRY / TUR / GES | `inquiry()` / `test_unit_ready()` / `get_event_status()` | — |
+| `cdb` | — | Vendor CDB constructors and field constants |
+| `Identity` | — | Decoded INQUIRY + vendor identity; `class()` |
+| `dvr` | — | DVR update-handshake challenge solver |
+| `sense` | — | `05/24/00` refusal classification |
+| `drive` | `drive` | `Transport` trait; `identify`, `read_memory`, `enter_update` → `Session` |
+| `image` | `image` | `family`, `is_uhd`, `required_abi` / `provided_abi` |
+
+The default build and the `drive` feature are `no_std` and allocation-free.
+`image` uses `alloc` and [`miniz_oxide`](https://crates.io/crates/miniz_oxide).
+
+## Example
+
+```rust,ignore
+use pioneer_optical::{drive, Role};
+
+struct Sg(/* your pass-through */);
+
+impl drive::Transport for Sg {
+    type Error = std::io::Error;
+    fn exec(&mut self, cdb: &[u8], data: drive::Data<'_>) -> Result<usize, Self::Error> {
+        /* issue `cdb`; fill or send `data` */
+    }
+    fn sense(&self) -> Option<(u8, u8, u8)> { /* last sense */ }
+}
+
+let id = drive::identify(&mut t)?;
+let class = id.class().ok_or(drive::Error::UnknownClass)?;
+let mut session = drive::enter_update(&mut t, class, &control)?;
+session.write(Role::Kernel, 0, &kernel)?;
+session.write(Role::Normal, 0, &normal)?;
+session.finish()?;
+```
+
+## Command set
+
+All vendor CDBs are 10 bytes; offsets and lengths are 24-bit big-endian.
+
+| Command | Constructor | CDB |
+|---|---|---|
+| Vendor identity (48 B) | `cdb::vendor_identity()` | `3C 02 F1 00 00 00 00 00 30 00` |
+| Memory read | `cdb::read_memory(off, len)` | `3C 02 B0 <off> <len> 00` |
+| Enable extended read | `cdb::knock()` | `3B 02 41 A5 AA AA 00 00 00 00` |
+| Enter update | `cdb::enter_update()` | `3B 04 FF 00 00 00 00 01 00 00` |
+| Write Kernel / Normal chunk | `cdb::transfer(role, off, len)` | `3B 07 FE\|F0 <off> <len> 00` |
+| Commit update | `cdb::finish()` | `3B 05 FF 00 00 00 00 01 00 00` |
+| DVR arm | `cdb::dvr_arm()` | `3B 01 F3 00 00 00 00 00 00 00` |
+| DVR challenge | `cdb::dvr_challenge()` | `3C 01 F2 00 00 00 00 04 00 00` |
+| DVR response | `cdb::dvr_response()` | `3B 01 F2 00 00 00 00 01 00 00` |
 
 ## Safety
 
-Issuing the OEM update sequence (`enter_update` → `transfer_*` → `finish`) or the
-kernel-mode write unlock **writes to drive firmware and can brick the drive**.
-This crate only produces the command bytes; the caller is responsible for backups,
-gating, and confirming the drive and image are correct. The memory-read and
-identity commands are read-only.
-
-## Scope and provenance
-
-The catalogue is for the Renesas-based "SAT" generation of Pioneer BD writers
-(reference platform BDR-UD04, `SAT 8A10`). Command bytes are recovered by
-reverse engineering and corroborated on real hardware; the read-unlock knock and
-its address ceiling are confirmed on a live BDR-UD04. This crate does not hold or
-ship any OEM key.
+An update session writes drive firmware. A wrong image, or an interrupted
+session, can leave the drive unusable. The memory-read and identity commands
+are read-only.
 
 ## Minimum supported Rust version
 

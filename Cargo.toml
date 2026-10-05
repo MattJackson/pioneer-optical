@@ -1,32 +1,30 @@
 # Self-contained manifest (no workspace inheritance) so it packages for crates.io as-is.
 [package]
 name = "pioneer-optical"
-version = "0.7.2"
+version = "0.8.0"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
 authors = ["Matthew Jackson <1085847+MattJackson@users.noreply.github.com>"]
-description = "Vendor SCSI command catalogue for Pioneer optical (BD/DVD) drives: named, documented CDB constructors for identity, gated memory reads, the read-unlock knock, the OEM update sequence, and the kernel-mode (write-unlock) handshake. Pure, no_std, no deps."
+description = "Pioneer optical drive (BD/DVD) vendor protocol: command encoding, response decoding, update and memory-read sequences over any SCSI transport, and firmware image analysis. no_std."
 repository = "https://github.com/MattJackson/pioneer-optical"
 homepage = "https://github.com/MattJackson/pioneer-optical"
 documentation = "https://docs.rs/pioneer-optical"
 readme = "README.md"
 keywords = ["pioneer", "optical", "scsi", "firmware", "bluray"]
-# The default build is no-std/no-alloc/zero-dep; the optional `fw` feature adds
-# alloc + a zlib inflater for firmware-body analysis (it is not no-alloc).
 categories = ["hardware-support", "no-std::no-alloc"]
 
 [lib]
 name = "pioneer_optical"
 
 [features]
-# Firmware-body analysis (crossflash family ids + UHD test). Pulls in alloc and
-# a zlib inflater; NOT part of the default no-std/no-alloc build.
-fw = ["dep:miniz_oxide"]
-# High-level drive-generic flash API: a `Transport` trait plus `flash::*`
-# helpers that issue every vendor CDB on the caller's behalf. Pulls in `alloc`;
-# NOT part of the default no-std/no-alloc build.
-highlevel = []
+# Command sequences over a caller-supplied transport. no_std, no alloc.
+drive = []
+# Firmware image analysis. Uses alloc and a zlib inflater.
+image = ["dep:miniz_oxide"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 miniz_oxide = { version = "0.8", optional = true, default-features = false, features = ["with-alloc"] }

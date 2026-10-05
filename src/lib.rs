@@ -1,384 +1,223 @@
-//! Vendor SCSI command catalogue for **Pioneer optical drives** (BD/DVD).
+//! Pioneer optical drive (BD/DVD) vendor protocol: command encoding, response
+//! decoding and firmware image analysis.
 //!
-//! This crate is the single source of truth for the Pioneer vendor CDBs: named,
-//! documented constructors plus the field constants behind them. It is pure data
-//! — every function returns the raw CDB bytes and performs no I/O — so any
-//! transport (a flasher, an unlocker, a diagnostic) can depend on it and issue
-//! the commands itself. `no_std`, no allocation, no dependencies.
+//! The crate root is `no_std`, allocation-free and dependency-free:
 //!
-//! ## Read vs. update privilege
-//! - **read unlock** — the zero-length "knock" [`knock`] (`3B 02 41 A5 AA AA`).
-//!   Opens [`read_memory`] (`3C 02 B0`) reads of protected memory above the
-//!   `0x8000` boot window, up to [`READ_CEILING`]. Proven live on a BDR-UD04 and
-//!   confirmed firmware-wide read-only (sets one RAM flag whose only consumers
-//!   are read paths; it cannot enable writes).
-//! - **"kernel mode" = OEM update session** — the state entered by `3B 04 FF`
-//!   ([`enter_update`]) in which the drive accepts Kernel (`07/FE`) and Normal
-//!   (`07/F0`) chunk writes and the `3B 05 FF` commit ([`finish`]). On DVR
-//!   generations entry is gated by an F3/F2/F2 challenge-response whose math
-//!   lives in [`kernel_mode`]; on BD the F3/F2 CDBs are inert (verified by
-//!   disassembly) and `3B 04 FF` enters directly. The drive-generic entry
-//!   point is [`flash::enter_kernel_mode`].
+//! - [`cdb`] — the vendor command descriptor blocks, as byte constructors.
+//! - [`Identity`] — the decoded INQUIRY and vendor identity responses.
+//! - [`dvr`] — the challenge solver for the DVR update handshake.
+//! - [`sense`] — classification of the vendor refusal sense.
 //!
-//! The read knock and the update session are disjoint state cells; neither
-//! enables the other.
+//! Optional features add:
 //!
-//! All vendor CDBs are 10 bytes; 24-bit offsets and lengths are big-endian.
+//! - `drive` — [`drive`]: the command sequences (identify, protected memory
+//!   read, update session) over a caller-supplied [`drive::Transport`].
+//! - `image` — [`image`]: hardware family, UHD capability and Kernel ABI
+//!   analysis of decoded firmware bodies. Uses `alloc` and a zlib inflater.
 //!
-//! ## Optional firmware-body analysis (`fw` feature)
-//! The non-default [`fw`] module adds deterministic crossflash-compatibility
-//! family ids and the UHD capability test over envelope-decoded firmware bodies.
-//! It pulls in `alloc` and a zlib inflater; the default build stays `no_std`,
-//! no-alloc and dependency-free.
+//! ## Drive state
 //!
-//! [`fw`]: crate::fw
+//! Two independent drive states gate the vendor commands:
+//!
+//! - **extended read** — enabled by [`cdb::knock`]. Allows [`cdb::read_memory`]
+//!   above the `0x8000` boot window, up to [`cdb::READ_CEILING`]. Read-only.
+//! - **update session** — entered by [`cdb::enter_update`]. Accepts Kernel and
+//!   Normal chunk writes ([`cdb::transfer`]) and the [`cdb::finish`] commit. DVR
+//!   generations require the [`dvr`] handshake before entry.
+//!
+//! Neither state enables the other.
 #![no_std]
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-#[cfg(any(feature = "fw", feature = "highlevel"))]
+#[cfg(feature = "image")]
 extern crate alloc;
 
-#[cfg(feature = "fw")]
-pub mod fw;
+pub mod cdb;
+#[cfg(feature = "drive")]
+pub mod drive;
+#[cfg(feature = "image")]
+pub mod image;
 
-#[cfg(feature = "highlevel")]
-pub mod transport;
+/// Length of a standard INQUIRY response header, in bytes.
+pub const INQUIRY_LEN: usize = 36;
+/// Length of the vendor identity block, in bytes.
+pub const IDENTITY_LEN: usize = cdb::IDENTITY_LEN as usize;
+/// Minimum vendor identity length that carries every field.
+const IDENTITY_MIN: usize = 44;
 
-#[cfg(feature = "highlevel")]
-pub mod flash;
-
-/// SCSI `WRITE BUFFER` opcode — every vendor *write/command* CDB.
-pub const WRITE_BUFFER: u8 = 0x3B;
-/// SCSI `READ BUFFER` opcode — every vendor *read* CDB.
-pub const READ_BUFFER: u8 = 0x3C;
-
-/// `3C 02 B0` / `3C 02 F1` read mode (`02`).
-pub const READ_MODE: u8 = 0x02;
-/// Gated memory-read buffer-id (`B0`).
-pub const READ_MEMORY_ID: u8 = 0xB0;
-/// Vendor identity-read buffer-id (`F1`).
-pub const IDENTITY_ID: u8 = 0xF1;
-/// Identity block length (`0x30` = 48 bytes).
-pub const IDENTITY_LEN: u32 = 0x30;
-/// Highest address the `02/B0` read reaches once unlocked (empirical ceiling).
-pub const READ_CEILING: u32 = 0x0088_0300;
-
-/// Read-unlock knock mode (WRITE BUFFER mode `02`).
-pub const KNOCK_MODE: u8 = 0x02;
-/// Read-unlock knock buffer-id (`41`).
-pub const KNOCK_ID: u8 = 0x41;
-/// Fixed magic in the knock's offset field (`A5 AA AA`); the drive checks only
-/// the trailing `AA AA`.
-pub const KNOCK_MAGIC: [u8; 3] = [0xA5, 0xAA, 0xAA];
-
-/// OEM update: enter-update mode (`04`).
-pub const ENTRY_MODE: u8 = 0x04;
-/// OEM update: chunk-transfer mode (`07`).
-pub const TRANSFER_MODE: u8 = 0x07;
-/// OEM update: finish/commit mode (`05`).
-pub const FINISH_MODE: u8 = 0x05;
-/// Control-buffer id for entry/finish (`FF`).
-pub const CONTROL_ID: u8 = 0xFF;
-/// Kernel-chunk transfer buffer-id (`FE`).
-pub const KERNEL_ID: u8 = 0xFE;
-/// Normal-chunk transfer buffer-id (`F0`).
-pub const NORMAL_ID: u8 = 0xF0;
-/// The control buffer carried by entry/finish is 256 bytes.
-pub const CONTROL_LEN: u32 = 0x100;
-
-/// Kernel-mode (write-unlock) mode field (`01`).
-pub const KERNEL_MODE_MODE: u8 = 0x01;
-/// Kernel-mode arm buffer-id (`F3`).
-pub const KERNEL_ARM_ID: u8 = 0xF3;
-/// Kernel-mode challenge/response buffer-id (`F2`).
-pub const KERNEL_CHALLENGE_ID: u8 = 0xF2;
-/// Kernel-mode challenge status length (`0x400`).
-pub const KERNEL_CHALLENGE_LEN: u32 = 0x400;
-/// Kernel-mode response length (`0x100`).
-pub const KERNEL_RESPONSE_LEN: u32 = 0x100;
-
-/// Generic 10-byte vendor CDB: `op, mode&0x1f, id, off[24 BE], len[24 BE], 00`.
-fn cdb(op: u8, mode: u8, id: u8, off: u32, len: u32) -> [u8; 10] {
-    [
-        op,
-        mode & 0x1f,
-        id,
-        (off >> 16) as u8,
-        (off >> 8) as u8,
-        off as u8,
-        (len >> 16) as u8,
-        (len >> 8) as u8,
-        len as u8,
-        0x00,
-    ]
+/// A firmware component written during an update session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Role {
+    /// The Kernel (boot and update loader) component.
+    Kernel,
+    /// The Normal (application) component.
+    Normal,
 }
 
-/// `12 00 00 00 <alloc> 00` — standard INQUIRY (completion/identity polling).
-pub fn inquiry(alloc: u8) -> [u8; 6] {
-    [0x12, 0, 0, 0, alloc, 0]
+/// The vendor command dialect a drive speaks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DriveClass {
+    /// BD generations: [`cdb::enter_update`] enters the update session directly.
+    Bd,
+    /// DVR generations: the [`dvr`] handshake precedes [`cdb::enter_update`].
+    Dvr,
 }
 
-/// `3C 02 F1 00 00 00 00 00 30 00` — vendor identity read (48-byte block).
-/// Pure identity: sets no state and does not unlock anything.
-pub fn vendor_identity() -> [u8; 10] {
-    cdb(READ_BUFFER, READ_MODE, IDENTITY_ID, 0, IDENTITY_LEN)
+/// Trim trailing ASCII spaces and NULs and decode as UTF-8; `""` if invalid.
+fn field(raw: &[u8]) -> &str {
+    let end = raw
+        .iter()
+        .rposition(|&b| b != b' ' && b != 0)
+        .map_or(0, |i| i + 1);
+    core::str::from_utf8(&raw[..end]).unwrap_or("")
 }
 
-/// `3C 02 B0 <off3> <len3> 00` — gated memory read. Refused with sense
-/// `05/24/00` for any protected offset until the [`knock`] has run.
-pub fn read_memory(off: u32, len: u32) -> [u8; 10] {
-    cdb(READ_BUFFER, READ_MODE, READ_MEMORY_ID, off, len)
+/// A drive's identity: the standard INQUIRY response plus the vendor identity
+/// block ([`cdb::vendor_identity`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Identity {
+    inquiry: [u8; INQUIRY_LEN],
+    vendor: [u8; IDENTITY_LEN],
 }
 
-/// `3B 02 41 A5 AA AA 00 00 00 00` — the read-unlock "knock" (Extended-read
-/// enable). Zero-length, no data phase; read-only privilege.
-pub fn knock() -> [u8; 10] {
-    [
-        WRITE_BUFFER,
-        KNOCK_MODE & 0x1f,
-        KNOCK_ID,
-        KNOCK_MAGIC[0],
-        KNOCK_MAGIC[1],
-        KNOCK_MAGIC[2],
-        0,
-        0,
-        0,
-        0,
-    ]
-}
-
-/// `3B 04 FF 00 00 00 00 01 00 00` — enter OEM update mode (256-byte control out).
-pub fn enter_update() -> [u8; 10] {
-    cdb(WRITE_BUFFER, ENTRY_MODE, CONTROL_ID, 0, CONTROL_LEN)
-}
-
-/// `3B 07 FE <off3> <len3> 00` — transfer a Kernel chunk (raw envelope bytes out).
-pub fn transfer_kernel(off: u32, len: u32) -> [u8; 10] {
-    cdb(WRITE_BUFFER, TRANSFER_MODE, KERNEL_ID, off, len)
-}
-
-/// `3B 07 F0 <off3> <len3> 00` — transfer a Normal chunk (raw envelope bytes out).
-pub fn transfer_normal(off: u32, len: u32) -> [u8; 10] {
-    cdb(WRITE_BUFFER, TRANSFER_MODE, NORMAL_ID, off, len)
-}
-
-/// `3B 05 FF 00 00 00 00 01 00 00` — finish/commit the update (256-byte control out).
-pub fn finish() -> [u8; 10] {
-    cdb(WRITE_BUFFER, FINISH_MODE, CONTROL_ID, 0, CONTROL_LEN)
-}
-
-/// `3B 01 F3 00 00 00 00 00 00 00` — DVR-era handshake arm: zero-length.
-///
-/// Prefer the drive-generic [`flash::enter_kernel_mode`] which issues this (or
-/// skips it on BD) on the caller's behalf.
-#[deprecated(note = "DVR-era handshake; use flash::enter_kernel_mode instead")]
-pub fn kernel_mode_arm() -> [u8; 10] {
-    cdb(WRITE_BUFFER, KERNEL_MODE_MODE, KERNEL_ARM_ID, 0, 0)
-}
-
-/// `3C 01 F2 00 00 00 00 04 00 00` — DVR-era challenge read (0x400-byte status).
-///
-/// Prefer the drive-generic [`flash::enter_kernel_mode`].
-#[deprecated(note = "DVR-era handshake; use flash::enter_kernel_mode instead")]
-pub fn kernel_mode_challenge() -> [u8; 10] {
-    cdb(
-        READ_BUFFER,
-        KERNEL_MODE_MODE,
-        KERNEL_CHALLENGE_ID,
-        0,
-        KERNEL_CHALLENGE_LEN,
-    )
-}
-
-/// `3B 01 F2 00 00 00 00 01 00 00` — DVR-era response write (0x100-byte reply).
-///
-/// Prefer the drive-generic [`flash::enter_kernel_mode`].
-#[deprecated(note = "DVR-era handshake; use flash::enter_kernel_mode instead")]
-pub fn kernel_mode_response() -> [u8; 10] {
-    cdb(
-        WRITE_BUFFER,
-        KERNEL_MODE_MODE,
-        KERNEL_CHALLENGE_ID,
-        0,
-        KERNEL_RESPONSE_LEN,
-    )
-}
-
-/// `00 00 00 00 00 00` — TEST UNIT READY (completion poll).
-pub fn test_unit_ready() -> [u8; 6] {
-    [0, 0, 0, 0, 0, 0]
-}
-
-/// `4A 00 00 00 10 00 00 00 08 00` — GET EVENT STATUS NOTIFICATION (poll drain).
-pub fn get_event_status() -> [u8; 10] {
-    [0x4A, 0, 0, 0, 0x10, 0, 0, 0, 0x08, 0]
-}
-
-/// Typed parsers for the data a Pioneer drive returns to the read commands.
-///
-/// Each parser borrows the response buffer (zero-copy) and exposes the vendor
-/// fields as trimmed `&str` / integers, so callers never index magic offsets.
-pub mod response {
-    /// Trim trailing ASCII spaces and NULs, then interpret as UTF-8 (vendor
-    /// fields are ASCII in practice). Returns `""` if the slice is not valid.
-    fn field(raw: &[u8]) -> &str {
-        let end = raw
-            .iter()
-            .rposition(|&b| b != b' ' && b != 0)
-            .map_or(0, |i| i + 1);
-        core::str::from_utf8(&raw[..end]).unwrap_or("")
+impl Identity {
+    /// Decode an INQUIRY response (at least [`INQUIRY_LEN`] bytes) and a vendor
+    /// identity block (at least 44 bytes). Returns `None` if either is short.
+    pub fn parse(inquiry: &[u8], vendor: &[u8]) -> Option<Self> {
+        if inquiry.len() < INQUIRY_LEN || vendor.len() < IDENTITY_MIN {
+            return None;
+        }
+        let mut id = Self {
+            inquiry: [0; INQUIRY_LEN],
+            vendor: [0; IDENTITY_LEN],
+        };
+        id.inquiry.copy_from_slice(&inquiry[..INQUIRY_LEN]);
+        let n = vendor.len().min(IDENTITY_LEN);
+        id.vendor[..n].copy_from_slice(&vendor[..n]);
+        Some(id)
     }
 
-    /// Parsed standard `INQUIRY` (opcode `12`) response.
-    #[derive(Clone, Copy, Debug)]
-    pub struct Inquiry<'a> {
-        raw: &'a [u8],
+    /// Peripheral device type; `0x05` for an optical drive.
+    pub fn device_type(&self) -> u8 {
+        self.inquiry[0] & 0x1f
+    }
+    /// Vendor identification, e.g. `PIONEER`.
+    pub fn vendor(&self) -> &str {
+        field(&self.inquiry[8..16])
+    }
+    /// Product identification, e.g. `BD-RW   BDR-UD04`.
+    pub fn product(&self) -> &str {
+        field(&self.inquiry[16..32])
+    }
+    /// Firmware revision, e.g. `1.14`.
+    pub fn revision(&self) -> &str {
+        field(&self.inquiry[32..36])
+    }
+    /// Serial number.
+    pub fn serial(&self) -> &str {
+        field(&self.vendor[0..16])
+    }
+    /// Hardware platform code, e.g. `SAT 8A10`.
+    pub fn platform(&self) -> &str {
+        field(&self.vendor[16..24])
+    }
+    /// Tag of the installed Kernel, e.g. `ID40`. A Normal component is built
+    /// for exactly one Kernel tag.
+    pub fn kernel_tag(&self) -> &str {
+        field(&self.vendor[24..32])
+    }
+    /// Tag of the installed Normal, e.g. `ID40`. Empty while the drive is in
+    /// an update session.
+    pub fn normal_tag(&self) -> &str {
+        field(&self.vendor[32..40])
+    }
+    /// Trailing numeric code, e.g. `0000`.
+    pub fn code(&self) -> &str {
+        field(&self.vendor[40..44])
+    }
+    /// The raw INQUIRY response.
+    pub fn inquiry_bytes(&self) -> &[u8; INQUIRY_LEN] {
+        &self.inquiry
+    }
+    /// The raw vendor identity block.
+    pub fn vendor_bytes(&self) -> &[u8; IDENTITY_LEN] {
+        &self.vendor
     }
 
-    impl<'a> Inquiry<'a> {
-        /// Borrow an INQUIRY response. Needs the 36-byte standard header.
-        pub fn parse(raw: &'a [u8]) -> Option<Self> {
-            (raw.len() >= 36).then_some(Self { raw })
-        }
-        /// Peripheral device type (low 5 bits of byte 0); `0x05` = BD/DVD/CD.
-        pub fn device_type(&self) -> u8 {
-            self.raw[0] & 0x1f
-        }
-        /// Vendor identification (bytes 8..16), e.g. `PIONEER`.
-        pub fn vendor(&self) -> &str {
-            field(&self.raw[8..16])
-        }
-        /// Product identification (bytes 16..32), e.g. `BD-RW   BDR-UD04`.
-        pub fn product(&self) -> &str {
-            field(&self.raw[16..32])
-        }
-        /// Product revision level (bytes 32..36), e.g. `1.14`.
-        pub fn revision(&self) -> &str {
-            field(&self.raw[32..36])
-        }
-    }
-
-    /// Parsed vendor identity block (`3C 02 F1`, 48 bytes).
+    /// The command dialect, or `None` when the identity matches neither class.
     ///
-    /// The [`platform`](Self::platform) field (e.g. `SAT 8A10`) is the drive's
-    /// hardware/firmware generation code — the value that governs which vendor
-    /// command dialect a drive speaks.
-    #[derive(Clone, Copy, Debug)]
-    pub struct VendorIdentity<'a> {
-        raw: &'a [u8],
-    }
-
-    impl<'a> VendorIdentity<'a> {
-        /// Borrow a 48-byte identity block (see [`crate::IDENTITY_LEN`]).
-        pub fn parse(raw: &'a [u8]) -> Option<Self> {
-            (raw.len() >= 44).then_some(Self { raw })
-        }
-        /// Drive serial number (bytes 0..16), e.g. `QHDL433450WL`.
-        pub fn serial(&self) -> &str {
-            field(&self.raw[0..16])
-        }
-        /// Platform / generation code (bytes 16..24), e.g. `SAT 8A10`.
-        pub fn platform(&self) -> &str {
-            field(&self.raw[16..24])
-        }
-        /// First market/region descriptor (bytes 24..32), e.g. `GENERAL`.
-        pub fn market(&self) -> &str {
-            field(&self.raw[24..32])
-        }
-        /// Second market/region descriptor (bytes 32..40).
-        pub fn market_alt(&self) -> &str {
-            field(&self.raw[32..40])
-        }
-        /// Trailing numeric code (bytes 40..44), e.g. `0000`.
-        pub fn code(&self) -> &str {
-            field(&self.raw[40..44])
+    /// A `BD-` product is [`DriveClass::Bd`]; a `DVD-R` product on a `DVR`
+    /// platform is [`DriveClass::Dvr`].
+    pub fn class(&self) -> Option<DriveClass> {
+        if self.product().starts_with("BD-") {
+            Some(DriveClass::Bd)
+        } else if self.product().starts_with("DVD-R") && self.platform().starts_with("DVR") {
+            Some(DriveClass::Dvr)
+        } else {
+            None
         }
     }
 }
 
-/// Math for the **DVR-era** F3/F2/F2 handshake that precedes the OEM update
-/// entry (`3B 04 FF`) on DVR drive generations.
+/// The challenge-response handshake that precedes update entry on
+/// [`DriveClass::Dvr`] drives.
 ///
-/// **This module is not the write-unlock.** Throughout this crate, "kernel
-/// mode" means the OEM update session entered by `3B 04 FF`
-/// ([`enter_update`]); the drive-generic entry point for callers is
-/// [`flash::enter_kernel_mode`]. The three CDBs
-/// ([`kernel_mode_arm`] / [`kernel_mode_challenge`] / [`kernel_mode_response`])
-/// are the DVR challenge-response primitives — the solver below computes the
-/// response bytes [`flash::enter_kernel_mode`] writes back on
-/// [`flash::DriveClass::Dvr`].
-///
-/// **On BD the F3/F2 CDBs are inert.** Direct disassembly of the BDR-UD04 /
-/// `SAT 8A10` Normal body shows: `F3` is phase-9 gated and only sets
-/// `@0x2c24 = 0xf0`; `F2`'s prerequisite requires `phase >= 8` and only sets
-/// `@0x2c28 = 0x00100000`; no LCG is called from either handler. The vendor
-/// challenge-response model does not exist on BD firmware — BD enters the
-/// update session with `3B 04 FF` alone. The solver below is kept for the
-/// DVR path and does nothing on BD even if invoked by hand.
-pub mod kernel_mode {
-    /// One step of the ANSI-C LCG: advance state, return bits 16..24.
-    fn lcg_step(state: &mut u32) -> u8 {
+/// Sequence: [`cdb::dvr_arm`], read the challenge with [`cdb::dvr_challenge`],
+/// [`solve`](crate::dvr::solve) it, write the response with [`cdb::dvr_response`].
+pub mod dvr {
+    use crate::cdb::{DVR_CHALLENGE_LEN, DVR_RESPONSE_LEN};
+
+    /// Advance the challenge generator; return its output byte.
+    fn step(state: &mut u32) -> u8 {
         *state = state.wrapping_mul(0x41C6_4E6D).wrapping_add(0x3039);
         (*state >> 16) as u8
     }
 
-    /// Recovered seed plus the full response payload to write back.
-    #[derive(Clone)]
-    pub struct Solution {
-        /// The 16-bit seed whose LCG stream reproduces the challenge.
-        pub seed: u16,
-        /// The response buffer for [`crate::kernel_mode_response`]
-        /// ([`crate::KERNEL_RESPONSE_LEN`] bytes).
-        pub response: [u8; crate::KERNEL_RESPONSE_LEN as usize],
-    }
-
-    /// Recover the LCG seed from the first four challenge bytes.
-    ///
-    /// Brute-forces all 65 536 seeds — cheap and deterministic. Returns `None`
-    /// if the buffer is shorter than four bytes or no seed reproduces it.
-    pub fn recover_seed(challenge: &[u8]) -> Option<u16> {
-        if challenge.len() < 4 {
-            return None;
-        }
-        (0u32..=0xFFFF).find_map(|v| {
+    /// Solve a challenge: the response payload for [`crate::cdb::dvr_response`],
+    /// or `None` if `challenge` is shorter than four bytes or not a valid
+    /// challenge.
+    pub fn solve(challenge: &[u8]) -> Option<[u8; DVR_RESPONSE_LEN as usize]> {
+        let head = challenge.get(..4)?;
+        let seed = (0u32..=0xFFFF).find(|&v| {
             let mut s = v;
-            (0..4)
-                .all(|i| lcg_step(&mut s) == challenge[i])
-                .then_some(v as u16)
-        })
-    }
-
-    /// The response byte for a recovered seed: advance the LCG past the whole
-    /// challenge window, then invert the next output.
-    pub fn response_byte(seed: u16) -> u8 {
-        let mut s = seed as u32;
-        for _ in 0..crate::KERNEL_CHALLENGE_LEN {
-            lcg_step(&mut s);
+            head.iter().all(|&b| step(&mut s) == b)
+        })?;
+        let mut s = seed;
+        for _ in 0..DVR_CHALLENGE_LEN {
+            step(&mut s);
         }
-        !lcg_step(&mut s)
+        Some([!step(&mut s); DVR_RESPONSE_LEN as usize])
     }
 
-    /// Solve a challenge end-to-end: recover the seed and build the response
-    /// payload (the response byte repeated across the buffer).
-    pub fn solve(challenge: &[u8]) -> Option<Solution> {
-        let seed = recover_seed(challenge)?;
-        Some(Solution {
-            seed,
-            response: [response_byte(seed); crate::KERNEL_RESPONSE_LEN as usize],
-        })
+    #[cfg(test)]
+    pub(crate) fn challenge(seed: u16) -> [u8; DVR_CHALLENGE_LEN as usize] {
+        let mut s = seed as u32;
+        let mut out = [0; DVR_CHALLENGE_LEN as usize];
+        out.iter_mut().for_each(|b| *b = step(&mut s));
+        out
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn solves_a_generated_challenge() {
+            let r = super::solve(&super::challenge(0x1234)).unwrap();
+            assert!(r.iter().all(|&b| b == r[0]));
+            assert_eq!(super::solve(&[1, 2]), None);
+        }
     }
 }
 
-/// Minimal SCSI sense helpers for recognising the vendor lock refusal.
+/// Classification of the sense data returned with a refused vendor command.
 pub mod sense {
-    /// SCSI sense key `ILLEGAL REQUEST`.
+    /// Sense key `ILLEGAL REQUEST`.
     pub const ILLEGAL_REQUEST: u8 = 0x05;
-    /// Additional sense code `INVALID FIELD IN CDB` (ASC `24`, ASCQ `00`).
+    /// Additional sense `INVALID FIELD IN CDB` (ASC `24`, ASCQ `00`).
     pub const INVALID_FIELD_IN_CDB: (u8, u8) = (0x24, 0x00);
 
-    /// `true` if `(key, asc, ascq)` is the `05/24/00` the drive returns when a
-    /// gated command is issued without the matching unlock (or is unsupported).
+    /// `true` for `05/24/00`: the command needs a drive state that is not
+    /// active, or is unsupported on this drive.
     pub fn is_locked(key: u8, asc: u8, ascq: u8) -> bool {
         key == ILLEGAL_REQUEST && (asc, ascq) == INVALID_FIELD_IN_CDB
     }
@@ -388,45 +227,48 @@ pub mod sense {
 mod tests {
     use super::*;
 
-    /// Byte-exact lock between this catalogue and the whitepaper's Appendix B.
-    /// If a row changes here, update Appendix B (and vice-versa).
+    fn inquiry(product: &[u8; 16]) -> [u8; INQUIRY_LEN] {
+        let mut b = [b' '; INQUIRY_LEN];
+        b[0] = 0x05;
+        b[8..15].copy_from_slice(b"PIONEER");
+        b[16..32].copy_from_slice(product);
+        b[32..36].copy_from_slice(b"1.14");
+        b
+    }
+
+    fn vendor(platform: &[u8; 8]) -> [u8; IDENTITY_LEN] {
+        let mut b = [b' '; IDENTITY_LEN];
+        b[0..12].copy_from_slice(b"QHDL433450WL");
+        b[16..24].copy_from_slice(platform);
+        b[24..28].copy_from_slice(b"ID40");
+        b[32..36].copy_from_slice(b"ID40");
+        b[40..44].copy_from_slice(b"0000");
+        b
+    }
+
     #[test]
-    #[allow(deprecated)]
-    fn cdb_catalogue_is_byte_exact() {
-        assert_eq!(
-            vendor_identity(),
-            [0x3C, 0x02, 0xF1, 0, 0, 0, 0, 0, 0x30, 0]
-        );
-        assert_eq!(
-            read_memory(0, 0xA4),
-            [0x3C, 0x02, 0xB0, 0, 0, 0, 0, 0, 0xA4, 0]
-        );
-        assert_eq!(
-            read_memory(0x1234, 0x1000),
-            [0x3C, 0x02, 0xB0, 0, 0x12, 0x34, 0, 0x10, 0, 0]
-        );
-        assert_eq!(knock(), [0x3B, 0x02, 0x41, 0xA5, 0xAA, 0xAA, 0, 0, 0, 0]);
-        assert_eq!(enter_update(), [0x3B, 0x04, 0xFF, 0, 0, 0, 0, 0x01, 0, 0]);
-        assert_eq!(
-            transfer_kernel(0, 0x80),
-            [0x3B, 0x07, 0xFE, 0, 0, 0, 0, 0, 0x80, 0]
-        );
-        assert_eq!(
-            transfer_normal(0x8000, 0x80),
-            [0x3B, 0x07, 0xF0, 0, 0x80, 0, 0, 0, 0x80, 0]
-        );
-        assert_eq!(finish(), [0x3B, 0x05, 0xFF, 0, 0, 0, 0, 0x01, 0, 0]);
-        assert_eq!(kernel_mode_arm(), [0x3B, 0x01, 0xF3, 0, 0, 0, 0, 0, 0, 0]);
-        assert_eq!(
-            kernel_mode_challenge(),
-            [0x3C, 0x01, 0xF2, 0, 0, 0, 0, 0x04, 0, 0]
-        );
-        assert_eq!(
-            kernel_mode_response(),
-            [0x3B, 0x01, 0xF2, 0, 0, 0, 0, 0x01, 0, 0]
-        );
-        assert_eq!(inquiry(0x60), [0x12, 0, 0, 0, 0x60, 0]);
-        assert_eq!(test_unit_ready(), [0, 0, 0, 0, 0, 0]);
-        assert_eq!(get_event_status(), [0x4A, 0, 0, 0, 0x10, 0, 0, 0, 0x08, 0]);
+    fn identity_fields() {
+        let id = Identity::parse(&inquiry(b"BD-RW   BDR-UD04"), &vendor(b"SAT 8A10")).unwrap();
+        assert_eq!(id.device_type(), 5);
+        assert_eq!(id.vendor(), "PIONEER");
+        assert_eq!(id.product(), "BD-RW   BDR-UD04");
+        assert_eq!(id.revision(), "1.14");
+        assert_eq!(id.serial(), "QHDL433450WL");
+        assert_eq!(id.platform(), "SAT 8A10");
+        assert_eq!(id.kernel_tag(), "ID40");
+        assert_eq!(id.normal_tag(), "ID40");
+        assert_eq!(id.code(), "0000");
+        assert_eq!(id.class(), Some(DriveClass::Bd));
+    }
+
+    #[test]
+    fn identity_class_and_bounds() {
+        let dvr = Identity::parse(&inquiry(b"DVD-RW  DVR-112D"), &vendor(b"DVR 0112")).unwrap();
+        assert_eq!(dvr.class(), Some(DriveClass::Dvr));
+        let other = Identity::parse(&inquiry(b"CD-RW   UNKNOWN1"), &vendor(b"SAT 8A10")).unwrap();
+        assert_eq!(other.class(), None);
+        assert!(Identity::parse(&[0; 35], &[0; 48]).is_none());
+        assert!(Identity::parse(&[0; 36], &[0; 43]).is_none());
+        assert!(Identity::parse(&[0; 36], &[0; 44]).is_some());
     }
 }

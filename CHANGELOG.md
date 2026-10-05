@@ -4,6 +4,39 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-10-04
+
+One domain model across the crate. Breaking.
+
+### Changed
+- CDB constructors and constants move to `cdb`. `transfer_kernel` /
+  `transfer_normal` become `cdb::transfer(Role, off, len)`; the DVR handshake
+  CDBs are `cdb::dvr_arm` / `dvr_challenge` / `dvr_response`.
+- `response::Inquiry`, `response::VendorIdentity` and `flash::Identity` merge
+  into the root `Identity` (`Identity::parse(inquiry, vendor)`). `class()`
+  returns `Option<DriveClass>`.
+- `kernel_mode` becomes `dvr`; `dvr::solve` returns the response payload.
+- Feature `highlevel` becomes `drive`; modules `transport` and `flash` merge
+  into `drive`. `Transport::exec` takes a `Data` (`None` / `In` / `Out`).
+  `FlashError` becomes `drive::Error`, adding `Oversize`, `Challenge` and
+  `UnknownClass`.
+- `drive::enter_update(t, class, control)` takes the control buffer and returns
+  a `Session` with `write(Role, off, data)` and `finish()`. Dropping a session
+  sends nothing.
+- `drive::read_memory(t, off, buf)` reads `buf.len()` bytes.
+- Feature `fw` becomes `image`; module `fw` becomes `image`. `get_family`
+  becomes `family`, returning `Family`. `AbiRequired` / `AbiProvided` merge
+  into `Abi` (`required_abi`, `provided_abi`, `Abi::is_satisfied_by`,
+  `Abi::missing_from`). Results are unchanged.
+- `drive` no longer allocates.
+
+### Removed
+- `fw::profile` / `Profile`, `fw::abi_compatible`, `fw::get_abi_match`,
+  `flash::vendor_identity`, `KERNEL_END`, and the deprecated root handshake
+  constructors.
+
+[0.8.0]: https://github.com/MattJackson/pioneer-optical/releases/tag/v0.8.0
+
 ## [0.7.1] - 2026-10-04
 
 ### Added

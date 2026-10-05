@@ -1,102 +1,63 @@
-//! Normal <-> Kernel ABI analysis.
+//! Kernel ABI: the Kernel entry points a Normal body calls and a Kernel body
+//! provides.
 //!
-//! On Pioneer BD firmware (H8S/2000, big-endian) the 64 KiB **Kernel**
-//! component is loaded at `0x400000` and the **Normal** component (~1.8 MiB) at
-//! `0x410000`. The Normal reaches the Kernel only through absolute
-//! `JSR @aa:24` (`5E xx xx xx`) / `JMP @aa:24` (`5A xx xx xx`) instructions whose
-//! target lies in `0x400000..=0x40FFFF`. Those targets are the **ABI entries**.
-//!
-//! * [`abi_required`] extracts the set of Kernel entry addresses a Normal body
-//!   calls (found by an instruction-synchronised sweep, so data bytes that merely
-//!   look like `5E 40 xx xx` are rejected).
-//! * [`abi_provided`] extracts the set of addresses a Kernel body exposes as
-//!   callable entries: function starts (instruction boundaries following a
-//!   terminator / padding), jump-table records and internal call targets.
-//! * [`abi_compatible`] is the set test `required` is a subset of `provided`.
-//!
-//! Both sets also carry an FNV-1a id of the sorted entry list for coarse
-//! grouping (equal id == equal set).
+//! The Kernel loads at [`KERNEL_BASE`] and the Normal reaches it only through
+//! absolute `JSR @aa:24` (`5E`) / `JMP @aa:24` (`5A`) into the Kernel range.
 
+use super::{fnv1a, KERNEL_BASE, KERNEL_LEN};
 use alloc::vec::Vec;
 
-/// First address of the Kernel component.
-pub const KERNEL_BASE: u32 = 0x40_0000;
-/// Last address of the Kernel component.
-pub const KERNEL_END: u32 = 0x40_FFFF;
-/// Size of a Kernel body in bytes.
-const KERNEL_LEN: usize = 0x1_0000;
+/// Last address of the Kernel range.
+const KERNEL_END: u32 = KERNEL_BASE + KERNEL_LEN as u32 - 1;
 /// Offset in a Normal body where code begins (after the `COMP` directory).
 const NORMAL_CODE_START: usize = 0x1100;
-/// Number of consecutive well-formed instructions required before a call is
-/// accepted. Rejects `5E 40 xx xx` byte patterns inside data tables and
-/// desynchronised sweeps. Chosen empirically over the 721-body corpus: at 8 the
-/// sweep admits ~300 spurious entries; at 128 every Normal that has a same-SAT
-/// Kernel is subset-compatible with one, while only ~0.14% of genuine call
-/// targets are dropped (and the reset address `0x400000` is the main one).
+/// Consecutive well-formed instructions required before a call is accepted;
+/// rejects call-shaped bytes inside data.
 const SYNC_RUN: u32 = 128;
 
-fn fnv1a_entries(entries: &[u32]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for e in entries {
-        for b in e.to_be_bytes() {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
+/// A set of Kernel entry addresses, sorted and de-duplicated.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Abi {
+    entries: Vec<u32>,
+}
+
+impl Abi {
+    fn new(mut entries: Vec<u32>) -> Self {
+        entries.sort_unstable();
+        entries.dedup();
+        Self { entries }
     }
-    h
-}
-
-/// The set of Kernel entry addresses a Normal body calls.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct AbiRequired {
-    entries: Vec<u32>,
-    id: u64,
-}
-
-/// The set of entry addresses a Kernel body provides.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct AbiProvided {
-    entries: Vec<u32>,
-    id: u64,
-}
-
-impl AbiRequired {
-    /// Required entries that `provided` does **not** supply (empty iff
-    /// [`abi_compatible`]).
-    pub fn missing_from(&self, provided: &AbiProvided) -> Vec<u32> {
+    /// The entry addresses, ascending.
+    pub fn entries(&self) -> &[u32] {
+        &self.entries
+    }
+    /// A hash of the entry set; equal ids mean equal sets.
+    pub fn id(&self) -> u64 {
+        let bytes: Vec<u8> = self.entries.iter().flat_map(|e| e.to_be_bytes()).collect();
+        fnv1a(&bytes)
+    }
+    /// Entries of `self` missing from `provided`.
+    pub fn missing_from(&self, provided: &Abi) -> Vec<u32> {
         self.entries
             .iter()
             .copied()
             .filter(|e| provided.entries.binary_search(e).is_err())
             .collect()
     }
+    /// Whether every entry of `self` is in `provided`: a Normal with this
+    /// required ABI runs on a Kernel with that provided ABI.
+    pub fn is_satisfied_by(&self, provided: &Abi) -> bool {
+        self.entries
+            .iter()
+            .all(|e| provided.entries.binary_search(e).is_ok())
+    }
 }
 
-macro_rules! abi_set_impl {
-    ($t:ident) => {
-        impl $t {
-            fn from_sorted(entries: Vec<u32>) -> Self {
-                let id = fnv1a_entries(&entries);
-                Self { entries, id }
-            }
-            /// Sorted, de-duplicated entry addresses (all in `0x400000..=0x40FFFF`).
-            pub fn entries(&self) -> &[u32] {
-                &self.entries
-            }
-            /// FNV-1a id of the sorted entry list; equal ids mean equal sets.
-            pub fn id(&self) -> u64 {
-                self.id
-            }
-        }
-        impl core::fmt::Display for $t {
-            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                write!(f, "{:016x}", self.id)
-            }
-        }
-    };
+impl core::fmt::Display for Abi {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:016x}", self.id())
+    }
 }
-abi_set_impl!(AbiRequired);
-abi_set_impl!(AbiProvided);
 
 /// Instruction length in bytes at `i` (H8S/2000 big-endian).
 fn ilen(c: &[u8], i: usize) -> usize {
@@ -191,12 +152,6 @@ fn abs24_target(c: &[u8], i: usize) -> Option<u32> {
     }
 }
 
-fn sorted_dedup(mut v: Vec<u32>) -> Vec<u32> {
-    v.sort_unstable();
-    v.dedup();
-    v
-}
-
 /// Entry addresses a Normal body calls: targets of `JSR/JMP @aa:24` in
 /// `0x400000..=0x40FFFF` (even), seen in the synchronised instruction stream.
 fn required_entries(body: &[u8]) -> Vec<u32> {
@@ -214,10 +169,11 @@ fn required_entries(body: &[u8]) -> Vec<u32> {
         run = if v { run + 1 } else { 0 };
         i += ilen(body, i);
     }
-    sorted_dedup(out)
+    out
 }
 
-/// Entry addresses a Kernel body provides (see module docs).
+/// Entry addresses a Kernel body provides: its start, instruction boundaries
+/// after a return, jump or padding, and internal call and branch targets.
 fn provided_entries(k: &[u8]) -> Vec<u32> {
     // Instruction starts by linear sweep from offset 0.
     let mut starts = Vec::new();
@@ -262,49 +218,23 @@ fn provided_entries(k: &[u8]) -> Vec<u32> {
             }
         }
     }
-    sorted_dedup(out)
+    out
 }
 
-/// Set of Kernel entry addresses a **Normal** body calls (`JSR/JMP @aa:24` into
-/// `0x400000..=0x40FFFF`). `None` if `body` is too small to be a Normal (or is
-/// the size of a Kernel), or if it makes no Kernel calls at all (e.g. the
-/// monolithic `SAT 8291` image).
-pub fn abi_required(body: &[u8]) -> Option<AbiRequired> {
+/// The Kernel entries a Normal body calls. `None` if `body` is not larger than
+/// a Kernel or calls no Kernel entry.
+pub fn required_abi(body: &[u8]) -> Option<Abi> {
     if body.len() <= KERNEL_LEN {
         return None;
     }
     let e = required_entries(body);
-    if e.is_empty() {
-        return None;
-    }
-    Some(AbiRequired::from_sorted(e))
+    (!e.is_empty()).then(|| Abi::new(e))
 }
 
-/// Set of entry addresses a **Kernel** body provides. `None` unless `body` is a
-/// 64 KiB Kernel image.
-pub fn abi_provided(body: &[u8]) -> Option<AbiProvided> {
-    if body.len() != KERNEL_LEN {
-        return None;
-    }
-    Some(AbiProvided::from_sorted(provided_entries(body)))
-}
-
-/// `required` is a subset of `provided`: every Kernel entry the Normal calls is
-/// a callable entry of the Kernel.
-pub fn abi_compatible(required: &AbiRequired, provided: &AbiProvided) -> bool {
-    required
-        .entries
-        .iter()
-        .all(|e| provided.entries.binary_search(e).is_ok())
-}
-
-/// Convenience: can this Normal body pair with this Kernel body? `false` if
-/// either body is not recognised.
-pub fn get_abi_match(normal_body: &[u8], kernel_body: &[u8]) -> bool {
-    match (abi_required(normal_body), abi_provided(kernel_body)) {
-        (Some(r), Some(p)) => abi_compatible(&r, &p),
-        _ => false,
-    }
+/// The entries a Kernel body provides. `None` unless `body` is exactly
+/// [`KERNEL_LEN`] bytes.
+pub fn provided_abi(body: &[u8]) -> Option<Abi> {
+    (body.len() == KERNEL_LEN).then(|| Abi::new(provided_entries(body)))
 }
 
 #[cfg(test)]
@@ -319,7 +249,7 @@ mod tests {
             .collect()
     }
 
-    /// Kernel with one RTS at 0x100: the only entries are 0x400000 and 0x400102.
+    /// Kernel with one RTS at 0x100: entries are 0x400000 and 0x400102.
     fn kernel() -> Vec<u8> {
         let mut k = fill(KERNEL_LEN);
         k[0x100..0x102].copy_from_slice(&[0x54, 0x70]);
@@ -327,7 +257,6 @@ mod tests {
     }
 
     fn normal_calling(target: u32, preceded_by_junk: bool) -> Vec<u8> {
-        // 0x20000 > KERNEL_LEN so this is classified as a Normal
         let mut n = fill(0x2_0000);
         let at = 0x3000;
         if preceded_by_junk {
@@ -339,47 +268,36 @@ mod tests {
     }
 
     #[test]
-    fn provided_entries_of_synthetic_kernel() {
-        let p = abi_provided(&kernel()).unwrap();
+    fn provided_entries_of_a_kernel() {
+        let p = provided_abi(&kernel()).unwrap();
         assert_eq!(p.entries(), &[0x40_0000, 0x40_0102]);
-        assert_eq!(p.id(), fnv1a_entries(&[0x40_0000, 0x40_0102]));
     }
 
     #[test]
-    fn required_extracts_kernel_calls() {
-        let r = abi_required(&normal_calling(0x40_0102, false)).unwrap();
+    fn required_entries_of_a_normal() {
+        let r = required_abi(&normal_calling(0x40_0102, false)).unwrap();
         assert_eq!(r.entries(), &[0x40_0102]);
-        assert_eq!(r.id(), fnv1a_entries(&[0x40_0102]));
+        assert_eq!(r.id(), Abi::new(vec![0x40_0102]).id());
     }
 
     #[test]
     fn subset_semantics() {
-        let k = kernel();
-        assert!(get_abi_match(&normal_calling(0x40_0102, false), &k));
-        // 0x400104 is mid-stream filler, not an entry
-        let bad = normal_calling(0x40_0104, false);
-        assert!(!get_abi_match(&bad, &k));
-        let r = abi_required(&bad).unwrap();
-        assert_eq!(r.missing_from(&abi_provided(&k).unwrap()), vec![0x40_0104]);
+        let p = provided_abi(&kernel()).unwrap();
+        assert!(required_abi(&normal_calling(0x40_0102, false))
+            .unwrap()
+            .is_satisfied_by(&p));
+        let bad = required_abi(&normal_calling(0x40_0104, false)).unwrap();
+        assert!(!bad.is_satisfied_by(&p));
+        assert_eq!(bad.missing_from(&p), vec![0x40_0104]);
     }
 
     #[test]
-    fn data_lookalikes_are_rejected() {
-        // JSR preceded by an undefined encoding is not trusted: no calls found.
-        assert!(abi_required(&normal_calling(0x40_0104, true)).is_none());
-    }
-
-    #[test]
-    fn odd_and_out_of_range_targets_ignored() {
-        assert!(abi_required(&normal_calling(0x40_0103, false)).is_none());
-        assert!(abi_required(&normal_calling(0x41_0000, false)).is_none());
-    }
-
-    #[test]
-    fn wrong_sized_bodies_rejected() {
-        assert!(abi_provided(&[0u8; 100]).is_none());
-        assert!(abi_required(&kernel()).is_none());
-        assert!(abi_required(&[]).is_none());
-        assert!(!get_abi_match(&[], &[]));
+    fn rejected_inputs() {
+        assert!(required_abi(&normal_calling(0x40_0104, true)).is_none());
+        assert!(required_abi(&normal_calling(0x40_0103, false)).is_none());
+        assert!(required_abi(&normal_calling(0x41_0000, false)).is_none());
+        assert!(provided_abi(&[0u8; 100]).is_none());
+        assert!(required_abi(&kernel()).is_none());
+        assert!(required_abi(&[]).is_none());
     }
 }

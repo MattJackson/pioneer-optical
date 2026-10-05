@@ -101,6 +101,10 @@ fn comp_streams(img: &[u8]) -> Option<Vec<Stream>> {
                 break;
             }
             let n = crate::comp::be_u32(img, o)? as usize;
+            if n > crate::comp::MAX_EXPANDED {
+                ok = false;
+                break;
+            }
             // Compressed data runs to the stream end, clamped to the body.
             let end = core::cmp::min((e - base + 4) as usize, img.len());
             let cstart = o + 4;
@@ -228,6 +232,10 @@ fn servo(code: &[u8]) -> String {
                 let row = &code[i..end];
                 if !rows.contains(&row) {
                     rows.push(row);
+                    // Only the first SERVO_BASE distinct rows are used.
+                    if rows.len() == SERVO_BASE {
+                        break;
+                    }
                 }
             }
             i += 1;
@@ -353,6 +361,14 @@ mod tests {
     #[test]
     fn family_displays_lowercase_hex() {
         assert_eq!(format!("{}", Family(0xABCD_1234)), "abcd1234");
+    }
+
+    #[test]
+    fn is_uhd_rejects_bodies_without_the_signature() {
+        assert!(!is_uhd(&alloc::vec![0u8; 4096]));
+        let mut body = alloc::vec![0u8; 100];
+        body.extend_from_slice(&SIG0[..SIG0.len() - 1]);
+        assert!(!is_uhd(&body));
     }
 
     #[test]

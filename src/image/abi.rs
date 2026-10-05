@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 /// Last address of the Kernel range.
 const KERNEL_END: u32 = KERNEL_BASE + KERNEL_LEN as u32 - 1;
 /// Offset in a Normal body where code begins (after the `COMP` directory).
-const NORMAL_CODE_START: usize = 0x1100;
+const NORMAL_CODE_START: usize = crate::comp::COMP_OFFSET + 0x100;
 /// Consecutive well-formed instructions required before a call is accepted;
 /// rejects call-shaped bytes inside data.
 const SYNC_RUN: u32 = 128;

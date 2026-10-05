@@ -105,7 +105,7 @@ fn read<T: Transport>(
     buf: &mut [u8],
     min: usize,
 ) -> Result<usize, Error<T::Error>> {
-    let n = exec(t, cdb, Data::In(buf))?;
+    let n = exec(t, cdb, Data::In(buf))?.min(buf.len());
     if n < min {
         return Err(Error::Short {
             expected: min,
@@ -153,15 +153,20 @@ pub fn identify<T: Transport>(t: &mut T) -> Result<Identity, Error<T::Error>> {
 }
 
 /// Enable extended read, then read `buf.len()` bytes of drive memory at `off`.
-/// Returns the number of bytes read.
+/// Returns the number of bytes read (at most `buf.len()`). Fails with
+/// [`Error::Oversize`] when `off` or `buf.len()` does not fit the 24-bit CDB
+/// field.
 pub fn read_memory<T: Transport>(
     t: &mut T,
     off: u32,
     buf: &mut [u8],
 ) -> Result<usize, Error<T::Error>> {
     let len = field(buf.len())?;
+    field::<T::Error>(off as usize)?;
     exec(t, &cdb::knock(), Data::None)?;
-    exec(t, &cdb::read_memory(off, len), Data::In(buf))
+    let blen = buf.len();
+    let n = exec(t, &cdb::read_memory(off, len), Data::In(buf))?;
+    Ok(n.min(blen))
 }
 
 /// An open update session, returned by [`enter_update`].
@@ -258,6 +263,38 @@ mod tests {
         fn cdbs(&self) -> Vec<(Vec<u8>, char)> {
             self.calls.iter().map(|c| (c.0.clone(), c.1)).collect()
         }
+    }
+
+    /// Reports more bytes than it was given.
+    struct Liar;
+    impl Transport for Liar {
+        type Error = ();
+        fn exec(&mut self, _: &[u8], _: Data<'_>) -> Result<usize, ()> {
+            Ok(0x1000)
+        }
+        fn sense(&self) -> Option<(u8, u8, u8)> {
+            None
+        }
+    }
+
+    #[test]
+    fn reported_length_is_clamped_to_the_buffer() {
+        // Identity is all zeros, so parse succeeds without panicking.
+        assert!(identify(&mut Liar).is_ok());
+        let mut buf = [0u8; 8];
+        assert_eq!(read_memory(&mut Liar, 0, &mut buf).unwrap(), 8);
+    }
+
+    #[test]
+    fn read_memory_rejects_offsets_beyond_24_bits() {
+        let mut m = Mock::default();
+        let mut buf = [0u8; 4];
+        assert!(matches!(
+            read_memory(&mut m, 0x0100_0000, &mut buf),
+            Err(Error::Oversize(0x0100_0000))
+        ));
+        assert!(m.calls.is_empty());
+        assert!(read_memory(&mut m, 0x00FF_FFFF, &mut buf).is_ok());
     }
 
     #[test]

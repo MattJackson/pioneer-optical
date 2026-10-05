@@ -4,7 +4,13 @@ use alloc::vec::Vec;
 
 /// Offset of the `COMP` marker in a decoded body.
 pub(crate) const COMP_OFFSET: usize = 0x1000;
-/// Largest number of address entries the directory can hold (start/end pairs).
+/// Largest expanded size accepted for one stream, in bytes.
+pub(crate) const MAX_EXPANDED: usize = 64 * 1024 * 1024;
+/// Largest total expanded size accepted across the streams of one image.
+#[cfg(feature = "envelope")]
+pub(crate) const MAX_TOTAL_EXPANDED: usize = 256 * 1024 * 1024;
+/// Policy cap on directory address entries (two per stream). The directory
+/// region itself can hold more.
 const MAX_ENTRIES: usize = 32;
 
 /// Big-endian `u32` at `off`; `None` if the slice is too short.

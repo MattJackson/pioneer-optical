@@ -278,6 +278,8 @@ pub enum NormalSignature<'a> {
     Sign(&'a SigningKey),
     /// Stamp a verbatim OEM signature block (`NORMAL_SIGNATURE_RANGE`, 0x50
     /// bytes) taken from an OEM envelope, yielding a byte-exact OEM Normal.
+    /// Ignored (the region stays zero) when the Kernel's authentication policy
+    /// carries no signature, as with every `NormalSignature` variant.
     Oem(&'a [u8]),
     /// Leave the signature region all-zero: the deliberate, obvious "not OEM /
     /// unverified" sentinel. The resulting Normal does not pass ECDSA checks.
@@ -625,18 +627,25 @@ fn validate_pair_inner(
     let expected_kernel_layout =
         kernel_layout_from_image(kernel_image).ok_or(Error::AmbiguousKernelLayout)?;
     if kernel.info.layout != expected_kernel_layout
-        || normal.info.layout
-            != if scaled.is_some() {
-                Layout::NormalScaledKey
-            } else {
-                Layout::Normal
-            }
+        || !normal_layout_matches(normal.info.layout, scaled)
         || kernel.image != kernel_image
         || normal.image != normal_image
     {
         return Err(Error::RoundTripMismatch);
     }
     Ok(())
+}
+
+/// A scaled Normal decodes as `NormalScaledKey`, except at a 64 KiB key where
+/// its bytes are identical to a plain keyed Normal and decode as `Normal`.
+fn normal_layout_matches(layout: Layout, scaled: Option<ScaledNormalGeometry>) -> bool {
+    match scaled {
+        Some(g) if g.key_len == crate::image::KERNEL_LEN => {
+            matches!(layout, Layout::NormalScaledKey | Layout::Normal)
+        }
+        Some(_) => layout == Layout::NormalScaledKey,
+        None => layout == Layout::Normal,
+    }
 }
 
 #[cfg(test)]

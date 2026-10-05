@@ -8,11 +8,13 @@ use num_traits::{One, Zero};
 use sha1::{Digest, Sha1};
 use std::sync::OnceLock;
 
-/// Result of [`verify_normal_signature`].
+/// Result of [`verify_normal_signature`]. `Unsupported` covers every input
+/// that cannot be classified: data too short, not an envelope, not a Normal,
+/// or a public point off the established curve.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SignatureCheck {
-    /// Header does not contain a point on the established 160-bit curve.
+    /// Not classifiable; see the type documentation.
     Unsupported,
     /// The public point is recognized, but neither observed signed range verifies.
     Invalid,
@@ -66,6 +68,17 @@ impl SigningKey {
     }
 
     fn sign_normal_from(&self, envelope: &mut [u8], start: usize) -> Result<()> {
+        let saved = envelope.get(0x170..0x1c0).map(<[u8]>::to_vec);
+        let result = self.sign_normal_in_place(envelope, start);
+        if result.is_err() {
+            if let Some(saved) = saved {
+                envelope[0x170..0x1c0].copy_from_slice(&saved);
+            }
+        }
+        result
+    }
+
+    fn sign_normal_in_place(&self, envelope: &mut [u8], start: usize) -> Result<()> {
         if envelope.len() < 0x10200 + 20
             || !super::header_info(envelope)
                 .is_some_and(|h| h.kind == Some(crate::ComponentKind::Normal))

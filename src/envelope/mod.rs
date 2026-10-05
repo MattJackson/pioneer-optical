@@ -120,7 +120,7 @@ pub struct EnvelopeInfo {
     pub layout: Layout,
     /// Offset of the payload within the envelope.
     pub payload_offset: usize,
-    /// Payload length, in bytes.
+    /// Length of the decoded image, in bytes.
     pub payload_size: usize,
     /// Image length the payload declares, when it declares one.
     pub declared_size: Option<usize>,
@@ -175,10 +175,24 @@ impl HeaderInfo {
     ///
     /// [`Identity::product`]: crate::Identity::product
     pub fn targets(&self, drive: &crate::Identity) -> bool {
-        drive.product().split_whitespace().last() == Some(self.model.as_str())
-            && self.hardware_version == drive.platform()
-            && self.kernel_version == drive.kernel_tag()
+        targets_drive(
+            &self.model,
+            &self.hardware_version,
+            &self.kernel_version,
+            drive,
+        )
     }
+}
+
+/// Shared rule for [`HeaderInfo::targets`]: every field must be present and
+/// equal to the drive's. Empty fields never match.
+fn targets_drive(model: &str, hardware: &str, kernel_tag: &str, drive: &crate::Identity) -> bool {
+    !model.is_empty()
+        && !hardware.is_empty()
+        && !kernel_tag.is_empty()
+        && drive.product().split_whitespace().last() == Some(model)
+        && hardware == drive.platform()
+        && kernel_tag == drive.kernel_tag()
 }
 
 /// Opaque OEM header bytes. The caller supplies these; [`build_header`] does
@@ -311,7 +325,10 @@ pub struct LiveMainImage {
 /// The COMP addresses must resolve at the same absolute offsets as the dump.
 pub fn carve_live_main(dump: &[u8]) -> Vec<LiveMainImage> {
     let mut found = Vec::new();
-    for offset in (0..dump.len().saturating_sub(0x2000)).step_by(0x10000) {
+    if dump.len() < 0x2000 {
+        return found;
+    }
+    for offset in (0..=dump.len() - 0x2000).step_by(0x10000) {
         let Some(header) = dump.get(offset..offset + 24) else {
             continue;
         };
@@ -349,6 +366,7 @@ pub fn comp_streams(image: &[u8]) -> Option<(u32, Vec<CompStream>)> {
     let mut valid = Vec::new();
     for base in (min_base & !0xfff..=first & !0xfff).step_by(0x1000) {
         let mut streams = Vec::new();
+        let mut total_expanded = 0usize;
         for &(start, end) in &pairs {
             if start < base || end <= start {
                 break;
@@ -359,7 +377,11 @@ pub fn comp_streams(image: &[u8]) -> Option<(u32, Vec<CompStream>)> {
                 break;
             };
             let expanded_size = u32::from_be_bytes(prefix.try_into().ok()?) as usize;
-            if expanded_size == 0 || expanded_size > 64 * 1024 * 1024 {
+            total_expanded += expanded_size;
+            if expanded_size == 0
+                || expanded_size > crate::comp::MAX_EXPANDED
+                || total_expanded > crate::comp::MAX_TOTAL_EXPANDED
+            {
                 break;
             }
             let Some(compressed) = image.get(offset + 4..end_offset + 4) else {
@@ -411,7 +433,7 @@ pub fn comp_streams(image: &[u8]) -> Option<(u32, Vec<CompStream>)> {
 pub fn rebuild_last_comp(image: &[u8], expanded: &[u8]) -> Option<Vec<u8>> {
     let (base, streams) = comp_streams(image)?;
     let last = streams.last()?;
-    if expanded.is_empty() || expanded.len() > 64 * 1024 * 1024 {
+    if expanded.is_empty() || expanded.len() > crate::comp::MAX_EXPANDED {
         return None;
     }
     if last.expanded == expanded {
@@ -429,7 +451,12 @@ pub fn rebuild_last_comp(image: &[u8], expanded: &[u8]) -> Option<Vec<u8>> {
     {
         return None;
     }
-    let dir_end_offset = 0x1004 + (streams.len() * 2 - 1) * 4;
+    let dir_end_offset = COMP_OFFSET + 4 + (streams.len() * 2 - 1) * 4;
+    // The last stream must follow the directory, or the rebuilt image would
+    // not contain the directory word being rewritten.
+    if last.info.image_offset < dir_end_offset + 4 {
+        return None;
+    }
     let old_end = last.info.address_end.to_be_bytes();
     for offset in 0..image.len().saturating_sub(3) {
         if image[offset..offset + 4] == old_end && offset != dir_end_offset {
@@ -828,7 +855,10 @@ fn splice_tail(kept: &[u8], total: usize) -> Option<Vec<u8>> {
             continue;
         }
         let expanded_size = u32::from_be_bytes(image[offset..offset + 4].try_into().ok()?) as usize;
-        if image[offset + 4] != 0x78 || expanded_size == 0 || expanded_size > 64 * 1024 * 1024 {
+        if image[offset + 4] != 0x78
+            || expanded_size == 0
+            || expanded_size > crate::comp::MAX_EXPANDED
+        {
             continue;
         }
         let mut inflater = flate2::Decompress::new(false);
@@ -1089,8 +1119,7 @@ fn raw_ud04_payload(data: &[u8], parsed: &HeaderInfo) -> Option<(Layout, usize)>
     Some((layout, offset))
 }
 
-/// Decode a complete banner-bearing envelope. Returns None for unsupported layouts.
-/// Decode envelope framing only. Normal images require a Kernel policy to reproduce
+/// Decode envelope framing only; `None` for unsupported layouts. Normal images require a Kernel policy to reproduce
 /// the receiver: use `decode_envelope_with_kernel` for backup or modification.
 pub fn decode_envelope(data: &[u8]) -> Option<DecodedEnvelope> {
     decode_envelope_impl(data)
@@ -1336,9 +1365,12 @@ impl DecodedEnvelope {
 
     /// True when the envelope is meant for `drive`; see [`HeaderInfo::targets`].
     pub fn targets(&self, drive: &crate::Identity) -> bool {
-        self.info.model == drive.product().split_whitespace().last().unwrap_or("")
-            && self.info.hardware_version == drive.platform()
-            && self.info.kernel_version == drive.kernel_tag()
+        targets_drive(
+            &self.info.model,
+            &self.info.hardware_version,
+            &self.info.kernel_version,
+            drive,
+        )
     }
 
     /// Hardware family of the decoded image; see [`crate::image::family`].
@@ -2090,7 +2122,8 @@ fn sha(data: &[u8]) -> String {
 /// `(instruction_offset, [payload_offset; 2])`.
 pub fn kernel_xor_branches(image: &[u8]) -> Vec<(usize, [u32; 2])> {
     let mut out = Vec::new();
-    for i in 0..image.len().saturating_sub(40) {
+    // The recognizers read at most 34 bytes from the branch start.
+    for i in 0..image.len().saturating_sub(33) {
         let b = &image[i..];
         if b[0] != 0x7a || b[1] & 0xf8 != 0x20 || b[6] != 0x47 {
             continue;
@@ -2191,7 +2224,11 @@ pub fn decode_envelope_with_kernel(
     if decoded.info.kind != ComponentKind::Normal {
         return Some(decoded);
     }
-    if decoded.info.layout == Layout::RawNormal {
+    // Layouts that are not XOR-keyed need no Kernel policy.
+    if matches!(
+        decoded.info.layout,
+        Layout::RawNormal | Layout::Plain | Layout::TransformedPlane
+    ) {
         return Some(decoded);
     }
     let policy = KernelXorPolicy::from_kernel(kernel)?;
@@ -2249,7 +2286,10 @@ impl DecodedEnvelope {
         if self.splices.is_empty() {
             return None;
         }
-        let kept_len = self.image.len() - SPLICE_LEN * self.splices.len();
+        let kept_len = self
+            .image
+            .len()
+            .saturating_sub(SPLICE_LEN * self.splices.len());
         let verified = self.image.get(COMP_OFFSET..COMP_OFFSET + 4) == Some(b"COMP".as_slice())
             && comp_streams(&self.image).is_some();
         (!verified).then_some(kept_len..self.image.len())
@@ -3269,6 +3309,71 @@ mod synthetic_roundtrip_tests {
         dump[stream_at..stream_at + 4].copy_from_slice(&(exp.len() as u32).to_be_bytes());
         dump[stream_at + 4..stream_at + 4 + comp.len()].copy_from_slice(&comp);
         dump
+    }
+
+    #[test]
+    fn carve_finds_an_image_ending_exactly_at_the_dump_end() {
+        let mut dump = small_comp_dump(0x2000);
+        dump.truncate(0x2000);
+        assert_eq!(carve_live_main(&dump).len(), 1);
+    }
+
+    #[test]
+    fn rebuild_last_comp_refuses_a_stream_that_overlaps_the_directory() {
+        // One stored-block stream at 0x100 whose payload covers the COMP
+        // directory: it parses, but cannot be rebuilt (the directory word
+        // rewritten lies inside the stream).
+        let base = 0x40_0000u32;
+        let len = 0x1000usize;
+        let compressed_len = 2 + 5 + len + 4;
+        let mut image = vec![0xffu8; 0x1200];
+        image[..8].copy_from_slice(b"PIONEER ");
+        image[20..24].copy_from_slice(&0x1200u32.to_be_bytes());
+        image[0x1000..0x1004].copy_from_slice(b"COMP");
+        let start = base + 0x100;
+        let end = start + compressed_len as u32;
+        image[0x1004..0x1008].copy_from_slice(&start.to_be_bytes());
+        image[0x1008..0x100c].copy_from_slice(&end.to_be_bytes());
+        image[0x100..0x104].copy_from_slice(&(len as u32).to_be_bytes());
+        image[0x104..0x106].copy_from_slice(&[0x78, 0x01]);
+        image[0x106] = 0x01;
+        image[0x107..0x109].copy_from_slice(&(len as u16).to_le_bytes());
+        image[0x109..0x10b].copy_from_slice(&(!(len as u16)).to_le_bytes());
+        let payload = image[0x10b..0x10b + len].to_vec();
+        image[0x10b + len..0x10b + len + 4].copy_from_slice(&adler32(&payload).to_be_bytes());
+        assert!(comp_streams(&image).is_some(), "fixture must parse");
+        assert!(rebuild_last_comp(&image, &[0xa5; 16]).is_none());
+    }
+
+    #[test]
+    fn targets_requires_every_field_to_match_the_drive() {
+        let mut inquiry = [b' '; crate::INQUIRY_LEN];
+        inquiry[0] = 0x05;
+        inquiry[16..32].copy_from_slice(b"BD-RW   BDR-UD04");
+        let mut vendor = [b' '; crate::IDENTITY_LEN];
+        vendor[16..24].copy_from_slice(b"SAT 8A10");
+        vendor[24..28].copy_from_slice(b"ID40");
+        let drive = crate::Identity::parse(&inquiry, &vendor).unwrap();
+        let header = |model: &str, hw: &str, tag: &str| HeaderInfo {
+            id: format!("PIONEER {model}"),
+            model: model.into(),
+            revision: "1.00".into(),
+            hardware_version: hw.into(),
+            kernel_version: tag.into(),
+            destination: tag.into(),
+            generated_date: "00/00/00".into(),
+            kernel_version2: "0000".into(),
+            kind: Some(ComponentKind::Normal),
+        };
+        assert!(header("BDR-UD04", "SAT 8A10", "ID40").targets(&drive));
+        assert!(!header("BDR-UD05", "SAT 8A10", "ID40").targets(&drive));
+        assert!(!header("BDR-UD04", "SAT 8A11", "ID40").targets(&drive));
+        assert!(!header("BDR-UD04", "SAT 8A10", "ID41").targets(&drive));
+        // A header with missing fields never matches a drive with blank ones.
+        let mut blank = vendor;
+        blank[16..32].fill(b' ');
+        let blank_drive = crate::Identity::parse(&inquiry, &blank).unwrap();
+        assert!(!header("BDR-UD04", "", "").targets(&blank_drive));
     }
 
     #[test]

@@ -24,7 +24,8 @@
 //! Two independent drive states gate the vendor commands:
 //!
 //! - **extended read** — enabled by [`cdb::knock`]. Allows [`cdb::read_memory`]
-//!   above the `0x8000` boot window, up to [`cdb::READ_CEILING`]. Read-only.
+//!   above the `0x8000` boot window; the drive refuses reads past
+//!   [`cdb::READ_CEILING`]. Read-only.
 //! - **update session** — entered by [`cdb::enter_update`]. Accepts Kernel and
 //!   Normal chunk writes ([`cdb::transfer`]) and the [`cdb::finish`] commit. DVR
 //!   generations require the [`dvr`] handshake before entry.
@@ -279,6 +280,9 @@ pub mod dvr {
         fn solves_a_generated_challenge() {
             let r = super::solve(&super::challenge(0x1234)).unwrap();
             assert!(r.iter().all(|&b| b == r[0]));
+            // The response depends on the challenge.
+            let other = super::solve(&super::challenge(0x4321)).unwrap();
+            assert_ne!(r[0], other[0]);
             assert_eq!(super::solve(&[1, 2]), None);
         }
     }
@@ -316,7 +320,7 @@ mod tests {
         b[0..12].copy_from_slice(b"QHDL433450WL");
         b[16..24].copy_from_slice(platform);
         b[24..28].copy_from_slice(b"ID40");
-        b[32..36].copy_from_slice(b"ID40");
+        b[32..36].copy_from_slice(b"ID41");
         b[40..44].copy_from_slice(b"0000");
         b
     }
@@ -331,9 +335,29 @@ mod tests {
         assert_eq!(id.serial(), "QHDL433450WL");
         assert_eq!(id.platform(), "SAT 8A10");
         assert_eq!(id.kernel_tag(), "ID40");
-        assert_eq!(id.normal_tag(), "ID40");
+        assert_eq!(id.normal_tag(), "ID41");
         assert_eq!(id.code(), "0000");
         assert_eq!(id.class(), Some(DriveClass::Bd));
+    }
+
+    #[test]
+    fn component_kind_conversions() {
+        assert_eq!(ComponentKind::from(Role::Kernel), ComponentKind::Kernel);
+        assert_eq!(ComponentKind::from(Role::Normal), ComponentKind::Normal);
+        assert_eq!(Role::try_from(ComponentKind::Kernel), Ok(Role::Kernel));
+        assert_eq!(Role::try_from(ComponentKind::Normal), Ok(Role::Normal));
+        assert_eq!(
+            Role::try_from(ComponentKind::Plane),
+            Err(ComponentKind::Plane)
+        );
+        for kind in [
+            ComponentKind::Kernel,
+            ComponentKind::Normal,
+            ComponentKind::Plane,
+        ] {
+            assert_eq!(ComponentKind::from_header(kind.as_str()), Some(kind));
+        }
+        assert_eq!(ComponentKind::from_header("Other"), None);
     }
 
     #[test]
@@ -342,6 +366,11 @@ mod tests {
         assert_eq!(dvr.class(), Some(DriveClass::Dvr));
         let other = Identity::parse(&inquiry(b"CD-RW   UNKNOWN1"), &vendor(b"SAT 8A10")).unwrap();
         assert_eq!(other.class(), None);
+        // The class needs both the product family and the platform.
+        let dvd_sat = Identity::parse(&inquiry(b"DVD-RW  DVR-112D"), &vendor(b"SAT 8A10")).unwrap();
+        assert_eq!(dvd_sat.class(), None);
+        let bd_dvr = Identity::parse(&inquiry(b"BD-RW   BDR-UD04"), &vendor(b"DVR 0112")).unwrap();
+        assert_eq!(bd_dvr.class(), Some(DriveClass::Bd));
         assert!(Identity::parse(&[0; 35], &[0; 48]).is_none());
         assert!(Identity::parse(&[0; 36], &[0; 43]).is_none());
         assert!(Identity::parse(&[0; 36], &[0; 44]).is_some());

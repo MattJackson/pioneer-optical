@@ -104,7 +104,11 @@ impl fmt::Display for Error {
             Error::SignatureBlockLength => "OEM Normal signature block must be exactly 0x50 bytes",
             Error::InvalidSignedEnvelope => "envelope size or Normal signature is invalid",
             Error::KernelBodySize { got } => {
-                return write!(f, "Kernel body is {got} bytes, expected 65536");
+                return write!(
+                    f,
+                    "Kernel body is {got} bytes, expected {}",
+                    crate::image::KERNEL_LEN
+                );
             }
             Error::UnknownMarker { marker } => {
                 return write!(f, "unrecognized generation marker {marker:#04x}");

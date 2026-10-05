@@ -23,7 +23,8 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 - `HeaderInfo::targets(&Identity)` and `DecodedEnvelope::targets`;
   `EnvelopeInfo` carries `hardware_version` and `kernel_version`.
 - `Debug` on all public types (`SigningKey` is redacted), `Default` for
-  `HeaderOpaque`; `#[non_exhaustive]` on enums and output structs.
+  `HeaderOpaque`; `#[non_exhaustive]` on enums and on `EnvelopeInfo`, `UniformRange`,
+  `CompStreamInfo`, `LiveMainImage` and `KernelXorPolicy`.
 
 ### Changed
 - `KernelLayout` is removed; `kernel_layout_from_image` returns `Layout`, and
@@ -36,7 +37,7 @@ All notable changes to `pioneer-optical` are documented here. The format follows
   not provide (`Error::AbiMismatch`). `image` bounds each inflate by the declared
   size. `Error::NotAscii` now rejects non-ASCII UTF-8.
 - `PioneerInfo`, `PioneerHeaderInfo`, `PioneerHeaderOpaque` become
-  `EnvelopeInfo`, `HeaderInfo`, `HeaderOpaque`. `HeaderInfo::file_type` is
+  `EnvelopeInfo`, `HeaderInfo`, `HeaderOpaque`. `HeaderInfo::kind` is
   `Option<ComponentKind>`.
 - `image` and `envelope` share one COMP directory parser (at most 16 address
   pairs) and one `miniz_oxide` 0.9.

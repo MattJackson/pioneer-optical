@@ -52,7 +52,8 @@ pub const DVR_CHALLENGE_LEN: u32 = 0x400;
 /// Length of the response written by [`dvr_response`].
 pub const DVR_RESPONSE_LEN: u32 = 0x100;
 
-/// A 10-byte vendor CDB.
+/// A 10-byte vendor CDB. `off` and `len` are 24-bit fields: the top byte of
+/// each is discarded, so callers must range-check first ([`crate::drive`] does).
 fn vendor(op: u8, mode: u8, id: u8, off: u32, len: u32) -> [u8; 10] {
     let [_, o2, o1, o0] = off.to_be_bytes();
     let [_, l2, l1, l0] = len.to_be_bytes();
@@ -145,6 +146,16 @@ pub fn dvr_response() -> [u8; 10] {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn offset_and_length_use_all_24_bits() {
+        assert_eq!(
+            super::read_memory(0x12_3456, 0x65_4321)[3..9],
+            [0x12, 0x34, 0x56, 0x65, 0x43, 0x21]
+        );
+        let t = super::transfer(crate::Role::Normal, 0x01_0203, 0x04_0506);
+        assert_eq!(t[3..9], [0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
+    }
+
     use super::*;
 
     #[test]

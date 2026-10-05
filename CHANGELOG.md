@@ -4,6 +4,27 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] - 2026-10-05
+
+Clean base release. All earlier versions (0.5.0, 0.7.2, 0.8.0, 0.9.0) are yanked;
+depend on 0.10.
+
+### Changed (breaking)
+- `file_type` renamed to `kind`; `ComponentKind` serializes kebab-case.
+- `KernelLayout` removed; `info()` is private; error types folded.
+- `targets()` rejects empty fields.
+
+### Fixed
+- `drive::read_memory` rejects offsets beyond 24 bits; transport-reported
+  lengths are clamped to the buffer.
+- COMP inflate capped at 64 MiB per stream and 256 MiB per envelope.
+- `rebuild_last_comp` no longer panics when the last stream overlaps the
+  directory; `carve_live_main` finds an image ending exactly at end of dump.
+- A failed signing attempt restores the original signature region.
+
+### Tests
+- Mutation-killing tests across image, abi, envelope, drive, signature and lib.
+
 ## [0.9.0] - 2026-10-04
 
 ### Added

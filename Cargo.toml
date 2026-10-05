@@ -1,7 +1,7 @@
 # Self-contained manifest (no workspace inheritance) so it packages for crates.io as-is.
 [package]
 name = "pioneer-optical"
-version = "0.5.0"
+version = "0.7.2"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
@@ -12,9 +12,21 @@ homepage = "https://github.com/MattJackson/pioneer-optical"
 documentation = "https://docs.rs/pioneer-optical"
 readme = "README.md"
 keywords = ["pioneer", "optical", "scsi", "firmware", "bluray"]
+# The default build is no-std/no-alloc/zero-dep; the optional `fw` feature adds
+# alloc + a zlib inflater for firmware-body analysis (it is not no-alloc).
 categories = ["hardware-support", "no-std::no-alloc"]
 
 [lib]
 name = "pioneer_optical"
 
+[features]
+# Firmware-body analysis (crossflash family ids + UHD test). Pulls in alloc and
+# a zlib inflater; NOT part of the default no-std/no-alloc build.
+fw = ["dep:miniz_oxide"]
+# High-level drive-generic flash API: a `Transport` trait plus `flash::*`
+# helpers that issue every vendor CDB on the caller's behalf. Pulls in `alloc`;
+# NOT part of the default no-std/no-alloc build.
+highlevel = []
+
 [dependencies]
+miniz_oxide = { version = "0.8", optional = true, default-features = false, features = ["with-alloc"] }

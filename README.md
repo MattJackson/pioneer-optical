@@ -12,7 +12,7 @@ image analysis.
 
 ```toml
 [dependencies]
-pioneer-optical = { version = "0.8", features = ["drive"] }
+pioneer-optical = { version = "0.9", features = ["drive"] }
 ```
 
 | Module | Feature | Contents |
@@ -23,9 +23,11 @@ pioneer-optical = { version = "0.8", features = ["drive"] }
 | `sense` | — | `05/24/00` refusal classification |
 | `drive` | `drive` | `Transport` trait; `identify`, `read_memory`, `enter_update` → `Session` |
 | `image` | `image` | `family`, `is_uhd`, `required_abi` / `provided_abi` |
+| `envelope` | `envelope` | `header_info`, `decode_envelope`, `DecodedEnvelope::repack`; `signature`, `builder` |
 
 The default build and the `drive` feature are `no_std` and allocation-free.
 `image` uses `alloc` and [`miniz_oxide`](https://crates.io/crates/miniz_oxide).
+`envelope` requires `std`.
 
 ## Example
 

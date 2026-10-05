@@ -2,12 +2,15 @@
 //! in the observed BDR/SAT generation. A valid signature under a caller-owned
 //! key does not prove that the drive accepts a transfer.
 
+use super::{Error, Result};
 use num_bigint::BigUint;
 use num_traits::{One, Zero};
 use sha1::{Digest, Sha1};
 use std::sync::OnceLock;
 
+/// Result of [`verify_normal_signature`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SignatureCheck {
     /// Header does not contain a point on the established 160-bit curve.
     Unsupported,
@@ -33,46 +36,47 @@ impl SigningKey {
     }
 
     /// Generate a fresh caller-owned signing key from operating-system entropy.
-    pub fn random() -> Result<Self, &'static str> {
+    pub fn random() -> Result<Self> {
         for _ in 0..128 {
             let mut bytes = [0u8; 20];
-            getrandom::fill(&mut bytes).map_err(|_| "OS entropy unavailable")?;
+            getrandom::fill(&mut bytes).map_err(|_| Error::EntropyUnavailable)?;
             if let Some(key) = Self::from_bytes(bytes) {
                 return Ok(key);
             }
         }
-        Err("failed to sample a valid signing scalar")
+        Err(Error::Randomness)
     }
 
     /// Replace the Normal header's signature and public point for the body
     /// beginning at 0x200. This proves format mathematics only.
-    pub fn sign_normal(&self, envelope: &mut [u8]) -> Result<(), &'static str> {
+    pub fn sign_normal(&self, envelope: &mut [u8]) -> Result<()> {
         self.sign_normal_from(envelope, 0x200)
     }
 
     /// Sign the encrypted payload beginning at 0x10200, as observed in the
     /// derived-key Kernel generation. This proves format mathematics only.
-    pub fn sign_normal_ciphertext_only(&self, envelope: &mut [u8]) -> Result<(), &'static str> {
+    pub fn sign_normal_ciphertext_only(&self, envelope: &mut [u8]) -> Result<()> {
         self.sign_normal_from(envelope, 0x10200)
     }
 
-    fn sign_normal_from(&self, envelope: &mut [u8], start: usize) -> Result<(), &'static str> {
+    fn sign_normal_from(&self, envelope: &mut [u8], start: usize) -> Result<()> {
         if envelope.len() < 0x10200 + 20
-            || !super::header_info(envelope).is_some_and(|h| h.file_type == "Normal")
+            || !super::header_info(envelope)
+                .is_some_and(|h| h.file_type == Some(crate::ComponentKind::Normal))
         {
-            return Err("invalid Normal envelope");
+            return Err(Error::NotSignableNormal);
         }
         let c = curve();
-        let public = multiply(self.scalar.clone(), &c.g, c).ok_or("invalid public point")?;
+        let public = multiply(self.scalar.clone(), &c.g, c).ok_or(Error::InvalidPoint)?;
         let z = BigUint::from_bytes_be(&Sha1::digest(&envelope[start..]));
         for _ in 0..128 {
             let mut bytes = [0u8; 20];
-            getrandom::fill(&mut bytes).map_err(|_| "OS entropy unavailable")?;
+            getrandom::fill(&mut bytes).map_err(|_| Error::EntropyUnavailable)?;
             let nonce = BigUint::from_bytes_be(&bytes);
             if nonce.is_zero() || nonce >= c.n {
                 continue;
             }
-            let ephemeral = multiply(nonce.clone(), &c.g, c).ok_or("invalid nonce point")?;
+            let ephemeral = multiply(nonce.clone(), &c.g, c).ok_or(Error::InvalidPoint)?;
             let r = ephemeral.0 % &c.n;
             let s = ((&z + &r * &self.scalar) * inverse(&nonce, &c.n)) % &c.n;
             if r.is_zero() || s.is_zero() {
@@ -86,7 +90,7 @@ impl SigningKey {
             ] {
                 let word = value.to_bytes_be();
                 if word.len() > 20 {
-                    return Err("ECDSA operand exceeds 160 bits");
+                    return Err(Error::OperandTooLarge);
                 }
                 envelope[offset..offset + 20].fill(0);
                 envelope[offset + 20 - word.len()..offset + 20].copy_from_slice(&word);
@@ -98,9 +102,9 @@ impl SigningKey {
             };
             return (verify_normal_signature(envelope) == expected)
                 .then_some(())
-                .ok_or("self-signed envelope failed verification");
+                .ok_or(Error::SelfVerification);
         }
-        Err("failed to sample a valid ECDSA nonce")
+        Err(Error::Randomness)
     }
 }
 
@@ -205,12 +209,13 @@ fn verifies(digest: &[u8], r: &BigUint, s: &BigUint, q: &Point, c: &Curve) -> bo
     x.is_some_and(|point| point.0 % &c.n == *r)
 }
 
-/// Check the two signed ranges found in the local OEM corpus. `Invalid` means
+/// Check the two signed ranges used by OEM Normal envelopes. `Invalid` means
 /// this curve is recognized but the signature is wrong for both ranges.
 pub fn verify_normal_signature(data: &[u8]) -> SignatureCheck {
     if data.len() < 0x10200 + 20
         || !super::is_envelope(data)
-        || !super::header_info(data).is_some_and(|h| h.file_type == "Normal")
+        || !super::header_info(data)
+            .is_some_and(|h| h.file_type == Some(crate::ComponentKind::Normal))
     {
         return SignatureCheck::Unsupported;
     }
@@ -248,7 +253,7 @@ mod tests {
         // This deliberately exercises the host verifier, not the drive's
         // unproved public-key trust policy.
         let c = curve();
-        let info = super::super::PioneerHeaderInfo {
+        let info = super::super::HeaderInfo {
             id: "PIONEER BDR-US04".into(),
             model: "BDR-US04".into(),
             revision: "1.14".into(),
@@ -257,9 +262,9 @@ mod tests {
             destination: "GENERAL".into(),
             generated_date: "20/06/15".into(),
             kernel_version2: "0000".into(),
-            file_type: "Normal".into(),
+            file_type: Some(crate::ComponentKind::Normal),
         };
-        let opaque = super::super::PioneerHeaderOpaque {
+        let opaque = super::super::HeaderOpaque {
             id_left_padding: 0,
             prevalidation: [0; 0x10],
             validation: [0; 0x50],
@@ -324,7 +329,7 @@ mod tests {
     }
 
     fn normal_envelope() -> Vec<u8> {
-        let info = super::super::PioneerHeaderInfo {
+        let info = super::super::HeaderInfo {
             id: "PIONEER BDR-US04".into(),
             model: "BDR-US04".into(),
             revision: "1.14".into(),
@@ -333,9 +338,9 @@ mod tests {
             destination: "GENERAL".into(),
             generated_date: "20/06/15".into(),
             kernel_version2: "0000".into(),
-            file_type: "Normal".into(),
+            file_type: Some(crate::ComponentKind::Normal),
         };
-        let opaque = super::super::PioneerHeaderOpaque {
+        let opaque = super::super::HeaderOpaque {
             id_left_padding: 0,
             prevalidation: [0; 0x10],
             validation: [0; 0x50],
@@ -418,8 +423,8 @@ mod tests {
         assert!(key.sign_normal(&mut short).is_err());
     }
 
-    fn envelope_of(file_type: &str, len: usize) -> Vec<u8> {
-        let info = super::super::PioneerHeaderInfo {
+    fn envelope_of(file_type: crate::ComponentKind, len: usize) -> Vec<u8> {
+        let info = super::super::HeaderInfo {
             id: "PIONEER BDR-US04".into(),
             model: "BDR-US04".into(),
             revision: "1.14".into(),
@@ -428,9 +433,9 @@ mod tests {
             destination: "GENERAL".into(),
             generated_date: "20/06/15".into(),
             kernel_version2: "0000".into(),
-            file_type: file_type.into(),
+            file_type: Some(file_type),
         };
-        let opaque = super::super::PioneerHeaderOpaque {
+        let opaque = super::super::HeaderOpaque {
             id_left_padding: 0,
             prevalidation: [0; 0x10],
             validation: [0; 0x50],
@@ -446,7 +451,7 @@ mod tests {
     fn sign_boundary_length_and_exact_error_messages() {
         let key = SigningKey::random().unwrap();
         // Exactly the minimum length (0x10200 + 20) must sign and verify.
-        let mut min = envelope_of("Normal", 0x10200 + 20);
+        let mut min = envelope_of(crate::ComponentKind::Normal, 0x10200 + 20);
         key.sign_normal(&mut min).unwrap();
         assert_eq!(
             verify_normal_signature(&min),
@@ -454,20 +459,20 @@ mod tests {
         );
         // One byte shorter is rejected with the length error, not a signing error:
         // distinguishes the `< 0x10200 + 20` boundary (==,<=) and `+ 20 -> - 20`.
-        let mut too_short = envelope_of("Normal", 0x10200 + 19);
+        let mut too_short = envelope_of(crate::ComponentKind::Normal, 0x10200 + 19);
         assert_eq!(
             key.sign_normal(&mut too_short),
-            Err("invalid Normal envelope")
+            Err(Error::NotSignableNormal)
         );
-        let mut just_header = envelope_of("Normal", 0x10200);
+        let mut just_header = envelope_of(crate::ComponentKind::Normal, 0x10200);
         assert_eq!(
             key.sign_normal(&mut just_header),
-            Err("invalid Normal envelope")
+            Err(Error::NotSignableNormal)
         );
         // A non-Normal envelope is rejected with the same length/identity error
         // (isolates the file-type `||` branch).
-        let mut kernel = envelope_of("Kernel", 0x10200 + 40);
-        assert_eq!(key.sign_normal(&mut kernel), Err("invalid Normal envelope"));
+        let mut kernel = envelope_of(crate::ComponentKind::Kernel, 0x10200 + 40);
+        assert_eq!(key.sign_normal(&mut kernel), Err(Error::NotSignableNormal));
     }
 
     #[test]
@@ -476,7 +481,7 @@ mod tests {
         // A fully valid signature in an envelope of exactly the minimum length
         // verifies -> isolates the `len < 0x10200 + 20` boundary (==, <=).
         let key = SigningKey::random().unwrap();
-        let mut min = envelope_of("Normal", 0x10200 + 20);
+        let mut min = envelope_of(crate::ComponentKind::Normal, 0x10200 + 20);
         key.sign_normal(&mut min).unwrap();
         assert_eq!(
             verify_normal_signature(&min),
@@ -486,7 +491,7 @@ mod tests {
         // An envelope of length 0x10200 (below the window) with an on-curve point
         // must report Unsupported, not fall through to Invalid. This distinguishes
         // the `+ 20 -> - 20` mutant (which would proceed and return Invalid).
-        let mut shortish = envelope_of("Normal", 0x10200);
+        let mut shortish = envelope_of(crate::ComponentKind::Normal, 0x10200);
         for (offset, value) in [(0x198, &c.g.0), (0x1ac, &c.g.1)] {
             let word = value.to_bytes_be();
             shortish[offset + 20 - word.len()..offset + 20].copy_from_slice(&word);
@@ -498,7 +503,7 @@ mod tests {
 
         // A long-enough Kernel-type envelope with an on-curve point must be
         // Unsupported (not Normal); isolates the file-type `||` branch.
-        let mut kernel = envelope_of("Kernel", 0x10200 + 40);
+        let mut kernel = envelope_of(crate::ComponentKind::Kernel, 0x10200 + 40);
         for (offset, value) in [(0x198, &c.g.0), (0x1ac, &c.g.1)] {
             let word = value.to_bytes_be();
             kernel[offset + 20 - word.len()..offset + 20].copy_from_slice(&word);

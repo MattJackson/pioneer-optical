@@ -4,6 +4,29 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-10-04
+
+### Added
+- Feature `envelope`: the firmware envelope codec. `header_info`,
+  `decode_envelope`, `decode_envelope_with_kernel`, `DecodedEnvelope::repack`,
+  COMP stream parsing and rebuild, `downgrade_patch`; `envelope::signature`
+  (Normal signature verification and signing); `envelope::builder` (Kernel and
+  Normal envelope construction from decoded images). Requires `std`.
+- `ComponentKind` (`Kernel`/`Normal`/`Plane`) with `From<Role>`; replaces the
+  `file_type` strings and `envelope_role`, which is removed.
+- `envelope::Layout` enum replaces the `layout` strings.
+- `envelope::Error` (with `Display` and `std::error::Error`) replaces
+  `&'static str` errors in `builder` and `signature`.
+- `DecodedEnvelope::{family, is_uhd, required_abi, provided_abi, role}`.
+- Feature `std`; `envelope` implies `image` and `std`.
+
+### Changed
+- `PioneerInfo`, `PioneerHeaderInfo`, `PioneerHeaderOpaque` become
+  `EnvelopeInfo`, `HeaderInfo`, `HeaderOpaque`. `HeaderInfo::file_type` is
+  `Option<ComponentKind>`.
+- `image` and `envelope` share one COMP directory parser (at most 16 address
+  pairs) and one `miniz_oxide` 0.9.
+
 ## [0.8.0] - 2026-10-04
 
 One domain model across the crate. Breaking.

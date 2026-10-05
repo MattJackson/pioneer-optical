@@ -72,36 +72,15 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     h
 }
 
-/// Big-endian u32 read; `None` if the slice does not hold 4 bytes at `off`.
-fn be_u32(img: &[u8], off: usize) -> Option<u32> {
-    img.get(off..off + 4)
-        .map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
-}
-
 /// A decompressed COMP stream: `(offset_in_body, decompressed_bytes)`.
 type Stream = (usize, Vec<u8>);
 
 /// Decompress the streams of a COMP container. `None` for an uncompressed body
 /// or an unparseable container.
 fn comp_streams(img: &[u8]) -> Option<Vec<Stream>> {
-    if img.get(0x1000..0x1004) != Some(b"COMP") {
-        return None;
-    }
-    let mut addrs: Vec<u32> = Vec::new();
-    let mut i = 0x1004;
-    while i < 0x1100 {
-        let v = be_u32(img, i)?;
-        if v == 0xFFFF_FFFF {
-            break;
-        }
-        addrs.push(v);
-        i += 4;
-    }
-    if addrs.is_empty() || addrs.len() % 2 != 0 {
-        return None;
-    }
-    let npairs = addrs.len() / 2;
-    let first = addrs[0] as u64;
+    let pairs = crate::comp::comp_pairs(img)?;
+    let npairs = pairs.len();
+    let first = pairs[0].0 as u64;
     let len = img.len() as u64;
     // The load base is unknown: try each 4 KiB-aligned base that fits.
     let start = (first.saturating_sub(len)) & !0xFFF;
@@ -110,9 +89,8 @@ fn comp_streams(img: &[u8]) -> Option<Vec<Stream>> {
     while base <= stop {
         let mut out: Vec<Stream> = Vec::with_capacity(npairs);
         let mut ok = true;
-        for p in 0..npairs {
-            let s = addrs[2 * p] as u64;
-            let e = addrs[2 * p + 1] as u64;
+        for &(s, e) in &pairs {
+            let (s, e) = (s as u64, e as u64);
             if s < base || e <= s {
                 ok = false;
                 break;
@@ -122,7 +100,7 @@ fn comp_streams(img: &[u8]) -> Option<Vec<Stream>> {
                 ok = false;
                 break;
             }
-            let n = be_u32(img, o)? as usize;
+            let n = crate::comp::be_u32(img, o)? as usize;
             // Compressed data runs to the stream end, clamped to the body.
             let end = core::cmp::min((e - base + 4) as usize, img.len());
             let cstart = o + 4;

@@ -1,10 +1,11 @@
 //! Pioneer optical drive (BD/DVD) vendor protocol: command encoding, response
-//! decoding and firmware image analysis.
+//! decoding, firmware image analysis and the firmware envelope codec.
 //!
 //! The crate root is `no_std`, allocation-free and dependency-free:
 //!
 //! - [`cdb`] — the vendor command descriptor blocks, as byte constructors.
 //! - [`Identity`] — the decoded INQUIRY and vendor identity responses.
+//! - [`ComponentKind`] and [`Role`] — which firmware component is meant.
 //! - [`dvr`] — the challenge solver for the DVR update handshake.
 //! - [`sense`] — classification of the vendor refusal sense.
 //!
@@ -14,6 +15,9 @@
 //!   read, update session) over a caller-supplied [`drive::Transport`].
 //! - `image` — [`image`]: hardware family, UHD capability and Kernel ABI
 //!   analysis of decoded firmware bodies. Uses `alloc` and a zlib inflater.
+//! - `envelope` — [`envelope`]: decode, repack, build and sign firmware
+//!   envelopes; the decoded image feeds [`image`]. Implies `image` and `std`.
+//! - `std` — links the standard library (implied by `envelope`).
 //!
 //! ## Drive state
 //!
@@ -26,18 +30,20 @@
 //!   generations require the [`dvr`] handshake before entry.
 //!
 //! Neither state enables the other.
-#![cfg_attr(not(feature = "envelope"), no_std)]
+#![cfg_attr(not(feature = "std"), no_std)]
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-#[cfg(feature = "image")]
+#[cfg(any(feature = "image", feature = "envelope"))]
 extern crate alloc;
+
+#[cfg(any(feature = "image", feature = "envelope"))]
+mod comp;
 
 pub mod cdb;
 #[cfg(feature = "drive")]
 pub mod drive;
 #[cfg(feature = "envelope")]
-#[allow(missing_docs)]
 pub mod envelope;
 #[cfg(feature = "image")]
 pub mod image;
@@ -56,6 +62,70 @@ pub enum Role {
     Kernel,
     /// The Normal (application) component.
     Normal,
+}
+
+/// The kind of firmware component a Pioneer envelope carries.
+///
+/// A superset of [`Role`]: [`ComponentKind::Plane`] exists as an envelope but
+/// is not written through the update-session commands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "envelope", derive(serde::Serialize))]
+#[non_exhaustive]
+pub enum ComponentKind {
+    /// The Kernel (boot and update loader) component.
+    Kernel,
+    /// The Normal (application) component.
+    Normal,
+    /// The Plane component of the DVR generations.
+    Plane,
+}
+
+impl ComponentKind {
+    /// The literal `File Type` text of the envelope header.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ComponentKind::Kernel => "Kernel",
+            ComponentKind::Normal => "Normal",
+            ComponentKind::Plane => "Plane",
+        }
+    }
+
+    /// Parse the literal `File Type` header text; `None` when unrecognized.
+    pub fn from_header(text: &str) -> Option<Self> {
+        match text {
+            "Kernel" => Some(ComponentKind::Kernel),
+            "Normal" => Some(ComponentKind::Normal),
+            "Plane" => Some(ComponentKind::Plane),
+            _ => None,
+        }
+    }
+}
+
+impl core::fmt::Display for ComponentKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl From<Role> for ComponentKind {
+    fn from(role: Role) -> Self {
+        match role {
+            Role::Kernel => ComponentKind::Kernel,
+            Role::Normal => ComponentKind::Normal,
+        }
+    }
+}
+
+impl TryFrom<ComponentKind> for Role {
+    type Error = ComponentKind;
+    /// Fails with the offending kind for [`ComponentKind::Plane`].
+    fn try_from(kind: ComponentKind) -> Result<Self, ComponentKind> {
+        match kind {
+            ComponentKind::Kernel => Ok(Role::Kernel),
+            ComponentKind::Normal => Ok(Role::Normal),
+            other => Err(other),
+        }
+    }
 }
 
 /// The vendor command dialect a drive speaks.

@@ -1,24 +1,37 @@
-//! Template-free Pioneer envelope construction from captured images.
-//! The resulting signatures are mathematically valid under a caller-owned key;
-//! physical receiver acceptance remains unproved.
+//! Envelope construction from decoded Kernel and Normal images.
+//!
+//! Signatures are valid under a caller-owned key; whether a drive accepts a
+//! built envelope is not established by this module.
 
 use super::signature::{verify_normal_signature, SignatureCheck, SigningKey};
 use super::{
     be32_sum_zero, build_header, decode_envelope, decode_envelope_with_kernel, kernel_xor_branches,
-    make_key, transform, transform_with_policy, PioneerHeaderInfo, PioneerHeaderOpaque,
+    make_key, transform, transform_with_policy, HeaderInfo, HeaderOpaque, Layout,
 };
+use super::{Error, Result};
+use crate::ComponentKind;
 
+/// How a Kernel stores its key table, as identified by its receiver dispatcher.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum KernelLayout {
+    /// The key table is stored at the front of the payload.
     FrontKey,
+    /// The key table is derived from an LCG seed.
     DerivedKey,
 }
 
+/// How a Kernel authenticates a Normal envelope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum NormalAuthentication {
+    /// No authentication data.
     Unsigned,
+    /// A checksum over the scaled image only.
     ScaledChecksumOnly,
+    /// A signature over the key and the ciphertext.
     KeyAndCiphertext,
+    /// A signature over the ciphertext only.
     CiphertextOnly,
 }
 
@@ -26,8 +39,11 @@ pub enum NormalAuthentication {
 /// These are derived from instruction operands, not a hardware/model table.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScaledNormalGeometry {
+    /// Decoded Normal image length, in bytes.
     pub image_len: usize,
+    /// Key length, in bytes.
     pub key_len: usize,
+    /// Total envelope length including the header, in bytes.
     pub envelope_len: usize,
 }
 
@@ -146,6 +162,7 @@ pub fn normal_authentication_from_kernel(kernel: &[u8]) -> Option<NormalAuthenti
     }
 }
 
+/// True when `normal` satisfies the authentication its `kernel` requires.
 pub fn normal_authentication_valid(normal: &[u8], kernel: &[u8]) -> bool {
     match normal_authentication_from_kernel(kernel) {
         Some(NormalAuthentication::ScaledChecksumOnly) => {
@@ -203,8 +220,11 @@ pub fn kernel_layout_from_image(kernel: &[u8]) -> Option<KernelLayout> {
     }
 }
 
+/// A built Kernel envelope and the Normal envelope that matches it.
 pub struct EncryptedPair {
+    /// Complete Kernel envelope.
     pub kernel: Vec<u8>,
+    /// Complete Normal envelope.
     pub normal: Vec<u8>,
 }
 
@@ -226,11 +246,14 @@ pub enum KernelKeySource<'a> {
 ///
 /// `revision`/`date` populate the Kernel header's `Revision Level`/`Generated
 /// Date` fields and drive the embedded filename. [`KernelBuild::from_seed`]
-/// reproduces the historical defaults (revision `0000`, date `00/00/00`).
+/// uses revision `0000`, date `00/00/00` and an LCG-derived key.
 #[derive(Clone, Copy, Debug)]
 pub struct KernelBuild<'a> {
+    /// Header `Revision Level`.
     pub revision: &'a str,
+    /// Header `Generated Date`, `DD/MM/YY`.
     pub date: &'a str,
+    /// Key table source.
     pub key: KernelKeySource<'a>,
 }
 
@@ -257,7 +280,7 @@ pub enum NormalSignature<'a> {
     /// known and a self-consistent candidate is still wanted.
     Sign(&'a SigningKey),
     /// Stamp a verbatim OEM signature block (`NORMAL_SIGNATURE_RANGE`, 0x50
-    /// bytes) recovered from the hoard, yielding a byte-exact OEM Normal.
+    /// bytes) taken from an OEM envelope, yielding a byte-exact OEM Normal.
     Oem(&'a [u8]),
     /// Leave the signature region all-zero: the deliberate, obvious "not OEM /
     /// unverified" sentinel. The resulting Normal does not pass ECDSA checks.
@@ -267,26 +290,32 @@ pub enum NormalSignature<'a> {
 /// All non-image inputs are explicit so an archival label cannot be mistaken
 /// for a fact recovered from flash. Seeds select fresh encoding tables.
 pub struct BuildInputs<'a> {
+    /// Decoded Kernel image.
     pub kernel_image: &'a [u8],
+    /// Decoded Normal image.
     pub normal_image: &'a [u8],
+    /// Full OEM `ID` string, e.g. `PIONEER BDR-UD04`.
     pub envelope_id: &'a str,
+    /// Normal header `Revision Level`.
     pub normal_revision: &'a str,
+    /// Normal header `Generated Date`.
     pub normal_date: &'a str,
     /// Kernel header identity and key material. Use [`KernelBuild::from_seed`]
-    /// for the historical defaults.
+    /// for the default revision and date.
     pub kernel: KernelBuild<'a>,
+    /// Seed for the Normal key table.
     pub normal_key_seed: u32,
 }
 
-fn text(bytes: &[u8]) -> Result<&str, &'static str> {
+fn text(bytes: &[u8]) -> Result<&str, Error> {
     std::str::from_utf8(bytes)
         .map(str::trim)
-        .map_err(|_| "firmware identity is not ASCII")
+        .map_err(|_| Error::NotAscii)
 }
 
-fn filename(name: &str) -> Result<[u8; 16], &'static str> {
+fn filename(name: &str) -> Result<[u8; 16], Error> {
     if name.len() > 16 || !name.is_ascii() {
-        return Err("invalid embedded filename");
+        return Err(Error::InvalidFilename);
     }
     let mut out = [0u8; 16];
     out[..name.len()].copy_from_slice(name.as_bytes());
@@ -298,17 +327,17 @@ fn header(
     hardware: &str,
     kernel_tag: &str,
     kernel_version2: &str,
-    role: &str,
+    role: ComponentKind,
     revision: &str,
     date: &str,
     embedded_name: &str,
-) -> Result<[u8; 0x200], &'static str> {
-    let info = PioneerHeaderInfo {
+) -> Result<[u8; 0x200], Error> {
+    let info = HeaderInfo {
         id: id.into(),
         model: id
             .split_whitespace()
             .last()
-            .ok_or("envelope ID has no model")?
+            .ok_or(Error::MissingModel)?
             .into(),
         revision: revision.into(),
         hardware_version: hardware.into(),
@@ -316,16 +345,16 @@ fn header(
         destination: kernel_tag.into(),
         generated_date: date.into(),
         kernel_version2: kernel_version2.into(),
-        file_type: role.into(),
+        file_type: Some(role),
     };
-    let opaque = PioneerHeaderOpaque {
+    let opaque = HeaderOpaque {
         id_left_padding: 0,
         prevalidation: [0; 0x10],
         validation: [0; 0x50],
         extension: [0; 0x30],
         filename: filename(embedded_name)?,
     };
-    build_header(&info, &opaque).ok_or("Pioneer header fields do not fit")
+    build_header(&info, &opaque).ok_or(Error::HeaderFieldsDoNotFit)
 }
 
 /// Resolve the OEM destination code from a kernel tag: `GENERAL` maps to `00`,
@@ -363,14 +392,14 @@ pub fn encode_kernel_envelope(
     kernel_image: &[u8],
     envelope_id: &str,
     build: &KernelBuild<'_>,
-) -> Result<Vec<u8>, &'static str> {
+) -> Result<Vec<u8>, Error> {
     if kernel_image.len() != 0x10000
         || !be32_sum_zero(kernel_image)
         || !kernel_image
             .get(0x1000..0x1008)
             .is_some_and(|v| v.starts_with(b"SAT "))
     {
-        return Err("captured Kernel image does not satisfy Pioneer H8/SAT structure");
+        return Err(Error::KernelStructure);
     }
     let hardware = text(&kernel_image[0x1000..0x1008])?;
     let kernel_tag = text(&kernel_image[0x1008..0x1010])?;
@@ -387,17 +416,16 @@ pub fn encode_kernel_envelope(
         || build.date.len() > 10
         || !build.date.is_ascii()
     {
-        return Err("captured Kernel image or drive identity is incomplete");
+        return Err(Error::KernelIncomplete);
     }
-    let layout = kernel_layout_from_image(kernel_image)
-        .ok_or("Kernel receiver dispatcher does not identify a unique envelope layout")?;
+    let layout = kernel_layout_from_image(kernel_image).ok_or(Error::AmbiguousKernelLayout)?;
     let name = kernel_filename(hardware, kernel_tag, build.revision);
     let mut enc = header(
         envelope_id,
         hardware,
         kernel_tag,
         kernel_version2,
-        "Kernel",
+        ComponentKind::Kernel,
         build.revision,
         build.date,
         &name,
@@ -407,12 +435,12 @@ pub fn encode_kernel_envelope(
         KernelKeySource::Seed(seed) => make_key(seed & 0x00ff_ffff, 0x1000),
         KernelKeySource::RawKey(bytes) => {
             if bytes.len() != 0x1000 {
-                return Err("raw Kernel key must be exactly 0x1000 bytes");
+                return Err(Error::RawKeyLength);
             }
             bytes.to_vec()
         }
     };
-    let cipher = transform(kernel_image, &key, true).ok_or("Kernel encode failed")?;
+    let cipher = transform(kernel_image, &key, true).ok_or(Error::KernelEncode)?;
     match layout {
         KernelLayout::FrontKey => {
             enc.extend_from_slice(&key);
@@ -420,7 +448,7 @@ pub fn encode_kernel_envelope(
         }
         KernelLayout::DerivedKey => {
             let KernelKeySource::Seed(seed) = build.key else {
-                return Err("derived-key Kernel requires an LCG seed, not raw key bytes");
+                return Err(Error::RawKeyNotAllowed);
             };
             enc.extend_from_slice(&cipher);
             // The 0x1000-byte trailer is one continuous LCG stream. The
@@ -440,7 +468,7 @@ pub fn encode_kernel_envelope(
 pub fn encode_encrypted_pair(
     input: &BuildInputs<'_>,
     signature: NormalSignature<'_>,
-) -> Result<EncryptedPair, &'static str> {
+) -> Result<EncryptedPair, Error> {
     let kernel = input.kernel_image;
     let normal = input.normal_image;
     let scaled = scaled_normal_geometry_from_kernel(kernel);
@@ -458,7 +486,7 @@ pub fn encode_encrypted_pair(
             None => u32::from_be_bytes(normal[20..24].try_into().unwrap()) as usize != normal.len(),
         }
     {
-        return Err("captured images do not satisfy Pioneer H8/SAT image structure");
+        return Err(Error::ImageStructure);
     }
     let hardware = text(&kernel[0x1000..0x1008])?;
     let kernel_tag = text(&kernel[0x1008..0x1010])?;
@@ -473,7 +501,7 @@ pub fn encode_encrypted_pair(
         || id.bytes().any(|b| b < 0x20 || b == 0x7f)
         || input.normal_revision.is_empty()
     {
-        return Err("captured image or drive identity is incomplete");
+        return Err(Error::ImageIncomplete);
     }
     let normal_revision_digits = input.normal_revision.replace('.', "");
     let normal_name = match destination_code(kernel_tag) {
@@ -484,20 +512,19 @@ pub fn encode_encrypted_pair(
     };
     if input.normal_date.is_empty() || input.normal_date.len() > 10 || !input.normal_date.is_ascii()
     {
-        return Err("Normal build date is invalid");
+        return Err(Error::InvalidDate);
     }
     let branches = kernel_xor_branches(kernel);
     let [(_, exceptions)] = branches.as_slice() else {
-        return Err("Kernel XOR exception policy is not unique");
+        return Err(Error::XorPolicyNotUnique);
     };
     if exceptions
         .iter()
         .any(|off| *off as usize >= normal.len() || off % 4 != 0)
     {
-        return Err("Kernel XOR exception is outside Normal image");
+        return Err(Error::XorExceptionOutOfRange);
     }
-    let kernel_layout = kernel_layout_from_image(kernel)
-        .ok_or("Kernel receiver dispatcher does not identify a unique envelope layout")?;
+    let kernel_layout = kernel_layout_from_image(kernel).ok_or(Error::AmbiguousKernelLayout)?;
     let kernel_enc = encode_kernel_envelope(kernel, id, &input.kernel)?;
 
     let mut normal_enc = header(
@@ -505,7 +532,7 @@ pub fn encode_encrypted_pair(
         hardware,
         kernel_tag,
         kernel_version2,
-        "Normal",
+        ComponentKind::Normal,
         input.normal_revision,
         input.normal_date,
         &normal_name,
@@ -518,12 +545,11 @@ pub fn encode_encrypted_pair(
     normal_enc.extend_from_slice(&normal_key);
     normal_enc.extend_from_slice(
         &transform_with_policy(normal, &normal_key, true, false, exceptions)
-            .ok_or("Normal encode failed")?,
+            .ok_or(Error::NormalEncode)?,
     );
     // Policies that carry no body signature ignore the `signature` argument;
     // the header's signature region stays zero either way.
-    let policy = normal_authentication_from_kernel(kernel)
-        .ok_or("Kernel authentication policy is unknown")?;
+    let policy = normal_authentication_from_kernel(kernel).ok_or(Error::UnknownAuthentication)?;
     let mut zeroed_signature = false;
     match policy {
         NormalAuthentication::Unsigned | NormalAuthentication::ScaledChecksumOnly => {}
@@ -538,7 +564,7 @@ pub fn encode_encrypted_pair(
                 }
                 NormalSignature::Oem(bytes) => {
                     if bytes.len() != NORMAL_SIGNATURE_RANGE.len() {
-                        return Err("OEM Normal signature block must be exactly 0x50 bytes");
+                        return Err(Error::SignatureBlockLength);
                     }
                     normal_enc[NORMAL_SIGNATURE_RANGE].copy_from_slice(bytes);
                 }
@@ -564,7 +590,7 @@ pub fn validate_encrypted_pair(
     kernel_image: &[u8],
     normal_image: &[u8],
     kernel_layout: KernelLayout,
-) -> Result<(), &'static str> {
+) -> Result<()> {
     validate_pair_inner(pair, kernel_image, normal_image, kernel_layout, true)
 }
 
@@ -577,32 +603,32 @@ fn validate_pair_inner(
     normal_image: &[u8],
     kernel_layout: KernelLayout,
     check_signature: bool,
-) -> Result<(), &'static str> {
+) -> Result<()> {
     let scaled = scaled_normal_geometry_from_kernel(kernel_image);
     if pair.kernel.len() != 0x1200 + kernel_image.len()
         || pair.normal.len() != scaled.map_or(0x10200 + normal_image.len(), |g| g.envelope_len)
         || (check_signature && !normal_authentication_valid(&pair.normal, kernel_image))
     {
-        return Err("envelope size or Normal signature is invalid");
+        return Err(Error::InvalidSignedEnvelope);
     }
-    let kernel = decode_envelope(&pair.kernel).ok_or("Kernel envelope cannot be decoded")?;
-    let normal = decode_envelope_with_kernel(&pair.normal, &kernel)
-        .ok_or("Normal envelope cannot be receiver-decoded")?;
+    let kernel = decode_envelope(&pair.kernel).ok_or(Error::KernelUndecodable)?;
+    let normal =
+        decode_envelope_with_kernel(&pair.normal, &kernel).ok_or(Error::NormalUndecodable)?;
     let expected_kernel_layout = match kernel_layout {
-        KernelLayout::FrontKey => "kernel-front",
-        KernelLayout::DerivedKey => "kernel-derived",
+        KernelLayout::FrontKey => Layout::KernelFront,
+        KernelLayout::DerivedKey => Layout::KernelDerived,
     };
     if kernel.info.layout != expected_kernel_layout
         || normal.info.layout
             != if scaled.is_some() {
-                "normal-scaled-key"
+                Layout::NormalScaledKey
             } else {
-                "normal"
+                Layout::Normal
             }
         || kernel.image != kernel_image
         || normal.image != normal_image
     {
-        return Err("envelope round trip differs from captured firmware");
+        return Err(Error::RoundTripMismatch);
     }
     Ok(())
 }

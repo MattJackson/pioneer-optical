@@ -1,7 +1,7 @@
 # Self-contained manifest (no workspace inheritance) so it packages for crates.io as-is.
 [package]
 name = "pioneer-optical"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
@@ -18,18 +18,20 @@ categories = ["hardware-support", "no-std::no-alloc"]
 name = "pioneer_optical"
 
 [features]
+# Links the standard library. Implied by `envelope`.
+std = []
 # Command sequences over a caller-supplied transport. no_std, no alloc.
 drive = []
 # Firmware image analysis. Uses alloc and a zlib inflater.
 image = ["dep:miniz_oxide"]
 # Envelope codec: decode, encode, sign Pioneer firmware envelopes. Requires std.
-envelope = ["dep:serde", "dep:sha2", "dep:flate2", "dep:num-bigint", "dep:num-traits", "dep:sha1", "dep:getrandom"]
+envelope = ["std", "image", "dep:serde", "dep:sha2", "dep:flate2", "dep:num-bigint", "dep:num-traits", "dep:sha1", "dep:getrandom"]
 
 [package.metadata.docs.rs]
 all-features = true
 
 [dependencies]
-miniz_oxide = { version = "0.8", optional = true, default-features = false, features = ["with-alloc"] }
+miniz_oxide = { version = "0.9", optional = true, default-features = false, features = ["with-alloc"] }
 serde = { version = "1", features = ["derive"], optional = true }
 sha2 = { version = "0.10", optional = true }
 flate2 = { version = "1", optional = true }

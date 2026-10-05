@@ -71,6 +71,9 @@ pub enum Error<E> {
     UnknownClass,
 }
 
+#[cfg(feature = "std")]
+impl<E: core::fmt::Debug> std::error::Error for Error<E> {}
+
 impl<E: core::fmt::Debug> core::fmt::Display for Error<E> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {

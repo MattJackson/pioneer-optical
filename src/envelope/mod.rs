@@ -6,18 +6,23 @@
 //! Layouts are selected by decoded signatures, so older DVR and BDC formats
 //! are never silently treated as this format.
 
-// Kept byte-for-byte as audited rather than restyled.
+// These routines mirror the receiver byte for byte, so long argument lists and
+// explicit modulo checks are kept.
 #![allow(
     clippy::too_many_arguments,
     clippy::manual_is_multiple_of,
     clippy::chunks_exact_to_as_chunks
 )]
 
+use crate::ComponentKind;
 use serde::Serialize;
 use std::io::{Read, Write};
 
 pub mod builder;
+mod error;
 pub mod signature;
+
+pub use error::{Error, Result};
 
 const BANNER: &[u8] = b"********  Copyright(c) 2000 Pioneer Corporation  ********";
 const HEADER_LEN: usize = 0x160;
@@ -38,16 +43,82 @@ const PLANE_LCG_C: u32 = 1;
 const PLANE_LCG_SEED: u32 = 0xc3c7_91c2;
 const PLANE_XOR_OFFSET: usize = 0x200;
 
+/// How an envelope's payload is framed and encoded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum Layout {
+    /// Unencoded image directly after the header.
+    Plain,
+    /// Plane body whitened with the fixed full-period LCG keystream.
+    TransformedPlane,
+    /// Recognized raw Kernel staging layout of a BACKUP-destination envelope.
+    RawKernel,
+    /// Recognized raw Normal staging layout of a BACKUP-destination envelope.
+    RawNormal,
+    /// Normal keyed by the Kernel-derived word key.
+    Normal,
+    /// Normal keyed as [`Layout::Normal`] with the rotation direction reversed.
+    NormalReverse,
+    /// Normal keyed with a scaled key length.
+    NormalScaledKey,
+    /// Kernel with the key table stored at the front of the payload.
+    KernelFront,
+    /// Kernel with the key table derived from an LCG seed.
+    KernelDerived,
+    /// Legacy little-endian Kernel.
+    KernelLegacyLe,
+}
+
+impl Layout {
+    /// The stable lowercase-hyphenated name, as serialized.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Layout::Plain => "plain",
+            Layout::TransformedPlane => "transformed-plane",
+            Layout::RawKernel => "raw-kernel",
+            Layout::RawNormal => "raw-normal",
+            Layout::Normal => "normal",
+            Layout::NormalReverse => "normal-reverse",
+            Layout::NormalScaledKey => "normal-scaled-key",
+            Layout::KernelFront => "kernel-front",
+            Layout::KernelDerived => "kernel-derived",
+            Layout::KernelLegacyLe => "kernel-legacy-le",
+        }
+    }
+
+    fn is_raw(self) -> bool {
+        matches!(self, Layout::RawKernel | Layout::RawNormal)
+    }
+    fn is_keyed_normal(self) -> bool {
+        matches!(self, Layout::Normal | Layout::NormalReverse)
+    }
+}
+
+impl core::fmt::Display for Layout {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Decoded envelope metadata.
 #[derive(Clone, Debug, Serialize)]
-pub struct PioneerInfo {
+pub struct EnvelopeInfo {
+    /// Drive model from the header `ID`, e.g. `BDR-UD04`.
     pub model: String,
+    /// Header `Revision Level`.
     pub revision: String,
-    pub file_type: String,
-    pub layout: String,
+    /// Component the envelope carries.
+    pub file_type: ComponentKind,
+    /// Payload framing and encoding.
+    pub layout: Layout,
+    /// Offset of the payload within the envelope.
     pub payload_offset: usize,
+    /// Payload length, in bytes.
     pub payload_size: usize,
+    /// Image length the payload declares, when it declares one.
     pub declared_size: Option<usize>,
-    /// The changing 32-bit word at decoded payload offset 0x10; purpose unknown.
+    /// The changing 32-bit word at decoded payload offset 0x10; meaning not established.
     pub unknown_word_0x10: Option<u32>,
     /// Long uniform runs observed in the decoded payload, not verified free space.
     pub uniform_ranges: Vec<UniformRange>,
@@ -55,44 +126,47 @@ pub struct PioneerInfo {
     pub receiver_xor_policy: Option<KernelXorPolicy>,
 }
 
-/// Literal component class. Plane is deliberately distinct from Normal: this
-/// identifies an extracted envelope, not its transfer protocol or decoded layout.
-pub fn envelope_role(file_type: &str) -> &'static str {
-    match file_type {
-        "Normal" => "main",
-        "Kernel" => "kernel",
-        "Plane" => "plane",
-        _ => "unknown",
-    }
-}
-
 /// Header fields recoverable without decoding the firmware body.
 #[derive(Clone, Debug, Serialize)]
-pub struct PioneerHeaderInfo {
+pub struct HeaderInfo {
+    /// Full `ID` field, e.g. `PIONEER BDR-UD04`.
     pub id: String,
+    /// Last token of `id`.
     pub model: String,
+    /// `Revision Level` field.
     pub revision: String,
+    /// `Hardware Version` field, e.g. `SAT 8A10`.
     pub hardware_version: String,
+    /// `Kernel Version` field: the Kernel tag the component targets.
     pub kernel_version: String,
+    /// `Destination` field.
     pub destination: String,
+    /// `Generated Date` field.
     pub generated_date: String,
+    /// `Kernel Version2` field.
     pub kernel_version2: String,
-    pub file_type: String,
+    /// `None` when the `File Type` field is absent or unrecognized.
+    pub file_type: Option<ComponentKind>,
 }
 
-/// Opaque OEM header bytes. A caller must supply these from evidence; this
-/// constructor does not derive or sign them.
-pub struct PioneerHeaderOpaque {
+/// Opaque OEM header bytes. The caller supplies these; [`build_header`] does
+/// not derive or sign them.
+pub struct HeaderOpaque {
+    /// Padding before the `ID` value.
     pub id_left_padding: u8,
+    /// Bytes at header offset 0x160.
     pub prevalidation: [u8; 0x10],
+    /// Bytes at header offset 0x170 (the signature region).
     pub validation: [u8; 0x50],
+    /// Bytes at header offset 0x1c0.
     pub extension: [u8; 0x30],
+    /// Embedded filename at header offset 0x1f0, NUL padded.
     pub filename: [u8; 0x10],
 }
 
 /// Construct the common 0x200-byte Pioneer header layout from explicit fields.
 /// This is formatting only: it does not establish receiver acceptance.
-pub fn build_header(info: &PioneerHeaderInfo, opaque: &PioneerHeaderOpaque) -> Option<[u8; 0x200]> {
+pub fn build_header(info: &HeaderInfo, opaque: &HeaderOpaque) -> Option<[u8; 0x200]> {
     const PREFIX: &[u8] = b"********  Copyright(c) 2000 Pioneer Corporation  ********     \r\nThis is microcode file.  \r\nID : ";
     if PREFIX.len() != 0x60 || !info.id.split_whitespace().last()?.eq(&info.model) {
         return None;
@@ -116,7 +190,7 @@ pub fn build_header(info: &PioneerHeaderInfo, opaque: &PioneerHeaderOpaque) -> O
         (0xb0, 8, 0xbd, info.hardware_version.as_str()),
         (0xd0, 8, 0xe0, info.kernel_version.as_str()),
         (0xf0, 8, 0x102, info.destination.as_str()),
-        (0x110, 8, 0x11d, info.file_type.as_str()),
+        (0x110, 8, 0x11d, info.file_type?.as_str()),
         (0x130, 10, 0x13c, info.generated_date.as_str()),
         (0x150, 4, 0x15d, info.kernel_version2.as_str()),
     ] {
@@ -143,34 +217,55 @@ pub fn build_header(info: &PioneerHeaderInfo, opaque: &PioneerHeaderOpaque) -> O
     Some(out)
 }
 
+/// A run of one repeated byte value.
 #[derive(Clone, Debug, Serialize)]
 pub struct UniformRange {
+    /// Start of the run.
     pub offset: usize,
+    /// Run length, in bytes.
     pub length: usize,
+    /// The repeated byte.
     pub byte: u8,
 }
 
+/// Directory entry and measurements of one COMP stream.
 #[derive(Clone, Debug, Serialize)]
 pub struct CompStreamInfo {
+    /// Load address of the stream start.
     pub address_start: u32,
+    /// Load address of the stream end.
     pub address_end: u32,
+    /// Offset of the stream within the image.
     pub image_offset: usize,
+    /// Compressed length, in bytes.
     pub compressed_size: usize,
+    /// Expanded length, in bytes.
     pub expanded_size: usize,
+    /// Lowercase hex SHA-256 of the expanded bytes.
     pub expanded_sha256: String,
+    /// Uniform runs of at least 256 bytes in the expanded data.
     pub expanded_uniform_ranges: Vec<UniformRange>,
+    /// True when recompressing the expanded data reproduces the stream exactly.
     pub recompresses_exactly: bool,
 }
 
+/// One expanded COMP stream.
 pub struct CompStream {
+    /// Directory entry and measurements.
     pub info: CompStreamInfo,
+    /// The inflated bytes.
     pub expanded: Vec<u8>,
 }
 
+/// A main image carved from a live-drive dump by [`carve_live_main`].
 pub struct LiveMainImage {
+    /// Offset of the image within the dump.
     pub offset: usize,
+    /// The image bytes.
     pub image: Vec<u8>,
+    /// Load address that maps image offset 0.
     pub comp_base_address: u32,
+    /// The image's COMP streams.
     pub streams: Vec<CompStream>,
 }
 
@@ -210,27 +305,13 @@ pub fn carve_live_main(dump: &[u8]) -> Vec<LiveMainImage> {
 
 /// Parse a COMP directory only when one unique image base makes every stream valid.
 pub fn comp_streams(image: &[u8]) -> Option<(u32, Vec<CompStream>)> {
-    if image.get(0x1000..0x1004)? != b"COMP" {
-        return None;
-    }
-    let mut addresses = Vec::new();
-    for chunk in image.get(0x1004..0x1100)?.chunks_exact(4) {
-        let value = u32::from_be_bytes(chunk.try_into().ok()?);
-        if value == u32::MAX {
-            break;
-        }
-        addresses.push(value);
-    }
-    if addresses.is_empty() || addresses.len() % 2 != 0 || addresses.len() > 32 {
-        return None;
-    }
-    let first = addresses[0];
+    let pairs = crate::comp::comp_pairs(image)?;
+    let first = pairs[0].0;
     let min_base = first.saturating_sub(u32::try_from(image.len()).ok()?);
     let mut valid = Vec::new();
     for base in (min_base & !0xfff..=first & !0xfff).step_by(0x1000) {
         let mut streams = Vec::new();
-        for pair in addresses.chunks_exact(2) {
-            let (start, end) = (pair[0], pair[1]);
+        for &(start, end) in &pairs {
             if start < base || end <= start {
                 break;
             }
@@ -279,7 +360,7 @@ pub fn comp_streams(image: &[u8]) -> Option<(u32, Vec<CompStream>)> {
                 expanded,
             });
         }
-        if streams.len() == addresses.len() / 2 {
+        if streams.len() == pairs.len() {
             valid.push((base, streams));
         }
     }
@@ -378,8 +459,10 @@ pub fn uniform_ranges(image: &[u8], minimum: usize) -> Vec<UniformRange> {
 
 /// A decoded image and the original framing needed to repack it.
 pub struct DecodedEnvelope {
+    /// The decoded plaintext image.
     pub image: Vec<u8>,
-    pub info: PioneerInfo,
+    /// Header and framing metadata.
+    pub info: EnvelopeInfo,
     header: Vec<u8>,
     prefix: Vec<u8>,
     suffix: Vec<u8>,
@@ -388,7 +471,7 @@ pub struct DecodedEnvelope {
     splices: Vec<SplicedBlock>,
 }
 
-type SelectedLayout = (String, usize, usize, Vec<u8>, Vec<u8>);
+type SelectedLayout = (Layout, usize, usize, Vec<u8>, Vec<u8>);
 
 fn field(header: &[u8], label: &str) -> String {
     let text = String::from_utf8_lossy(header);
@@ -401,17 +484,18 @@ fn field(header: &[u8], label: &str) -> String {
 }
 
 /// Read only the literal ASCII envelope header; this makes no codec claim.
-pub fn header_info(data: &[u8]) -> Option<PioneerHeaderInfo> {
+pub fn header_info(data: &[u8]) -> Option<HeaderInfo> {
     let header = data.get(..HEADER_LEN)?;
     if !header.starts_with(BANNER) {
         return None;
     }
+    let file_type = ComponentKind::from_header(&field(header, "File Type"));
     let id = field(header, "ID");
     let model = id.split_whitespace().last()?.to_string();
     if model.is_empty() {
         return None;
     }
-    Some(PioneerHeaderInfo {
+    Some(HeaderInfo {
         id,
         model,
         revision: field(header, "Revision Level"),
@@ -420,7 +504,7 @@ pub fn header_info(data: &[u8]) -> Option<PioneerHeaderInfo> {
         destination: field(header, "Destination"),
         generated_date: field(header, "Generated Date"),
         kernel_version2: field(header, "Kernel Version2"),
-        file_type: field(header, "File Type"),
+        file_type,
     })
 }
 
@@ -475,8 +559,8 @@ fn keyed_word(v: u32, k: u32, encode: bool, reverse: bool, skip_xor: bool) -> u3
     }
 }
 
-// Spliced Normal envelopes. Six OEM Normal releases in the hoard (SAT 8211
-// 1.01 and 2.02, 8291 1.01, 8510 1.03, 1040 1.01, 1041 1.01) carry three
+// Spliced Normal envelopes. Six OEM Normal releases (SAT 8211 1.01 and 2.02,
+// 8291 1.01, 8510 1.03, 1040 1.01, 1041 1.01) carry three
 // foreign 16-byte blocks in the ciphertext. Each sits where the *unspliced*
 // stream would cross a 64 KiB file boundary, i.e. at image offset `c` with
 // `(payload_offset + c) % 0x10000 == 0`; the key index does not advance over
@@ -499,7 +583,9 @@ const SPLICE_WINDOW: usize = 0x1000;
 /// preceded image byte `image_offset`; `bytes` are kept verbatim for repack.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SplicedBlock {
+    /// Image offset the block preceded.
     pub image_offset: usize,
+    /// The removed ciphertext bytes.
     pub bytes: [u8; SPLICE_LEN],
 }
 
@@ -869,8 +955,8 @@ fn plane_lcg_xor(data: &[u8]) -> Vec<u8> {
 // direct-copy Plane image. The header (0..0x200) is literal; the keystream
 // starts at 0x200. Rebuilding the full buffer lets `has_plain_image_layout`
 // apply the same erased-gap and firmware-identifier checks it uses for plain.
-fn transformed_plane_layout(data: &[u8], file_type: &str) -> Option<SelectedLayout> {
-    if file_type != "Plane"
+fn transformed_plane_layout(data: &[u8], file_type: ComponentKind) -> Option<SelectedLayout> {
+    if file_type != ComponentKind::Plane
         || data.len() <= PLANE_XOR_OFFSET
         || data.len() % 4 != 0
         || has_plain_image_layout(data)
@@ -883,7 +969,7 @@ fn transformed_plane_layout(data: &[u8], file_type: &str) -> Option<SelectedLayo
         return None;
     }
     Some((
-        "transformed-plane".into(),
+        Layout::TransformedPlane,
         HEADER_LEN,
         data.len(),
         Vec::new(),
@@ -921,7 +1007,7 @@ fn legacy_le_kernel(data: &[u8]) -> Option<SelectedLayout> {
         return None;
     }
     Some((
-        "kernel-legacy-le".into(),
+        Layout::KernelLegacyLe,
         0xb000,
         data.len(),
         key.to_vec(),
@@ -931,16 +1017,16 @@ fn legacy_le_kernel(data: &[u8]) -> Option<SelectedLayout> {
 
 // This is the UD04 receiver's recognized-raw staging layout. The reserved
 // bytes are fixed to zero by our constructor, making detection unambiguous.
-fn raw_ud04_payload(data: &[u8], parsed: &PioneerHeaderInfo) -> Option<(&'static str, usize)> {
+fn raw_ud04_payload(data: &[u8], parsed: &HeaderInfo) -> Option<(Layout, usize)> {
     if parsed.hardware_version != "SAT 8A10" || parsed.destination != "BACKUP" {
         return None;
     }
-    let (layout, offset, prefix) = match parsed.file_type.as_str() {
-        "Kernel" => ("raw-kernel", 0x1200, b"SAT 8A".as_slice()),
-        "Normal" => ("raw-normal", 0x10200, b"PIONEER BDR-US04".as_slice()),
+    let (layout, offset, prefix) = match parsed.file_type {
+        Some(ComponentKind::Kernel) => (Layout::RawKernel, 0x1200, b"SAT 8A".as_slice()),
+        Some(ComponentKind::Normal) => (Layout::RawNormal, 0x10200, b"PIONEER BDR-US04".as_slice()),
         _ => return None,
     };
-    if parsed.file_type == "Kernel" && data.len() != 0x11200 {
+    if parsed.file_type == Some(ComponentKind::Kernel) && data.len() != 0x11200 {
         return None;
     }
     let image = data.get(offset..)?;
@@ -948,7 +1034,7 @@ fn raw_ud04_payload(data: &[u8], parsed: &PioneerHeaderInfo) -> Option<(&'static
         || !be32_sum_zero(image)
         || !data.get(0x200..offset)?.iter().all(|&byte| byte == 0)
         || !image
-            .get(if parsed.file_type == "Kernel" {
+            .get(if parsed.file_type == Some(ComponentKind::Kernel) {
                 0x1000..0x1000 + prefix.len()
             } else {
                 0..prefix.len()
@@ -957,7 +1043,7 @@ fn raw_ud04_payload(data: &[u8], parsed: &PioneerHeaderInfo) -> Option<(&'static
     {
         return None;
     }
-    if parsed.file_type == "Normal"
+    if parsed.file_type == Some(ComponentKind::Normal)
         && u32::from_be_bytes(image.get(20..24)?.try_into().ok()?) as usize != image.len()
     {
         return None;
@@ -975,7 +1061,7 @@ pub fn decode_envelope(data: &[u8]) -> Option<DecodedEnvelope> {
 /// Return a decoded Normal's declared and actual sizes when they disagree.
 /// Unknown layouts return None; this is an integrity check, not a codec claim.
 pub fn normal_length_mismatch(data: &[u8]) -> Option<(usize, usize)> {
-    if header_info(data)?.file_type != "Normal" {
+    if header_info(data)?.file_type != Some(ComponentKind::Normal) {
         return None;
     }
     for key_off in [0x200, 0x10200] {
@@ -1004,21 +1090,21 @@ fn decode_envelope_impl(data: &[u8]) -> Option<DecodedEnvelope> {
     let header = &data[..HEADER_LEN];
     let parsed = header_info(data)?;
     let raw_layout = raw_ud04_payload(data, &parsed);
-    let file_type = parsed.file_type;
+    let file_type = parsed.file_type?;
     let model = parsed.model;
     let revision = parsed.revision;
     let body = &data[HEADER_LEN..];
     let mut chosen: Option<SelectedLayout> = None;
 
     if let Some((layout, offset)) = raw_layout {
-        chosen = Some((layout.into(), offset, data.len(), Vec::new(), Vec::new()));
+        chosen = Some((layout, offset, data.len(), Vec::new(), Vec::new()));
     }
 
-    if file_type == "Kernel" && chosen.is_none() {
+    if file_type == ComponentKind::Kernel && chosen.is_none() {
         chosen = legacy_le_kernel(data);
     }
 
-    if file_type == "Normal" && chosen.is_none() {
+    if file_type == ComponentKind::Normal && chosen.is_none() {
         for key_off in [0x200, 0x10200] {
             let payload_off = key_off + 0x10000;
             if data.len() < payload_off + 64 {
@@ -1037,7 +1123,11 @@ fn decode_envelope_impl(data: &[u8]) -> Option<DecodedEnvelope> {
                     .is_some_and(|s| s.starts_with(b"PIONEER "))
                 {
                     chosen = Some((
-                        if reverse { "normal-reverse" } else { "normal" }.into(),
+                        if reverse {
+                            Layout::NormalReverse
+                        } else {
+                            Layout::Normal
+                        },
                         payload_off,
                         data.len() & !3,
                         key.to_vec(),
@@ -1055,7 +1145,7 @@ fn decode_envelope_impl(data: &[u8]) -> Option<DecodedEnvelope> {
     // envelope body is therefore 17 equal units: key followed by 16 image
     // units. SAT1003 receiver arguments and key-index arithmetic establish
     // this geometry; the decoded prefix must still identify Pioneer code.
-    if file_type == "Normal"
+    if file_type == ComponentKind::Normal
         && chosen.is_none()
         && data.len() >= 0x200
         && (data.len() - 0x200) % 17 == 0
@@ -1070,7 +1160,7 @@ fn decode_envelope_impl(data: &[u8]) -> Option<DecodedEnvelope> {
                 .is_some_and(|sample| sample.starts_with(b"PIONEER "))
             {
                 chosen = Some((
-                    "normal-scaled-key".into(),
+                    Layout::NormalScaledKey,
                     payload_off,
                     data.len(),
                     key.to_vec(),
@@ -1079,12 +1169,12 @@ fn decode_envelope_impl(data: &[u8]) -> Option<DecodedEnvelope> {
             }
         }
     }
-    if file_type == "Kernel" && chosen.is_none() && data.len() >= 0x1200 + 0x10000 {
+    if file_type == ComponentKind::Kernel && chosen.is_none() && data.len() >= 0x1200 + 0x10000 {
         let key = &data[0x200..0x1200];
         if let Some(sample) = transform(&data[0x1200..0x2240], key, false) {
             if contains(&sample[0x1000..], b"SAT ") {
                 chosen = Some((
-                    "kernel-front".into(),
+                    Layout::KernelFront,
                     0x1200,
                     0x11200,
                     key.to_vec(),
@@ -1093,14 +1183,14 @@ fn decode_envelope_impl(data: &[u8]) -> Option<DecodedEnvelope> {
             }
         }
     }
-    if file_type == "Kernel" && chosen.is_none() && data.len() >= 0x11200 {
+    if file_type == ComponentKind::Kernel && chosen.is_none() && data.len() >= 0x11200 {
         let state = recover_seed(&data[data.len() - 16..])?;
         let seed = jump_seed(state, data.len() - 0x200 - 16 + 0x1000, true);
         let key = make_key(seed, 0x1000);
         if let Some(sample) = transform(&data[0x200..0x1240], &key, false) {
             if contains(&sample[0x1000..], b"SAT ") {
                 chosen = Some((
-                    "kernel-derived".into(),
+                    Layout::KernelDerived,
                     0x200,
                     0x10200,
                     key,
@@ -1109,9 +1199,11 @@ fn decode_envelope_impl(data: &[u8]) -> Option<DecodedEnvelope> {
             }
         }
     }
-    if matches!(file_type.as_str(), "Normal" | "Plane") && has_plain_image_layout(data) {
+    if matches!(file_type, ComponentKind::Normal | ComponentKind::Plane)
+        && has_plain_image_layout(data)
+    {
         chosen = Some((
-            "plain".into(),
+            Layout::Plain,
             HEADER_LEN,
             data.len(),
             Vec::new(),
@@ -1119,15 +1211,18 @@ fn decode_envelope_impl(data: &[u8]) -> Option<DecodedEnvelope> {
         ));
     }
     if chosen.is_none() {
-        chosen = transformed_plane_layout(data, &file_type);
+        chosen = transformed_plane_layout(data, file_type);
     }
     let (layout, payload_off, payload_end, key, suffix) = chosen?;
-    let image = if layout == "transformed-plane" {
+    let image = if layout == Layout::TransformedPlane {
         let mut decoded = data[HEADER_LEN..PLANE_XOR_OFFSET].to_vec();
         decoded.extend(plane_lcg_xor(&data[PLANE_XOR_OFFSET..payload_end]));
         decoded
-    } else if matches!(layout.as_str(), "plain" | "raw-kernel" | "raw-normal") {
-        if layout == "plain" {
+    } else if matches!(
+        layout,
+        Layout::Plain | Layout::RawKernel | Layout::RawNormal
+    ) {
+        if layout == Layout::Plain {
             body.to_vec()
         } else {
             data[payload_off..payload_end].to_vec()
@@ -1137,16 +1232,17 @@ fn decode_envelope_impl(data: &[u8]) -> Option<DecodedEnvelope> {
             &data[payload_off..payload_end],
             &key,
             false,
-            layout == "normal-reverse",
+            layout == Layout::NormalReverse,
         )?
     };
-    let (image, splices) = match matches!(layout.as_str(), "normal" | "normal-reverse")
+    let (image, splices) = match layout
+        .is_keyed_normal()
         .then(|| {
             spliced_normal(
                 &data[payload_off..payload_end],
                 payload_off,
                 &key,
-                layout == "normal-reverse",
+                layout == Layout::NormalReverse,
             )
         })
         .flatten()
@@ -1154,12 +1250,11 @@ fn decode_envelope_impl(data: &[u8]) -> Option<DecodedEnvelope> {
         Some((spliced, splices)) => (spliced, splices),
         None => (image, Vec::new()),
     };
-    let declared_size =
-        if matches!(layout.as_str(), "normal" | "normal-reverse") && image.len() >= 24 {
-            Some(u32::from_be_bytes(image[20..24].try_into().unwrap()) as usize)
-        } else {
-            None
-        };
+    let declared_size = if layout.is_keyed_normal() && image.len() >= 24 {
+        Some(u32::from_be_bytes(image[20..24].try_into().unwrap()) as usize)
+    } else {
+        None
+    };
     // A recognizable prefix alone is insufficient: one XD04 corpus file ends
     // early. Keep its original envelope, but do not emit a partial decoded bin.
     if let Some(declared) = declared_size {
@@ -1168,7 +1263,7 @@ fn decode_envelope_impl(data: &[u8]) -> Option<DecodedEnvelope> {
         }
     }
     Some(DecodedEnvelope {
-        info: PioneerInfo {
+        info: EnvelopeInfo {
             model,
             revision,
             file_type,
@@ -1192,6 +1287,32 @@ fn decode_envelope_impl(data: &[u8]) -> Option<DecodedEnvelope> {
 }
 
 impl DecodedEnvelope {
+    /// Hardware family of the decoded image; see [`crate::image::family`].
+    pub fn family(&self) -> Option<crate::image::Family> {
+        crate::image::family(&self.image)
+    }
+
+    /// True when the decoded image is UHD-capable; see [`crate::image::is_uhd`].
+    pub fn is_uhd(&self) -> bool {
+        crate::image::is_uhd(&self.image)
+    }
+
+    /// Kernel ABI a decoded Normal requires; see [`crate::image::required_abi`].
+    pub fn required_abi(&self) -> Option<crate::image::Abi> {
+        crate::image::required_abi(&self.image)
+    }
+
+    /// Kernel ABI a decoded Kernel provides; see [`crate::image::provided_abi`].
+    pub fn provided_abi(&self) -> Option<crate::image::Abi> {
+        crate::image::provided_abi(&self.image)
+    }
+
+    /// The update-session [`Role`](crate::Role) of this component, or `None`
+    /// for a Plane envelope.
+    pub fn role(&self) -> Option<crate::Role> {
+        crate::Role::try_from(self.info.file_type).ok()
+    }
+
     /// Recover a seed only if it regenerates the entire encoding key exactly.
     /// This is an LCG encoding seed, not a signing private key.
     pub fn encoding_seed(&self) -> Option<u32> {
@@ -1206,7 +1327,7 @@ impl DecodedEnvelope {
         }
         let mut out = self.header.clone();
         out.extend_from_slice(&self.prefix);
-        if self.info.layout == "transformed-plane" {
+        if self.info.layout == Layout::TransformedPlane {
             let split = PLANE_XOR_OFFSET - HEADER_LEN;
             if image.len() < split || image.len() % 4 != split % 4 {
                 return None;
@@ -1226,7 +1347,7 @@ impl DecodedEnvelope {
             out.extend_from_slice(&encode_spliced(
                 &image[..kept_len],
                 &self.key,
-                self.info.layout == "normal-reverse",
+                self.info.layout == Layout::NormalReverse,
                 &self.xor_exceptions,
                 &self.splices,
             )?);
@@ -1234,10 +1355,10 @@ impl DecodedEnvelope {
             return Some(out);
         }
         if matches!(
-            self.info.layout.as_str(),
-            "plain" | "raw-kernel" | "raw-normal"
+            self.info.layout,
+            Layout::Plain | Layout::RawKernel | Layout::RawNormal
         ) {
-            if self.info.layout.starts_with("raw-") && !be32_sum_zero(image) {
+            if self.info.layout.is_raw() && !be32_sum_zero(image) {
                 return None;
             }
             out.extend_from_slice(image);
@@ -1246,14 +1367,12 @@ impl DecodedEnvelope {
                 image,
                 &self.key,
                 true,
-                self.info.layout == "normal-reverse",
+                self.info.layout == Layout::NormalReverse,
                 &self.xor_exceptions,
             )?);
         }
         out.extend_from_slice(&self.suffix);
-        if self.info.layout.starts_with("raw-")
-            && raw_ud04_payload(&out, &header_info(&out)?).is_none()
-        {
+        if self.info.layout.is_raw() && raw_ud04_payload(&out, &header_info(&out)?).is_none() {
             return None;
         }
         Some(out)
@@ -1263,9 +1382,9 @@ impl DecodedEnvelope {
     /// header and key table. This checks envelope mechanics only; it does not
     /// establish internal checksums, signatures, or drive acceptance.
     pub fn repack_resized_normal(&self, image: &[u8]) -> Option<Vec<u8>> {
-        if !matches!(self.info.layout.as_str(), "normal" | "normal-reverse")
+        if !self.info.layout.is_keyed_normal()
             || !self.splices.is_empty()
-            || self.info.file_type != "Normal"
+            || self.info.file_type != ComponentKind::Normal
             || image.len() < 0x2000
             || image.len() % 0x100 != 0
             || !image.starts_with(b"PIONEER ")
@@ -1286,7 +1405,7 @@ impl DecodedEnvelope {
             image,
             &self.key,
             true,
-            self.info.layout == "normal-reverse",
+            self.info.layout == Layout::NormalReverse,
             &self.xor_exceptions,
         )?);
         out.extend_from_slice(&self.suffix);
@@ -1302,30 +1421,28 @@ pub fn is_envelope(data: &[u8]) -> bool {
 /// Decoded-body length of a Pioneer BD Kernel component (64 KiB).
 pub const KERNEL_BODY_LEN: usize = 0x10000;
 
-/// Decoded-body offset of the generation marker byte (§15.1 — runtime
+/// Decoded-body offset of the Kernel generation marker byte (runtime address
 /// `0x4000FE`).
 pub const KERNEL_MARKER_OFFSET: usize = 0xFE;
 
 /// Decoded-body offset of the 32-bit BE word that absorbs the marker edit's
-/// contribution to the body's additive checksum (§15.3).
+/// contribution to the body's additive checksum.
 pub const KERNEL_CHECKSUM_WORD_OFFSET: usize = 0x1020;
 
-/// Fixed delta added to the checksum word for the §15.3-documented `FF → 01`
-/// transform: byte `0xFE` is the second-from-top byte of its enclosing BE
+/// Delta added to the checksum word for the `FF -> 01` marker edit: byte `0xFE` is the second-from-top byte of its enclosing BE
 /// u32 word, so flipping it from `0xFF` to `0x01` subtracts `0xFE00` from the
 /// additive body sum; adding the same `0xFE00` to the word at `0x1020`
-/// restores the §8.1 zero sum. For a `00 → 01` transform the compensation
-/// is `-0x0100` (= `0xFFFF_FF00`); [`downgrade_patch`] computes the right
-/// delta for either case. Validated byte-exact on the 33 corpus Kernels
-/// (2026-10-04).
+/// restores the zero additive sum. For a `00 -> 01` edit the compensation
+/// is `-0x0100` (`0xFFFF_FF00`); [`downgrade_patch`] computes the right delta
+/// for either case.
 pub const KERNEL_CHECKSUM_COMPENSATION: u32 = 0xFE00;
 
-/// Outcome of applying [`downgrade_patch`] — the two-byte-level §15.3 Site-1
-/// bypass for an older Kernel going onto a newer-generation receiver.
+/// Outcome of applying [`downgrade_patch`], which lets an older-generation
+/// Kernel be accepted by a newer-generation receiver.
 ///
-/// Marker codes seen in the hoard:
-/// - `0xFF` / `0x00` — older generation (Site-1 reject on a newer receiver)
-/// - `0x01` — newer generation (Site-1 accept)
+/// Generation marker values:
+/// - `0xFF` / `0x00`: older generation, rejected by a newer receiver
+/// - `0x01`: newer generation, accepted
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DowngradePatchOutcome {
     /// Marker was already `0x01` — nothing to patch; returned body is byte-
@@ -1333,7 +1450,7 @@ pub enum DowngradePatchOutcome {
     AlreadyNewer,
     /// Marker was `0xFF` or `0x00` — flipped to `0x01` and the checksum word
     /// at [`KERNEL_CHECKSUM_WORD_OFFSET`] was incremented by
-    /// [`KERNEL_CHECKSUM_COMPENSATION`] (mod 2³²). The §8.1 additive body sum
+    /// [`KERNEL_CHECKSUM_COMPENSATION`] (mod 2³²). The additive body sum
     /// is preserved. Carries the before/after word values for a dry-run diff.
     Patched {
         /// The pre-patch marker value (`0xFF` or `0x00`).
@@ -1362,13 +1479,28 @@ pub enum DowngradePatchError {
     },
 }
 
-/// The §15.3 Site-1 downgrade transform (pure byte edit, no I/O).
+impl core::fmt::Display for DowngradePatchError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::WrongSize { got } => {
+                write!(f, "Kernel body is {got} bytes, expected {KERNEL_BODY_LEN}")
+            }
+            Self::UnknownMarker { marker } => {
+                write!(f, "unrecognized generation marker {marker:#04x}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DowngradePatchError {}
+
+/// Mark an older-generation Kernel as newer-generation (pure byte edit, no I/O).
 ///
 /// Applied to a **decoded Kernel body** (not an envelope). Flips the generation
-/// marker at offset `0xFE` from `FF`/`00` to `01` and compensates the §8.1
+/// marker at offset `0xFE` from `FF`/`00` to `01` and compensates the
 /// additive body-sum invariant by adding `0xFE00` (mod 2³²) to the big-endian
-/// u32 word at offset `0x1020`. The resulting body passes a Site-1 receiver's
-/// `FF`/`00` reject at runtime `0x405266`. The only bytes that change are
+/// u32 word at offset `0x1020`. The resulting body passes a newer receiver's
+/// `FF`/`00` rejection (runtime address `0x405266`). The only bytes that change are
 /// `body[0xFE]` and `body[0x1020..0x1024]`.
 ///
 /// `AlreadyNewer` is a *successful* no-op (not an error) so callers can run
@@ -1394,7 +1526,7 @@ pub fn downgrade_patch(
     // Marker byte `0xFE` sits in the second-from-top byte position of its
     // enclosing BE u32 word, so flipping it from `marker` to `0x01` shifts
     // the 32-bit additive body sum by `(0x01 - marker) * 0x100`. Add the
-    // negation to the §8.1 balance word at `0x1020` to cancel it.
+    // negation to the balance word at `0x1020` to cancel it.
     let marker_delta = (0x01u32).wrapping_sub(marker as u32).wrapping_mul(0x100);
     let compensation = marker_delta.wrapping_neg();
     let o = KERNEL_CHECKSUM_WORD_OFFSET;
@@ -1427,7 +1559,7 @@ mod downgrade_patch_tests {
         let mut b = vec![0u8; KERNEL_BODY_LEN];
         b[KERNEL_MARKER_OFFSET] = marker;
         // Compensate: pre-populate the checksum word so the full-body
-        // additive sum is zero (matches §8.1 invariant on real Kernels).
+        // additive sum is zero (the invariant on real Kernels).
         let marker_word_offset = KERNEL_MARKER_OFFSET & !3;
         let mw = u32::from_be_bytes([
             b[marker_word_offset],
@@ -1451,7 +1583,7 @@ mod downgrade_patch_tests {
         assert_eq!(
             sum32_be(&patched),
             0,
-            "§8.1 zero-sum invariant must survive the patch"
+            "zero-sum invariant must survive the patch"
         );
         match outcome {
             DowngradePatchOutcome::Patched {
@@ -1460,7 +1592,7 @@ mod downgrade_patch_tests {
                 checksum_word_after,
             } => {
                 assert_eq!(marker_before, 0xFF);
-                // Documented §15.3 FF→01 compensation is +0xFE00.
+                // FF->01 compensation is +0xFE00.
                 assert_eq!(
                     checksum_word_after,
                     checksum_word_before.wrapping_add(0xFE00)
@@ -1703,11 +1835,11 @@ mod tests {
         original[20..24].copy_from_slice(&0x2000u32.to_be_bytes());
         let template = DecodedEnvelope {
             image: original.clone(),
-            info: PioneerInfo {
+            info: EnvelopeInfo {
                 model: "BDR-TEST".into(),
                 revision: "1.00".into(),
-                file_type: "Normal".into(),
-                layout: "normal".into(),
+                file_type: ComponentKind::Normal,
+                layout: Layout::Normal,
                 payload_offset: 0x10200,
                 payload_size: original.len(),
                 declared_size: Some(original.len()),
@@ -1744,7 +1876,7 @@ mod tests {
         let header = header_info(&envelope).unwrap();
         assert_eq!(header.model, "DVR-107D");
         assert_eq!(header.revision, "1.22");
-        assert_eq!(header.file_type, "Normal");
+        assert_eq!(header.file_type, Some(ComponentKind::Normal));
         assert!(decode_envelope(&envelope).is_none());
     }
 
@@ -1756,7 +1888,7 @@ mod tests {
         envelope[0x8000..0x8004].copy_from_slice(&[0xf4, 0xf0, 0x27, 0xe3]);
         envelope[0x10000..0x10010].copy_from_slice(b"PIONEER  DVR-112");
         let decoded = decode_envelope(&envelope).unwrap();
-        assert_eq!(decoded.info.layout, "plain");
+        assert_eq!(decoded.info.layout, Layout::Plain);
         assert_eq!(decoded.repack(&decoded.image).unwrap(), envelope);
 
         let mut transformed = envelope.clone();
@@ -1785,8 +1917,8 @@ mod tests {
         assert!(!has_plain_image_layout(&envelope));
 
         let decoded = decode_envelope(&envelope).unwrap();
-        assert_eq!(decoded.info.layout, "transformed-plane");
-        assert_eq!(decoded.info.file_type, "Plane");
+        assert_eq!(decoded.info.layout, Layout::TransformedPlane);
+        assert_eq!(decoded.info.file_type, ComponentKind::Plane);
         assert_eq!(decoded.info.model, "DVR-217");
         // The decoded image is the recovered direct-copy Plane body from 0x160.
         assert_eq!(decoded.image, plain[HEADER_LEN..]);
@@ -1879,7 +2011,7 @@ mod splice_tests {
         }
         let envelope = envelope(&image, &at);
         let decoded = decode_envelope(&envelope).unwrap();
-        assert_eq!(decoded.info.layout, "normal");
+        assert_eq!(decoded.info.layout, Layout::Normal);
         let found: Vec<usize> = decoded
             .spliced_blocks()
             .iter()
@@ -1939,8 +2071,8 @@ fn sha(data: &[u8]) -> String {
     format!("{:x}", Sha256::digest(data))
 }
 
-// Known instruction arrangements, with offsets extracted from CMP immediates.
-// Both BEQs must land after the XOR (and any stack store), preserving rotation.
+/// Every recognized XOR-skipping branch in a decoded Kernel image, as
+/// `(instruction_offset, [payload_offset; 2])`.
 pub fn kernel_xor_branches(image: &[u8]) -> Vec<(usize, [u32; 2])> {
     let mut out = Vec::new();
     for i in 0..image.len().saturating_sub(40) {
@@ -2003,15 +2135,19 @@ pub fn kernel_xor_branches(image: &[u8]) -> Vec<(usize, [u32; 2])> {
 /// Receiver policy proven by one recognized XOR-skipping branch in a decoded Kernel.
 #[derive(Clone, Debug, Serialize)]
 pub struct KernelXorPolicy {
+    /// Kernel image offset of the branch.
     pub instruction_offset: usize,
+    /// The two payload offsets whose words skip the XOR.
     pub offsets: [u32; 2],
 }
 impl KernelXorPolicy {
+    /// The policy a decoded Kernel proves, or `None` when it is absent or not
+    /// unique.
     pub fn from_kernel(kernel: &DecodedEnvelope) -> Option<Self> {
-        if kernel.info.file_type != "Kernel"
+        if kernel.info.file_type != ComponentKind::Kernel
             || !matches!(
-                kernel.info.layout.as_str(),
-                "kernel-front" | "kernel-derived"
+                kernel.info.layout,
+                Layout::KernelFront | Layout::KernelDerived
             )
         {
             return None;
@@ -2036,16 +2172,16 @@ pub fn decode_envelope_with_kernel(
     kernel: &DecodedEnvelope,
 ) -> Option<DecodedEnvelope> {
     let mut decoded = decode_envelope(data)?;
-    if decoded.info.file_type != "Normal" {
+    if decoded.info.file_type != ComponentKind::Normal {
         return Some(decoded);
     }
-    if decoded.info.layout == "raw-normal" {
+    if decoded.info.layout == Layout::RawNormal {
         return Some(decoded);
     }
     let policy = KernelXorPolicy::from_kernel(kernel)?;
     if !matches!(
-        decoded.info.layout.as_str(),
-        "normal" | "normal-reverse" | "normal-scaled-key"
+        decoded.info.layout,
+        Layout::Normal | Layout::NormalReverse | Layout::NormalScaledKey
     ) {
         return None;
     }
@@ -2056,14 +2192,14 @@ pub fn decode_envelope_with_kernel(
             payload,
             &decoded.key,
             false,
-            decoded.info.layout == "normal-reverse",
+            decoded.info.layout == Layout::NormalReverse,
             &policy.offsets,
         )?
     } else {
         let kept = decode_spliced(
             payload,
             &decoded.key,
-            decoded.info.layout == "normal-reverse",
+            decoded.info.layout == Layout::NormalReverse,
             &policy.offsets,
             &decoded.splices,
         )?;
@@ -2072,7 +2208,7 @@ pub fn decode_envelope_with_kernel(
     decoded.info.uniform_ranges = uniform_ranges(&decoded.image, 256);
     decoded.xor_exceptions = policy.offsets.to_vec();
     decoded.info.receiver_xor_policy = Some(policy);
-    if decoded.info.layout == "normal-scaled-key" && !be32_sum_zero(&decoded.image) {
+    if decoded.info.layout == Layout::NormalScaledKey && !be32_sum_zero(&decoded.image) {
         return None;
     }
     Some(decoded)
@@ -2129,7 +2265,7 @@ mod receiver_tests {
         );
         let normal =
             decode_envelope_with_kernel(&normal_bytes, &kernel).expect("receiver checksum");
-        assert_eq!(normal.info.layout, "normal-scaled-key");
+        assert_eq!(normal.info.layout, Layout::NormalScaledKey);
         assert_eq!(normal.info.payload_offset, 0x200 + normal.image.len() / 16);
         assert!(be32_sum_zero(&normal.image));
         assert_eq!(normal.repack(&normal.image).unwrap(), normal_bytes);
@@ -2190,11 +2326,11 @@ mod receiver_tests {
     fn policy_rejects_missing_ambiguous_unaligned_and_repeated_offsets() {
         let mut kernel = DecodedEnvelope {
             image: branch([0x16900, 0x77300]),
-            info: PioneerInfo {
+            info: EnvelopeInfo {
                 model: "BDR-TEST".into(),
                 revision: "1.00".into(),
-                file_type: "Kernel".into(),
-                layout: "kernel-front".into(),
+                file_type: ComponentKind::Kernel,
+                layout: Layout::KernelFront,
                 payload_offset: 0x1200,
                 payload_size: 64,
                 declared_size: None,
@@ -2259,7 +2395,7 @@ mod header_identity_tests {
     fn generic_header_builder_recreates_literal_fixture() {
         let original = include_bytes!("../../tests/fixtures/id43.header");
         let info = header_info(original).unwrap();
-        let opaque = PioneerHeaderOpaque {
+        let opaque = HeaderOpaque {
             id_left_padding: 0,
             prevalidation: [0; 0x10],
             validation: [0; 0x50],
@@ -2301,17 +2437,6 @@ mod header_identity_tests {
         assert!(h.destination.is_empty());
         assert!(h.generated_date.is_empty());
         assert_eq!(h.kernel_version2, "0000");
-    }
-}
-
-#[cfg(test)]
-mod role_tests {
-    #[test]
-    fn plane_is_a_distinct_literal_role_not_normal() {
-        assert_eq!(super::envelope_role("Plane"), "plane");
-        assert_eq!(super::envelope_role("Normal"), "main");
-        assert_eq!(super::envelope_role("Kernel"), "kernel");
-        assert_eq!(super::envelope_role("Unknown"), "unknown");
     }
 }
 
@@ -2359,7 +2484,7 @@ mod synthetic_roundtrip_tests {
     }
 
     fn header_bytes(file_type: &str, hardware: &str, destination: &str) -> [u8; 0x200] {
-        let info = PioneerHeaderInfo {
+        let info = HeaderInfo {
             id: "PIONEER BDR-US04".into(),
             model: "BDR-US04".into(),
             revision: "1.00".into(),
@@ -2368,9 +2493,9 @@ mod synthetic_roundtrip_tests {
             destination: destination.into(),
             generated_date: "00/00/00".into(),
             kernel_version2: "0000".into(),
-            file_type: file_type.into(),
+            file_type: ComponentKind::from_header(file_type),
         };
-        let opaque = PioneerHeaderOpaque {
+        let opaque = HeaderOpaque {
             id_left_padding: 0,
             prevalidation: [0; 0x10],
             validation: [0; 0x50],
@@ -2532,12 +2657,12 @@ mod synthetic_roundtrip_tests {
         validate_encrypted_pair(&pair, &kernel, &normal, KernelLayout::FrontKey).unwrap();
 
         let dk = decode_envelope(&pair.kernel).unwrap();
-        assert_eq!(dk.info.layout, "kernel-front");
+        assert_eq!(dk.info.layout, Layout::KernelFront);
         assert_eq!(dk.image, kernel);
         assert_eq!(dk.encoding_seed(), Some(0x123456));
 
         let dn = decode_envelope_with_kernel(&pair.normal, &dk).unwrap();
-        assert_eq!(dn.info.layout, "normal");
+        assert_eq!(dn.info.layout, Layout::Normal);
         assert_eq!(dn.image, normal);
         assert_eq!(
             dn.receiver_xor_exceptions(),
@@ -2598,7 +2723,7 @@ mod synthetic_roundtrip_tests {
         validate_encrypted_pair(&pair, &kernel, &normal, KernelLayout::DerivedKey).unwrap();
 
         let dk = decode_envelope(&pair.kernel).unwrap();
-        assert_eq!(dk.info.layout, "kernel-derived");
+        assert_eq!(dk.info.layout, Layout::KernelDerived);
         assert_eq!(dk.image, kernel);
         assert_eq!(dk.encoding_seed(), Some(0x123456));
 
@@ -2639,7 +2764,7 @@ mod synthetic_roundtrip_tests {
 
         let dk = decode_envelope(&pair.kernel).unwrap();
         let dn = decode_envelope_with_kernel(&pair.normal, &dk).unwrap();
-        assert_eq!(dn.info.layout, "normal-scaled-key");
+        assert_eq!(dn.info.layout, Layout::NormalScaledKey);
         assert_eq!(dn.image, normal);
         assert!(normal_authentication_valid(&pair.normal, &kernel));
 
@@ -2735,7 +2860,7 @@ mod synthetic_roundtrip_tests {
         .unwrap();
         let dk = decode_envelope(&kernel_enc).unwrap();
         let again = decode_envelope_with_kernel(&kernel_enc, &dk).unwrap();
-        assert_eq!(again.info.file_type, "Kernel");
+        assert_eq!(again.info.file_type, ComponentKind::Kernel);
         assert_eq!(again.image, kernel);
         assert!(again.receiver_xor_exceptions().is_none());
     }
@@ -2747,7 +2872,7 @@ mod synthetic_roundtrip_tests {
         env[0x1200 + 0x1000..0x1200 + 0x1006].copy_from_slice(b"SAT 8A");
         be32_fix(&mut env[0x1200..], 0x2000);
         let decoded = decode_envelope(&env).unwrap();
-        assert_eq!(decoded.info.layout, "raw-kernel");
+        assert_eq!(decoded.info.layout, Layout::RawKernel);
         assert_eq!(decoded.image, env[0x1200..]);
         assert_eq!(decoded.repack(&decoded.image).unwrap(), env);
         // A non-zero reserved byte before the image disqualifies the raw layout
@@ -2756,14 +2881,14 @@ mod synthetic_roundtrip_tests {
         broken[0x300] = 1;
         assert_ne!(
             decode_envelope(&broken).map(|d| d.info.layout),
-            Some("raw-kernel".to_string())
+            Some(Layout::RawKernel)
         );
         // A length other than 0x11200 disqualifies the raw kernel layout.
         let mut longer = env.clone();
         longer.extend_from_slice(&[0u8; 0x100]);
         assert_ne!(
             decode_envelope(&longer).map(|d| d.info.layout),
-            Some("raw-kernel".to_string())
+            Some(Layout::RawKernel)
         );
     }
 
@@ -2776,7 +2901,7 @@ mod synthetic_roundtrip_tests {
         env[img_off + 20..img_off + 24].copy_from_slice(&0x2000u32.to_be_bytes());
         be32_fix(&mut env[img_off..], 0x1000);
         let decoded = decode_envelope(&env).unwrap();
-        assert_eq!(decoded.info.layout, "raw-normal");
+        assert_eq!(decoded.info.layout, Layout::RawNormal);
         assert_eq!(decoded.image, env[img_off..]);
         assert_eq!(decoded.repack(&decoded.image).unwrap(), env);
         // repack must refuse an image whose big-endian sum is not zero.
@@ -2794,7 +2919,7 @@ mod synthetic_roundtrip_tests {
         )
         .unwrap();
         let passthrough = decode_envelope_with_kernel(&env, &dk).unwrap();
-        assert_eq!(passthrough.info.layout, "raw-normal");
+        assert_eq!(passthrough.info.layout, Layout::RawNormal);
     }
 
     #[test]
@@ -2829,7 +2954,7 @@ mod synthetic_roundtrip_tests {
         env[0xb000..].copy_from_slice(&cipher);
 
         let decoded = decode_envelope(&env).unwrap();
-        assert_eq!(decoded.info.layout, "kernel-legacy-le");
+        assert_eq!(decoded.info.layout, Layout::KernelLegacyLe);
         assert_eq!(decoded.image, image);
         assert_eq!(decoded.repack(&decoded.image).unwrap(), env);
 
@@ -3062,7 +3187,7 @@ mod synthetic_roundtrip_tests {
         be32_fix(&mut image, 0x1f00);
         let env = plain_normal_env(&image);
         let decoded = decode_envelope(&env).unwrap();
-        assert_eq!(decoded.info.layout, "normal");
+        assert_eq!(decoded.info.layout, Layout::Normal);
         assert_eq!(decoded.image, image);
         // image.len() >= 20 -> unknown word is read (guards `>= 20` vs `< 20`).
         assert_eq!(decoded.info.unknown_word_0x10, Some(0xdead_beef));
@@ -3094,7 +3219,7 @@ mod synthetic_roundtrip_tests {
         // layout is "normal" (not scaled), so the be32 checksum guard must NOT
         // apply here; a `== -> !=` on that layout check would reject it.
         let decoded = decode_envelope_with_kernel(&env, &dk).unwrap();
-        assert_eq!(decoded.info.layout, "normal");
+        assert_eq!(decoded.info.layout, Layout::Normal);
         assert_eq!(decoded.image, image);
     }
 
@@ -3107,7 +3232,7 @@ mod synthetic_roundtrip_tests {
         be32_fix(&mut wrong_hw[0x1200..], 0x2000);
         assert_ne!(
             decode_envelope(&wrong_hw).map(|d| d.info.layout),
-            Some("raw-kernel".to_string())
+            Some(Layout::RawKernel)
         );
         // raw-kernel shape whose image checksum is non-zero must not be raw.
         let mut bad_sum = vec![0u8; 0x11200];
@@ -3116,7 +3241,7 @@ mod synthetic_roundtrip_tests {
         bad_sum[0x1200 + 0x40] = 1;
         assert_ne!(
             decode_envelope(&bad_sum).map(|d| d.info.layout),
-            Some("raw-kernel".to_string())
+            Some(Layout::RawKernel)
         );
     }
 
@@ -3184,7 +3309,7 @@ mod synthetic_roundtrip_tests {
         let valid = legacy_le_env(&valid_le_image());
         assert_eq!(
             decode_envelope(&valid).unwrap().info.layout,
-            "kernel-legacy-le"
+            Layout::KernelLegacyLe
         );
         // A non-0xff byte in the reserved [0x200..0x9000] region disqualifies it.
         let mut dirty = valid.clone();
@@ -3201,11 +3326,11 @@ mod synthetic_roundtrip_tests {
     fn repack_resized_normal_guard_isolation() {
         let valid = normal_image(0x2000);
         let tmpl = |image: Vec<u8>, ft: &str| DecodedEnvelope {
-            info: PioneerInfo {
+            info: EnvelopeInfo {
                 model: "BDR".into(),
                 revision: "1".into(),
-                file_type: ft.into(),
-                layout: "normal".into(),
+                file_type: ComponentKind::from_header(ft).unwrap(),
+                layout: Layout::Normal,
                 payload_offset: 0x10200,
                 payload_size: image.len(),
                 declared_size: Some(image.len()),
@@ -3269,11 +3394,11 @@ mod synthetic_roundtrip_tests {
         write_branch(&mut image, 0, [0x100, 0x200]);
         let env = DecodedEnvelope {
             image,
-            info: PioneerInfo {
+            info: EnvelopeInfo {
                 model: "BDR".into(),
                 revision: "1".into(),
-                file_type: "Kernel".into(),
-                layout: "raw-kernel".into(), // not kernel-front/derived
+                file_type: ComponentKind::Kernel,
+                layout: Layout::RawKernel, // not kernel-front/derived
                 payload_offset: 0,
                 payload_size: 64,
                 declared_size: None,
@@ -3294,7 +3419,7 @@ mod synthetic_roundtrip_tests {
 
     #[test]
     fn build_header_field_and_id_guards_are_exact() {
-        let info = |id: &str, model: &str, revision: &str| PioneerHeaderInfo {
+        let info = |id: &str, model: &str, revision: &str| HeaderInfo {
             id: id.into(),
             model: model.into(),
             revision: revision.into(),
@@ -3303,9 +3428,9 @@ mod synthetic_roundtrip_tests {
             destination: "GENERAL".into(),
             generated_date: "00/00/00".into(),
             kernel_version2: "0000".into(),
-            file_type: "Normal".into(),
+            file_type: Some(ComponentKind::Normal),
         };
-        let opq = |left: u8| PioneerHeaderOpaque {
+        let opq = |left: u8| HeaderOpaque {
             id_left_padding: left,
             prevalidation: [0; 0x10],
             validation: [0; 0x50],

@@ -406,4 +406,142 @@ mod tests {
             Err(Error::Oversize(_))
         ));
     }
+
+    /// Returns a configurable byte count and sense.
+    struct Fixed {
+        n: usize,
+        sense: Option<(u8, u8, u8)>,
+        fail: bool,
+    }
+    impl Transport for Fixed {
+        type Error = u8;
+        fn exec(&mut self, _: &[u8], _: Data<'_>) -> Result<usize, u8> {
+            if self.fail {
+                Err(9)
+            } else {
+                Ok(self.n)
+            }
+        }
+        fn sense(&self) -> Option<(u8, u8, u8)> {
+            self.sense
+        }
+    }
+
+    #[test]
+    fn write_requires_every_byte_transferred() {
+        let control = [0; CONTROL_LEN as usize];
+        // Exactly the data length: ok. More than asked: still ok.
+        for n in [4, 5] {
+            let mut t = Fixed {
+                n,
+                sense: None,
+                fail: false,
+            };
+            let mut s = Session {
+                t: &mut t,
+                control: &control,
+            };
+            s.write(Role::Kernel, 0, &[1, 2, 3, 4]).unwrap();
+        }
+        // Fewer: Short with exact counts.
+        let mut t = Fixed {
+            n: 3,
+            sense: None,
+            fail: false,
+        };
+        let mut s = Session {
+            t: &mut t,
+            control: &control,
+        };
+        assert!(matches!(
+            s.write(Role::Kernel, 0, &[1, 2, 3, 4]),
+            Err(Error::Short {
+                expected: 4,
+                actual: 3
+            })
+        ));
+    }
+
+    #[test]
+    fn field_limit_is_inclusive() {
+        let control = [0; CONTROL_LEN as usize];
+        let mut t = Fixed {
+            n: 1,
+            sense: None,
+            fail: false,
+        };
+        let mut s = Session {
+            t: &mut t,
+            control: &control,
+        };
+        s.write(Role::Normal, 0xFF_FFFF, &[0]).unwrap();
+        assert!(matches!(
+            s.write(Role::Normal, 0x100_0000, &[0]),
+            Err(Error::Oversize(0x100_0000))
+        ));
+    }
+
+    #[test]
+    fn only_the_lock_sense_maps_to_locked() {
+        let mut buf = [0u8; 4];
+        let mut t = Fixed {
+            n: 0,
+            sense: Some((0x05, 0x24, 0x00)),
+            fail: true,
+        };
+        assert!(matches!(
+            read_memory(&mut t, 0, &mut buf),
+            Err(Error::Locked)
+        ));
+        for sense in [None, Some((0x05, 0x20, 0x00)), Some((0x02, 0x24, 0x00))] {
+            let mut t = Fixed {
+                n: 0,
+                sense,
+                fail: true,
+            };
+            assert!(matches!(
+                read_memory(&mut t, 0, &mut buf),
+                Err(Error::Transport(9))
+            ));
+        }
+    }
+
+    #[test]
+    fn display_and_debug_text() {
+        use std::string::ToString;
+        type E = Error<u8>;
+        assert_eq!(E::Transport(7).to_string(), "transport error: 7");
+        assert_eq!(
+            E::Locked.to_string(),
+            "drive refused the command (sense 05/24/00)"
+        );
+        assert_eq!(
+            E::Short {
+                expected: 4,
+                actual: 3
+            }
+            .to_string(),
+            "short transfer: expected 4 bytes, got 3"
+        );
+        assert_eq!(
+            E::Oversize(0x100_0000).to_string(),
+            "0x1000000 exceeds the 24-bit CDB field"
+        );
+        assert_eq!(E::Challenge.to_string(), "DVR challenge has no solution");
+        assert_eq!(
+            E::UnknownClass.to_string(),
+            "drive identity matches no known class"
+        );
+        let control = [0; CONTROL_LEN as usize];
+        let mut t = Fixed {
+            n: 0,
+            sense: None,
+            fail: false,
+        };
+        let s = Session {
+            t: &mut t,
+            control: &control,
+        };
+        assert_eq!(std::format!("{s:?}"), "Session { .. }");
+    }
 }

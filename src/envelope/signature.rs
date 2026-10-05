@@ -531,4 +531,101 @@ mod tests {
             SignatureCheck::Unsupported
         );
     }
+
+    fn put(env: &mut [u8], offset: usize, value: &BigUint) {
+        let bytes = value.to_bytes_be();
+        assert!(bytes.len() <= 20);
+        env[offset..offset + 20].fill(0);
+        env[offset + 20 - bytes.len()..offset + 20].copy_from_slice(&bytes);
+    }
+
+    #[test]
+    fn scalar_s_not_reduced_below_n_is_invalid() {
+        // s + n verifies mathematically (inverse is mod n), so only the range
+        // guard rejects it.
+        let c = curve();
+        let private = BigUint::from(5u8);
+        let public = multiply(private.clone(), &c.g, c).unwrap();
+        let mut env = normal_envelope();
+        let z = BigUint::from_bytes_be(&Sha1::digest(&env[0x200..]));
+        let mut found = None;
+        for k in 1u32..400 {
+            let nonce = BigUint::from(k);
+            let r = multiply(nonce.clone(), &c.g, c).unwrap().0 % &c.n;
+            let s = ((&z + &r * &private) * inverse(&nonce, &c.n)) % &c.n;
+            if (&s + &c.n).bits() <= 160 {
+                found = Some((r, s));
+                break;
+            }
+        }
+        let (r, s) = found.expect("a small s exists");
+        put(&mut env, 0x170, &r);
+        put(&mut env, 0x184, &s);
+        put(&mut env, 0x198, &public.0);
+        put(&mut env, 0x1ac, &public.1);
+        assert_eq!(
+            verify_normal_signature(&env),
+            SignatureCheck::ValidKeyAndCiphertext
+        );
+        put(&mut env, 0x184, &(&s + &c.n));
+        assert_eq!(verify_normal_signature(&env), SignatureCheck::Invalid);
+    }
+
+    #[test]
+    fn add_distinguishes_doubling_negation_and_distinct_points() {
+        let c = curve();
+        let g = c.g.clone();
+        // P + (-P) is the point at infinity.
+        let neg = Point(g.0.clone(), &c.p - &g.1);
+        assert!(add(Some(g.clone()), Some(neg), c).is_none());
+        // Doubling matches repeated multiplication.
+        let two = multiply(BigUint::from(2u8), &g, c).unwrap();
+        let dbl = add(Some(g.clone()), Some(g.clone()), c).unwrap();
+        assert_eq!((dbl.0, dbl.1), (two.0, two.1));
+        // Distinct x with equal y is NOT a doubling: slope is zero.
+        let u = |v: u32| BigUint::from(v);
+        let r = add(Some(Point(u(1), u(5))), Some(Point(u(2), u(5))), c).unwrap();
+        assert_eq!(r.0, &c.p - u(3));
+        assert_eq!(r.1, &c.p - u(5));
+        // Equal x with different y (not negations) is not a doubling either.
+        let r = add(Some(Point(u(1), u(5))), Some(Point(u(1), u(6))), c).unwrap();
+        assert_eq!(r.0, &c.p - u(2));
+        assert_eq!(r.1, &c.p - u(5));
+        // Different x whose y values sum to p is not infinity.
+        let r = add(Some(Point(u(1), u(5))), Some(Point(u(2), &c.p - u(5))), c);
+        assert!(r.is_some());
+    }
+
+    #[test]
+    fn on_curve_rejects_x_equal_to_p() {
+        let c = curve();
+        // x = p reduces to 0 and y^2 = b has a root (p = 3 mod 4), so only the
+        // range check rejects it.
+        let y = hex("a514f3b012021ba8ff9777b3d922c4d63501a4de");
+        assert_eq!((&y * &y) % &c.p, c.b);
+        assert!(!on_curve(&Point(c.p.clone(), y.clone()), c));
+        assert!(on_curve(&Point(BigUint::zero(), y), c));
+    }
+
+    #[test]
+    fn signing_keys_with_short_public_coordinates_work() {
+        // Scalar 50 gives a 19-byte public X: padded, not an error.
+        let mut d = [0u8; 20];
+        d[19] = 50;
+        let key = SigningKey::from_bytes(d).unwrap();
+        let mut env = normal_envelope();
+        key.sign_normal(&mut env).unwrap();
+        assert_eq!(
+            verify_normal_signature(&env),
+            SignatureCheck::ValidKeyAndCiphertext
+        );
+        assert_eq!(env[0x198], 0);
+        assert_eq!(env[0x199], 0xc5);
+    }
+
+    #[test]
+    fn signing_key_debug_hides_the_scalar() {
+        let key = SigningKey::from_bytes([1; 20]).unwrap();
+        assert_eq!(std::format!("{key:?}"), "SigningKey { .. }");
+    }
 }

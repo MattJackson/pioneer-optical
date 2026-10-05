@@ -1351,4 +1351,228 @@ mod tests {
         )
         .is_err());
     }
+
+    const ID: &str = "PIONEER BDR-TEST";
+
+    fn kernel_err(k: &[u8], id: &str, rev: &str, date: &str) -> Error {
+        encode_kernel_envelope(
+            k,
+            id,
+            &KernelBuild {
+                revision: rev,
+                date,
+                key: KernelKeySource::Seed(1),
+            },
+        )
+        .unwrap_err()
+    }
+
+    #[test]
+    fn encode_kernel_envelope_exact_errors_per_guard() {
+        let k = front_kernel();
+        let structure = Error::KernelStructure;
+        let incomplete = Error::KernelIncomplete;
+        // First guard: length, checksum, SAT identity.
+        assert_eq!(kernel_err(&k[..0xfffc], ID, "1.00", "00/00/00"), structure);
+        let mut bad_sum = k.clone();
+        bad_sum[0x3000] ^= 1;
+        assert_eq!(kernel_err(&bad_sum, ID, "1.00", "00/00/00"), structure);
+        let no_sat = front_kernel_field(|k| k[0x1000] = b'X');
+        assert_eq!(kernel_err(&no_sat, ID, "1.00", "00/00/00"), structure);
+        // Second guard: each condition alone.
+        let hw7 = front_kernel_field(|k| k[0x1000..0x1008].copy_from_slice(b"SAT 8A1 "));
+        assert_eq!(kernel_err(&hw7, ID, "1.00", "00/00/00"), incomplete);
+        let tag0 = front_kernel_field(|k| k[0x1008..0x1010].copy_from_slice(b"        "));
+        assert_eq!(kernel_err(&tag0, ID, "1.00", "00/00/00"), incomplete);
+        let v20 = front_kernel_field(|k| k[0x1010..0x1014].copy_from_slice(b"    "));
+        assert_eq!(kernel_err(&v20, ID, "1.00", "00/00/00"), incomplete);
+        assert_eq!(kernel_err(&k, "PIONEER", "1.00", "00/00/00"), incomplete);
+        assert_eq!(
+            kernel_err(&k, "PIONEER BDR-\u{c9}", "1.00", "00/00/00"),
+            incomplete
+        );
+        assert_eq!(
+            kernel_err(&k, "PIONEER BDR-\x01", "1.00", "00/00/00"),
+            incomplete
+        );
+        assert_eq!(
+            kernel_err(&k, "PIONEER BDR-\x7f", "1.00", "00/00/00"),
+            incomplete
+        );
+        assert_eq!(kernel_err(&k, ID, "", "00/00/00"), incomplete);
+        assert_eq!(kernel_err(&k, ID, "1.00", ""), incomplete);
+        assert_eq!(kernel_err(&k, ID, "1.00", "0123456789A"), incomplete);
+        assert_eq!(kernel_err(&k, ID, "1.00", "00/00/0\u{c9}"), incomplete);
+    }
+
+    fn pair_err(i: &BuildInputs<'_>) -> Error {
+        encode_encrypted_pair(i, NormalSignature::Sign(&a_signer())).unwrap_err()
+    }
+
+    #[test]
+    fn encode_pair_exact_errors_per_guard() {
+        let kernel = front_kernel();
+        let n = normal_image(0x2000);
+        let structure = Error::ImageStructure;
+        let incomplete = Error::ImageIncomplete;
+        // Structure guard, each condition alone.
+        assert_eq!(pair_err(&base_inputs(&kernel[..0xfffc], &n)), structure);
+        assert_eq!(
+            pair_err(&base_inputs(&kernel, &normal_image(0x1f00))),
+            structure
+        );
+        assert_eq!(
+            pair_err(&base_inputs(&kernel, &normal_image(0x2080))),
+            structure
+        );
+        let mut bad_k = kernel.clone();
+        bad_k[0x3000] ^= 1;
+        assert_eq!(pair_err(&base_inputs(&bad_k, &n)), structure);
+        let mut bad_n = n.clone();
+        bad_n[0x44] ^= 1;
+        assert_eq!(pair_err(&base_inputs(&kernel, &bad_n)), structure);
+        let no_sat = front_kernel_field(|k| k[0x1000] = b'X');
+        assert_eq!(pair_err(&base_inputs(&no_sat, &n)), structure);
+        let mut no_pioneer = n.clone();
+        no_pioneer[0] = b'X';
+        be32_fix(&mut no_pioneer, 0x1f00);
+        assert_eq!(pair_err(&base_inputs(&kernel, &no_pioneer)), structure);
+        let mut declared = n.clone();
+        declared[20..24].copy_from_slice(&0x3000u32.to_be_bytes());
+        be32_fix(&mut declared, 0x1f00);
+        assert_eq!(pair_err(&base_inputs(&kernel, &declared)), structure);
+        // Identity guard, each condition alone.
+        let hw7 = front_kernel_field(|k| k[0x1000..0x1008].copy_from_slice(b"SAT 8A1 "));
+        assert_eq!(pair_err(&base_inputs(&hw7, &n)), incomplete);
+        let tag0 = front_kernel_field(|k| k[0x1008..0x1010].copy_from_slice(b"        "));
+        assert_eq!(pair_err(&base_inputs(&tag0, &n)), incomplete);
+        let v20 = front_kernel_field(|k| k[0x1010..0x1014].copy_from_slice(b"    "));
+        assert_eq!(pair_err(&base_inputs(&v20, &n)), incomplete);
+        for id in [
+            "PIONEER",
+            "PIONEER BDR-\u{c9}",
+            "PIONEER BDR-\x01",
+            "PIONEER BDR-\x7f",
+        ] {
+            let mut i = base_inputs(&kernel, &n);
+            i.envelope_id = id;
+            assert_eq!(pair_err(&i), incomplete, "{id:?}");
+        }
+        let mut i = base_inputs(&kernel, &n);
+        i.normal_revision = "";
+        assert_eq!(pair_err(&i), incomplete);
+        // Date guard, each condition alone.
+        for date in ["", "0123456789A", "00/00/0\u{c9}"] {
+            let mut i = base_inputs(&kernel, &n);
+            i.normal_date = date;
+            assert_eq!(pair_err(&i), Error::InvalidDate, "{date:?}");
+        }
+        // Exception guard: out of range, and in range but misaligned.
+        let far = front_kernel_with([0x100, 0x4000]);
+        assert_eq!(
+            pair_err(&base_inputs(&far, &n)),
+            Error::XorExceptionOutOfRange
+        );
+        let odd = front_kernel_with([0x100, 0x202]);
+        assert_eq!(
+            pair_err(&base_inputs(&odd, &n)),
+            Error::XorExceptionOutOfRange
+        );
+    }
+
+    #[test]
+    fn abi_check_rejects_only_unsatisfied_requirements() {
+        let kernel = front_kernel();
+        let call = |target: u32| {
+            let mut n = vec![0u8; 0x10100];
+            n[..8].copy_from_slice(b"PIONEER ");
+            let l = n.len() as u32;
+            n[20..24].copy_from_slice(&l.to_be_bytes());
+            let t = target.to_be_bytes();
+            n[0x3000..0x3004].copy_from_slice(&[0x5E, t[1], t[2], t[3]]);
+            let fix = n.len() - 0x100;
+            be32_fix(&mut n, fix);
+            n
+        };
+        // Satisfied: the Kernel start is always provided.
+        let ok = call(0x40_0000);
+        assert!(crate::image::required_abi(&ok).is_some());
+        assert!(crate::image::provided_abi(&kernel).is_some());
+        encode_encrypted_pair(
+            &base_inputs(&kernel, &ok),
+            NormalSignature::Sign(&a_signer()),
+        )
+        .unwrap();
+        // Unsatisfied: 0x400102 is inside a 6-byte instruction.
+        let bad = call(0x40_0102);
+        assert_eq!(pair_err(&base_inputs(&kernel, &bad)), Error::AbiMismatch);
+    }
+
+    #[test]
+    fn validate_pair_inner_exact_errors() {
+        let kernel = front_kernel();
+        let n = normal_image(0x2000);
+        let s = a_signer();
+        let pair =
+            encode_encrypted_pair(&base_inputs(&kernel, &n), NormalSignature::Sign(&s)).unwrap();
+        let bad = Error::InvalidSignedEnvelope;
+        let mut p = pair.clone();
+        p.kernel.pop();
+        assert_eq!(validate_encrypted_pair(&p, &kernel, &n), Err(bad));
+        let mut p = pair.clone();
+        p.normal.push(0);
+        assert_eq!(validate_encrypted_pair(&p, &kernel, &n), Err(bad));
+        let mut p = pair.clone();
+        p.normal[0x180] ^= 1;
+        assert_eq!(validate_encrypted_pair(&p, &kernel, &n), Err(bad));
+        // A zeroed-signature pair passes the unchecked path but fails the
+        // checked one with exactly the signature error.
+        let z = encode_encrypted_pair(&base_inputs(&kernel, &n), NormalSignature::Zeroed).unwrap();
+        assert_eq!(validate_encrypted_pair(&z, &kernel, &n), Err(bad));
+        validate_pair_inner(&z, &kernel, &n, false).unwrap();
+        // Image mismatches are reported as round-trip errors.
+        let other_k = front_kernel_field(|k| k[0x6000] ^= 1);
+        assert_eq!(
+            validate_encrypted_pair(&pair, &other_k, &n),
+            Err(Error::RoundTripMismatch)
+        );
+        let mut other_n = n.clone();
+        other_n[0x50] ^= 1;
+        assert_eq!(
+            validate_encrypted_pair(&pair, &kernel, &other_n),
+            Err(Error::RoundTripMismatch)
+        );
+    }
+
+    #[test]
+    fn kernel_layout_mismatch_alone_is_a_round_trip_error() {
+        let kernel = front_kernel();
+        let n = normal_image(0x2000);
+        let pair = encode_encrypted_pair(
+            &base_inputs(&kernel, &n),
+            NormalSignature::Sign(&a_signer()),
+        )
+        .unwrap();
+        // Re-encode the same Kernel image as a derived-key envelope. Every
+        // length and image comparison still holds; only the layout differs.
+        let seed = 0x123456u32;
+        let key = make_key(seed, 0x1000);
+        let mut enc = pair.kernel[..0x200].to_vec();
+        enc.extend_from_slice(&transform(&kernel, &key, true).unwrap());
+        let steps = 0x11200 - 0x200 - 16 + 0x1000;
+        let final_state = super::super::jump_seed(seed, steps, false);
+        let trailer_start = super::super::jump_seed(final_state, 0xff0, true);
+        enc.extend_from_slice(&make_key(trailer_start, 0x1000));
+        let derived = decode_envelope(&enc).expect("derived Kernel decodes");
+        assert_eq!(derived.info.layout, Layout::KernelDerived);
+        assert_eq!(derived.image, kernel);
+        let swapped = EncryptedPair {
+            kernel: enc,
+            normal: pair.normal.clone(),
+        };
+        assert_eq!(
+            validate_encrypted_pair(&swapped, &kernel, &n),
+            Err(Error::RoundTripMismatch)
+        );
+    }
 }

@@ -284,6 +284,31 @@ pub mod dvr {
             let other = super::solve(&super::challenge(0x4321)).unwrap();
             assert_ne!(r[0], other[0]);
             assert_eq!(super::solve(&[1, 2]), None);
+            // Exact responses (independently computed LCG).
+            assert_eq!(r, [0x55; crate::cdb::DVR_RESPONSE_LEN as usize]);
+            assert_eq!(other, [0xb9; crate::cdb::DVR_RESPONSE_LEN as usize]);
+        }
+
+        #[test]
+        fn generator_outputs_exact_bytes() {
+            // state 1 -> 0x41C67EA6 -> high-half low byte 0xC6.
+            assert_eq!(super::challenge(1)[0], 0xC6);
+            let mut s = 0u32;
+            assert_eq!(super::step(&mut s), 0);
+            assert_eq!(s, 0x3039);
+            let mut s = 1u32;
+            assert_eq!(super::step(&mut s), 0xC6);
+            assert_eq!(s, 0x41C6_7EA6);
+        }
+
+        #[test]
+        fn rejects_a_non_challenge() {
+            // A genuine challenge with a corrupted head matches no seed.
+            let mut c = super::challenge(0x1234);
+            for b in c.iter_mut().take(4) {
+                *b ^= 0xFF;
+            }
+            assert_eq!(super::solve(&c), None);
         }
     }
 }
@@ -374,5 +399,38 @@ mod tests {
         assert!(Identity::parse(&[0; 35], &[0; 48]).is_none());
         assert!(Identity::parse(&[0; 36], &[0; 43]).is_none());
         assert!(Identity::parse(&[0; 36], &[0; 44]).is_some());
+    }
+
+    #[test]
+    fn raw_blocks_are_the_parsed_bytes() {
+        let inq = inquiry(b"BD-RW   BDR-UD04");
+        let ven = vendor(b"SAT 8A10");
+        let id = Identity::parse(&inq, &ven).unwrap();
+        assert_eq!(id.inquiry_bytes(), &inq);
+        assert_eq!(id.vendor_bytes(), &ven);
+    }
+
+    #[test]
+    fn class_requires_a_known_product_family() {
+        let id = Identity::parse(&inquiry(b"CD-RW   UNKNOWN1"), &vendor(b"DVR 0112")).unwrap();
+        assert_eq!(id.class(), None);
+    }
+
+    #[test]
+    fn locked_sense_needs_key_and_code() {
+        assert!(sense::is_locked(0x05, 0x24, 0x00));
+        assert!(!sense::is_locked(0x05, 0x24, 0x01));
+        assert!(!sense::is_locked(0x05, 0x25, 0x00));
+        assert!(!sense::is_locked(0x02, 0x24, 0x00));
+        assert!(!sense::is_locked(0x00, 0x00, 0x00));
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn component_kind_displays_its_header_text() {
+        use std::string::ToString;
+        assert_eq!(ComponentKind::Kernel.to_string(), "Kernel");
+        assert_eq!(ComponentKind::Normal.to_string(), "Normal");
+        assert_eq!(ComponentKind::Plane.to_string(), "Plane");
     }
 }

@@ -6,7 +6,7 @@ edition = "2021"
 rust-version = "1.75"
 license = "MIT"
 authors = ["Matthew Jackson <1085847+MattJackson@users.noreply.github.com>"]
-description = "Pioneer optical drive (BD/DVD) vendor protocol: command encoding, response decoding, update and memory-read sequences over any SCSI transport, and firmware image analysis. no_std."
+description = "Pioneer optical drive (BD/DVD) vendor protocol: command encoding, response decoding, update and memory-read sequences over any SCSI transport, firmware image analysis, and envelope codec. no_std by default."
 repository = "https://github.com/MattJackson/pioneer-optical"
 homepage = "https://github.com/MattJackson/pioneer-optical"
 documentation = "https://docs.rs/pioneer-optical"
@@ -22,9 +22,18 @@ name = "pioneer_optical"
 drive = []
 # Firmware image analysis. Uses alloc and a zlib inflater.
 image = ["dep:miniz_oxide"]
+# Envelope codec: decode, encode, sign Pioneer firmware envelopes. Requires std.
+envelope = ["dep:serde", "dep:sha2", "dep:flate2", "dep:num-bigint", "dep:num-traits", "dep:sha1", "dep:getrandom"]
 
 [package.metadata.docs.rs]
 all-features = true
 
 [dependencies]
 miniz_oxide = { version = "0.8", optional = true, default-features = false, features = ["with-alloc"] }
+serde = { version = "1", features = ["derive"], optional = true }
+sha2 = { version = "0.10", optional = true }
+flate2 = { version = "1", optional = true }
+num-bigint = { version = "0.4", optional = true }
+num-traits = { version = "0.2", optional = true }
+sha1 = { version = "0.10", optional = true }
+getrandom = { version = "0.3", optional = true }

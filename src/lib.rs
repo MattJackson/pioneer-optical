@@ -26,7 +26,7 @@
 //!   generations require the [`dvr`] handshake before entry.
 //!
 //! Neither state enables the other.
-#![no_std]
+#![cfg_attr(not(feature = "envelope"), no_std)]
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
@@ -36,6 +36,9 @@ extern crate alloc;
 pub mod cdb;
 #[cfg(feature = "drive")]
 pub mod drive;
+#[cfg(feature = "envelope")]
+#[allow(missing_docs)]
+pub mod envelope;
 #[cfg(feature = "image")]
 pub mod image;
 

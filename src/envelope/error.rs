@@ -45,6 +45,19 @@ pub enum Error {
     SignatureBlockLength,
     /// The envelope size or Normal signature is not valid.
     InvalidSignedEnvelope,
+    /// The Kernel body is not the expected 64 KiB.
+    KernelBodySize {
+        /// Actual length received.
+        got: usize,
+    },
+    /// The Kernel generation marker is not `0x00`, `0x01` or `0xFF`; the body is
+    /// almost certainly corrupt.
+    UnknownMarker {
+        /// The marker byte found at offset `0xFE`.
+        marker: u8,
+    },
+    /// The Normal requires Kernel entry points the Kernel does not provide.
+    AbiMismatch,
     /// The Kernel envelope cannot be decoded.
     KernelUndecodable,
     /// The Normal envelope cannot be decoded with the Kernel's receiver rules.
@@ -73,20 +86,16 @@ impl fmt::Display for Error {
             Error::InvalidFilename => "invalid embedded filename",
             Error::MissingModel => "envelope ID has no model",
             Error::HeaderFieldsDoNotFit => "Pioneer header fields do not fit",
-            Error::KernelStructure => {
-                "captured Kernel image does not satisfy Pioneer H8/SAT structure"
-            }
-            Error::KernelIncomplete => "captured Kernel image or drive identity is incomplete",
+            Error::KernelStructure => "Kernel image does not satisfy Pioneer H8/SAT structure",
+            Error::KernelIncomplete => "Kernel image or drive identity is incomplete",
             Error::AmbiguousKernelLayout => {
                 "Kernel receiver dispatcher does not identify a unique envelope layout"
             }
             Error::RawKeyLength => "raw Kernel key must be exactly 0x1000 bytes",
             Error::RawKeyNotAllowed => "derived-key Kernel requires an LCG seed, not raw key bytes",
             Error::KernelEncode => "Kernel encode failed",
-            Error::ImageStructure => {
-                "captured images do not satisfy Pioneer H8/SAT image structure"
-            }
-            Error::ImageIncomplete => "captured image or drive identity is incomplete",
+            Error::ImageStructure => "images do not satisfy Pioneer H8/SAT image structure",
+            Error::ImageIncomplete => "image or drive identity is incomplete",
             Error::InvalidDate => "Normal build date is invalid",
             Error::XorPolicyNotUnique => "Kernel XOR exception policy is not unique",
             Error::XorExceptionOutOfRange => "Kernel XOR exception is outside Normal image",
@@ -94,9 +103,16 @@ impl fmt::Display for Error {
             Error::UnknownAuthentication => "Kernel authentication policy is unknown",
             Error::SignatureBlockLength => "OEM Normal signature block must be exactly 0x50 bytes",
             Error::InvalidSignedEnvelope => "envelope size or Normal signature is invalid",
+            Error::KernelBodySize { got } => {
+                return write!(f, "Kernel body is {got} bytes, expected 65536");
+            }
+            Error::UnknownMarker { marker } => {
+                return write!(f, "unrecognized generation marker {marker:#04x}");
+            }
+            Error::AbiMismatch => "Normal requires Kernel entry points the Kernel does not provide",
             Error::KernelUndecodable => "Kernel envelope cannot be decoded",
             Error::NormalUndecodable => "Normal envelope cannot be receiver-decoded",
-            Error::RoundTripMismatch => "envelope round trip differs from captured firmware",
+            Error::RoundTripMismatch => "envelope round trip differs from the input images",
             Error::NotSignableNormal => "invalid Normal envelope",
             Error::NotAscii => "firmware identity is not ASCII",
             Error::EntropyUnavailable => "OS entropy unavailable",

@@ -28,6 +28,12 @@ pub struct SigningKey {
     scalar: BigUint,
 }
 
+impl core::fmt::Debug for SigningKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SigningKey").finish_non_exhaustive()
+    }
+}
+
 impl SigningKey {
     /// Accept a 160-bit private scalar for a caller-owned signing key.
     pub fn from_bytes(bytes: [u8; 20]) -> Option<Self> {
@@ -62,7 +68,7 @@ impl SigningKey {
     fn sign_normal_from(&self, envelope: &mut [u8], start: usize) -> Result<()> {
         if envelope.len() < 0x10200 + 20
             || !super::header_info(envelope)
-                .is_some_and(|h| h.file_type == Some(crate::ComponentKind::Normal))
+                .is_some_and(|h| h.kind == Some(crate::ComponentKind::Normal))
         {
             return Err(Error::NotSignableNormal);
         }
@@ -214,8 +220,7 @@ fn verifies(digest: &[u8], r: &BigUint, s: &BigUint, q: &Point, c: &Curve) -> bo
 pub fn verify_normal_signature(data: &[u8]) -> SignatureCheck {
     if data.len() < 0x10200 + 20
         || !super::is_envelope(data)
-        || !super::header_info(data)
-            .is_some_and(|h| h.file_type == Some(crate::ComponentKind::Normal))
+        || !super::header_info(data).is_some_and(|h| h.kind == Some(crate::ComponentKind::Normal))
     {
         return SignatureCheck::Unsupported;
     }
@@ -262,7 +267,7 @@ mod tests {
             destination: "GENERAL".into(),
             generated_date: "20/06/15".into(),
             kernel_version2: "0000".into(),
-            file_type: Some(crate::ComponentKind::Normal),
+            kind: Some(crate::ComponentKind::Normal),
         };
         let opaque = super::super::HeaderOpaque {
             id_left_padding: 0,
@@ -338,7 +343,7 @@ mod tests {
             destination: "GENERAL".into(),
             generated_date: "20/06/15".into(),
             kernel_version2: "0000".into(),
-            file_type: Some(crate::ComponentKind::Normal),
+            kind: Some(crate::ComponentKind::Normal),
         };
         let opaque = super::super::HeaderOpaque {
             id_left_padding: 0,
@@ -433,7 +438,7 @@ mod tests {
             destination: "GENERAL".into(),
             generated_date: "20/06/15".into(),
             kernel_version2: "0000".into(),
-            file_type: Some(file_type),
+            kind: Some(file_type),
         };
         let opaque = super::super::HeaderOpaque {
             id_left_padding: 0,

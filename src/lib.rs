@@ -53,7 +53,7 @@ pub const INQUIRY_LEN: usize = 36;
 /// Length of the vendor identity block, in bytes.
 pub const IDENTITY_LEN: usize = cdb::IDENTITY_LEN as usize;
 /// Minimum vendor identity length that carries every field.
-const IDENTITY_MIN: usize = 44;
+pub(crate) const IDENTITY_MIN: usize = 44;
 
 /// A firmware component written during an update session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -70,6 +70,7 @@ pub enum Role {
 /// is not written through the update-session commands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "envelope", derive(serde::Serialize))]
+#[cfg_attr(feature = "envelope", serde(rename_all = "kebab-case"))]
 #[non_exhaustive]
 pub enum ComponentKind {
     /// The Kernel (boot and update loader) component.
@@ -130,6 +131,7 @@ impl TryFrom<ComponentKind> for Role {
 
 /// The vendor command dialect a drive speaks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum DriveClass {
     /// BD generations: [`cdb::enter_update`] enters the update session directly.
     Bd,

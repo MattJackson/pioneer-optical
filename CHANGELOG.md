@@ -20,7 +20,21 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 - `DecodedEnvelope::{family, is_uhd, required_abi, provided_abi, role}`.
 - Feature `std`; `envelope` implies `image` and `std`.
 
+- `HeaderInfo::targets(&Identity)` and `DecodedEnvelope::targets`;
+  `EnvelopeInfo` carries `hardware_version` and `kernel_version`.
+- `Debug` on all public types (`SigningKey` is redacted), `Default` for
+  `HeaderOpaque`; `#[non_exhaustive]` on enums and output structs.
+
 ### Changed
+- `KernelLayout` is removed; `kernel_layout_from_image` returns `Layout`, and
+  `validate_encrypted_pair` derives the layout (no `kernel_layout` parameter).
+- `DowngradePatchError` is folded into `envelope::Error`;
+  `KERNEL_CHECKSUM_COMPENSATION` is removed (the delta depends on the marker).
+- `DecodedEnvelope::info` is private: use `info()`. `file_type` fields are
+  renamed `kind`. `ComponentKind` serializes in kebab-case.
+- `encode_encrypted_pair` rejects a Normal whose required ABI the Kernel does
+  not provide (`Error::AbiMismatch`). `image` bounds each inflate by the declared
+  size. `Error::NotAscii` now rejects non-ASCII UTF-8.
 - `PioneerInfo`, `PioneerHeaderInfo`, `PioneerHeaderOpaque` become
   `EnvelopeInfo`, `HeaderInfo`, `HeaderOpaque`. `HeaderInfo::file_type` is
   `Option<ComponentKind>`.

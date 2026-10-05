@@ -1,4 +1,4 @@
-//! Pioneer RS-series firmware envelope decoder and byte-exact repacker.
+//! Pioneer firmware envelope decoder, byte-exact repacker, builder and signer.
 //!
 //! The 0x160-byte banner is literal. Normal and Kernel payloads use the
 //! Microsoft C-runtime LCG to make a repeating word key, then XOR and rotate
@@ -14,6 +14,7 @@
     clippy::chunks_exact_to_as_chunks
 )]
 
+use crate::comp::COMP_OFFSET;
 use crate::ComponentKind;
 use serde::Serialize;
 use std::io::{Read, Write};
@@ -103,13 +104,18 @@ impl core::fmt::Display for Layout {
 
 /// Decoded envelope metadata.
 #[derive(Clone, Debug, Serialize)]
+#[non_exhaustive]
 pub struct EnvelopeInfo {
     /// Drive model from the header `ID`, e.g. `BDR-UD04`.
     pub model: String,
     /// Header `Revision Level`.
     pub revision: String,
     /// Component the envelope carries.
-    pub file_type: ComponentKind,
+    pub kind: ComponentKind,
+    /// Header `Hardware Version`, e.g. `SAT 8A10`.
+    pub hardware_version: String,
+    /// Header `Kernel Version`: the Kernel tag the component targets.
+    pub kernel_version: String,
     /// Payload framing and encoding.
     pub layout: Layout,
     /// Offset of the payload within the envelope.
@@ -118,7 +124,7 @@ pub struct EnvelopeInfo {
     pub payload_size: usize,
     /// Image length the payload declares, when it declares one.
     pub declared_size: Option<usize>,
-    /// The changing 32-bit word at decoded payload offset 0x10; meaning not established.
+    /// The changing 32-bit word at decoded payload offset 0x10; meaning unknown.
     pub unknown_word_0x10: Option<u32>,
     /// Long uniform runs observed in the decoded payload, not verified free space.
     pub uniform_ranges: Vec<UniformRange>,
@@ -146,11 +152,38 @@ pub struct HeaderInfo {
     /// `Kernel Version2` field.
     pub kernel_version2: String,
     /// `None` when the `File Type` field is absent or unrecognized.
-    pub file_type: Option<ComponentKind>,
+    pub kind: Option<ComponentKind>,
+}
+
+impl Default for HeaderOpaque {
+    /// All-zero opaque regions, as emitted for OEM Kernels.
+    fn default() -> Self {
+        Self {
+            id_left_padding: 0,
+            prevalidation: [0; 0x10],
+            validation: [0; 0x50],
+            extension: [0; 0x30],
+            filename: [0; 0x10],
+        }
+    }
+}
+
+impl HeaderInfo {
+    /// True when this envelope is meant for `drive`: the header model is the
+    /// drive's product model (the last token of [`Identity::product`]), and its
+    /// hardware version and Kernel tag equal the drive's platform and Kernel tag.
+    ///
+    /// [`Identity::product`]: crate::Identity::product
+    pub fn targets(&self, drive: &crate::Identity) -> bool {
+        drive.product().split_whitespace().last() == Some(self.model.as_str())
+            && self.hardware_version == drive.platform()
+            && self.kernel_version == drive.kernel_tag()
+    }
 }
 
 /// Opaque OEM header bytes. The caller supplies these; [`build_header`] does
 /// not derive or sign them.
+#[derive(Clone, Debug)]
 pub struct HeaderOpaque {
     /// Padding before the `ID` value.
     pub id_left_padding: u8,
@@ -190,7 +223,7 @@ pub fn build_header(info: &HeaderInfo, opaque: &HeaderOpaque) -> Option<[u8; 0x2
         (0xb0, 8, 0xbd, info.hardware_version.as_str()),
         (0xd0, 8, 0xe0, info.kernel_version.as_str()),
         (0xf0, 8, 0x102, info.destination.as_str()),
-        (0x110, 8, 0x11d, info.file_type?.as_str()),
+        (0x110, 8, 0x11d, info.kind?.as_str()),
         (0x130, 10, 0x13c, info.generated_date.as_str()),
         (0x150, 4, 0x15d, info.kernel_version2.as_str()),
     ] {
@@ -219,6 +252,7 @@ pub fn build_header(info: &HeaderInfo, opaque: &HeaderOpaque) -> Option<[u8; 0x2
 
 /// A run of one repeated byte value.
 #[derive(Clone, Debug, Serialize)]
+#[non_exhaustive]
 pub struct UniformRange {
     /// Start of the run.
     pub offset: usize,
@@ -230,6 +264,7 @@ pub struct UniformRange {
 
 /// Directory entry and measurements of one COMP stream.
 #[derive(Clone, Debug, Serialize)]
+#[non_exhaustive]
 pub struct CompStreamInfo {
     /// Load address of the stream start.
     pub address_start: u32,
@@ -250,6 +285,7 @@ pub struct CompStreamInfo {
 }
 
 /// One expanded COMP stream.
+#[derive(Clone, Debug)]
 pub struct CompStream {
     /// Directory entry and measurements.
     pub info: CompStreamInfo,
@@ -258,6 +294,8 @@ pub struct CompStream {
 }
 
 /// A main image carved from a live-drive dump by [`carve_live_main`].
+#[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct LiveMainImage {
     /// Offset of the image within the dump.
     pub offset: usize,
@@ -369,7 +407,7 @@ pub fn comp_streams(image: &[u8]) -> Option<(u32, Vec<CompStream>)> {
 
 /// Structurally rebuild only the final COMP stream. Earlier streams retain
 /// their addresses. This does not update the unknown word at image offset
-/// 0x10 or establish drive acceptance; callers must mark edits unverified.
+/// 0x10 or establish drive acceptance; treat edited images as unverified.
 pub fn rebuild_last_comp(image: &[u8], expanded: &[u8]) -> Option<Vec<u8>> {
     let (base, streams) = comp_streams(image)?;
     let last = streams.last()?;
@@ -458,11 +496,11 @@ pub fn uniform_ranges(image: &[u8], minimum: usize) -> Vec<UniformRange> {
 }
 
 /// A decoded image and the original framing needed to repack it.
+#[derive(Clone, Debug)]
 pub struct DecodedEnvelope {
     /// The decoded plaintext image.
     pub image: Vec<u8>,
-    /// Header and framing metadata.
-    pub info: EnvelopeInfo,
+    info: EnvelopeInfo,
     header: Vec<u8>,
     prefix: Vec<u8>,
     suffix: Vec<u8>,
@@ -504,7 +542,7 @@ pub fn header_info(data: &[u8]) -> Option<HeaderInfo> {
         destination: field(header, "Destination"),
         generated_date: field(header, "Generated Date"),
         kernel_version2: field(header, "Kernel Version2"),
-        file_type,
+        kind: file_type,
     })
 }
 
@@ -755,7 +793,7 @@ fn adler32(data: &[u8]) -> u32 {
 fn splice_tail(kept: &[u8], total: usize) -> Option<Vec<u8>> {
     let mut image = kept.to_vec();
     image.resize(total, 0xff);
-    if image.get(0x1000..0x1004) != Some(b"COMP".as_slice()) {
+    if image.get(COMP_OFFSET..COMP_OFFSET + 4) != Some(b"COMP".as_slice()) {
         return Some(image);
     }
     let mut addresses = Vec::new();
@@ -836,7 +874,7 @@ fn spliced_normal(
     if !image.starts_with(b"PIONEER ") || declared != image.len() {
         return None;
     }
-    if image.get(0x1000..0x1004) == Some(b"COMP".as_slice())
+    if image.get(COMP_OFFSET..COMP_OFFSET + 4) == Some(b"COMP".as_slice())
         && comp_streams(&image).is_none()
         && !comp_valid_except_truncated_last(&image, kept.len())
     {
@@ -922,7 +960,7 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
         .any(|window| window == needle)
 }
 
-// The corpus' direct-copy Plane images have an erased gap between the
+// Direct-copy Plane images have an erased gap between the
 // envelope header and a firmware identifier at file offset 0x10000. The
 // 0x8000 word varies and has no established meaning. Other Plane envelopes
 // contain transformed data, so the banner's file-type field alone cannot
@@ -1016,17 +1054,17 @@ fn legacy_le_kernel(data: &[u8]) -> Option<SelectedLayout> {
 }
 
 // This is the UD04 receiver's recognized-raw staging layout. The reserved
-// bytes are fixed to zero by our constructor, making detection unambiguous.
+// bytes are fixed to zero by the builder, making detection unambiguous.
 fn raw_ud04_payload(data: &[u8], parsed: &HeaderInfo) -> Option<(Layout, usize)> {
     if parsed.hardware_version != "SAT 8A10" || parsed.destination != "BACKUP" {
         return None;
     }
-    let (layout, offset, prefix) = match parsed.file_type {
+    let (layout, offset, prefix) = match parsed.kind {
         Some(ComponentKind::Kernel) => (Layout::RawKernel, 0x1200, b"SAT 8A".as_slice()),
         Some(ComponentKind::Normal) => (Layout::RawNormal, 0x10200, b"PIONEER BDR-US04".as_slice()),
         _ => return None,
     };
-    if parsed.file_type == Some(ComponentKind::Kernel) && data.len() != 0x11200 {
+    if parsed.kind == Some(ComponentKind::Kernel) && data.len() != 0x11200 {
         return None;
     }
     let image = data.get(offset..)?;
@@ -1034,7 +1072,7 @@ fn raw_ud04_payload(data: &[u8], parsed: &HeaderInfo) -> Option<(Layout, usize)>
         || !be32_sum_zero(image)
         || !data.get(0x200..offset)?.iter().all(|&byte| byte == 0)
         || !image
-            .get(if parsed.file_type == Some(ComponentKind::Kernel) {
+            .get(if parsed.kind == Some(ComponentKind::Kernel) {
                 0x1000..0x1000 + prefix.len()
             } else {
                 0..prefix.len()
@@ -1043,7 +1081,7 @@ fn raw_ud04_payload(data: &[u8], parsed: &HeaderInfo) -> Option<(Layout, usize)>
     {
         return None;
     }
-    if parsed.file_type == Some(ComponentKind::Normal)
+    if parsed.kind == Some(ComponentKind::Normal)
         && u32::from_be_bytes(image.get(20..24)?.try_into().ok()?) as usize != image.len()
     {
         return None;
@@ -1061,7 +1099,7 @@ pub fn decode_envelope(data: &[u8]) -> Option<DecodedEnvelope> {
 /// Return a decoded Normal's declared and actual sizes when they disagree.
 /// Unknown layouts return None; this is an integrity check, not a codec claim.
 pub fn normal_length_mismatch(data: &[u8]) -> Option<(usize, usize)> {
-    if header_info(data)?.file_type != Some(ComponentKind::Normal) {
+    if header_info(data)?.kind != Some(ComponentKind::Normal) {
         return None;
     }
     for key_off in [0x200, 0x10200] {
@@ -1090,8 +1128,10 @@ fn decode_envelope_impl(data: &[u8]) -> Option<DecodedEnvelope> {
     let header = &data[..HEADER_LEN];
     let parsed = header_info(data)?;
     let raw_layout = raw_ud04_payload(data, &parsed);
-    let file_type = parsed.file_type?;
+    let file_type = parsed.kind?;
     let model = parsed.model;
+    let hardware_version = parsed.hardware_version;
+    let kernel_version = parsed.kernel_version;
     let revision = parsed.revision;
     let body = &data[HEADER_LEN..];
     let mut chosen: Option<SelectedLayout> = None;
@@ -1255,7 +1295,7 @@ fn decode_envelope_impl(data: &[u8]) -> Option<DecodedEnvelope> {
     } else {
         None
     };
-    // A recognizable prefix alone is insufficient: one XD04 corpus file ends
+    // A recognizable prefix alone is insufficient: one XD04 file ends
     // early. Keep its original envelope, but do not emit a partial decoded bin.
     if let Some(declared) = declared_size {
         if declared != image.len() {
@@ -1266,8 +1306,10 @@ fn decode_envelope_impl(data: &[u8]) -> Option<DecodedEnvelope> {
         info: EnvelopeInfo {
             model,
             revision,
-            file_type,
+            kind: file_type,
             layout,
+            hardware_version,
+            kernel_version,
             payload_offset: payload_off,
             payload_size: image.len(),
             declared_size,
@@ -1287,6 +1329,18 @@ fn decode_envelope_impl(data: &[u8]) -> Option<DecodedEnvelope> {
 }
 
 impl DecodedEnvelope {
+    /// Header and framing metadata.
+    pub fn info(&self) -> &EnvelopeInfo {
+        &self.info
+    }
+
+    /// True when the envelope is meant for `drive`; see [`HeaderInfo::targets`].
+    pub fn targets(&self, drive: &crate::Identity) -> bool {
+        self.info.model == drive.product().split_whitespace().last().unwrap_or("")
+            && self.info.hardware_version == drive.platform()
+            && self.info.kernel_version == drive.kernel_tag()
+    }
+
     /// Hardware family of the decoded image; see [`crate::image::family`].
     pub fn family(&self) -> Option<crate::image::Family> {
         crate::image::family(&self.image)
@@ -1310,7 +1364,7 @@ impl DecodedEnvelope {
     /// The update-session [`Role`](crate::Role) of this component, or `None`
     /// for a Plane envelope.
     pub fn role(&self) -> Option<crate::Role> {
-        crate::Role::try_from(self.info.file_type).ok()
+        crate::Role::try_from(self.info.kind).ok()
     }
 
     /// Recover a seed only if it regenerates the entire encoding key exactly.
@@ -1384,7 +1438,7 @@ impl DecodedEnvelope {
     pub fn repack_resized_normal(&self, image: &[u8]) -> Option<Vec<u8>> {
         if !self.info.layout.is_keyed_normal()
             || !self.splices.is_empty()
-            || self.info.file_type != ComponentKind::Normal
+            || self.info.kind != ComponentKind::Normal
             || image.len() < 0x2000
             || image.len() % 0x100 != 0
             || !image.starts_with(b"PIONEER ")
@@ -1419,7 +1473,7 @@ pub fn is_envelope(data: &[u8]) -> bool {
 }
 
 /// Decoded-body length of a Pioneer BD Kernel component (64 KiB).
-pub const KERNEL_BODY_LEN: usize = 0x10000;
+pub const KERNEL_BODY_LEN: usize = crate::image::KERNEL_LEN;
 
 /// Decoded-body offset of the Kernel generation marker byte (runtime address
 /// `0x4000FE`).
@@ -1429,14 +1483,6 @@ pub const KERNEL_MARKER_OFFSET: usize = 0xFE;
 /// contribution to the body's additive checksum.
 pub const KERNEL_CHECKSUM_WORD_OFFSET: usize = 0x1020;
 
-/// Delta added to the checksum word for the `FF -> 01` marker edit: byte `0xFE` is the second-from-top byte of its enclosing BE
-/// u32 word, so flipping it from `0xFF` to `0x01` subtracts `0xFE00` from the
-/// additive body sum; adding the same `0xFE00` to the word at `0x1020`
-/// restores the zero additive sum. For a `00 -> 01` edit the compensation
-/// is `-0x0100` (`0xFFFF_FF00`); [`downgrade_patch`] computes the right delta
-/// for either case.
-pub const KERNEL_CHECKSUM_COMPENSATION: u32 = 0xFE00;
-
 /// Outcome of applying [`downgrade_patch`], which lets an older-generation
 /// Kernel be accepted by a newer-generation receiver.
 ///
@@ -1444,61 +1490,30 @@ pub const KERNEL_CHECKSUM_COMPENSATION: u32 = 0xFE00;
 /// - `0xFF` / `0x00`: older generation, rejected by a newer receiver
 /// - `0x01`: newer generation, accepted
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DowngradePatchOutcome {
     /// Marker was already `0x01` — nothing to patch; returned body is byte-
     /// identical to the input. Not an error.
     AlreadyNewer,
     /// Marker was `0xFF` or `0x00` — flipped to `0x01` and the checksum word
-    /// at [`KERNEL_CHECKSUM_WORD_OFFSET`] was incremented by
-    /// [`KERNEL_CHECKSUM_COMPENSATION`] (mod 2³²). The additive body sum
-    /// is preserved. Carries the before/after word values for a dry-run diff.
+    /// at [`KERNEL_CHECKSUM_WORD_OFFSET`] was adjusted by
+    /// `(marker_before - 1) * 0x100` (mod 2³²), so the additive body sum is
+    /// preserved. Carries the before/after word values for a dry-run diff.
     Patched {
         /// The pre-patch marker value (`0xFF` or `0x00`).
         marker_before: u8,
         /// The pre-patch checksum word (big-endian u32 at `0x1020`).
         checksum_word_before: u32,
-        /// The post-patch checksum word (`before + 0xFE00`, wrapping).
+        /// The post-patch checksum word (`before + (marker_before - 1) * 0x100`, wrapping).
         checksum_word_after: u32,
     },
 }
-
-/// Why [`downgrade_patch`] refused.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DowngradePatchError {
-    /// Body wasn't the expected 64 KiB Kernel size.
-    WrongSize {
-        /// Actual length received.
-        got: usize,
-    },
-    /// Marker byte wasn't one of the three recognised values (`0x00`, `0x01`,
-    /// `0xFF`). Hoard scan found none outside that set; a different value is
-    /// almost certainly a corrupt body — refuse rather than patch blindly.
-    UnknownMarker {
-        /// The actual marker byte at offset `0xFE`.
-        marker: u8,
-    },
-}
-
-impl core::fmt::Display for DowngradePatchError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::WrongSize { got } => {
-                write!(f, "Kernel body is {got} bytes, expected {KERNEL_BODY_LEN}")
-            }
-            Self::UnknownMarker { marker } => {
-                write!(f, "unrecognized generation marker {marker:#04x}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for DowngradePatchError {}
 
 /// Mark an older-generation Kernel as newer-generation (pure byte edit, no I/O).
 ///
 /// Applied to a **decoded Kernel body** (not an envelope). Flips the generation
 /// marker at offset `0xFE` from `FF`/`00` to `01` and compensates the
-/// additive body-sum invariant by adding `0xFE00` (mod 2³²) to the big-endian
+/// additive body-sum invariant by adding `(marker - 1) * 0x100` (mod 2³²) to the big-endian
 /// u32 word at offset `0x1020`. The resulting body passes a newer receiver's
 /// `FF`/`00` rejection (runtime address `0x405266`). The only bytes that change are
 /// `body[0xFE]` and `body[0x1020..0x1024]`.
@@ -1506,11 +1521,9 @@ impl std::error::Error for DowngradePatchError {}
 /// `AlreadyNewer` is a *successful* no-op (not an error) so callers can run
 /// this unconditionally on a target Kernel before flashing. Caller must
 /// re-encode the envelope (via [`DecodedEnvelope::repack`]) after patching.
-pub fn downgrade_patch(
-    decoded_body: &[u8],
-) -> Result<(Vec<u8>, DowngradePatchOutcome), DowngradePatchError> {
+pub fn downgrade_patch(decoded_body: &[u8]) -> Result<(Vec<u8>, DowngradePatchOutcome)> {
     if decoded_body.len() != KERNEL_BODY_LEN {
-        return Err(DowngradePatchError::WrongSize {
+        return Err(Error::KernelBodySize {
             got: decoded_body.len(),
         });
     }
@@ -1519,7 +1532,7 @@ pub fn downgrade_patch(
         return Ok((decoded_body.to_vec(), DowngradePatchOutcome::AlreadyNewer));
     }
     if marker != 0xFF && marker != 0x00 {
-        return Err(DowngradePatchError::UnknownMarker { marker });
+        return Err(Error::UnknownMarker { marker });
     }
     let mut out = decoded_body.to_vec();
     out[KERNEL_MARKER_OFFSET] = 0x01;
@@ -1642,7 +1655,7 @@ mod downgrade_patch_tests {
         b[KERNEL_MARKER_OFFSET] = 0x55; // not FF/00/01
         assert_eq!(
             downgrade_patch(&b),
-            Err(DowngradePatchError::UnknownMarker { marker: 0x55 }),
+            Err(Error::UnknownMarker { marker: 0x55 }),
         );
     }
 
@@ -1651,7 +1664,7 @@ mod downgrade_patch_tests {
         let b = vec![0u8; KERNEL_BODY_LEN - 1];
         assert_eq!(
             downgrade_patch(&b),
-            Err(DowngradePatchError::WrongSize {
+            Err(Error::KernelBodySize {
                 got: KERNEL_BODY_LEN - 1
             }),
         );
@@ -1838,7 +1851,9 @@ mod tests {
             info: EnvelopeInfo {
                 model: "BDR-TEST".into(),
                 revision: "1.00".into(),
-                file_type: ComponentKind::Normal,
+                kind: ComponentKind::Normal,
+                hardware_version: String::new(),
+                kernel_version: String::new(),
                 layout: Layout::Normal,
                 payload_offset: 0x10200,
                 payload_size: original.len(),
@@ -1876,7 +1891,7 @@ mod tests {
         let header = header_info(&envelope).unwrap();
         assert_eq!(header.model, "DVR-107D");
         assert_eq!(header.revision, "1.22");
-        assert_eq!(header.file_type, Some(ComponentKind::Normal));
+        assert_eq!(header.kind, Some(ComponentKind::Normal));
         assert!(decode_envelope(&envelope).is_none());
     }
 
@@ -1918,7 +1933,7 @@ mod tests {
 
         let decoded = decode_envelope(&envelope).unwrap();
         assert_eq!(decoded.info.layout, Layout::TransformedPlane);
-        assert_eq!(decoded.info.file_type, ComponentKind::Plane);
+        assert_eq!(decoded.info.kind, ComponentKind::Plane);
         assert_eq!(decoded.info.model, "DVR-217");
         // The decoded image is the recovered direct-copy Plane body from 0x160.
         assert_eq!(decoded.image, plain[HEADER_LEN..]);
@@ -2134,6 +2149,7 @@ pub fn kernel_xor_branches(image: &[u8]) -> Vec<(usize, [u32; 2])> {
 
 /// Receiver policy proven by one recognized XOR-skipping branch in a decoded Kernel.
 #[derive(Clone, Debug, Serialize)]
+#[non_exhaustive]
 pub struct KernelXorPolicy {
     /// Kernel image offset of the branch.
     pub instruction_offset: usize,
@@ -2144,7 +2160,7 @@ impl KernelXorPolicy {
     /// The policy a decoded Kernel proves, or `None` when it is absent or not
     /// unique.
     pub fn from_kernel(kernel: &DecodedEnvelope) -> Option<Self> {
-        if kernel.info.file_type != ComponentKind::Kernel
+        if kernel.info.kind != ComponentKind::Kernel
             || !matches!(
                 kernel.info.layout,
                 Layout::KernelFront | Layout::KernelDerived
@@ -2172,7 +2188,7 @@ pub fn decode_envelope_with_kernel(
     kernel: &DecodedEnvelope,
 ) -> Option<DecodedEnvelope> {
     let mut decoded = decode_envelope(data)?;
-    if decoded.info.file_type != ComponentKind::Normal {
+    if decoded.info.kind != ComponentKind::Normal {
         return Some(decoded);
     }
     if decoded.info.layout == Layout::RawNormal {
@@ -2234,7 +2250,7 @@ impl DecodedEnvelope {
             return None;
         }
         let kept_len = self.image.len() - SPLICE_LEN * self.splices.len();
-        let verified = self.image.get(0x1000..0x1004) == Some(b"COMP".as_slice())
+        let verified = self.image.get(COMP_OFFSET..COMP_OFFSET + 4) == Some(b"COMP".as_slice())
             && comp_streams(&self.image).is_some();
         (!verified).then_some(kept_len..self.image.len())
     }
@@ -2329,7 +2345,9 @@ mod receiver_tests {
             info: EnvelopeInfo {
                 model: "BDR-TEST".into(),
                 revision: "1.00".into(),
-                file_type: ComponentKind::Kernel,
+                kind: ComponentKind::Kernel,
+                hardware_version: String::new(),
+                kernel_version: String::new(),
                 layout: Layout::KernelFront,
                 payload_offset: 0x1200,
                 payload_size: 64,
@@ -2493,7 +2511,7 @@ mod synthetic_roundtrip_tests {
             destination: destination.into(),
             generated_date: "00/00/00".into(),
             kernel_version2: "0000".into(),
-            file_type: ComponentKind::from_header(file_type),
+            kind: ComponentKind::from_header(file_type),
         };
         let opaque = HeaderOpaque {
             id_left_padding: 0,
@@ -2593,10 +2611,7 @@ mod synthetic_roundtrip_tests {
     #[test]
     fn frontkey_recognizers_classify_dispatcher_and_policy() {
         let kernel = front_kernel();
-        assert_eq!(
-            kernel_layout_from_image(&kernel),
-            Some(KernelLayout::FrontKey)
-        );
+        assert_eq!(kernel_layout_from_image(&kernel), Some(Layout::KernelFront));
         assert_eq!(scaled_normal_geometry_from_kernel(&kernel), None);
         assert_eq!(
             normal_authentication_from_kernel(&kernel),
@@ -2610,7 +2625,7 @@ mod synthetic_roundtrip_tests {
         let kernel = derived_kernel();
         assert_eq!(
             kernel_layout_from_image(&kernel),
-            Some(KernelLayout::DerivedKey)
+            Some(Layout::KernelDerived)
         );
         assert_eq!(
             normal_authentication_from_kernel(&kernel),
@@ -2631,10 +2646,7 @@ mod synthetic_roundtrip_tests {
         );
         // Scaled kernels dispatch through the legacy decoder, so the layout
         // resolves as FrontKey from the decoder presence alone (no AE/AD pair).
-        assert_eq!(
-            kernel_layout_from_image(&kernel),
-            Some(KernelLayout::FrontKey)
-        );
+        assert_eq!(kernel_layout_from_image(&kernel), Some(Layout::KernelFront));
     }
 
     #[test]
@@ -2654,7 +2666,7 @@ mod synthetic_roundtrip_tests {
         let pair = encode_encrypted_pair(&input, NormalSignature::Sign(&s)).unwrap();
         assert_eq!(pair.kernel.len(), 0x11200);
         assert_eq!(pair.normal.len(), 0x10200 + normal.len());
-        validate_encrypted_pair(&pair, &kernel, &normal, KernelLayout::FrontKey).unwrap();
+        validate_encrypted_pair(&pair, &kernel, &normal).unwrap();
 
         let dk = decode_envelope(&pair.kernel).unwrap();
         assert_eq!(dk.info.layout, Layout::KernelFront);
@@ -2688,9 +2700,7 @@ mod synthetic_roundtrip_tests {
             kernel: pair.kernel.clone(),
             normal: tampered,
         };
-        assert!(
-            validate_encrypted_pair(&bad_pair, &kernel, &normal, KernelLayout::FrontKey).is_err()
-        );
+        assert!(validate_encrypted_pair(&bad_pair, &kernel, &normal).is_err());
         // Flip a Kernel byte: Kernel round trip must fail.
         bad_pair = EncryptedPair {
             kernel: {
@@ -2700,9 +2710,7 @@ mod synthetic_roundtrip_tests {
             },
             normal: pair.normal.clone(),
         };
-        assert!(
-            validate_encrypted_pair(&bad_pair, &kernel, &normal, KernelLayout::FrontKey).is_err()
-        );
+        assert!(validate_encrypted_pair(&bad_pair, &kernel, &normal).is_err());
     }
 
     #[test]
@@ -2720,7 +2728,7 @@ mod synthetic_roundtrip_tests {
             normal_key_seed: 0x47d001,
         };
         let pair = encode_encrypted_pair(&input, NormalSignature::Sign(&s)).unwrap();
-        validate_encrypted_pair(&pair, &kernel, &normal, KernelLayout::DerivedKey).unwrap();
+        validate_encrypted_pair(&pair, &kernel, &normal).unwrap();
 
         let dk = decode_envelope(&pair.kernel).unwrap();
         assert_eq!(dk.info.layout, Layout::KernelDerived);
@@ -2760,7 +2768,7 @@ mod synthetic_roundtrip_tests {
         // ScaledChecksumOnly ignores the signature argument.
         let pair = encode_encrypted_pair(&input, NormalSignature::Zeroed).unwrap();
         assert_eq!(pair.normal.len(), 0x2400);
-        validate_encrypted_pair(&pair, &kernel, &normal, KernelLayout::FrontKey).unwrap();
+        validate_encrypted_pair(&pair, &kernel, &normal).unwrap();
 
         let dk = decode_envelope(&pair.kernel).unwrap();
         let dn = decode_envelope_with_kernel(&pair.normal, &dk).unwrap();
@@ -2860,7 +2868,7 @@ mod synthetic_roundtrip_tests {
         .unwrap();
         let dk = decode_envelope(&kernel_enc).unwrap();
         let again = decode_envelope_with_kernel(&kernel_enc, &dk).unwrap();
-        assert_eq!(again.info.file_type, ComponentKind::Kernel);
+        assert_eq!(again.info.kind, ComponentKind::Kernel);
         assert_eq!(again.image, kernel);
         assert!(again.receiver_xor_exceptions().is_none());
     }
@@ -3329,7 +3337,9 @@ mod synthetic_roundtrip_tests {
             info: EnvelopeInfo {
                 model: "BDR".into(),
                 revision: "1".into(),
-                file_type: ComponentKind::from_header(ft).unwrap(),
+                kind: ComponentKind::from_header(ft).unwrap(),
+                hardware_version: String::new(),
+                kernel_version: String::new(),
                 layout: Layout::Normal,
                 payload_offset: 0x10200,
                 payload_size: image.len(),
@@ -3397,7 +3407,9 @@ mod synthetic_roundtrip_tests {
             info: EnvelopeInfo {
                 model: "BDR".into(),
                 revision: "1".into(),
-                file_type: ComponentKind::Kernel,
+                kind: ComponentKind::Kernel,
+                hardware_version: String::new(),
+                kernel_version: String::new(),
                 layout: Layout::RawKernel, // not kernel-front/derived
                 payload_offset: 0,
                 payload_size: 64,
@@ -3428,7 +3440,7 @@ mod synthetic_roundtrip_tests {
             destination: "GENERAL".into(),
             generated_date: "00/00/00".into(),
             kernel_version2: "0000".into(),
-            file_type: Some(ComponentKind::Normal),
+            kind: Some(ComponentKind::Normal),
         };
         let opq = |left: u8| HeaderOpaque {
             id_left_padding: left,

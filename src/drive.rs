@@ -51,6 +51,7 @@ pub trait Transport {
 
 /// Errors from the command sequences.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error<E> {
     /// The transport failed.
     Transport(E),
@@ -144,9 +145,9 @@ pub fn identify<T: Transport>(t: &mut T) -> Result<Identity, Error<T::Error>> {
         INQUIRY_LEN,
     )?;
     let mut vendor = [0; IDENTITY_LEN];
-    let n = read(t, &cdb::vendor_identity(), &mut vendor, 44)?;
+    let n = read(t, &cdb::vendor_identity(), &mut vendor, crate::IDENTITY_MIN)?;
     Identity::parse(&inquiry, &vendor[..n]).ok_or(Error::Short {
-        expected: 44,
+        expected: crate::IDENTITY_MIN,
         actual: n,
     })
 }
@@ -179,7 +180,8 @@ impl<T: Transport> core::fmt::Debug for Session<'_, T> {
 }
 
 impl<T: Transport> Session<'_, T> {
-    /// Write `data` as the chunk of the `role` component at `off`.
+    /// Write `data` as the chunk of the `role` component at byte offset `off`
+    /// within the component. Both `off` and `data.len()` must fit in 24 bits.
     pub fn write(&mut self, role: Role, off: u32, data: &[u8]) -> Result<(), Error<T::Error>> {
         let len = field(data.len())?;
         field::<T::Error>(off as usize)?;
@@ -343,7 +345,7 @@ mod tests {
         assert!(matches!(
             identify(&mut m),
             Err(Error::Short {
-                expected: 44,
+                expected: crate::IDENTITY_MIN,
                 actual: 20
             })
         ));

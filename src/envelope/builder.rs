@@ -11,16 +11,6 @@ use super::{
 use super::{Error, Result};
 use crate::ComponentKind;
 
-/// How a Kernel stores its key table, as identified by its receiver dispatcher.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum KernelLayout {
-    /// The key table is stored at the front of the payload.
-    FrontKey,
-    /// The key table is derived from an LCG seed.
-    DerivedKey,
-}
-
 /// How a Kernel authenticates a Normal envelope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -87,7 +77,7 @@ pub fn scaled_normal_geometry_from_kernel(kernel: &[u8]) -> Option<ScaledNormalG
 /// Earlier receivers pass explicit staging addresses to the same decoder:
 /// key=0x10400, Kernel=0x11400, length=0x10000. Relative to staging
 /// base 0x10200 these are the front-key envelope offsets 0x200/0x1200.
-/// Require a unique call site and resolve its target inside the captured Kernel.
+/// Require a unique call site and resolve its target inside the Kernel.
 fn legacy_decoder_target(kernel: &[u8]) -> Option<[u8; 4]> {
     const ARGS: &[u8] = &[0x7a, 0x02, 0, 1, 4, 0, 0x7a, 0x00, 0, 1, 0x14, 0];
     let mut calls = kernel.windows(16).enumerate().filter(|(offset, w)| {
@@ -120,7 +110,7 @@ fn legacy_decoder_target(kernel: &[u8]) -> Option<[u8; 4]> {
         return None;
     }
     let target = u32::from_be_bytes([0, call[1], call[2], call[3]]);
-    let offset = target.checked_sub(0x400000)? as usize;
+    let offset = target.checked_sub(crate::image::KERNEL_BASE)? as usize;
     kernel.get(offset..offset + 4)?;
     Some(call)
 }
@@ -157,8 +147,9 @@ pub fn normal_authentication_from_kernel(kernel: &[u8]) -> Option<NormalAuthenti
         };
     }
     match kernel_layout_from_image(kernel)? {
-        KernelLayout::FrontKey => Some(NormalAuthentication::KeyAndCiphertext),
-        KernelLayout::DerivedKey => Some(NormalAuthentication::CiphertextOnly),
+        Layout::KernelFront => Some(NormalAuthentication::KeyAndCiphertext),
+        Layout::KernelDerived => Some(NormalAuthentication::CiphertextOnly),
+        _ => None,
     }
 }
 
@@ -187,7 +178,7 @@ pub fn normal_authentication_valid(normal: &[u8], kernel: &[u8]) -> bool {
             .is_some_and(|image| image.starts_with(b"PIONEER ") && be32_sum_zero(&image))
         }
         Some(NormalAuthentication::Unsigned) => normal
-            .get(0x170..0x1c0)
+            .get(NORMAL_SIGNATURE_RANGE)
             .is_some_and(|bytes| bytes.iter().all(|b| *b == 0)),
         Some(NormalAuthentication::KeyAndCiphertext) => {
             verify_normal_signature(normal) == SignatureCheck::ValidKeyAndCiphertext
@@ -199,10 +190,13 @@ pub fn normal_authentication_valid(normal: &[u8], kernel: &[u8]) -> bool {
     }
 }
 
+/// The Kernel key-table layout ([`Layout::KernelFront`] or
+/// [`Layout::KernelDerived`]), identified from the receiver dispatcher.
+///
 /// The two observed receiver dispatcher generations compare FE then F0 on
 /// different H8 byte registers. This is a code signature, not a model table.
 /// An unrecognized or ambiguous dispatcher must not be assigned a wrapper.
-pub fn kernel_layout_from_image(kernel: &[u8]) -> Option<KernelLayout> {
+pub fn kernel_layout_from_image(kernel: &[u8]) -> Option<Layout> {
     let paired_cmp = |reg: u8| {
         kernel
             .windows(8)
@@ -214,13 +208,14 @@ pub fn kernel_layout_from_image(kernel: &[u8]) -> Option<KernelLayout> {
         paired_cmp(0xad),
         legacy_decoder_target(kernel).is_some(),
     ) {
-        (1, 0, false) | (0, 0, true) => Some(KernelLayout::FrontKey),
-        (0, 1, false) => Some(KernelLayout::DerivedKey),
+        (1, 0, false) | (0, 0, true) => Some(Layout::KernelFront),
+        (0, 1, false) => Some(Layout::KernelDerived),
         _ => None,
     }
 }
 
 /// A built Kernel envelope and the Normal envelope that matches it.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EncryptedPair {
     /// Complete Kernel envelope.
     pub kernel: Vec<u8>,
@@ -235,6 +230,7 @@ pub struct EncryptedPair {
 /// that is not LCG-derived; for those, supply the raw 0x1000 bytes verbatim with
 /// `RawKey` (FrontKey layout only).
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum KernelKeySource<'a> {
     /// 24-bit LCG seed; the low 24 bits are expanded into the key table.
     Seed(u32),
@@ -258,8 +254,7 @@ pub struct KernelBuild<'a> {
 }
 
 impl<'a> KernelBuild<'a> {
-    /// Historical defaults: header revision `0000`, date `00/00/00`, key from an
-    /// LCG seed. Equivalent to the previous hardcoded Kernel header behavior.
+    /// Header revision `0000`, date `00/00/00`, key derived from an LCG seed.
     pub fn from_seed(seed: u32) -> Self {
         Self {
             revision: "0000",
@@ -274,6 +269,8 @@ impl<'a> KernelBuild<'a> {
 pub const NORMAL_SIGNATURE_RANGE: std::ops::Range<usize> = 0x170..0x1c0;
 
 /// How the Normal envelope's signature region is populated for a signed policy.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum NormalSignature<'a> {
     /// Sign the body with a caller-owned key: mathematically valid but NOT the
     /// OEM signature (the public point differs). Used when no OEM signature is
@@ -289,6 +286,7 @@ pub enum NormalSignature<'a> {
 
 /// All non-image inputs are explicit so an archival label cannot be mistaken
 /// for a fact recovered from flash. Seeds select fresh encoding tables.
+#[derive(Clone, Copy, Debug)]
 pub struct BuildInputs<'a> {
     /// Decoded Kernel image.
     pub kernel_image: &'a [u8],
@@ -308,6 +306,9 @@ pub struct BuildInputs<'a> {
 }
 
 fn text(bytes: &[u8]) -> Result<&str, Error> {
+    if !bytes.is_ascii() {
+        return Err(Error::NotAscii);
+    }
     std::str::from_utf8(bytes)
         .map(str::trim)
         .map_err(|_| Error::NotAscii)
@@ -345,7 +346,7 @@ fn header(
         destination: kernel_tag.into(),
         generated_date: date.into(),
         kernel_version2: kernel_version2.into(),
-        file_type: Some(role),
+        kind: Some(role),
     };
     let opaque = HeaderOpaque {
         id_left_padding: 0,
@@ -393,7 +394,7 @@ pub fn encode_kernel_envelope(
     envelope_id: &str,
     build: &KernelBuild<'_>,
 ) -> Result<Vec<u8>, Error> {
-    if kernel_image.len() != 0x10000
+    if kernel_image.len() != crate::image::KERNEL_LEN
         || !be32_sum_zero(kernel_image)
         || !kernel_image
             .get(0x1000..0x1008)
@@ -442,11 +443,11 @@ pub fn encode_kernel_envelope(
     };
     let cipher = transform(kernel_image, &key, true).ok_or(Error::KernelEncode)?;
     match layout {
-        KernelLayout::FrontKey => {
+        Layout::KernelFront => {
             enc.extend_from_slice(&key);
             enc.extend_from_slice(&cipher);
         }
-        KernelLayout::DerivedKey => {
+        Layout::KernelDerived => {
             let KernelKeySource::Seed(seed) = build.key else {
                 return Err(Error::RawKeyNotAllowed);
             };
@@ -459,6 +460,7 @@ pub fn encode_kernel_envelope(
             let trailer_start = super::jump_seed(final_state, 0xff0, true);
             enc.extend_from_slice(&make_key(trailer_start, 0x1000));
         }
+        _ => return Err(Error::AmbiguousKernelLayout),
     }
     Ok(enc)
 }
@@ -471,8 +473,16 @@ pub fn encode_encrypted_pair(
 ) -> Result<EncryptedPair, Error> {
     let kernel = input.kernel_image;
     let normal = input.normal_image;
+    if let (Some(required), Some(provided)) = (
+        crate::image::required_abi(normal),
+        crate::image::provided_abi(kernel),
+    ) {
+        if !required.is_satisfied_by(&provided) {
+            return Err(Error::AbiMismatch);
+        }
+    }
     let scaled = scaled_normal_geometry_from_kernel(kernel);
-    if kernel.len() != 0x10000
+    if kernel.len() != crate::image::KERNEL_LEN
         || normal.len() < 0x2000
         || normal.len() % 0x100 != 0
         || !be32_sum_zero(kernel)
@@ -524,7 +534,7 @@ pub fn encode_encrypted_pair(
     {
         return Err(Error::XorExceptionOutOfRange);
     }
-    let kernel_layout = kernel_layout_from_image(kernel).ok_or(Error::AmbiguousKernelLayout)?;
+    kernel_layout_from_image(kernel).ok_or(Error::AmbiguousKernelLayout)?;
     let kernel_enc = encode_kernel_envelope(kernel, id, &input.kernel)?;
 
     let mut normal_enc = header(
@@ -540,7 +550,7 @@ pub fn encode_encrypted_pair(
     .to_vec();
     let normal_key = make_key(
         input.normal_key_seed & 0x00ff_ffff,
-        scaled.map_or(0x10000, |g| g.key_len),
+        scaled.map_or(crate::image::KERNEL_LEN, |g| g.key_len),
     );
     normal_enc.extend_from_slice(&normal_key);
     normal_enc.extend_from_slice(
@@ -579,19 +589,18 @@ pub fn encode_encrypted_pair(
     };
     // A zeroed sentinel Normal deliberately fails ECDSA, so skip only the
     // signature check; structure, receiver-decode and image round-trip still run.
-    validate_pair_inner(&pair, kernel, normal, kernel_layout, !zeroed_signature)?;
+    validate_pair_inner(&pair, kernel, normal, !zeroed_signature)?;
     Ok(pair)
 }
 
-/// Verify format, receiver-aware decode, exact captured images and ECDSA.
+/// Verify format, receiver-aware decode, exact input images and ECDSA.
 /// This does not certify the drive's public-key trust policy.
 pub fn validate_encrypted_pair(
     pair: &EncryptedPair,
     kernel_image: &[u8],
     normal_image: &[u8],
-    kernel_layout: KernelLayout,
 ) -> Result<()> {
-    validate_pair_inner(pair, kernel_image, normal_image, kernel_layout, true)
+    validate_pair_inner(pair, kernel_image, normal_image, true)
 }
 
 /// As [`validate_encrypted_pair`], but `check_signature == false` skips only the
@@ -601,7 +610,6 @@ fn validate_pair_inner(
     pair: &EncryptedPair,
     kernel_image: &[u8],
     normal_image: &[u8],
-    kernel_layout: KernelLayout,
     check_signature: bool,
 ) -> Result<()> {
     let scaled = scaled_normal_geometry_from_kernel(kernel_image);
@@ -614,10 +622,8 @@ fn validate_pair_inner(
     let kernel = decode_envelope(&pair.kernel).ok_or(Error::KernelUndecodable)?;
     let normal =
         decode_envelope_with_kernel(&pair.normal, &kernel).ok_or(Error::NormalUndecodable)?;
-    let expected_kernel_layout = match kernel_layout {
-        KernelLayout::FrontKey => Layout::KernelFront,
-        KernelLayout::DerivedKey => Layout::KernelDerived,
-    };
+    let expected_kernel_layout =
+        kernel_layout_from_image(kernel_image).ok_or(Error::AmbiguousKernelLayout)?;
     if kernel.info.layout != expected_kernel_layout
         || normal.info.layout
             != if scaled.is_some() {
@@ -672,13 +678,7 @@ mod tests {
             NormalSignature::Sign(&signer),
         );
         let rebuilt = rebuilt.unwrap();
-        validate_encrypted_pair(
-            &rebuilt,
-            &kernel.image,
-            &normal.image,
-            KernelLayout::FrontKey,
-        )
-        .unwrap();
+        validate_encrypted_pair(&rebuilt, &kernel.image, &normal.image).unwrap();
         if !h.destination.starts_with("ID") {
             assert!(rebuilt.normal[0x1f0..].starts_with(b"NORMAL."));
             assert_eq!(
@@ -690,7 +690,7 @@ mod tests {
         }
         assert_eq!(
             kernel_layout_from_image(&kernel.image),
-            Some(KernelLayout::FrontKey)
+            Some(Layout::KernelFront)
         );
 
         // An inconsistent decoder image length cannot become an inferred read
@@ -738,19 +738,14 @@ mod tests {
             decode_envelope(&pair.normal).unwrap().encoding_seed(),
             Some(input.normal_key_seed)
         );
-        validate_encrypted_pair(&pair, kernel, normal, KernelLayout::FrontKey).unwrap();
+        validate_encrypted_pair(&pair, kernel, normal).unwrap();
         assert_eq!(pair.kernel.len(), 0x11200);
         assert_eq!(pair.normal.len(), 0x1d7700);
         let mut tampered = pair;
         tampered.normal[0x1d7600] ^= 1;
-        assert!(
-            validate_encrypted_pair(&tampered, kernel, normal, KernelLayout::FrontKey).is_err()
-        );
+        assert!(validate_encrypted_pair(&tampered, kernel, normal).is_err());
 
-        assert_eq!(
-            kernel_layout_from_image(kernel),
-            Some(KernelLayout::FrontKey)
-        );
+        assert_eq!(kernel_layout_from_image(kernel), Some(Layout::KernelFront));
     }
 
     // ---- Synthetic-fixture coverage for the recognizers and guards ----
@@ -1206,7 +1201,7 @@ mod tests {
         let s = a_signer();
         let pair =
             encode_encrypted_pair(&base_inputs(&kernel, &n), NormalSignature::Sign(&s)).unwrap();
-        validate_encrypted_pair(&pair, &kernel, &n, KernelLayout::FrontKey).unwrap();
+        validate_encrypted_pair(&pair, &kernel, &n).unwrap();
 
         // Tamper the signature region only: structure and images stay valid, so
         // only the signature check fails. A `|| -> &&` would skip it and pass.
@@ -1215,18 +1210,18 @@ mod tests {
             normal: pair.normal.clone(),
         };
         tampered.normal[0x180] ^= 1;
-        assert!(validate_encrypted_pair(&tampered, &kernel, &n, KernelLayout::FrontKey).is_err());
+        assert!(validate_encrypted_pair(&tampered, &kernel, &n).is_err());
 
         // A different (but same-shape) kernel image: only the kernel-image
         // comparison fails.
         let other_k = front_kernel_field(|k| k[0x6000] ^= 1);
-        assert!(validate_encrypted_pair(&pair, &other_k, &n, KernelLayout::FrontKey).is_err());
+        assert!(validate_encrypted_pair(&pair, &other_k, &n).is_err());
 
         // A different (same-length) normal image: only the normal-image
         // comparison fails.
         let mut other_n = n.clone();
         other_n[0x50] ^= 1;
-        assert!(validate_encrypted_pair(&pair, &kernel, &other_n, KernelLayout::FrontKey).is_err());
+        assert!(validate_encrypted_pair(&pair, &kernel, &other_n).is_err());
     }
 
     #[test]

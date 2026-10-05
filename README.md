@@ -7,8 +7,8 @@
 [![MSRV 1.75](https://img.shields.io/badge/MSRV-1.75-blue.svg)](#minimum-supported-rust-version)
 
 The vendor protocol of **Pioneer optical drives** (BD/DVD): command encoding,
-response decoding, command sequences over any SCSI transport, and firmware
-image analysis.
+response decoding, command sequences over any SCSI transport, firmware image
+analysis, and the firmware envelope codec (decode, repack, build, sign).
 
 ```toml
 [dependencies]
@@ -23,11 +23,11 @@ pioneer-optical = { version = "0.9", features = ["drive"] }
 | `sense` | — | `05/24/00` refusal classification |
 | `drive` | `drive` | `Transport` trait; `identify`, `read_memory`, `enter_update` → `Session` |
 | `image` | `image` | `family`, `is_uhd`, `required_abi` / `provided_abi` |
-| `envelope` | `envelope` | `header_info`, `decode_envelope`, `DecodedEnvelope::repack`; `signature`, `builder` |
+| `envelope` | `envelope` | `header_info`, `decode_envelope`, `DecodedEnvelope::repack`; `signature`, `builder`; `Error`, `Layout`; `ComponentKind` at the root |
 
 The default build and the `drive` feature are `no_std` and allocation-free.
 `image` uses `alloc` and [`miniz_oxide`](https://crates.io/crates/miniz_oxide).
-`envelope` requires `std`.
+`envelope` implies `image` and `std`.
 
 ## Example
 

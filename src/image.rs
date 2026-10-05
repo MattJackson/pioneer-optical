@@ -113,7 +113,7 @@ fn comp_streams(img: &[u8]) -> Option<Vec<Stream>> {
                 ok = false;
                 break;
             }
-            match miniz_oxide::inflate::decompress_to_vec_zlib(c) {
+            match miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(c, n) {
                 Ok(x) if x.len() == n => out.push((o, x)),
                 _ => {
                     ok = false;

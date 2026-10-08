@@ -86,7 +86,7 @@ pub mod abi {
         }
     }
 
-    /// Follow CDB[2]'s dispatch and prove the helper arguments at the first call.
+    /// Follow `CDB[2]`'s dispatch and prove the helper arguments at the first call.
     /// ER0=object, R1L=direction, ER2=BE24(CDB[3..6]), stack=BE24(CDB[6..9]).
     /// Resolve a memory helper by tracing address, length and direction arguments.
     pub fn memory_call(

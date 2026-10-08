@@ -262,6 +262,10 @@ impl Update {
     pub fn normal_transfer(&self) -> &[u8] {
         &self.normal_transfer
     }
+
+    pub(crate) fn into_normal(self) -> (Envelope, Vec<u8>) {
+        (self.normal, self.normal_transfer)
+    }
 }
 
 fn load(

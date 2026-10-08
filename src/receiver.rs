@@ -8,7 +8,7 @@ use crate::image::{family, receiver_control, Family, ReceiverControl};
 use crate::{cdb, ComponentKind};
 
 mod preparation;
-pub use preparation::{PreparationError, PreparedUpdate};
+pub use preparation::{PreparationError, PreparedNormal, PreparedUpdate};
 
 /// Bytes compared by the resident Normal's update-entry handler.
 pub const DESCRIPTOR_LEN: usize = 16;
@@ -86,11 +86,17 @@ pub struct Receiver {
     policy: ReceiverControl,
     family: Option<Family>,
     kernel_policy: Option<crate::image::KernelMarkerPolicy>,
+    installed_kernel: Option<Envelope>,
     codec: &'static dyn ReceiverCodec,
 }
 
 trait ReceiverCodec: core::fmt::Debug + Sync {
     fn detect(&self, image: &[u8]) -> Option<ReceiverControl>;
+    fn prepare_normal(
+        &self,
+        kernel: &Envelope,
+        target: &[u8],
+    ) -> Result<PreparedNormal, PreparationError>;
     fn prepare(
         &self,
         policy: crate::image::KernelMarkerPolicy,
@@ -108,6 +114,13 @@ struct Oem;
 impl ReceiverCodec for Oem {
     fn detect(&self, image: &[u8]) -> Option<ReceiverControl> {
         receiver_control(image)
+    }
+    fn prepare_normal(
+        &self,
+        kernel: &Envelope,
+        target: &[u8],
+    ) -> Result<PreparedNormal, PreparationError> {
+        preparation::prepare_normal_oem(kernel, target)
     }
     fn prepare(
         &self,
@@ -167,6 +180,7 @@ impl Receiver {
             policy,
             family: family(image),
             kernel_policy: None,
+            installed_kernel: None,
             codec,
         })
     }
@@ -204,6 +218,7 @@ impl Receiver {
             }
         }
         receiver.kernel_policy = crate::image::kernel_marker_policy(&kernel.image);
+        receiver.installed_kernel = Some(kernel.clone());
         Ok(receiver)
     }
 

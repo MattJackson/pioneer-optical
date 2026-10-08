@@ -183,3 +183,79 @@ fn explicit_family_override_does_not_waive_receiver_or_restore_checks() {
         PreparationError::UnknownInstalledKernel
     );
 }
+
+#[test]
+fn normal_only_uses_installed_kernel_without_selecting_a_kernel_write() {
+    let installed = update(true, 1, 0x12, true);
+    let receiver = Receiver::from_installed(&installed).unwrap();
+    let target = update(true, 1, 0x12, true);
+    let prepared = receiver.prepare_normal(target.normal_transfer()).unwrap();
+    assert_eq!(prepared.normal_transfer(), target.normal_transfer());
+    assert_eq!(prepared.normal_image(), target.normal().image);
+
+    // Kernel marker handling is immaterial when no Kernel is being written.
+    let mut unknown_marker_handler = installed.kernel().clone();
+    unknown_marker_handler.image[0x300] ^= 1;
+    fix_sum(&mut unknown_marker_handler.image);
+    let receiver =
+        Receiver::detect_with_kernel(installed.normal(), &unknown_marker_handler).unwrap();
+    assert!(receiver.prepare_normal(target.normal_transfer()).is_ok());
+    assert_eq!(
+        receiver.prepare(target).unwrap_err(),
+        PreparationError::UnknownInstalledKernel
+    );
+}
+
+#[test]
+fn normal_only_force_waives_family_but_not_authentication_or_missing_evidence() {
+    let installed = update(false, 0, 0x12, true);
+    let receiver = Receiver::from_installed(&installed).unwrap();
+    let other = update(false, 0, 0x13, true);
+    assert!(matches!(
+        receiver.prepare_normal(other.normal_transfer()),
+        Err(PreparationError::Compatibility(
+            Error::FamilyMismatch { .. }
+        ))
+    ));
+    assert!(receiver
+        .prepare_normal_without_family_check(other.normal_transfer())
+        .is_ok());
+    let mut invalid = other.normal_transfer().to_vec();
+    invalid[crate::envelope::builder::NORMAL_SIGNATURE_RANGE].fill(0);
+    assert_eq!(
+        receiver
+            .prepare_normal_without_family_check(&invalid)
+            .unwrap_err(),
+        PreparationError::Target(UpdateError::Authentication)
+    );
+    let entry_only = Receiver::detect(installed.normal()).unwrap();
+    assert_eq!(
+        entry_only
+            .prepare_normal_without_family_check(other.normal_transfer())
+            .unwrap_err(),
+        PreparationError::MissingInstalledKernel
+    );
+}
+
+#[test]
+fn normal_only_retains_typed_target_errors_and_rejects_kernel_tag_mismatch() {
+    use std::error::Error as _;
+    let installed = update(false, 0, 0x12, true);
+    let receiver = Receiver::from_installed(&installed).unwrap();
+    let error = receiver.prepare_normal(b"malformed").unwrap_err();
+    assert!(matches!(
+        error,
+        PreparationError::Target(UpdateError::Decode { .. })
+    ));
+    assert!(error.source().unwrap().source().is_some());
+    let mut mismatch = installed.normal_transfer().to_vec();
+    let tag = mismatch[..0x200]
+        .windows(7)
+        .position(|s| s == b"GENERAL")
+        .unwrap();
+    mismatch[tag..tag + 7].copy_from_slice(b"DIFFTAG");
+    assert!(matches!(
+        receiver.prepare_normal_without_family_check(&mismatch),
+        Err(PreparationError::Target(UpdateError::Header { .. }))
+    ));
+}

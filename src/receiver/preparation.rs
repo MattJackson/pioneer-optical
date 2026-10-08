@@ -1,13 +1,19 @@
 //! Immutable component preparation; no transport or device I/O.
 
 use super::{Error, Receiver};
-use crate::envelope::{downgrade_patch, Update, KERNEL_MARKER_OFFSET};
+use crate::envelope::{downgrade_patch, Envelope, Update, UpdateError, KERNEL_MARKER_OFFSET};
 use crate::image::{kernel_marker_policy, KernelMarkerPolicy};
 
 /// A receiver could not prepare all required update passes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum PreparationError {
+    /// Target validation failed against the installed Kernel.
+    Target(UpdateError),
+    /// Normal-only preparation requires the captured installed Kernel.
+    MissingInstalledKernel,
+    /// The captured Kernel cannot reproduce its envelope for pair validation.
+    InstalledKernelRepresentation,
     /// Installed/target hardware compatibility could not be established.
     Compatibility(Error),
     /// The installed Kernel's marker handling is not recognized.
@@ -23,6 +29,13 @@ pub enum PreparationError {
 impl core::fmt::Display for PreparationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Target(error) => write!(f, "target preparation: {error}"),
+            Self::MissingInstalledKernel => {
+                f.write_str("Normal-only preparation requires captured installed Kernel evidence")
+            }
+            Self::InstalledKernelRepresentation => {
+                f.write_str("captured installed Kernel cannot be represented for pair validation")
+            }
             Self::Compatibility(error) => write!(f, "update compatibility: {error}"),
             Self::UnknownInstalledKernel => {
                 f.write_str("installed Kernel marker policy is unsupported or unavailable")
@@ -40,9 +53,32 @@ impl core::fmt::Display for PreparationError {
 impl std::error::Error for PreparationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Target(error) => Some(error),
             Self::Compatibility(error) | Self::RestorationEntry(error) => Some(error),
             _ => None,
         }
+    }
+}
+
+/// A validated Normal-only transfer for the captured installed Kernel.
+///
+/// Preparation does not issue commands. No Kernel transfer or restoration pass
+/// is selected; the resident Kernel remains the receiving implementation.
+#[derive(Debug)]
+pub struct PreparedNormal {
+    normal: Envelope,
+    transfer: Vec<u8>,
+}
+
+impl PreparedNormal {
+    /// Normal bytes validated under the installed Kernel's authentication rules.
+    pub fn normal_transfer(&self) -> &[u8] {
+        &self.transfer
+    }
+
+    /// Exact decoded target Normal, available for receiver-specific verification.
+    pub fn normal_image(&self) -> &[u8] {
+        &self.normal.image
     }
 }
 
@@ -101,6 +137,29 @@ impl PreparedUpdate {
 }
 
 impl Receiver {
+    /// Prepare a Normal-only update using captured installed Kernel evidence.
+    pub fn prepare_normal(&self, target: &[u8]) -> Result<PreparedNormal, PreparationError> {
+        let prepared = self.prepare_normal_without_family_check(target)?;
+        self.check_family(&prepared.normal)
+            .map_err(PreparationError::Compatibility)?;
+        Ok(prepared)
+    }
+
+    /// Prepare Normal-only with a deliberate caller override of family comparison.
+    ///
+    /// Component compatibility, integrity and installed-Kernel authentication
+    /// remain mandatory. This may target incompatible hardware.
+    pub fn prepare_normal_without_family_check(
+        &self,
+        target: &[u8],
+    ) -> Result<PreparedNormal, PreparationError> {
+        let kernel = self
+            .installed_kernel
+            .as_ref()
+            .ok_or(PreparationError::MissingInstalledKernel)?;
+        self.codec.prepare_normal(kernel, target)
+    }
+
     /// Prepare both passes of a complete update before issuing any commands.
     ///
     /// Requires captured installed Kernel evidence from [`Self::from_installed`].
@@ -126,6 +185,18 @@ impl Receiver {
             .ok_or(PreparationError::UnknownInstalledKernel)?;
         self.codec.prepare(policy, target)
     }
+}
+
+pub(super) fn prepare_normal_oem(
+    kernel: &Envelope,
+    target: &[u8],
+) -> Result<PreparedNormal, PreparationError> {
+    let bytes = kernel
+        .repack(&kernel.image)
+        .ok_or(PreparationError::InstalledKernelRepresentation)?;
+    let prepared = Update::load(&bytes, target).map_err(PreparationError::Target)?;
+    let (normal, transfer) = prepared.into_normal();
+    Ok(PreparedNormal { normal, transfer })
 }
 
 pub(super) fn prepare_oem(

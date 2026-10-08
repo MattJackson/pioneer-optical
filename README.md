@@ -35,6 +35,12 @@ loading establishes envelope framing only; it does not establish compatibility
 with a drive or permission to flash. Sparse checksum wrappers expose their
 stored payload without claiming an internal instruction set or receiver protocol.
 
+`Envelope::load_with_kernel` also recognizes legacy boot-key formats when the
+supplied Kernel contains the supported decoder and checksum routines. This
+includes M32C and M7900 layouts. Keys come from that Kernel, and decoded checksums
+are verified before returning an envelope. A decoded legacy envelope can be
+repacked losslessly even when no receiver transfer representation is supported.
+
 ## Example
 
 ```rust,ignore

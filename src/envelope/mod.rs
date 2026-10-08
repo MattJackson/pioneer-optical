@@ -68,6 +68,8 @@ pub enum Layout {
     NormalTailKey,
     /// Legacy byte-block Normal requiring the supplied Kernel boot-code key.
     NormalBootKey,
+    /// M7900 byte-block Normal bound to the supplied ROM decoder and boot checksum.
+    NormalBootKeyM7900,
     /// Kernel with the key table stored at the front of the payload.
     KernelFront,
     /// Kernel with the key table derived from an LCG seed.
@@ -92,6 +94,7 @@ impl Layout {
             Layout::NormalReverse => "normal-reverse",
             Layout::NormalScaledKey => "normal-scaled-key",
             Layout::NormalTailKey => "normal-tail-key",
+            Layout::NormalBootKeyM7900 => "normal-boot-key-m7900",
             Layout::NormalBootKey => "normal-boot-key",
             Layout::KernelFront => "kernel-front",
             Layout::KernelDerived => "kernel-derived",

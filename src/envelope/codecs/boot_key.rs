@@ -122,7 +122,7 @@ fn select(data: &[u8], header: &HeaderInfo, kernel: &Envelope) -> Option<Selecte
     })
 }
 
-fn transform_block(input: &[u8], output: &mut [u8], key: &[u8], encode: bool) {
+pub(super) fn transform_block(input: &[u8], output: &mut [u8], key: &[u8], encode: bool) {
     for (j, &key) in key.iter().enumerate() {
         let reversed = BLOCK - 1 - j;
         let shift = u32::from(key & 7);

@@ -2,6 +2,7 @@
 
 use super::{DecodeError, HeaderInfo, Layout, SelectedLayout};
 mod boot_key;
+mod boot_key_m7900;
 mod checksum;
 mod kernel;
 mod normal;
@@ -59,6 +60,7 @@ pub(super) trait EnvelopeCodec: Sync {
 
 const CODECS: &[&dyn EnvelopeCodec] = &[
     &boot_key::BootKey,
+    &boot_key_m7900::BootKeyM7900,
     &kernel::Legacy,
     &rom::KernelRom,
     &checksum::Sparse,
@@ -95,6 +97,7 @@ pub(super) fn detect(
 pub(super) fn for_layout(layout: Layout) -> &'static dyn EnvelopeCodec {
     // Layout is a closed internal format identifier, not a model/profile lookup.
     match layout {
+        Layout::NormalBootKeyM7900 => &boot_key_m7900::BootKeyM7900,
         Layout::NormalBootKey => &boot_key::BootKey,
         Layout::SparseChecksum => &checksum::Sparse,
         Layout::Plain => &plain::Plain,

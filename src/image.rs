@@ -8,6 +8,7 @@
 
 mod abi;
 mod control;
+pub(crate) mod h8;
 mod receiver;
 pub use abi::{provided_abi, required_abi, Abi};
 pub use control::{receiver_control, ReceiverControl};
@@ -296,14 +297,6 @@ fn fmt_board(ints: Option<&BTreeSet<u8>>, strs: Option<&BTreeSet<String>>) -> St
 /// The hardware family of a body, or `None` when the body carries no front-end
 /// configuration (a Kernel, an undecodable body, or unrelated data).
 pub fn family(body: &[u8]) -> Option<Family> {
-    let wanted: BTreeSet<u16> = ASIC_REGS
-        .iter()
-        .chain(PIN_REGS.iter())
-        .chain(BOARD_REGS.iter())
-        .copied()
-        .collect();
-    let board_wanted: BTreeSet<u16> = BOARD_REGS.iter().copied().collect();
-
     // Code = the uncompressed head plus stream 5; servo rows live in the head.
     let (code, main): (Vec<u8>, &[u8]) = match comp_streams(body) {
         Some(st) => {
@@ -318,14 +311,26 @@ pub fn family(body: &[u8]) -> Option<Family> {
         None => (body.to_vec(), body),
     };
 
-    let w = reg_writes(&code, &wanted);
+    family_parts(&code, main)
+}
+
+pub(crate) fn family_parts(code: &[u8], main: &[u8]) -> Option<Family> {
+    let wanted: BTreeSet<u16> = ASIC_REGS
+        .iter()
+        .chain(PIN_REGS.iter())
+        .chain(BOARD_REGS.iter())
+        .copied()
+        .collect();
+    let board_wanted: BTreeSet<u16> = BOARD_REGS.iter().copied().collect();
+
+    let w = reg_writes(code, &wanted);
     if !ASIC_REGS
         .iter()
         .any(|a| w.get(a).is_some_and(|s| !s.is_empty()))
     {
         return None;
     }
-    let b = bit_ops(&code, &board_wanted);
+    let b = bit_ops(code, &board_wanted);
     let regs = |set: &[u16], f: &dyn Fn(&u16) -> String| {
         set.iter()
             .map(|a| format!("{:04x}={}", a, f(a)))

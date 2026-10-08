@@ -1,7 +1,7 @@
 # Self-contained manifest (no workspace inheritance) so it packages for crates.io as-is.
 [package]
 name = "pioneer-optical"
-version = "0.11.3"
+version = "0.12.0"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
@@ -20,6 +20,8 @@ name = "pioneer_optical"
 [features]
 # Links the standard library. Implied by `envelope`.
 std = []
+# Structured, read-only analysis of a single firmware envelope.
+analysis = ["envelope"]
 # Command sequences over a caller-supplied transport. no_std, no alloc.
 drive = []
 # Firmware image analysis. Uses alloc and a zlib inflater.

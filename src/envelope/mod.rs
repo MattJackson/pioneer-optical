@@ -17,7 +17,7 @@
 use crate::comp::COMP_OFFSET;
 use crate::ComponentKind;
 use serde::Serialize;
-use std::io::{Read, Write};
+use std::io::Write;
 
 pub mod builder;
 mod codecs;
@@ -375,72 +375,14 @@ pub fn carve_live_main(dump: &[u8]) -> Vec<LiveMainImage> {
 
 /// Parse a COMP directory only when one unique image base makes every stream valid.
 pub fn comp_streams(image: &[u8]) -> Option<(u32, Vec<CompStream>)> {
-    let pairs = crate::comp::comp_pairs(image)?;
-    let first = pairs[0].0;
-    let min_base = first.saturating_sub(u32::try_from(image.len()).ok()?);
-    let mut valid = Vec::new();
-    for base in (min_base & !0xfff..=first & !0xfff).step_by(0x1000) {
-        let mut streams = Vec::new();
-        let mut total_expanded = 0usize;
-        for &(start, end) in &pairs {
-            if start < base || end <= start {
-                break;
-            }
-            let offset = (start - base) as usize;
-            let end_offset = (end - base) as usize;
-            let Some(prefix) = image.get(offset..offset + 4) else {
-                break;
-            };
-            let expanded_size = u32::from_be_bytes(prefix.try_into().ok()?) as usize;
-            total_expanded += expanded_size;
-            if expanded_size == 0
-                || expanded_size > crate::comp::MAX_EXPANDED
-                || total_expanded > crate::comp::MAX_TOTAL_EXPANDED
-            {
-                break;
-            }
-            let Some(compressed) = image.get(offset + 4..end_offset + 4) else {
-                break;
-            };
-            if !compressed.starts_with(&[0x78]) {
-                break;
-            }
-            let mut decoder = flate2::read::ZlibDecoder::new(compressed);
-            let mut expanded = Vec::new();
-            if decoder
-                .by_ref()
-                .take((expanded_size + 1) as u64)
-                .read_to_end(&mut expanded)
-                .is_err()
-                || expanded.len() != expanded_size
-                || decoder.total_in() as usize != compressed.len()
-            {
-                break;
-            }
-            let mut encoder =
-                flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(6));
-            let recompresses_exactly = encoder.write_all(&expanded).is_ok()
-                && encoder.finish().is_ok_and(|rebuilt| rebuilt == compressed);
-            streams.push(CompStream {
-                info: CompStreamInfo {
-                    address_start: start,
-                    address_end: end,
-                    image_offset: offset,
-                    compressed_size: compressed.len(),
-                    expanded_size,
-                    expanded_sha256: sha(&expanded),
-                    expanded_uniform_ranges: uniform_ranges(&expanded, 256),
-                    recompresses_exactly,
-                },
-                expanded,
-            });
-        }
-        if streams.len() == pairs.len() {
-            valid.push((base, streams));
-        }
-    }
-    (valid.len() == 1).then(|| valid.pop().unwrap())
+    streams::read(image, crate::comp::MAX_TOTAL_EXPANDED, &mut || true)
+        .ok()
+        .flatten()
 }
+
+mod streams;
+#[cfg(feature = "analysis")]
+pub(crate) use streams::{read as inspect_streams, StreamError};
 
 /// Structurally rebuild only the final COMP stream. Earlier streams retain
 /// their addresses. This does not update the unknown word at image offset

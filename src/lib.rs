@@ -37,6 +37,9 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "analysis")]
+pub mod analysis;
+
 #[cfg(any(feature = "image", feature = "envelope"))]
 extern crate alloc;
 
@@ -62,6 +65,7 @@ pub mod image;
 pub mod logging;
 #[cfg(feature = "envelope")]
 pub mod receiver;
+pub mod rpc;
 
 /// Length of a standard INQUIRY response header, in bytes.
 pub const INQUIRY_LEN: usize = 36;

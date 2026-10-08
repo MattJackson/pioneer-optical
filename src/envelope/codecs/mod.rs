@@ -5,6 +5,7 @@ mod checksum;
 mod kernel;
 mod normal;
 mod plain;
+mod rom;
 
 pub(super) trait EnvelopeCodec: Sync {
     fn layout(&self) -> Layout;
@@ -40,6 +41,7 @@ pub(super) trait EnvelopeCodec: Sync {
 
 const CODECS: &[&dyn EnvelopeCodec] = &[
     &kernel::Legacy,
+    &rom::KernelRom,
     &checksum::Sparse,
     &normal::Keyed,
     &normal::Reverse,
@@ -77,6 +79,7 @@ pub(super) fn for_layout(layout: Layout) -> &'static dyn EnvelopeCodec {
         Layout::KernelFront => &kernel::Front,
         Layout::KernelDerived => &kernel::Derived,
         Layout::KernelLegacyLe => &kernel::Legacy,
+        Layout::KernelRom => &rom::KernelRom,
     }
 }
 

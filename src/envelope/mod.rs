@@ -70,6 +70,9 @@ pub enum Layout {
     KernelDerived,
     /// Legacy little-endian Kernel.
     KernelLegacyLe,
+    /// Directly stored boot ROM with a reset vector and erased container padding.
+    /// Recognition does not establish a checksum or a transfer protocol.
+    KernelRom,
     /// Sparse wrapper with a little-endian additive checksum and stored payload.
     /// Unwrapping does not establish the payload's instruction set or receiver.
     SparseChecksum,
@@ -87,6 +90,7 @@ impl Layout {
             Layout::KernelFront => "kernel-front",
             Layout::KernelDerived => "kernel-derived",
             Layout::KernelLegacyLe => "kernel-legacy-le",
+            Layout::KernelRom => "kernel-rom",
             Layout::SparseChecksum => "sparse-checksum",
         }
     }
@@ -1674,6 +1678,9 @@ mod codec_tests;
 
 #[cfg(test)]
 mod checksum_tests;
+
+#[cfg(test)]
+mod rom_tests;
 
 #[cfg(test)]
 mod transfer_tests;

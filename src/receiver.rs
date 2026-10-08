@@ -9,6 +9,12 @@ use crate::{cdb, ComponentKind};
 
 mod preparation;
 pub use preparation::{PreparationError, PreparedNormal, PreparedUpdate};
+#[cfg(feature = "drive")]
+mod execution;
+#[cfg(feature = "drive")]
+pub use execution::{FlashError, FlashPass, FlashRuntime, FlashTransport};
+
+type Control = [u8; cdb::CONTROL_LEN as usize];
 
 /// Bytes compared by the resident Normal's update-entry handler.
 pub const DESCRIPTOR_LEN: usize = 16;
@@ -96,11 +102,13 @@ trait ReceiverCodec: core::fmt::Debug + Sync {
         &self,
         kernel: &Envelope,
         target: &[u8],
+        control: Control,
     ) -> Result<PreparedNormal, PreparationError>;
     fn prepare(
         &self,
         policy: crate::image::KernelMarkerPolicy,
         target: crate::envelope::Update,
+        control: Control,
     ) -> Result<PreparedUpdate, PreparationError>;
     fn control(
         &self,
@@ -119,15 +127,17 @@ impl ReceiverCodec for Oem {
         &self,
         kernel: &Envelope,
         target: &[u8],
+        control: Control,
     ) -> Result<PreparedNormal, PreparationError> {
-        preparation::prepare_normal_oem(kernel, target)
+        preparation::prepare_normal_oem(kernel, target, control)
     }
     fn prepare(
         &self,
         policy: crate::image::KernelMarkerPolicy,
         target: crate::envelope::Update,
+        control: Control,
     ) -> Result<PreparedUpdate, PreparationError> {
-        preparation::prepare_oem(policy, target)
+        preparation::prepare_oem(policy, target, control)
     }
     fn control(
         &self,
@@ -249,6 +259,10 @@ impl Receiver {
         Ok(installed)
     }
 
+    fn control(&self) -> Control {
+        self.codec.control(&self.descriptor, self.policy)
+    }
+
     /// Construct entry/finish control after checking the live descriptor.
     ///
     /// Descriptor equality binds this buffer to the supplied firmware evidence;
@@ -260,7 +274,7 @@ impl Receiver {
         if live_descriptor != self.descriptor {
             return Err(Error::DescriptorMismatch);
         }
-        Ok(self.codec.control(&self.descriptor, self.policy))
+        Ok(self.control())
     }
 }
 

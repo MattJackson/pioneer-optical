@@ -1,6 +1,6 @@
 //! Immutable component preparation; no transport or device I/O.
 
-use super::{Error, Receiver};
+use super::{Control, Error, Receiver};
 use crate::envelope::{downgrade_patch, Envelope, Update, UpdateError, KERNEL_MARKER_OFFSET};
 use crate::image::{kernel_marker_policy, KernelMarkerPolicy};
 
@@ -66,6 +66,8 @@ impl std::error::Error for PreparationError {
 /// is selected; the resident Kernel remains the receiving implementation.
 #[derive(Debug)]
 pub struct PreparedNormal {
+    #[cfg(feature = "drive")]
+    pub(super) control: Control,
     normal: Envelope,
     transfer: Vec<u8>,
 }
@@ -84,12 +86,13 @@ impl PreparedNormal {
 
 /// Complete-pair component bytes and mandatory Kernel readback expectations.
 ///
-/// This is preparation, not an executed flash or a complete transport schedule.
-/// The executor must bind live entry descriptors, perform protocol transitions,
-/// and verify the first Kernel before starting any required restoration pass.
-/// Success requires the final Kernel readback to match the pristine target.
+/// Preparation performs no device I/O. With the `drive` feature, `flash` binds
+/// live descriptors, executes the protocol and verifies each Kernel before
+/// proceeding. Success requires the final readback to match the pristine target.
 #[derive(Debug)]
 pub struct PreparedUpdate {
+    #[cfg(feature = "drive")]
+    pub(super) control: Control,
     target: Update,
     restoration: Option<Restoration>,
 }
@@ -157,7 +160,7 @@ impl Receiver {
             .installed_kernel
             .as_ref()
             .ok_or(PreparationError::MissingInstalledKernel)?;
-        self.codec.prepare_normal(kernel, target)
+        self.codec.prepare_normal(kernel, target, self.control())
     }
 
     /// Prepare both passes of a complete update before issuing any commands.
@@ -183,25 +186,32 @@ impl Receiver {
         let policy = self
             .kernel_policy
             .ok_or(PreparationError::UnknownInstalledKernel)?;
-        self.codec.prepare(policy, target)
+        self.codec.prepare(policy, target, self.control())
     }
 }
 
 pub(super) fn prepare_normal_oem(
     kernel: &Envelope,
     target: &[u8],
+    _control: Control,
 ) -> Result<PreparedNormal, PreparationError> {
     let bytes = kernel
         .repack(&kernel.image)
         .ok_or(PreparationError::InstalledKernelRepresentation)?;
     let prepared = Update::load(&bytes, target).map_err(PreparationError::Target)?;
     let (normal, transfer) = prepared.into_normal();
-    Ok(PreparedNormal { normal, transfer })
+    Ok(PreparedNormal {
+        #[cfg(feature = "drive")]
+        control: _control,
+        normal,
+        transfer,
+    })
 }
 
 pub(super) fn prepare_oem(
     policy: KernelMarkerPolicy,
     target: Update,
+    _control: Control,
 ) -> Result<PreparedUpdate, PreparationError> {
     let patch = needs_patch(
         policy,
@@ -229,6 +239,8 @@ pub(super) fn prepare_oem(
         None
     };
     Ok(PreparedUpdate {
+        #[cfg(feature = "drive")]
+        control: _control,
         target,
         restoration,
     })
@@ -240,4 +252,4 @@ fn needs_patch(policy: KernelMarkerPolicy, marker: Option<u8>) -> bool {
 
 #[cfg(test)]
 #[path = "preparation_tests.rs"]
-mod tests;
+pub(super) mod tests;

@@ -15,7 +15,7 @@ fn fix_sum(bytes: &mut [u8]) {
     bytes[end..].copy_from_slice(&sum.wrapping_neg().to_be_bytes());
 }
 
-fn update(gated: bool, marker: u8, family: u8, entry: bool) -> Update {
+pub(in crate::receiver) fn update(gated: bool, marker: u8, family: u8, entry: bool) -> Update {
     let mut kernel = front_kernel();
     let receiver = crate::image::receiver_fixture(gated);
     // Relocate the finalizer away from the independent envelope decoder fixture.

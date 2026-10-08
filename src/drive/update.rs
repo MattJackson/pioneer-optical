@@ -40,6 +40,8 @@ pub struct UpdateOptions {
 
 /// Host timing and progress services, independent of a UI or operating system.
 pub trait UpdateRuntime {
+    /// A validated single-pass transfer is about to enter update mode.
+    fn starting(&mut self, _kernel_bytes: usize, _normal_bytes: usize) {}
     /// Monotonic elapsed time from a fixed origin; must advance during sleeps.
     fn elapsed(&self) -> Duration;
     /// Wait at least the requested duration.
@@ -157,6 +159,10 @@ pub fn execute_update<T: Transport, R: UpdateRuntime>(
             }
         }
     }
+    runtime.starting(
+        transfer.kernel.map_or(0, <[u8]>::len),
+        transfer.normal.len(),
+    );
     let mut session =
         enter_update(transport, options.class, control).map_err(UpdateError::Entry)?;
     runtime.sleep(ENTRY_SETTLE);

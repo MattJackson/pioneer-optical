@@ -64,6 +64,8 @@ pub enum Layout {
     NormalReverse,
     /// Normal keyed with a scaled key length.
     NormalScaledKey,
+    /// Legacy Normal with an embedded ROM and trailing key table.
+    NormalTailKey,
     /// Kernel with the key table stored at the front of the payload.
     KernelFront,
     /// Kernel with the key table derived from an LCG seed.
@@ -87,6 +89,7 @@ impl Layout {
             Layout::Normal => "normal",
             Layout::NormalReverse => "normal-reverse",
             Layout::NormalScaledKey => "normal-scaled-key",
+            Layout::NormalTailKey => "normal-tail-key",
             Layout::KernelFront => "kernel-front",
             Layout::KernelDerived => "kernel-derived",
             Layout::KernelLegacyLe => "kernel-legacy-le",

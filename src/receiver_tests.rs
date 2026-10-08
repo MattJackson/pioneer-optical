@@ -55,3 +55,39 @@ fn descriptor_only_control_has_no_fabricated_key() {
     assert_eq!(&control[..DESCRIPTOR_LEN], &descriptor);
     assert!(control[DESCRIPTOR_LEN..].iter().all(|&b| b == 0));
 }
+
+#[test]
+fn family_gate_preserves_both_ids_and_distinguishes_missing_evidence() {
+    let first = [0xf6, 0x12, 0x6a, 0x86, 0xe4, 0x36, 0, 0];
+    let second = [0xf6, 0x13, 0x6a, 0x86, 0xe4, 0x36, 0, 0];
+    let mut installed = image();
+    installed.extend_from_slice(&first);
+    let receiver = Receiver::from_image(&installed).unwrap();
+    let a = family(&first).unwrap();
+    let b = family(&second).unwrap();
+    assert_eq!(receiver.family(), Some(a));
+    assert_eq!(receiver.compare_family(Some(a)), Ok(a));
+    assert_eq!(
+        receiver.compare_family(Some(b)),
+        Err(Error::FamilyMismatch {
+            installed: a,
+            target: b
+        })
+    );
+    assert_eq!(
+        receiver.compare_family(None),
+        Err(Error::UnknownTargetFamily)
+    );
+    let unknown = Receiver::from_image(&image()).unwrap();
+    assert_eq!(
+        unknown.compare_family(Some(a)),
+        Err(Error::UnknownInstalledFamily)
+    );
+    assert_eq!(
+        unknown.compare_family(None),
+        Err(Error::UnknownInstalledFamily)
+    );
+    let error = receiver.compare_family(Some(b)).unwrap_err().to_string();
+    assert!(error.contains(&a.to_string()));
+    assert!(error.contains(&b.to_string()));
+}

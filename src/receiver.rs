@@ -4,7 +4,7 @@
 //! hardware compatibility, component acceptance, or a complete flash plan.
 
 use crate::envelope::Envelope;
-use crate::image::{receiver_control, ReceiverControl};
+use crate::image::{family, receiver_control, Family, ReceiverControl};
 use crate::{cdb, ComponentKind};
 
 /// Bytes compared by the resident Normal's update-entry handler.
@@ -27,6 +27,17 @@ pub enum Error {
     Unsupported,
     /// The live descriptor differs from the captured installed firmware.
     DescriptorMismatch,
+    /// The installed image does not establish a hardware family.
+    UnknownInstalledFamily,
+    /// The target image does not establish a hardware family.
+    UnknownTargetFamily,
+    /// The installed and target images describe different hardware families.
+    FamilyMismatch {
+        /// Family recovered from installed firmware.
+        installed: Family,
+        /// Family recovered from the target firmware.
+        target: Family,
+    },
 }
 
 impl core::fmt::Display for Error {
@@ -38,6 +49,9 @@ impl core::fmt::Display for Error {
             ),
             Self::InvalidDescriptor => f.write_str("invalid resident Pioneer control descriptor"),
             Self::Unsupported => f.write_str("receiver entry control is unsupported or ambiguous"),
+            Self::UnknownInstalledFamily => f.write_str("could not determine the installed firmware family"),
+            Self::UnknownTargetFamily => f.write_str("could not determine the target firmware family"),
+            Self::FamilyMismatch { installed, target } => write!(f, "family mismatch: installed firmware is family {installed}, target is family {target}"),
             Self::DescriptorMismatch => {
                 f.write_str("installed firmware does not match the live receiver descriptor")
             }
@@ -50,12 +64,14 @@ impl std::error::Error for Error {}
 ///
 /// Construct from the captured installed Normal, decoded with its Kernel when
 /// needed. A target envelope must not be substituted for installed evidence.
-/// This object currently establishes entry control only; callers must validate
-/// family, components, transfer sequencing and verification before any write.
+/// This object establishes entry requirements and the hardware family gate.
+/// Callers must still validate components, transfer sequencing and verification
+/// before any write.
 #[derive(Debug)]
 pub struct Receiver {
     descriptor: [u8; DESCRIPTOR_LEN],
     policy: ReceiverControl,
+    family: Option<Family>,
     codec: &'static dyn ReceiverCodec,
 }
 
@@ -123,8 +139,36 @@ impl Receiver {
         Ok(Self {
             descriptor,
             policy,
+            family: family(image),
             codec,
         })
+    }
+
+    /// Hardware family recovered from the captured installed image.
+    pub fn family(&self) -> Option<Family> {
+        self.family
+    }
+
+    /// Require the target Normal to describe the same hardware family.
+    ///
+    /// This is the hardware compatibility gate. A matching family does not
+    /// validate envelope integrity or complete the receiver's transfer plan.
+    pub fn check_family(&self, target: &Envelope) -> Result<Family, Error> {
+        if target.info().kind != ComponentKind::Normal {
+            return Err(Error::Component {
+                actual: target.info().kind,
+            });
+        }
+        self.compare_family(target.family())
+    }
+
+    fn compare_family(&self, target: Option<Family>) -> Result<Family, Error> {
+        let installed = self.family.ok_or(Error::UnknownInstalledFamily)?;
+        let target = target.ok_or(Error::UnknownTargetFamily)?;
+        if installed != target {
+            return Err(Error::FamilyMismatch { installed, target });
+        }
+        Ok(installed)
     }
 
     /// Construct entry/finish control after checking the live descriptor.

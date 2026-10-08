@@ -28,7 +28,7 @@ fn discovers_code_without_identity_and_rejects_broken_proof() {
     let b = firmware();
     assert_eq!(
         discover(&b),
-        Some(Logging {
+        Some(LoggingLayout {
             mask_address: 0x337c,
             group: 0x93,
             bit: 0x40000
@@ -90,12 +90,15 @@ fn temporary_enable_preserves_mask_and_checks_readback() {
         writes: 0,
         refuse: false,
     };
-    assert!(set_logging_ram(&mut d, layout, true).unwrap());
-    assert!(set_logging_ram(&mut d, layout, true).unwrap());
+    set_logging_ram(&mut d, layout, true).unwrap();
+    set_logging_ram(&mut d, layout, true).unwrap();
     assert_eq!(d.writes, 1);
     d.mask = 0x92492490;
     d.refuse = true;
-    assert!(!set_logging_ram(&mut d, layout, true).unwrap());
+    assert!(matches!(
+        set_logging_ram(&mut d, layout, true),
+        Err(crate::drive::Error::ReadbackMismatch { .. })
+    ));
 }
 
 #[cfg(feature = "drive")]
@@ -134,11 +137,19 @@ fn persistent_is_explicit_and_ram_errors_never_fall_back() {
         writes: vec![],
         fail: false,
     };
-    assert!(set_logging_persistent(&mut d, layout, true).unwrap());
+    set_logging_persistent(&mut d, layout, true).unwrap();
     assert_eq!(&d.writes[0][..3], &[0x93, 0x10, 1]);
     d.writes.clear();
     d.fail = true;
     assert!(set_logging_ram(&mut d, layout, false).is_err());
     assert_eq!(d.writes.len(), 1);
     assert_eq!(&d.writes[0][..7], &[0x93, 0x12, 1, 0x92, 0x49, 0x24, 0x90]);
+}
+
+#[test]
+fn ambiguous_dispatch_binding_is_not_a_capability() {
+    let mut image = firmware();
+    let entry = image[0x400..0x40c].to_vec();
+    image[0x600..0x60c].copy_from_slice(&entry);
+    assert!(discover(&image).is_none());
 }

@@ -1,9 +1,12 @@
 //! Mapped diagnostic read surfaces. Support varies by firmware; callers must
 //! retain refusal/short-read status rather than treating zero fill as real data.
 
+const FIELD_MAX: usize = 0xff_ffff;
+const MEMORY_CHUNK: usize = 0x1000;
+
 /// A bounded vendor read surface, independent of any host dump-file layout.
 #[derive(Clone, Copy, Debug)]
-pub struct Surface {
+pub struct ReadSurface {
     /// Stable descriptive name.
     pub name: &'static str,
     /// READ BUFFER selector.
@@ -15,17 +18,17 @@ pub struct Surface {
     /// Maximum bytes to request in a single transfer.
     pub chunk: usize,
 }
-impl Surface {
+impl ReadSurface {
     /// Encode a bounded chunk, or return `None` for invalid ranges.
     pub fn read_cdb(self, offset: usize, length: usize) -> Option<[u8; 10]> {
         if length == 0 || length > self.chunk || offset.checked_add(length)? > self.length {
             return None;
         }
         let address = self.offset.checked_add(u32::try_from(offset).ok()?)?;
-        if address > 0xffffff || length > 0xffffff {
+        if address as usize > FIELD_MAX || (address as usize).checked_add(length)? > FIELD_MAX + 1 {
             return None;
         }
-        Some(crate::cdb::diagnostic_read(
+        Some(crate::cdb::read_diagnostic(
             self.selector,
             address,
             length as u32,
@@ -33,15 +36,15 @@ impl Surface {
     }
 }
 /// CPU memory before B0's high-register alias.
-pub const CPU_LOW: Surface = Surface {
+pub const CPU_LOW: ReadSurface = ReadSurface {
     name: "low_memory",
-    selector: 0xb0,
+    selector: crate::cdb::MEMORY_ID,
     offset: 0,
     length: 0x880000,
-    chunk: 0x1000,
+    chunk: MEMORY_CHUNK,
 };
 /// CPU registers at FFFFE000..FFFFFFFF, addressed through selector 92.
-pub const CPU_HIGH: Surface = Surface {
+pub const CPU_HIGH: ReadSurface = ReadSurface {
     name: "high_registers",
     selector: 0x92,
     offset: 0,
@@ -49,112 +52,112 @@ pub const CPU_HIGH: Surface = Surface {
     chunk: 0x100,
 };
 /// CPU registers at FF414000..FF4142FF, reached through B0's alias.
-pub const CPU_ALIAS: Surface = Surface {
+pub const CPU_ALIAS: ReadSurface = ReadSurface {
     name: "high_register_alias",
-    selector: 0xb0,
+    selector: crate::cdb::MEMORY_ID,
     offset: 0x880000,
     length: 0x300,
     chunk: 0x300,
 };
 /// Controller-local address space, distinct from CPU addresses.
-pub const CONTROLLER: Surface = Surface {
+pub const CONTROLLER: ReadSurface = ReadSurface {
     name: "controller_memory",
     selector: 0x93,
     offset: 0,
     length: 0x400000,
-    chunk: 0x1000,
+    chunk: MEMORY_CHUNK,
 };
 /// Exact diagnostic ring response in firmware-returned order.
-pub const LOG: Surface = Surface {
+pub const LOG: ReadSurface = ReadSurface {
     name: "diagnostic_log",
-    selector: 0xfc,
+    selector: crate::cdb::DIAGNOSTIC_LOG_ID,
     offset: 0,
-    length: 0x4000,
-    chunk: 0x4000,
+    length: crate::cdb::DIAGNOSTIC_LOG_LEN as usize,
+    chunk: crate::cdb::DIAGNOSTIC_LOG_LEN as usize,
 };
 
 /// Mapped fixed diagnostic responses. These issue reads only; they do not
 /// include poorly understood indexed or polling operations. FE temporarily
 /// overrides the firmware's read gate and restores it before returning.
-pub const RESPONSES: &[Surface] = &[
-    Surface {
+pub const RESPONSES: &[ReadSurface] = &[
+    ReadSurface {
         name: "parameters",
         selector: 0xa0,
         offset: 0,
         length: 0x800,
         chunk: 0x800,
     },
-    Surface {
+    ReadSurface {
         name: "peripheral_e900",
         selector: 0xd0,
         offset: 0,
         length: 0x100,
         chunk: 0x100,
     },
-    Surface {
+    ReadSurface {
         name: "identity",
-        selector: 0xf1,
+        selector: crate::cdb::IDENTITY_ID,
         offset: 0,
         length: 0x30,
         chunk: 0x30,
     },
-    Surface {
+    ReadSurface {
         name: "status_e0",
         selector: 0xe0,
         offset: 0,
         length: 0x20,
         chunk: 0x20,
     },
-    Surface {
+    ReadSurface {
         name: "status_e1",
         selector: 0xe1,
         offset: 0,
         length: 0x20,
         chunk: 0x20,
     },
-    Surface {
+    ReadSurface {
         name: "status_e5",
         selector: 0xe5,
         offset: 0,
         length: 2,
         chunk: 2,
     },
-    Surface {
+    ReadSurface {
         name: "status_e7",
         selector: 0xe7,
         offset: 0,
         length: 0x50,
         chunk: 0x50,
     },
-    Surface {
+    ReadSurface {
         name: "status_e6_03",
         selector: 0xe6,
         offset: 3,
         length: 4,
         chunk: 4,
     },
-    Surface {
+    ReadSurface {
         name: "bank_window",
         selector: 0xfe,
         offset: 0,
         length: 0x4000,
         chunk: 0x4000,
     },
-    Surface {
+    ReadSurface {
         name: "record_a",
         selector: 0xa4,
         offset: 0,
         length: 0x114,
         chunk: 0x114,
     },
-    Surface {
+    ReadSurface {
         name: "record_b",
         selector: 0xa8,
         offset: 0,
         length: 0x164,
         chunk: 0x164,
     },
-    Surface {
+    ReadSurface {
         name: "status_50",
         selector: 0x50,
         offset: 0,
@@ -164,21 +167,5 @@ pub const RESPONSES: &[Surface] = &[
 ];
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn bounded_reads_keep_wire_addresses_separate_from_host_offsets() {
-        assert_eq!(
-            CPU_ALIAS.read_cdb(0, 0x300),
-            Some(crate::cdb::read_memory(0x880000, 0x300))
-        );
-        assert!(CPU_HIGH.read_cdb(0x2000, 1).is_none());
-        assert!(CPU_HIGH.read_cdb(0, 0x101).is_none());
-        assert!(CPU_LOW.read_cdb(usize::MAX, 1).is_none());
-        assert!(CPU_LOW.read_cdb(0, 0).is_none());
-        assert_eq!(
-            LOG.read_cdb(0, LOG.length),
-            Some(crate::cdb::diagnostic_log())
-        );
-    }
-}
+#[path = "diagnostic_tests.rs"]
+mod tests;

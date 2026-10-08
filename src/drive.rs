@@ -64,6 +64,13 @@ pub enum Error<E> {
         /// Bytes received.
         actual: usize,
     },
+    /// A command completed, but the live value did not match the requested value.
+    ReadbackMismatch {
+        /// Requested value.
+        expected: u32,
+        /// Value returned by the drive.
+        actual: u32,
+    },
     /// An offset or length does not fit the 24-bit CDB field.
     Oversize(usize),
     /// The DVR challenge has no solution.
@@ -83,6 +90,10 @@ impl<E: core::fmt::Debug> core::fmt::Display for Error<E> {
             Self::Short { expected, actual } => {
                 write!(f, "short transfer: expected {expected} bytes, got {actual}")
             }
+            Self::ReadbackMismatch { expected, actual } => write!(
+                f,
+                "readback mismatch: expected {expected:#010x}, got {actual:#010x}"
+            ),
             Self::Oversize(n) => write!(f, "{n:#x} exceeds the 24-bit CDB field"),
             Self::Challenge => f.write_str("DVR challenge has no solution"),
             Self::UnknownClass => f.write_str("drive identity matches no known class"),
@@ -99,7 +110,7 @@ fn exec<T: Transport>(t: &mut T, cdb: &[u8], data: Data<'_>) -> Result<usize, Er
 }
 
 /// Execute a data-in `cdb` that must return at least `min` bytes.
-fn read<T: Transport>(
+pub(crate) fn read<T: Transport>(
     t: &mut T,
     cdb: &[u8],
     buf: &mut [u8],
@@ -116,7 +127,11 @@ fn read<T: Transport>(
 }
 
 /// Execute a data-out `cdb` that must transfer every byte of `data`.
-fn write<T: Transport>(t: &mut T, cdb: &[u8], data: &[u8]) -> Result<(), Error<T::Error>> {
+pub(crate) fn write<T: Transport>(
+    t: &mut T,
+    cdb: &[u8],
+    data: &[u8],
+) -> Result<(), Error<T::Error>> {
     let n = exec(t, cdb, Data::Out(data))?;
     if n < data.len() {
         return Err(Error::Short {

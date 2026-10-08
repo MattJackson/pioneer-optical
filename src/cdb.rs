@@ -60,20 +60,41 @@ fn vendor(op: u8, mode: u8, id: u8, off: u32, len: u32) -> [u8; 10] {
     [op, mode & 0x1f, id, o2, o1, o0, l2, l1, l0, 0]
 }
 
+/// Selector of the diagnostic circular-buffer read.
+pub const DIAGNOSTIC_LOG_ID: u8 = 0xFC;
+/// Maximum diagnostic circular-buffer response size.
+pub const DIAGNOSTIC_LOG_LEN: u32 = 0x4000;
+/// Selector of the internal diagnostic control envelope.
+pub const DIAGNOSTIC_CONTROL_ID: u8 = 0xE1;
+/// Size of an internal diagnostic control envelope.
+pub const DIAGNOSTIC_CONTROL_LEN: u32 = 32;
+
 /// Read a diagnostic selector. Offset and length must fit 24 bits.
 /// Selector-specific bounds and side effects are the caller's responsibility.
-pub fn diagnostic_read(id: u8, off: u32, len: u32) -> [u8; 10] {
+pub fn read_diagnostic(id: u8, off: u32, len: u32) -> [u8; 10] {
     vendor(READ_BUFFER, READ_MODE, id, off, len)
 }
 
 /// Read the 16 KiB diagnostic circular buffer on audited H8 firmware.
-pub fn diagnostic_log() -> [u8; 10] {
-    vendor(READ_BUFFER, READ_MODE, 0xFC, 0, 0x4000)
+pub fn read_diagnostic_log() -> [u8; 10] {
+    vendor(
+        READ_BUFFER,
+        READ_MODE,
+        DIAGNOSTIC_LOG_ID,
+        0,
+        DIAGNOSTIC_LOG_LEN,
+    )
 }
 
 /// Send a 32-byte internal control envelope on audited H8 firmware.
-pub fn diagnostic_control() -> [u8; 10] {
-    vendor(WRITE_BUFFER, READ_MODE, 0xE1, 0, 32)
+pub fn write_diagnostic_control() -> [u8; 10] {
+    vendor(
+        WRITE_BUFFER,
+        READ_MODE,
+        DIAGNOSTIC_CONTROL_ID,
+        0,
+        DIAGNOSTIC_CONTROL_LEN,
+    )
 }
 
 /// `12 00 00 00 <alloc> 00` — standard INQUIRY.

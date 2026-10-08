@@ -149,3 +149,28 @@ fn checksum_policy_must_be_established_from_rom_code() {
     duplicate.image[0x800..0x800 + CHECKSUM.len()].copy_from_slice(CHECKSUM);
     assert!(Envelope::load_with_kernel(&normal, &duplicate).is_err());
 }
+
+#[test]
+fn truncated_containers_and_kernel_context_fail_without_partial_images() {
+    let (kernel, normal, _) = fixture();
+    for end in [0, 0x200, PAYLOAD_START, PAYLOAD_END, CONTAINER_SIZE - 1] {
+        assert!(Envelope::load_with_kernel(&normal[..end], &kernel).is_err());
+    }
+    for end in [0, BLOCK - 1, 0x400 + CHECKSUM.len(), kernel.image.len() - 1] {
+        let mut truncated = kernel.clone();
+        truncated.image.truncate(end);
+        assert!(Envelope::load_with_kernel(&normal, &truncated).is_err());
+    }
+}
+
+#[test]
+fn routine_locations_are_not_a_firmware_profile() {
+    let (mut kernel, normal, image) = fixture();
+    kernel.image[BLOCK * 2..BLOCK * 2 + DECODER.len()].fill(0xff);
+    kernel.image[0x400..0x400 + CHECKSUM.len()].fill(0xff);
+    kernel.image[0x1200..0x1200 + DECODER.len()].copy_from_slice(DECODER);
+    kernel.image[0x2000..0x2000 + CHECKSUM.len()].copy_from_slice(CHECKSUM);
+    let decoded = Envelope::load_with_kernel(&normal, &kernel).unwrap();
+    assert_eq!(decoded.image, image);
+    assert_eq!(decoded.repack(&image).unwrap(), normal);
+}

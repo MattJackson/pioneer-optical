@@ -22,6 +22,8 @@ name = "pioneer_optical"
 std = []
 # Structured, read-only analysis of a single firmware envelope.
 analysis = ["envelope"]
+# Generic H8 callback, ABI and memory-layout inspection.
+firmware-info = ["envelope", "dep:anyhow"]
 # Command sequences over a caller-supplied transport. no_std, no alloc.
 drive = []
 # Firmware image analysis. Uses alloc and a zlib inflater.
@@ -33,6 +35,7 @@ envelope = ["std", "image", "dep:serde", "dep:sha2", "dep:flate2", "dep:num-bigi
 all-features = true
 
 [dependencies]
+anyhow = { version = "1", optional = true }
 miniz_oxide = { version = "0.9", optional = true, default-features = false, features = ["with-alloc"] }
 serde = { version = "1", features = ["derive"], optional = true }
 sha2 = { version = "0.10", optional = true }

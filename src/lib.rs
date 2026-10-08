@@ -49,6 +49,9 @@ mod comp;
 mod error_codes;
 pub use error_codes::CodedError;
 
+#[cfg(feature = "firmware-info")]
+pub mod firmware;
+
 pub mod cdb;
 /// Bounded diagnostic read surfaces.
 pub mod diagnostic;

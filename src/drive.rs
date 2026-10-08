@@ -187,6 +187,59 @@ pub fn read_memory<T: Transport>(
     Ok(n.min(blen))
 }
 
+/// Transfer caller-provided bytes through a diagnostic memory selector.
+///
+/// Does not enable diagnostics, select RAM, interpret payloads or install hooks.
+/// The caller owns address validity, permissions and transaction recovery.
+/// Each command is bounded to 4096 bytes and must transfer its complete buffer.
+/// The full interval is checked before issuing any command.
+pub fn diagnostic_memory<T: Transport>(
+    t: &mut T,
+    selector: u8,
+    offset: u32,
+    data: Data<'_>,
+) -> Result<(), Error<T::Error>> {
+    let length = match &data {
+        Data::In(b) => b.len(),
+        Data::Out(b) => b.len(),
+        Data::None => 0,
+    };
+    field::<T::Error>(offset as usize)?;
+    if length > FIELD_MAX + 1 - offset as usize {
+        return Err(Error::Oversize(length));
+    }
+    let transfer = |t: &mut T, index: usize, data: Data<'_>, write: bool, len: usize| {
+        let mut command =
+            cdb::read_diagnostic(selector, offset + (index * 4096) as u32, len as u32);
+        if write {
+            command[0] = 0x3b;
+        }
+        let actual = exec(t, &command, data)?;
+        if actual != len {
+            return Err(Error::Short {
+                expected: len,
+                actual,
+            });
+        }
+        Ok(())
+    };
+    match data {
+        Data::In(bytes) => {
+            for (index, chunk) in bytes.chunks_mut(4096).enumerate() {
+                let len = chunk.len();
+                transfer(t, index, Data::In(chunk), false, len)?;
+            }
+        }
+        Data::Out(bytes) => {
+            for (index, chunk) in bytes.chunks(4096).enumerate() {
+                transfer(t, index, Data::Out(chunk), true, chunk.len())?;
+            }
+        }
+        Data::None => {}
+    }
+    Ok(())
+}
+
 /// An open update session, returned by [`enter_update`].
 ///
 /// Component transfers may already program flash before [`finish`](Self::finish).

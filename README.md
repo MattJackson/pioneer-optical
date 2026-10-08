@@ -25,6 +25,16 @@ pioneer-optical = { version = "0.11", features = ["drive"] }
 | `image` | `image` | `family`, `is_uhd`, `required_abi` / `provided_abi` |
 | `envelope` | `envelope` | `Envelope::load`, `DecodeError`, `header_info`, `DecodedEnvelope::repack`; `signature`, `builder`; `Error`, `Layout`; `ComponentKind` at the root |
 
+The optional `firmware-info` feature exposes `firmware::{layout, callbacks, abi}`
+for structural H8 memory maps, dispatch callback discovery, and bounded argument
+tracing. These APIs report evidence from a decoded firmware image; they do not
+reserve live RAM, construct payloads, or install hooks. Unsupported or ambiguous
+patterns are errors. This feature requires `std` and the envelope decoder.
+
+`drive::diagnostic_memory` transfers caller-provided bytes through a diagnostic
+selector in bounded chunks with exact transfer-count checks. The caller owns
+address selection, diagnostic enablement, payload interpretation, and recovery.
+
 The default build and the `drive` feature are `no_std` and allocation-free.
 `image` uses `alloc` and [`miniz_oxide`](https://crates.io/crates/miniz_oxide).
 `envelope` implies `image` and `std`.

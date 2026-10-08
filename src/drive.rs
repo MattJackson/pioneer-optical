@@ -19,6 +19,9 @@
 use crate::cdb::{self, CONTROL_LEN, DVR_CHALLENGE_LEN};
 use crate::{DriveClass, Identity, Role, IDENTITY_LEN, INQUIRY_LEN};
 
+mod update;
+pub use update::{execute_update, UpdateError, UpdateOptions, UpdateRuntime, UpdateTransfer};
+
 /// The control buffer carried by [`cdb::enter_update`] and [`cdb::finish`].
 pub type Control = [u8; CONTROL_LEN as usize];
 

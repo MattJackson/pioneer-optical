@@ -1,0 +1,77 @@
+//! Descriptor-only entry: compare sixteen bytes, disable interrupts and enter Kernel.
+
+const NORMAL_BASE: u32 = super::super::KERNEL_BASE + super::super::KERNEL_LEN as u32;
+const DESCRIPTOR_LOOP: &[u8] = &[
+    0x18, 0xbb, 0x1a, 0x91, 0x0c, 0xb9, 0x0f, 0x94, 0x7a, 0x14, 0x00, 0x41, 0x00, 0x00, 0x17, 0x51,
+    0x01, 0x00, 0x6f, 0x70, 0x00, 0x3e, 0x7a, 0x06, 0x00, 0x58, 0xc8, 0xbe, 0x5d, 0x60, 0x68, 0x49,
+    0x1c, 0x98, 0x47, 0x0e, 0x01, 0x00, 0x6f, 0x70, 0x00, 0x44, 0x5e, 0x5a, 0x17, 0x82, 0x5a, 0x59,
+    0xac, 0x1e, 0x0a, 0x0b, 0xab, 0x10, 0x45, 0xca, 0x7a, 0x02, 0x00, 0x00, 0x01, 0x43, 0x04, 0x80,
+    0xf0, 0x01, 0x6a, 0xa0, 0x00, 0x00, 0x01, 0x42, 0x6a, 0xa0, 0x00, 0x00, 0x01, 0x40, 0x6a, 0x28,
+    0x00, 0x00, 0x01, 0x6c, 0xa8, 0xff, 0x47, 0x04, 0x70, 0x58, 0x40, 0x10, 0x6a, 0x28, 0x00, 0x00,
+    0x01, 0x6b, 0xa8, 0xff, 0x47, 0x04, 0x70, 0x48, 0x40, 0x02, 0x18, 0x88, 0x68, 0xa8, 0xf8, 0xff,
+    0x6a, 0x88, 0xff, 0x00, 0x6a, 0x88, 0xff, 0x01, 0x6a, 0x88, 0xff, 0x02,
+];
+const STARTUP: &[&[u8]] = &[
+    &[0xf8, 0x80, 0x03, 0x08, 0x5e, 0x40, 0x00, 0x28],
+    &[
+        0x6a, 0x80, 0xfe, 0x68, 0xf8, 0x23, 0x6a, 0x88, 0xfe, 0x69, 0xf8, 0x80, 0x03, 0x08, 0x5e,
+        0x40, 0x00, 0x28,
+    ],
+    &[
+        0x6a, 0x80, 0xfe, 0x68, 0xf8, 0x23, 0x6a, 0x88, 0xfe, 0x69, 0xf8, 0x80, 0x03, 0x08, 0x5e,
+        0x40, 0x00, 0x2a,
+    ],
+];
+const POINTERS: [(usize, usize); 3] = [(24, 4), (43, 3), (47, 3)];
+const BUFFER_STACK: usize = 21;
+const ERROR_STACK: usize = 41;
+const FLAG_REGISTER: usize = 57;
+const FLAG_STORE: usize = 109;
+const RECOVERY_FLAGS: [usize; 2] = [83, 97];
+
+pub(super) fn matches(body: &[u8]) -> impl Iterator<Item = ()> + '_ {
+    body.windows(DESCRIPTOR_LOOP.len())
+        .enumerate()
+        .filter_map(|(offset, code)| {
+            if offset % 2 != 0
+                || !code
+                    .iter()
+                    .zip(DESCRIPTOR_LOOP)
+                    .enumerate()
+                    .all(|(i, (a, b))| {
+                        [BUFFER_STACK, ERROR_STACK, FLAG_REGISTER, FLAG_STORE].contains(&i)
+                            || RECOVERY_FLAGS.contains(&i)
+                            || POINTERS.iter().any(|&(p, n)| (p..p + n).contains(&i))
+                            || a == b
+                    })
+            {
+                return None;
+            }
+            if !matches!(
+                (code[BUFFER_STACK], code[ERROR_STACK]),
+                (0x3e, 0x44) | (0x44, 0x48)
+            ) || !matches!(code[FLAG_REGISTER], 1 | 2)
+                || code[FLAG_STORE] != 0x88 | (code[FLAG_REGISTER] << 4)
+                || code[RECOVERY_FLAGS[1]].checked_add(1) != Some(code[RECOVERY_FLAGS[0]])
+            {
+                return None;
+            }
+            for (position, width) in POINTERS {
+                let mut pointer = [0; 4];
+                pointer[4 - width..].copy_from_slice(&code[position..position + width]);
+                let target = u32::from_be_bytes(pointer).checked_sub(NORMAL_BASE)? as usize;
+                if target % 2 != 0 || body.get(target..target.checked_add(2)?).is_none() {
+                    return None;
+                }
+            }
+            let tail = body.get(offset + DESCRIPTOR_LOOP.len()..)?;
+            STARTUP
+                .iter()
+                .any(|startup| tail.starts_with(startup))
+                .then_some(())
+        })
+}
+
+#[cfg(test)]
+#[path = "control_descriptor_tests.rs"]
+mod tests;

@@ -10,7 +10,7 @@ mod abi;
 mod control;
 mod receiver;
 pub use abi::{provided_abi, required_abi, Abi};
-pub use control::receiver_control_key;
+pub use control::{receiver_control, ReceiverControl};
 pub use receiver::{kernel_marker_policy, KernelMarkerPolicy};
 
 use alloc::borrow::ToOwned;

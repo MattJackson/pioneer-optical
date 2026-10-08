@@ -38,6 +38,9 @@ fn keyed(data: &[u8], header: &HeaderInfo, codec: &dyn EnvelopeCodec) -> Vec<Sel
 
 pub(super) struct Keyed;
 impl EnvelopeCodec for Keyed {
+    fn decoded_checksum(&self, image: &[u8]) -> Option<u32> {
+        Some(super::super::be32_sum(image))
+    }
     fn normal_transfer(&self, envelope: &super::super::DecodedEnvelope) -> Option<Vec<u8>> {
         continuous_transfer(self, envelope)
     }
@@ -53,6 +56,9 @@ impl EnvelopeCodec for Keyed {
 }
 pub(super) struct Reverse;
 impl EnvelopeCodec for Reverse {
+    fn decoded_checksum(&self, image: &[u8]) -> Option<u32> {
+        Some(super::super::be32_sum(image))
+    }
     fn normal_transfer(&self, envelope: &super::super::DecodedEnvelope) -> Option<Vec<u8>> {
         continuous_transfer(self, envelope)
     }
@@ -71,6 +77,9 @@ impl EnvelopeCodec for Reverse {
 }
 pub(super) struct Scaled;
 impl EnvelopeCodec for Scaled {
+    fn decoded_checksum(&self, image: &[u8]) -> Option<u32> {
+        Some(super::super::be32_sum(image))
+    }
     fn normal_transfer(&self, envelope: &super::super::DecodedEnvelope) -> Option<Vec<u8>> {
         continuous_transfer(self, envelope)
     }

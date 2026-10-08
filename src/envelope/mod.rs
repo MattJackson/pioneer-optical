@@ -1051,10 +1051,13 @@ fn transformed_plane_layout(data: &[u8], file_type: ComponentKind) -> Option<Sel
 }
 
 fn be32_sum_zero(image: &[u8]) -> bool {
-    image.len() % 4 == 0
-        && image.chunks_exact(4).fold(0u32, |sum, word| {
-            sum.wrapping_add(u32::from_be_bytes(word.try_into().unwrap()))
-        }) == 0
+    image.len() % 4 == 0 && be32_sum(image) == 0
+}
+
+fn be32_sum(image: &[u8]) -> u32 {
+    image.chunks_exact(4).fold(0u32, |sum, word| {
+        sum.wrapping_add(u32::from_be_bytes(word.try_into().unwrap()))
+    })
 }
 
 // Older 64 KiB Kernel framing, established across nine ATA0006/7/8

@@ -202,15 +202,16 @@ impl Update {
         }
         for (envelope, bytes) in [(&kernel, kernel_bytes), (&normal, normal_bytes)] {
             let component = envelope.info().kind;
-            let sum = envelope.image.chunks_exact(4).fold(0u32, |sum, word| {
-                sum.wrapping_add(u32::from_be_bytes([word[0], word[1], word[2], word[3]]))
-            });
-            if envelope.image.len() % 4 != 0 || sum != 0 {
-                return Err(UpdateError::Checksum {
-                    component,
-                    sum,
-                    bytes: envelope.image.len(),
-                });
+            if let Some(sum) =
+                super::codecs::for_layout(envelope.info().layout).decoded_checksum(&envelope.image)
+            {
+                if envelope.image.len() % 4 != 0 || sum != 0 {
+                    return Err(UpdateError::Checksum {
+                        component,
+                        sum,
+                        bytes: envelope.image.len(),
+                    });
+                }
             }
             if envelope.repack(&envelope.image).as_deref() != Some(bytes) {
                 return Err(UpdateError::Roundtrip { component });

@@ -3,7 +3,7 @@ use super::{DecodeError, Envelope, Layout, BANNER};
 fn fixture(kind: &str, payload: &[u8]) -> Vec<u8> {
     let mut bytes = vec![0xff; 0x10000];
     let header = format!(
-        "{}\r\nID : PIONEER TEST\r\nFile Type : {kind}\r\n",
+        "{}\r\nID : PIONEER TEST\r\nFile Type : {kind}\r\nHardware Version : TEST0001\r\nDestination : CUSTOM\r\nKernel Version : TEST\r\nKernel Version2 : 0001\r\n",
         String::from_utf8_lossy(BANNER)
     );
     bytes[..header.len()].copy_from_slice(header.as_bytes());
@@ -13,6 +13,28 @@ fn fixture(kind: &str, payload: &[u8]) -> Vec<u8> {
     bytes[0x8000..0x8004].copy_from_slice(&checksum.to_le_bytes());
     bytes.extend_from_slice(payload);
     bytes
+}
+
+#[test]
+fn valid_sparse_pair_reports_missing_transfer_support_not_a_false_checksum_error() {
+    let kernel = fixture("Kernel", &[1, 2, 3, 4]);
+    let normal = fixture("Normal", &[5, 6, 7, 8]);
+    assert_eq!(
+        super::Update::load(&kernel, &normal).unwrap_err(),
+        super::UpdateError::Representation {
+            component: crate::ComponentKind::Kernel,
+            layout: Layout::SparseChecksum,
+        }
+    );
+    let mut corrupt = kernel;
+    corrupt[0x10000] ^= 1;
+    assert!(matches!(
+        super::Update::load(&corrupt, &normal),
+        Err(super::UpdateError::Decode {
+            component: crate::ComponentKind::Kernel,
+            source: DecodeError::ChecksumMismatch { .. }
+        })
+    ));
 }
 
 #[test]

@@ -22,6 +22,11 @@ pub(super) trait EnvelopeCodec: Sync {
     fn validate(&self, _data: &[u8]) -> Result<(), DecodeError> {
         Ok(())
     }
+    /// A format-defined decoded whole-image zero-sum checksum, when one exists.
+    /// Stored-wrapper checksums are validated separately by `validate`.
+    fn decoded_checksum(&self, _image: &[u8]) -> Option<u32> {
+        None
+    }
     fn finish_repack(&self, _data: &mut [u8]) -> Option<()> {
         Some(())
     }

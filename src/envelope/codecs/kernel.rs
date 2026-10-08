@@ -15,6 +15,9 @@ const SEED_SAMPLE: usize = 16;
 
 pub(super) struct Front;
 impl EnvelopeCodec for Front {
+    fn decoded_checksum(&self, image: &[u8]) -> Option<u32> {
+        Some(super::super::be32_sum(image))
+    }
     fn kernel_transfer(&self, envelope: &super::super::DecodedEnvelope) -> Option<Vec<u8>> {
         front_key_transfer(envelope)
     }
@@ -41,6 +44,9 @@ impl EnvelopeCodec for Front {
 
 pub(super) struct Derived;
 impl EnvelopeCodec for Derived {
+    fn decoded_checksum(&self, image: &[u8]) -> Option<u32> {
+        Some(super::super::be32_sum(image))
+    }
     fn kernel_transfer(&self, envelope: &super::super::DecodedEnvelope) -> Option<Vec<u8>> {
         front_key_transfer(envelope)
     }

@@ -87,6 +87,31 @@ fn valid_checksums_do_not_substitute_for_authentication() {
 }
 
 #[test]
+fn modern_component_corruption_still_reports_its_decoded_checksum() {
+    use crate::envelope::Envelope;
+    let pair = pair(true);
+    let kernel = Envelope::load(&pair.kernel).unwrap();
+    let normal = Envelope::load_with_kernel(&pair.normal, &kernel).unwrap();
+    for (component, envelope) in [
+        (ComponentKind::Kernel, &kernel),
+        (ComponentKind::Normal, &normal),
+    ] {
+        let mut image = envelope.image.clone();
+        image[0x800] ^= 1;
+        let modified = envelope.repack(&image).unwrap();
+        let error = match component {
+            ComponentKind::Kernel => Update::load(&modified, &pair.normal),
+            _ => Update::load(&pair.kernel, &modified),
+        }
+        .unwrap_err();
+        assert!(
+            matches!(error, UpdateError::Checksum { component: actual, sum, bytes }
+            if actual == component && sum != 0 && bytes == image.len())
+        );
+    }
+}
+
+#[test]
 fn pair_identity_errors_name_the_typed_field_and_both_values() {
     use super::PairField;
     let pair = pair(true);

@@ -24,6 +24,13 @@ pub enum Error {
         /// Component actually supplied.
         actual: ComponentKind,
     },
+    /// Kernel evidence carries another component role.
+    KernelComponent {
+        /// Component actually supplied as the installed Kernel.
+        actual: ComponentKind,
+    },
+    /// Captured components disagree on their declared hardware or Kernel tag.
+    InstalledPairMismatch,
     /// The resident image has no valid entry descriptor.
     InvalidDescriptor,
     /// No unique supported entry handler was recovered from the image.
@@ -50,6 +57,8 @@ impl core::fmt::Display for Error {
                 f,
                 "receiver detection requires a Normal component, got {actual:?}"
             ),
+            Self::KernelComponent { actual } => write!(f, "installed Kernel evidence requires a Kernel component, got {actual}"),
+            Self::InstalledPairMismatch => f.write_str("installed Kernel and Normal hardware or Kernel tags do not match"),
             Self::InvalidDescriptor => f.write_str("invalid resident Pioneer control descriptor"),
             Self::Unsupported => f.write_str("receiver entry control is unsupported or ambiguous"),
             Self::UnknownInstalledFamily => f.write_str("could not determine the installed firmware family"),
@@ -167,8 +176,34 @@ impl Receiver {
     /// Unlike Normal-only detection, this also retains the installed Kernel's
     /// recognized marker policy for complete-pair preparation.
     pub fn from_installed(installed: &crate::envelope::Update) -> Result<Self, Error> {
-        let mut receiver = Self::detect(installed.normal())?;
-        receiver.kernel_policy = crate::image::kernel_marker_policy(&installed.kernel().image);
+        Self::detect_with_kernel(installed.normal(), installed.kernel())
+    }
+
+    /// Detect from decoded Normal and Kernel captured from the same drive.
+    ///
+    /// Captured firmware need not retain the original update-file signature.
+    /// This inspects installed code, not permission to transfer these envelopes.
+    /// The caller must bind both images to its capture; header agreement alone
+    /// cannot prove they are currently installed on a physical device.
+    pub fn detect_with_kernel(normal: &Envelope, kernel: &Envelope) -> Result<Self, Error> {
+        let mut receiver = Self::detect(normal)?;
+        if kernel.info().kind != ComponentKind::Kernel {
+            return Err(Error::KernelComponent {
+                actual: kernel.info().kind,
+            });
+        }
+        for (a, b) in [
+            (
+                &normal.info().hardware_version,
+                &kernel.info().hardware_version,
+            ),
+            (&normal.info().kernel_version, &kernel.info().kernel_version),
+        ] {
+            if a.is_empty() || a != b {
+                return Err(Error::InstalledPairMismatch);
+            }
+        }
+        receiver.kernel_policy = crate::image::kernel_marker_policy(&kernel.image);
         Ok(receiver)
     }
 

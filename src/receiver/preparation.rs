@@ -109,6 +109,18 @@ impl Receiver {
     pub fn prepare(&self, target: Update) -> Result<PreparedUpdate, PreparationError> {
         self.check_family(target.normal())
             .map_err(PreparationError::Compatibility)?;
+        self.prepare_without_family_check(target)
+    }
+
+    /// Prepare with an explicit caller override of the hardware family gate.
+    ///
+    /// Intended for applications exposing a deliberate force option. This may
+    /// target incompatible hardware; it waives only family comparison. Target
+    /// integrity, installed marker policy and restoration checks still apply.
+    pub fn prepare_without_family_check(
+        &self,
+        target: Update,
+    ) -> Result<PreparedUpdate, PreparationError> {
         let policy = self
             .kernel_policy
             .ok_or(PreparationError::UnknownInstalledKernel)?;

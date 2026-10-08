@@ -132,3 +132,54 @@ fn gated_receiver_does_not_patch_an_accepted_marker() {
         assert!(plan.restoration_receiver().is_none());
     }
 }
+
+#[test]
+fn captured_receiver_evidence_does_not_require_a_distribution_signature() {
+    let installed = update(true, 1, 0x12, true);
+    let mut bytes = installed.normal_transfer().to_vec();
+    bytes[crate::envelope::builder::NORMAL_SIGNATURE_RANGE].fill(0);
+    let captured = Envelope::load_with_kernel(&bytes, installed.kernel()).unwrap();
+    let receiver = Receiver::detect_with_kernel(&captured, installed.kernel()).unwrap();
+    assert_eq!(receiver.family(), installed.family());
+    assert!(receiver.prepare(update(false, 0, 0x12, true)).is_ok());
+    assert!(Update::load(installed.kernel_transfer(), &bytes).is_err());
+    assert_eq!(
+        Receiver::detect_with_kernel(&captured, &captured).unwrap_err(),
+        Error::KernelComponent {
+            actual: crate::ComponentKind::Normal
+        }
+    );
+    let mut mismatched = bytes;
+    let hardware = mismatched[..0x200]
+        .windows(8)
+        .position(|s| s == b"SAT 8A10")
+        .unwrap();
+    mismatched[hardware + 7] = b'1';
+    let mismatched = Envelope::load_with_kernel(&mismatched, installed.kernel()).unwrap();
+    assert_eq!(
+        Receiver::detect_with_kernel(&mismatched, installed.kernel()).unwrap_err(),
+        Error::InstalledPairMismatch
+    );
+}
+
+#[test]
+fn explicit_family_override_does_not_waive_receiver_or_restore_checks() {
+    let installed = update(true, 1, 0x12, true);
+    let receiver = Receiver::from_installed(&installed).unwrap();
+    assert!(receiver
+        .prepare_without_family_check(update(false, 0, 0x13, true))
+        .is_ok());
+    assert_eq!(
+        receiver
+            .prepare_without_family_check(update(true, 0, 0x13, true))
+            .unwrap_err(),
+        PreparationError::UnsupportedRestoration
+    );
+    let entry_only = Receiver::detect(installed.normal()).unwrap();
+    assert_eq!(
+        entry_only
+            .prepare_without_family_check(update(false, 0, 0x13, true))
+            .unwrap_err(),
+        PreparationError::UnknownInstalledKernel
+    );
+}

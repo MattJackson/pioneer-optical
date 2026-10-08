@@ -42,12 +42,17 @@ extern crate alloc;
 mod comp;
 
 pub mod cdb;
+/// Bounded diagnostic read surfaces.
+pub mod diagnostic;
 #[cfg(feature = "drive")]
 pub mod drive;
 #[cfg(feature = "envelope")]
 pub mod envelope;
 #[cfg(feature = "image")]
 pub mod image;
+/// Firmware-derived diagnostic logging.
+#[cfg(feature = "image")]
+pub mod logging;
 
 /// Length of a standard INQUIRY response header, in bytes.
 pub const INQUIRY_LEN: usize = 36;

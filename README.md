@@ -81,3 +81,15 @@ are read-only.
 ## License
 
 MIT. See [LICENSE-MIT](LICENSE-MIT).
+
+Diagnostic support is split into bounded read definitions (`diagnostic`) and
+firmware-derived logging capabilities (`logging`, with the `image` feature).
+`logging::discover` accepts an address-aligned CPU image, validates a supported
+handler structure and returns its mask address and dispatcher group. It uses no
+model/version allowlist; missing or ambiguous structures return `None`.
+With `drive` enabled, `set_logging_ram` and `set_logging_persistent` preserve
+unrelated mask bits and verify the live mask. The persistent setter explicitly
+writes nonvolatile settings; neither setter falls back to the other. A verified
+live mask does not prove persistence across a power cycle. File layout, capture
+ordering and whether optional failures should abort are the host application's
+responsibility.

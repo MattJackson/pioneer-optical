@@ -43,3 +43,7 @@ getrandom = { version = "0.3", optional = true }
 [[example]]
 name = "image_scan"
 required-features = ["image"]
+
+[[example]]
+name = "logging_scan"
+required-features = ["image"]

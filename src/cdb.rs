@@ -60,6 +60,22 @@ fn vendor(op: u8, mode: u8, id: u8, off: u32, len: u32) -> [u8; 10] {
     [op, mode & 0x1f, id, o2, o1, o0, l2, l1, l0, 0]
 }
 
+/// Read a diagnostic selector. Offset and length must fit 24 bits.
+/// Selector-specific bounds and side effects are the caller's responsibility.
+pub fn diagnostic_read(id: u8, off: u32, len: u32) -> [u8; 10] {
+    vendor(READ_BUFFER, READ_MODE, id, off, len)
+}
+
+/// Read the 16 KiB diagnostic circular buffer on audited H8 firmware.
+pub fn diagnostic_log() -> [u8; 10] {
+    vendor(READ_BUFFER, READ_MODE, 0xFC, 0, 0x4000)
+}
+
+/// Send a 32-byte internal control envelope on audited H8 firmware.
+pub fn diagnostic_control() -> [u8; 10] {
+    vendor(WRITE_BUFFER, READ_MODE, 0xE1, 0, 32)
+}
+
 /// `12 00 00 00 <alloc> 00` — standard INQUIRY.
 pub fn inquiry(alloc: u8) -> [u8; 6] {
     [0x12, 0, 0, 0, alloc, 0]

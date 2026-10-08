@@ -105,3 +105,13 @@ writes nonvolatile settings; neither setter falls back to the other. A verified
 live mask does not prove persistence across a power cycle. File layout, capture
 ordering and whether optional failures should abort are the host application's
 responsibility.
+
+### Error codes
+
+Typed errors implement `pioneer_optical::CodedError`. `error.code()` returns a
+stable namespaced identifier such as `pioneer.receiver.family_mismatch`.
+Applications can use these identifiers as translation keys and match the error
+variant for parameters. Codes contain no runtime values; English `Display`
+messages are diagnostic text, not a parsing contract. Wrapper errors retain their
+own stage code and typed causes. Handle unknown future codes with a generic
+message and preserve the diagnostic details.

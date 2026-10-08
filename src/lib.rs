@@ -43,6 +43,9 @@ extern crate alloc;
 #[cfg(any(feature = "image", feature = "envelope"))]
 mod comp;
 
+mod error_codes;
+pub use error_codes::CodedError;
+
 pub mod cdb;
 /// Bounded diagnostic read surfaces.
 pub mod diagnostic;

@@ -11,6 +11,8 @@ mod control;
 mod receiver;
 pub use abi::{provided_abi, required_abi, Abi};
 pub use control::{receiver_control, ReceiverControl};
+#[cfg(all(test, feature = "envelope"))]
+pub(crate) use receiver::tests::fixture as receiver_fixture;
 pub use receiver::{kernel_marker_policy, KernelMarkerPolicy};
 
 use alloc::borrow::ToOwned;

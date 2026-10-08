@@ -10,7 +10,7 @@ fn call(bytes: &mut [u8], offset: usize, target: usize) {
     bytes[offset + 1..offset + 4].copy_from_slice(&address[1..]);
 }
 
-fn fixture(gated: bool) -> Vec<u8> {
+pub(crate) fn fixture(gated: bool) -> Vec<u8> {
     let mut image = vec![0u8; KERNEL_LEN];
     let template = if gated {
         GATED_FINALIZER

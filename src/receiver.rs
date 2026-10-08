@@ -7,6 +7,9 @@ use crate::envelope::Envelope;
 use crate::image::{family, receiver_control, Family, ReceiverControl};
 use crate::{cdb, ComponentKind};
 
+mod preparation;
+pub use preparation::{PreparationError, PreparedUpdate};
+
 /// Bytes compared by the resident Normal's update-entry handler.
 pub const DESCRIPTOR_LEN: usize = 16;
 const KEY_END: usize = DESCRIPTOR_LEN + 4;
@@ -60,23 +63,30 @@ impl core::fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 
-/// A receiver's detected entry requirements, bound to its installed firmware.
+/// Firmware-derived update requirements bound to the installed receiver.
 ///
 /// Construct from the captured installed Normal, decoded with its Kernel when
 /// needed. A target envelope must not be substituted for installed evidence.
-/// This object establishes entry requirements and the hardware family gate.
-/// Callers must still validate components, transfer sequencing and verification
-/// before any write.
+/// Normal-only detection establishes entry requirements and the hardware family
+/// gate. [`Self::from_installed`] also enables complete-pair preparation using
+/// the installed Kernel's code. Callers still own transport sequencing and
+/// readback verification; preparation performs no device I/O.
 #[derive(Debug)]
 pub struct Receiver {
     descriptor: [u8; DESCRIPTOR_LEN],
     policy: ReceiverControl,
     family: Option<Family>,
+    kernel_policy: Option<crate::image::KernelMarkerPolicy>,
     codec: &'static dyn ReceiverCodec,
 }
 
 trait ReceiverCodec: core::fmt::Debug + Sync {
     fn detect(&self, image: &[u8]) -> Option<ReceiverControl>;
+    fn prepare(
+        &self,
+        policy: crate::image::KernelMarkerPolicy,
+        target: crate::envelope::Update,
+    ) -> Result<PreparedUpdate, PreparationError>;
     fn control(
         &self,
         descriptor: &[u8; DESCRIPTOR_LEN],
@@ -89,6 +99,13 @@ struct Oem;
 impl ReceiverCodec for Oem {
     fn detect(&self, image: &[u8]) -> Option<ReceiverControl> {
         receiver_control(image)
+    }
+    fn prepare(
+        &self,
+        policy: crate::image::KernelMarkerPolicy,
+        target: crate::envelope::Update,
+    ) -> Result<PreparedUpdate, PreparationError> {
+        preparation::prepare_oem(policy, target)
     }
     fn control(
         &self,
@@ -140,8 +157,19 @@ impl Receiver {
             descriptor,
             policy,
             family: family(image),
+            kernel_policy: None,
             codec,
         })
+    }
+
+    /// Detect a receiver from a validated captured Kernel/Normal pair.
+    ///
+    /// Unlike Normal-only detection, this also retains the installed Kernel's
+    /// recognized marker policy for complete-pair preparation.
+    pub fn from_installed(installed: &crate::envelope::Update) -> Result<Self, Error> {
+        let mut receiver = Self::detect(installed.normal())?;
+        receiver.kernel_policy = crate::image::kernel_marker_policy(&installed.kernel().image);
+        Ok(receiver)
     }
 
     /// Hardware family recovered from the captured installed image.

@@ -59,7 +59,7 @@ fn header_bytes(file_type: &str, hardware: &str, destination: &str) -> [u8; 0x20
 
 /// 0x10000 Kernel image with a FrontKey dispatcher (one AE compare pair),
 /// the SAT identity block, and exactly one XOR-skip branch.
-pub(super) fn front_kernel() -> Vec<u8> {
+pub(crate) fn front_kernel() -> Vec<u8> {
     let mut k = vec![0u8; 0x10000];
     k[0x1000..0x1008].copy_from_slice(b"SAT 8A10");
     k[0x1008..0x1010].copy_from_slice(b"GENERAL ");
@@ -128,7 +128,7 @@ fn scaled_kernel() -> Vec<u8> {
     k
 }
 
-pub(super) fn normal_image(len: usize) -> Vec<u8> {
+pub(crate) fn normal_image(len: usize) -> Vec<u8> {
     let mut n = vec![0u8; len];
     n[..8].copy_from_slice(b"PIONEER ");
     n[20..24].copy_from_slice(&(len as u32).to_be_bytes());

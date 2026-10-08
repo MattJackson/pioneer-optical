@@ -195,4 +195,4 @@ fn call_target(image: &[u8], candidate: &[u8], offset: usize) -> Option<usize> {
 
 #[cfg(test)]
 #[path = "receiver_tests.rs"]
-mod tests;
+pub(crate) mod tests;

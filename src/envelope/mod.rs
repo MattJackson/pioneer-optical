@@ -1685,7 +1685,7 @@ mod header_identity_tests;
 /// that gate them) run on every build.
 #[cfg(test)]
 #[path = "synthetic_roundtrip_tests.rs"]
-mod synthetic_roundtrip_tests;
+pub(crate) mod synthetic_roundtrip_tests;
 
 #[cfg(test)]
 mod raw_detection_tests;

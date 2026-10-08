@@ -85,3 +85,61 @@ fn valid_checksums_do_not_substitute_for_authentication() {
         UpdateError::Authentication
     );
 }
+
+#[test]
+fn pair_identity_errors_name_the_typed_field_and_both_values() {
+    use super::PairField;
+    let pair = pair(true);
+    for (field, start, width) in [
+        (PairField::HardwareVersion, 0xb0, 8),
+        (PairField::Destination, 0xf0, 8),
+        (PairField::KernelVersion, 0xd0, 8),
+        (PairField::KernelVersion2, 0x150, 4),
+    ] {
+        for missing in [false, true] {
+            let mut normal = pair.normal.clone();
+            if missing {
+                normal[start..start + width].fill(b' ');
+            } else {
+                normal[start] = b'X';
+            }
+            let error = Update::load(&pair.kernel, &normal).unwrap_err();
+            let UpdateError::Header {
+                field: actual,
+                kernel,
+                normal,
+            } = &error
+            else {
+                panic!("expected {field}, got {error:?}");
+            };
+            assert_eq!(*actual, field);
+            assert!(!kernel.is_empty());
+            assert_ne!(kernel, normal);
+            assert_eq!(normal.is_empty(), missing);
+            let message = error.to_string();
+            assert!(message.contains(&field.to_string()));
+            assert!(message.contains("Kernel=") && message.contains("Normal="));
+        }
+    }
+}
+
+#[test]
+fn kernel_policy_loading_preserves_decode_errors_and_reports_layouts() {
+    use crate::envelope::{DecodeError, Envelope, Layout};
+    let pair = pair(true);
+    let mut kernel = Envelope::load(&pair.kernel).unwrap();
+    assert!(matches!(
+        Envelope::load_with_kernel(&[], &kernel),
+        Err(DecodeError::InvalidHeader)
+    ));
+    let decoded = Envelope::load_with_kernel(&pair.normal, &kernel).unwrap();
+    assert_eq!(decoded.image, normal_image(0x2000));
+    kernel.image[0x100..0x180].fill(0);
+    assert!(matches!(
+        Envelope::load_with_kernel(&pair.normal, &kernel),
+        Err(DecodeError::ReceiverPolicy {
+            kernel_layout: Layout::KernelFront,
+            normal_layout: Layout::Normal
+        })
+    ));
+}

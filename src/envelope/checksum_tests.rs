@@ -29,6 +29,16 @@ fn both_component_roles_unwrap_and_roundtrip_without_model_lookup() {
 }
 
 #[test]
+fn checksum_wrapper_does_not_require_an_unrelated_xor_policy() {
+    let kernel = Envelope::load(&fixture("Kernel", &[1, 2, 3, 4])).unwrap();
+    let bytes = fixture("Normal", &[5, 6, 7, 8]);
+    let normal = Envelope::load_with_kernel(&bytes, &kernel).unwrap();
+    assert_eq!(normal.image, [5, 6, 7, 8]);
+    assert_eq!(normal.receiver_xor_exceptions(), None);
+    assert!(normal.normal_transfer_image().is_none());
+}
+
+#[test]
 fn repacking_changes_checksum_and_preserves_wrapper() {
     let bytes = fixture("Normal", &[1, 0, 0, 0, 2, 0, 0, 0]);
     let envelope = Envelope::load(&bytes).unwrap();

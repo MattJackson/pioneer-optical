@@ -12,6 +12,13 @@ pub enum DecodeError {
     AmbiguousLayout,
     /// A recognized payload cannot be decoded consistently with its metadata.
     InvalidPayload,
+    /// The supplied Kernel does not prove a unique decoding policy for this Normal.
+    ReceiverPolicy {
+        /// Detected Kernel envelope layout.
+        kernel_layout: super::Layout,
+        /// Detected Normal envelope layout.
+        normal_layout: super::Layout,
+    },
     /// The stored payload is not a whole number of codec words.
     PayloadAlignment {
         /// Recognized codec.
@@ -51,6 +58,8 @@ impl core::fmt::Display for DecodeError {
             Self::UnsupportedLayout => f.write_str("unsupported firmware envelope layout"),
             Self::AmbiguousLayout => f.write_str("ambiguous firmware envelope layout"),
             Self::InvalidPayload => f.write_str("invalid firmware envelope payload"),
+            Self::ReceiverPolicy { kernel_layout, normal_layout } => write!(f,
+                "Kernel {kernel_layout} does not establish a unique receiver decoding policy for Normal {normal_layout}"),
             Self::PayloadAlignment { layout, alignment, actual } => write!(f,
                 "firmware envelope {layout} payload size {actual:#x} is not aligned to {alignment} bytes"),
             Self::ChecksumMismatch { layout, checksum_offset, stored, calculated } => write!(f,

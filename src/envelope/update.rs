@@ -1,7 +1,32 @@
 //! Complete component preparation. This module performs no device I/O.
 
-use super::{builder, decode_envelope_with_kernel, header_info, DecodeError, Envelope};
+use super::{apply_kernel_policy, builder, header_info, DecodeError, Envelope};
 use crate::{image, ComponentKind};
+
+/// Identity field that must agree within a complete firmware pair.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PairField {
+    /// Hardware platform and controller tag.
+    HardwareVersion,
+    /// OEM destination tag.
+    Destination,
+    /// Primary Kernel compatibility tag.
+    KernelVersion,
+    /// Secondary Kernel compatibility tag.
+    KernelVersion2,
+}
+
+impl core::fmt::Display for PairField {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::HardwareVersion => "hardware version",
+            Self::Destination => "destination",
+            Self::KernelVersion => "Kernel version",
+            Self::KernelVersion2 => "Kernel version 2",
+        })
+    }
+}
 
 /// A failure while preparing an update, before any device command is issued.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,14 +49,12 @@ pub enum UpdateError {
     /// A required header field is missing or differs between the components.
     Header {
         /// Header field being compared.
-        field: &'static str,
+        field: PairField,
         /// Value in the Kernel header.
         kernel: String,
         /// Value in the Normal header.
         normal: String,
     },
-    /// The target Kernel's Normal decoding policy could not be established.
-    ReceiverPolicy,
     /// A decoded image has a nonzero additive checksum or incomplete words.
     Checksum {
         /// Component whose decoded checksum failed.
@@ -79,9 +102,6 @@ impl core::fmt::Display for UpdateError {
                 f,
                 "component {field} must be present and match: Kernel={kernel:?}, Normal={normal:?}"
             ),
-            Self::ReceiverPolicy => {
-                f.write_str("target Kernel Normal decoding policy is unsupported or ambiguous")
-            }
             Self::Checksum {
                 component,
                 sum,
@@ -132,7 +152,7 @@ impl Update {
     /// Load and prepare a complete pair without issuing any device commands.
     pub fn load(kernel_bytes: &[u8], normal_bytes: &[u8]) -> Result<Self, UpdateError> {
         let kernel = load(kernel_bytes, ComponentKind::Kernel)?;
-        let _normal = load(normal_bytes, ComponentKind::Normal)?;
+        let normal = load(normal_bytes, ComponentKind::Normal)?;
         // The two loads above establish complete, typed headers.
         let kh = header_info(kernel_bytes).ok_or(UpdateError::Decode {
             component: ComponentKind::Kernel,
@@ -144,13 +164,21 @@ impl Update {
         })?;
         for (field, k, n) in [
             (
-                "hardware version",
+                PairField::HardwareVersion,
                 &kh.hardware_version,
                 &nh.hardware_version,
             ),
-            ("destination", &kh.destination, &nh.destination),
-            ("Kernel version", &kh.kernel_version, &nh.kernel_version),
-            ("Kernel version 2", &kh.kernel_version2, &nh.kernel_version2),
+            (PairField::Destination, &kh.destination, &nh.destination),
+            (
+                PairField::KernelVersion,
+                &kh.kernel_version,
+                &nh.kernel_version,
+            ),
+            (
+                PairField::KernelVersion2,
+                &kh.kernel_version2,
+                &nh.kernel_version2,
+            ),
         ] {
             if k.is_empty() || n.is_empty() || k != n {
                 return Err(UpdateError::Header {
@@ -160,8 +188,12 @@ impl Update {
                 });
             }
         }
-        let normal = decode_envelope_with_kernel(normal_bytes, &kernel)
-            .ok_or(UpdateError::ReceiverPolicy)?;
+        let normal = apply_kernel_policy(normal_bytes, normal, &kernel).map_err(|source| {
+            UpdateError::Decode {
+                component: ComponentKind::Normal,
+                source,
+            }
+        })?;
         if let Some(tail) = normal.unrecovered_tail() {
             return Err(UpdateError::UnrecoveredTail {
                 offset: tail.start,
@@ -219,7 +251,7 @@ impl Update {
     }
     /// Hardware family derived from the decoded Normal, when recognized.
     pub fn family(&self) -> Option<image::Family> {
-        image::family(&self.normal.image)
+        self.normal.family()
     }
     /// Front-key Kernel representation; receiver routing is still required.
     pub fn kernel_transfer(&self) -> &[u8] {

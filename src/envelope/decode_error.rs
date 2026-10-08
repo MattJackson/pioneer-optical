@@ -39,6 +39,15 @@ pub enum DecodeError {
         /// Checksum calculated from the payload.
         calculated: u32,
     },
+    /// A decoded format-defined additive checksum is not zero.
+    DecodedChecksum {
+        /// Recognized codec.
+        layout: super::Layout,
+        /// Additive checksum word width in bits.
+        word_bits: u8,
+        /// Observed wrapping sum; zero was required.
+        sum: u32,
+    },
     /// A recognized payload declares a different size from the decoded bytes.
     PayloadLengthMismatch {
         /// Codec that recognized the envelope.
@@ -64,6 +73,8 @@ impl core::fmt::Display for DecodeError {
                 "firmware envelope {layout} payload size {actual:#x} is not aligned to {alignment} bytes"),
             Self::ChecksumMismatch { layout, checksum_offset, stored, calculated } => write!(f,
                 "firmware envelope {layout} checksum at file offset {checksum_offset:#x}: stored {stored:#010x}, calculated {calculated:#010x}"),
+            Self::DecodedChecksum { layout, word_bits, sum } => write!(f,
+                "firmware envelope {layout} decoded {word_bits}-bit checksum is {sum:#x}; expected zero"),
             Self::PayloadLengthMismatch { layout, payload_offset, declared, actual } => write!(f,
                 "firmware envelope {layout:?} payload at file offset {payload_offset:#x} declares {declared:#x} bytes, but decoded {actual:#x} bytes"),
         }

@@ -1,6 +1,7 @@
 //! Internal format implementations. Selection uses file structure, never drive names.
 
 use super::{DecodeError, HeaderInfo, Layout, SelectedLayout};
+mod boot_key;
 mod checksum;
 mod kernel;
 mod normal;
@@ -13,6 +14,17 @@ pub(super) trait EnvelopeCodec: Sync {
     fn detect(&self, data: &[u8], header: &HeaderInfo) -> Option<SelectedLayout>;
     fn candidates(&self, data: &[u8], header: &HeaderInfo) -> Vec<SelectedLayout> {
         self.detect(data, header).into_iter().collect()
+    }
+    fn candidates_with_kernel(
+        &self,
+        data: &[u8],
+        header: &HeaderInfo,
+        _kernel: &super::Envelope,
+    ) -> Vec<SelectedLayout> {
+        self.candidates(data, header)
+    }
+    fn validate_decoded(&self, _image: &[u8]) -> Result<(), DecodeError> {
+        Ok(())
     }
     fn kernel_transfer(&self, _envelope: &super::DecodedEnvelope) -> Option<Vec<u8>> {
         None
@@ -46,6 +58,7 @@ pub(super) trait EnvelopeCodec: Sync {
 }
 
 const CODECS: &[&dyn EnvelopeCodec] = &[
+    &boot_key::BootKey,
     &kernel::Legacy,
     &rom::KernelRom,
     &checksum::Sparse,
@@ -59,10 +72,15 @@ const CODECS: &[&dyn EnvelopeCodec] = &[
     &plain::Whitened,
 ];
 
-pub(super) fn detect(data: &[u8], header: &HeaderInfo) -> Result<SelectedLayout, DecodeError> {
-    let mut candidates = CODECS
-        .iter()
-        .flat_map(|codec| codec.candidates(data, header));
+pub(super) fn detect(
+    data: &[u8],
+    header: &HeaderInfo,
+    kernel: Option<&super::Envelope>,
+) -> Result<SelectedLayout, DecodeError> {
+    let mut candidates = CODECS.iter().flat_map(|codec| match kernel {
+        Some(kernel) => codec.candidates_with_kernel(data, header, kernel),
+        None => codec.candidates(data, header),
+    });
     let selected = candidates.next().ok_or(DecodeError::UnsupportedLayout)?;
     // Equal Normal geometry may have equivalent codecs: rotations by zero or
     // sixteen bits are their own inverses. Canonicalize only proven equivalence.
@@ -77,6 +95,7 @@ pub(super) fn detect(data: &[u8], header: &HeaderInfo) -> Result<SelectedLayout,
 pub(super) fn for_layout(layout: Layout) -> &'static dyn EnvelopeCodec {
     // Layout is a closed internal format identifier, not a model/profile lookup.
     match layout {
+        Layout::NormalBootKey => &boot_key::BootKey,
         Layout::SparseChecksum => &checksum::Sparse,
         Layout::Plain => &plain::Plain,
         Layout::TransformedPlane => &plain::Whitened,

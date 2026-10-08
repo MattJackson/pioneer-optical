@@ -151,8 +151,8 @@ pub struct Update {
 impl Update {
     /// Load and prepare a complete pair without issuing any device commands.
     pub fn load(kernel_bytes: &[u8], normal_bytes: &[u8]) -> Result<Self, UpdateError> {
-        let kernel = load(kernel_bytes, ComponentKind::Kernel)?;
-        let normal = load(normal_bytes, ComponentKind::Normal)?;
+        let kernel = load(kernel_bytes, ComponentKind::Kernel, None)?;
+        let normal = load(normal_bytes, ComponentKind::Normal, Some(&kernel))?;
         // The two loads above establish complete, typed headers.
         let kh = header_info(kernel_bytes).ok_or(UpdateError::Decode {
             component: ComponentKind::Kernel,
@@ -264,8 +264,12 @@ impl Update {
     }
 }
 
-fn load(bytes: &[u8], expected: ComponentKind) -> Result<Envelope, UpdateError> {
-    let envelope = Envelope::load(bytes).map_err(|source| UpdateError::Decode {
+fn load(
+    bytes: &[u8],
+    expected: ComponentKind,
+    kernel: Option<&Envelope>,
+) -> Result<Envelope, UpdateError> {
+    let envelope = Envelope::load_context(bytes, kernel).map_err(|source| UpdateError::Decode {
         component: expected,
         source,
     })?;

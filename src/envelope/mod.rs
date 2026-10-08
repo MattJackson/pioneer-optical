@@ -66,6 +66,8 @@ pub enum Layout {
     NormalScaledKey,
     /// Legacy Normal with an embedded ROM and trailing key table.
     NormalTailKey,
+    /// Legacy byte-block Normal requiring the supplied Kernel boot-code key.
+    NormalBootKey,
     /// Kernel with the key table stored at the front of the payload.
     KernelFront,
     /// Kernel with the key table derived from an LCG seed.
@@ -90,6 +92,7 @@ impl Layout {
             Layout::NormalReverse => "normal-reverse",
             Layout::NormalScaledKey => "normal-scaled-key",
             Layout::NormalTailKey => "normal-tail-key",
+            Layout::NormalBootKey => "normal-boot-key",
             Layout::KernelFront => "kernel-front",
             Layout::KernelDerived => "kernel-derived",
             Layout::KernelLegacyLe => "kernel-legacy-le",
@@ -1144,6 +1147,7 @@ fn decode_selected(
     let image = codecs::for_layout(layout)
         .transform(&data[payload_off..payload_end], &key, false, &[])
         .ok_or(DecodeError::InvalidPayload)?;
+    codecs::for_layout(layout).validate_decoded(&image)?;
     let (image, splices) = match layout
         .is_keyed_normal()
         .then(|| {
@@ -1213,11 +1217,18 @@ impl DecodedEnvelope {
     /// Normal payloads still require the installed Kernel's receiver policy for
     /// exact modification or flashing; see [`decode_envelope_with_kernel`].
     pub fn load(data: &[u8]) -> core::result::Result<Self, DecodeError> {
+        Self::load_context(data, None)
+    }
+
+    fn load_context(
+        data: &[u8],
+        kernel: Option<&Envelope>,
+    ) -> core::result::Result<Self, DecodeError> {
         let parsed = header_info(data).ok_or(DecodeError::InvalidHeader)?;
         if parsed.kind.is_none() {
             return Err(DecodeError::InvalidHeader);
         }
-        let selected = codecs::detect(data, &parsed)?;
+        let selected = codecs::detect(data, &parsed, kernel)?;
         codecs::for_layout(selected.0).validate(data)?;
         decode_selected(data, parsed, selected)
     }
@@ -1621,14 +1632,14 @@ fn apply_kernel_policy(
     Ok(decoded)
 }
 impl DecodedEnvelope {
-    /// Load an envelope and apply the supplied Kernel's proven XOR policy to
-    /// keyed Normal payloads. Other component formats need no XOR policy.
+    /// Detect and decode an envelope using the supplied Kernel when its codec
+    /// requires a boot-code key or a proven receiver XOR policy.
     /// This does not establish pairing or hardware compatibility.
     pub fn load_with_kernel(
         data: &[u8],
         kernel: &Envelope,
     ) -> core::result::Result<Self, DecodeError> {
-        apply_kernel_policy(data, Self::load(data)?, kernel)
+        apply_kernel_policy(data, Self::load_context(data, Some(kernel))?, kernel)
     }
 
     /// None means Normal receiver behavior has not been established.

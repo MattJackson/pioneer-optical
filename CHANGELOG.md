@@ -4,6 +4,29 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.11.0] - 2026-10-07
+
+### Changed (breaking)
+- Remove model-specific raw-backup layouts and their decode-policy bypass.
+- Detect envelope formats through internal codecs and reject ambiguous framing.
+
+### Added
+- `Update::load` prepares and authenticates complete Kernel/Normal pairs without device I/O.
+- `image::receiver_control_key` extracts recognized update-entry keys from receiver code, with no default-key fallback.
+- `ident` exposes firmware banner parsing and embedded OEM identity recovery.
+- `Envelope::load` with typed recognition and integrity errors, including payload
+  offsets, expected lengths, alignment, and checksum values.
+- Sparse little-endian checksum wrappers for Kernel and Normal components,
+  including checksum validation and checksum regeneration on repack.
+- `kernel_transfer_image` converts front-key and derived-key Kernel files into
+  a common receiver representation. This conversion does not authorize flashing.
+- `normal_transfer_image` rebuilds continuous keyed Normal payloads using the
+  receiving Kernel policy, refusing bad checksums and unrecovered data.
+- `image::kernel_marker_policy` identifies receiver marker checks from code,
+  independently of editable marker bytes or firmware catalogs.
+- Separate regression suites for codec ambiguity, raw detection, checksum
+  wrappers, malformed inputs, and independent receiver decoding.
+
 ## [0.10.0] - 2026-10-05
 
 Clean base release. All earlier versions (0.5.0, 0.7.2, 0.8.0, 0.9.0) are yanked;

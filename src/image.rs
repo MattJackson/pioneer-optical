@@ -7,7 +7,11 @@
 //! Requires the `image` feature.
 
 mod abi;
+mod control;
+mod receiver;
 pub use abi::{provided_abi, required_abi, Abi};
+pub use control::receiver_control_key;
+pub use receiver::{kernel_marker_policy, KernelMarkerPolicy};
 
 use alloc::borrow::ToOwned;
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -40,8 +44,11 @@ const SIG0: [u8; 24] = [
     0x01, 0x00, 0x69, 0xE3, 0x5E, 0x40, 0x87, 0xD0,
 ];
 
-/// A hardware family. Bodies with equal families target the same hardware and
-/// can be cross-flashed.
+/// A hardware-family fingerprint derived from the image's hardware setup.
+/// Matching families identify hardware intended to accept complete firmware
+/// packages in either direction. The receiver implementation must handle any
+/// protocol or generation differences. Invalid packages and unimplemented
+/// transfer paths must be reported separately from hardware incompatibility.
 ///
 /// The value is an opaque hash; only equality and the hex [`Display`] form are
 /// meaningful.

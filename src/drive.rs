@@ -186,8 +186,8 @@ pub fn read_memory<T: Transport>(
 
 /// An open update session, returned by [`enter_update`].
 ///
-/// [`finish`](Self::finish) commits the update. Dropping the session without
-/// finishing sends nothing; the drive stays in the update session.
+/// Component transfers may already program flash before [`finish`](Self::finish).
+/// Dropping the session sends nothing and does not roll back earlier writes.
 pub struct Session<'a, T: Transport> {
     t: &'a mut T,
     control: &'a Control,

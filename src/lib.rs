@@ -15,6 +15,8 @@
 //!   read, update session) over a caller-supplied [`drive::Transport`].
 //! - `image` — [`image`]: hardware family, UHD capability and Kernel ABI
 //!   analysis of decoded firmware bodies. Uses `alloc` and a zlib inflater.
+//!   Also enables [`ident`]: plaintext banner parsing and recovery of the
+//!   embedded OEM identity string from captured images.
 //! - `envelope` — [`envelope`]: decode, repack, build and sign firmware
 //!   envelopes; the decoded image feeds [`image`]. Implies `image` and `std`.
 //! - `std` — links the standard library (implied by `envelope`).
@@ -48,6 +50,8 @@ pub mod diagnostic;
 pub mod drive;
 #[cfg(feature = "envelope")]
 pub mod envelope;
+#[cfg(feature = "image")]
+pub mod ident;
 #[cfg(feature = "image")]
 pub mod image;
 /// Firmware-derived diagnostic logging.

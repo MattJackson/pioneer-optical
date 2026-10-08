@@ -4,6 +4,14 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.11.3] - 2026-10-08
+
+### Added
+- Envelope inspection methods expose parsed headers, raw encoding keys and signature
+  presence/verification using the existing parser and verifier.
+- Typed reconstruction placeholder detection requires combined seed and metadata
+  markers. Neither a match nor a non-match establishes OEM provenance.
+
 ## [0.11.2] - 2026-10-08
 
 ### Added

@@ -1716,3 +1716,9 @@ mod rom_tests;
 
 #[cfg(test)]
 mod transfer_tests;
+
+mod inspection;
+pub use inspection::{ReconstructionPlaceholder, SignatureStatus};
+
+#[cfg(test)]
+mod inspection_tests;

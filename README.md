@@ -139,3 +139,11 @@ variant for parameters. Codes contain no runtime values; English `Display`
 messages are diagnostic text, not a parsing contract. Wrapper errors retain their
 own stage code and typed causes. Handle unknown future codes with a generic
 message and preserve the diagnostic details.
+
+Envelope inspection also exposes `header()`, `encoding_key()`, `encoding_seed()`,
+`signature_bytes()`, `signature_status()` and `reconstruction_placeholder()`.
+These report format facts, not manufacturer provenance. A valid mathematical
+signature does not identify an OEM signer. A zero seed alone is not a placeholder;
+Normal detection additionally requires an entirely zero signature slot, and Kernel
+detection requires revision `0000` and date `00/00/00`. A non-matching image is
+not thereby proven OEM. Raw encoding keys may legitimately have no LCG seed.

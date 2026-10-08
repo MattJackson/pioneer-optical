@@ -57,6 +57,8 @@ pub mod image;
 /// Firmware-derived diagnostic logging.
 #[cfg(feature = "image")]
 pub mod logging;
+#[cfg(feature = "envelope")]
+pub mod receiver;
 
 /// Length of a standard INQUIRY response header, in bytes.
 pub const INQUIRY_LEN: usize = 36;

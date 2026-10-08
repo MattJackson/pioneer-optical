@@ -1,7 +1,7 @@
 # Self-contained manifest (no workspace inheritance) so it packages for crates.io as-is.
 [package]
 name = "pioneer-optical"
-version = "0.11.1"
+version = "0.11.2"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"

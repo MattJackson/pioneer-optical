@@ -4,6 +4,23 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.11.2] - 2026-10-08
+
+### Added
+- `Envelope::normal_layout()` and `NormalLayout::from_kernel()` derive bounded
+  Normal capture reads from a verified H8 Kernel's checksum and descriptor code.
+  Both header-derived and fixed-extent layouts are supported without model tables
+  or probing unrelated drive memory. Unknown, conflicting and ambiguous evidence
+  fails explicitly with stable `pioneer.normal_layout.*` error codes.
+- Layout validation checks the Normal descriptor, extent and complete checksum.
+  Synthetic instruction, malformed-input and corpus regression tests cover the API.
+
+## [0.11.1] - 2026-10-07
+
+### Added
+- Stable namespaced error codes through `CodedError` for application diagnostics
+  and future localization.
+
 ## [0.11.0] - 2026-10-07
 
 ### Changed (breaking)

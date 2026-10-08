@@ -24,6 +24,8 @@ mod codecs;
 mod decode_error;
 pub use decode_error::DecodeError;
 mod error;
+mod normal_layout;
+pub use normal_layout::{NormalLayout, NormalLayoutError, NormalRegion};
 pub mod signature;
 mod update;
 pub use update::{PairField, Update, UpdateError};
@@ -1259,6 +1261,16 @@ impl DecodedEnvelope {
     /// Header and framing metadata.
     pub fn info(&self) -> &EnvelopeInfo {
         &self.info
+    }
+
+    /// Locate this Kernel's companion Normal using its decoded instructions.
+    ///
+    /// Performs no device I/O and does not establish flash compatibility.
+    pub fn normal_layout(&self) -> core::result::Result<NormalLayout, NormalLayoutError> {
+        if self.info.kind != ComponentKind::Kernel {
+            return Err(NormalLayoutError::NotKernel);
+        }
+        NormalLayout::from_kernel(&self.image, crate::image::KERNEL_BASE)
     }
 
     /// True when the envelope is meant for `drive`; see [`HeaderInfo::targets`].

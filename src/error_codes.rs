@@ -13,6 +13,24 @@ pub trait CodedError {
 }
 
 #[cfg(feature = "envelope")]
+impl CodedError for crate::envelope::NormalLayoutError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::NotKernel => "pioneer.normal_layout.not_kernel",
+            Self::InvalidKernel => "pioneer.normal_layout.invalid_kernel",
+            Self::Unsupported => "pioneer.normal_layout.unsupported",
+            Self::Ambiguous => "pioneer.normal_layout.ambiguous",
+            Self::ConflictingGeometry => "pioneer.normal_layout.conflicting_geometry",
+            Self::ShortHeader { .. } => "pioneer.normal_layout.short_header",
+            Self::DescriptorMismatch => "pioneer.normal_layout.descriptor_mismatch",
+            Self::InvalidLength { .. } => "pioneer.normal_layout.invalid_length",
+            Self::ImageLength { .. } => "pioneer.normal_layout.image_length",
+            Self::ImageChecksum => "pioneer.normal_layout.image_checksum",
+        }
+    }
+}
+
+#[cfg(feature = "envelope")]
 impl CodedError for crate::envelope::Error {
     fn code(&self) -> &'static str {
         match self {

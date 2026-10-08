@@ -41,6 +41,30 @@ includes M32C and M7900 layouts. Keys come from that Kernel, and decoded checksu
 are verified before returning an envelope. A decoded legacy envelope can be
 repacked losslessly even when no receiver transfer representation is supported.
 
+## Locating Normal for backup
+
+With `envelope` enabled, a decoded H8 Kernel can establish its companion Normal's
+capture geometry without probing a contiguous device memory map:
+
+```rust,ignore
+let layout = kernel_envelope.normal_layout()?;
+// For raw captured bytes instead:
+// let layout = NormalLayout::from_kernel(&kernel_bytes, kernel_address)?;
+let prefix = layout.header_region();
+let header = read_exact(prefix.address(), prefix.length())?;
+let region = layout.resolve(&header)?;
+let normal = read_exact(region.address(), region.length())?;
+layout.validate(&normal)?;
+```
+
+The caller owns transport, repeated-read verification and backup persistence.
+The library recognizes aligned checksum and descriptor-check instruction sequences
+and requires their addresses to agree. Fixed-extent layouts additionally require
+agreement with the Kernel's decoder geometry. Unsupported or ambiguous code is an
+error, never a guessed address. This API currently covers the 64 KiB H8 Kernel
+capture format; envelope support for other architectures does not imply live
+backup support. Capture geometry does not establish flash compatibility.
+
 ## Example
 
 ```rust,ignore

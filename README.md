@@ -29,14 +29,18 @@ The optional `firmware-info` feature exposes `firmware::{layout, callbacks, abi}
 for structural H8 memory maps, dispatch callback discovery, and bounded argument
 tracing. These APIs report evidence from a decoded firmware image; they do not
 reserve live RAM, construct payloads, or install hooks. Unsupported or ambiguous
-patterns are errors. This feature requires `std` and the envelope decoder.
+patterns are errors. This feature requires `std` and the shared COMP decoder.
 
 `drive::diagnostic_memory` transfers caller-provided bytes through a diagnostic
 selector in bounded chunks with exact transfer-count checks. The caller owns
 address selection, diagnostic enablement, payload interpretation, and recovery.
 
 The default build and the `drive` feature are `no_std` and allocation-free.
-`image` uses `alloc` and [`miniz_oxide`](https://crates.io/crates/miniz_oxide).
+`image` uses `std`, `alloc`, [`h8-asm`](https://crates.io/crates/h8-asm), and
+[`miniz_oxide`](https://crates.io/crates/miniz_oxide). The shared H8 decoder
+currently requires `std`; the default and `drive` builds remain `no_std`.
+`firmware-info` adds read-only inspection and serialization without enabling
+envelope encoding, signing, random-number generation, or big integers.
 `envelope` implies `image` and `std`.
 
 `Envelope::load` detects a codec from file contents. Unsupported formats,

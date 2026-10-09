@@ -320,7 +320,12 @@ impl Envelope {
             }
         }
         if let Some(base) = body_base {
-            runtime::identify(&self.image, base, &mut result.regions);
+            if let Err(stream) = runtime::identify(&self.image, base, &mut result.regions) {
+                result.diagnostics.push(Diagnostic {
+                    code: "pioneer.analysis.ambiguous_runtime_destination",
+                    message: format!("Conflicting COMP loader destinations for stream {stream}; runtime mappings were not assigned."),
+                });
+            }
         }
         metadata::identify(self, &mut result.regions);
         if matches!(

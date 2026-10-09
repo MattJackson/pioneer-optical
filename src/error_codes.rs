@@ -12,6 +12,30 @@ pub trait CodedError {
     fn code(&self) -> &'static str;
 }
 
+#[cfg(feature = "drive")]
+impl<E> CodedError for crate::device::Error<E> {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Transport { .. } => "pioneer.device.transport",
+            Self::Unsupported => "pioneer.device.unsupported",
+            Self::NotReported => "pioneer.device.not_reported",
+            Self::Malformed => "pioneer.device.malformed",
+            Self::InvalidValue => "pioneer.device.invalid_value",
+            Self::RegionLocked => "pioneer.device.region_locked",
+        }
+    }
+}
+
+impl CodedError for crate::settings::CodecError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Malformed => "pioneer.settings.codec.malformed",
+            Self::Unsupported => "pioneer.settings.codec.unsupported",
+            Self::InvalidRequest => "pioneer.settings.codec.invalid_request",
+        }
+    }
+}
+
 #[cfg(feature = "envelope")]
 impl CodedError for crate::envelope::NormalLayoutError {
     fn code(&self) -> &'static str {

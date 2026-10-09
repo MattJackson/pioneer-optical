@@ -1,12 +1,19 @@
 //! Generic H8 firmware facts. Does not allocate drive RAM or construct payloads.
 
+mod error;
 pub mod settings;
+pub use error::Error;
+/// Result of a read-only firmware inspection.
+pub type Result<T> = core::result::Result<T, Error>;
 
 /// Bounded symbolic analysis of memory-helper calling conventions.
 pub mod abi {
     // Bounded symbolic tracing of OEM argument construction. Unknown instructions
     // are rejected. No model names, firmware revisions, or firmware addresses occur here.
-    use anyhow::{bail, ensure, Context, Result};
+    use super::{
+        error::{ensure, Context},
+        Error, Result,
+    };
     use std::collections::BTreeMap;
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Byte {
@@ -102,145 +109,168 @@ pub mod abi {
         let mut pc = main;
         let mut compare = None;
         let mut selected = false;
+        use h8_asm::isa::{decode_insn, Ea, Operand as O, Reg as R, Size as S};
         for _ in 0..160 {
-            let b = offset(image, base, pc, 2)?;
-            let (op, arg) = (b[0], b[1]);
-            let len = match (op, arg) {
-                (0x01, 0x20) => {
-                    let b = offset(image, base, pc, 4)?;
-                    ensure!(
-                        b[2] == 0x6d && b[3] & 0xf8 == 0xf0,
-                        "unsupported register save"
-                    );
-                    let first = (b[3] & 7) as usize;
-                    ensure!(first + 2 < 7, "unsupported saved registers");
-                    for r in (first..first + 3).rev() {
-                        state.push(state.er[r]);
-                    }
-                    4
-                }
-                (0x01, 0) => {
-                    let b = offset(image, base, pc, 4)?;
-                    let reg = (b[3] & 7) as usize;
-                    match b[2] {
-                        0x6d => {
-                            ensure!(b[3] & 0xf8 == 0xf0, "unsupported stack operation");
-                            state.push(state.er[reg]);
-                            4
-                        }
-                        0x6f => {
-                            let b = offset(image, base, pc, 6)?;
-                            ensure!((b[3] >> 4) & 7 == 7, "non-stack long local");
-                            let d = i16::from_be_bytes([b[4], b[5]]) as i32;
-                            let at = state.sp + d;
-                            if b[3] & 0x80 != 0 {
-                                state.store(at, state.er[reg]);
-                            } else {
-                                state.er[reg] = state.load(at);
-                            }
-                            6
-                        }
-                        0x69 => {
-                            ensure!(b[3] & 0xf8 == 0xf0, "unsupported stack argument store");
-                            state.store(state.sp, state.er[reg]);
-                            4
-                        }
-                        _ => bail!("unsupported long instruction at {pc:#x}"),
+            offset(image, base, pc, 2)?;
+            let decoded = decode_insn(
+                &image[(pc - base) as usize..],
+                h8_asm::Target::H8S2000,
+                h8_asm::Mode::Advanced,
+            )
+            .map_err(|_| Error::Instruction { address: pc })?;
+            let [first, second, third] = decoded.insn.operands;
+            ensure!(third == O::None, "unsupported third ABI operand");
+            match (decoded.insn.mnemonic, decoded.insn.size, first, second) {
+                (
+                    "STM",
+                    Some(S::Long),
+                    O::Registers { first, last },
+                    O::Address(Ea::PreDecrement(R::Long(7))),
+                ) => {
+                    ensure!(last < 7 && last - first == 2, "unsupported saved registers");
+                    for r in (first..=last).rev() {
+                        state.push(state.er[r as usize]);
                     }
                 }
-                (0x79, 0x37) => {
-                    let b = offset(image, base, pc, 4)?;
-                    let n = u16::from_be_bytes([b[2], b[3]]);
+                (
+                    "MOV",
+                    Some(S::Long),
+                    O::Register(R::Long(r)),
+                    O::Address(Ea::PreDecrement(R::Long(7))),
+                ) => state.push(state.er[r as usize]),
+                (
+                    "MOV",
+                    Some(S::Long),
+                    O::Register(R::Long(r)),
+                    O::Address(Ea::Indirect(R::Long(7))),
+                ) => state.store(state.sp, state.er[r as usize]),
+                (
+                    "MOV",
+                    Some(S::Long),
+                    O::Register(R::Long(r)),
+                    O::Address(Ea::Displacement {
+                        base: R::Long(7),
+                        value,
+                        ..
+                    }),
+                ) => state.store(state.sp + value, state.er[r as usize]),
+                (
+                    "MOV",
+                    Some(S::Long),
+                    O::Address(Ea::Displacement {
+                        base: R::Long(7),
+                        value,
+                        ..
+                    }),
+                    O::Register(R::Long(r)),
+                ) => state.er[r as usize] = state.load(state.sp + value),
+                ("SUB", Some(S::Word), O::Immediate { value, .. }, O::Register(R::Word(7))) => {
                     ensure!(
-                        n > 0 && n < 4096 && state.sp >= -32,
+                        value > 0 && value < 4096 && state.sp >= -32,
                         "unsupported stack frame"
                     );
-                    state.sp -= n as i32;
-                    4
+                    state.sp -= value as i32;
                 }
-                (0x0f, _) => {
-                    ensure!(arg & 0x88 == 0x80, "unsupported long register move");
-                    state.er[(arg & 7) as usize] = state.er[((arg >> 4) & 7) as usize];
-                    2
+                (
+                    "MOV",
+                    Some(S::Long),
+                    O::Register(R::Long(source)),
+                    O::Register(R::Long(destination)),
+                ) => state.er[destination as usize] = state.er[source as usize],
+                (
+                    "MOV",
+                    Some(S::Word),
+                    O::Register(R::Word(source)),
+                    O::Register(R::Word(destination)),
+                ) => {
+                    let (sr, sb) = word_location(source);
+                    let (dr, db) = word_location(destination);
+                    let value = [state.er[sr][sb], state.er[sr][sb + 1]];
+                    state.er[dr][db..db + 2].copy_from_slice(&value);
                 }
-                (0x0d, _) => {
-                    let (sr, sb) = word_location(arg >> 4);
-                    let (dr, db) = word_location(arg & 15);
-                    let v = [state.er[sr][sb], state.er[sr][sb + 1]];
-                    state.er[dr][db..db + 2].copy_from_slice(&v);
-                    2
+                (
+                    "MOV",
+                    Some(S::Byte),
+                    O::Register(R::Byte(source)),
+                    O::Register(R::Byte(destination)),
+                ) => state.set_byte(destination, state.get_byte(source)),
+                (
+                    "SUB",
+                    Some(S::Byte),
+                    O::Register(R::Byte(source)),
+                    O::Register(R::Byte(destination)),
+                ) => {
+                    ensure!(source == destination, "unsupported byte subtraction");
+                    state.set_byte(destination, Byte::Constant(0));
                 }
-                (0x0c, _) => {
-                    state.set_byte(arg & 15, state.get_byte(arg >> 4));
-                    2
-                }
-                (0x18, _) => {
-                    ensure!(arg >> 4 == arg & 15, "unsupported byte subtraction");
-                    state.set_byte(arg & 15, Byte::Constant(0));
-                    2
-                }
-                (0xe0..=0xef, _) => {
-                    let r = op & 15;
-                    let v = match state.get_byte(r) {
-                        Byte::Constant(v) => Byte::Constant(v & arg),
+                ("AND", Some(S::Byte), O::Immediate { value, .. }, O::Register(R::Byte(r))) => {
+                    let value = match state.get_byte(r) {
+                        Byte::Constant(v) => Byte::Constant(v & value as u8),
                         _ => Byte::Unknown,
                     };
-                    state.set_byte(r, v);
-                    2
+                    state.set_byte(r, value);
                 }
-                (0xf0..=0xff, _) => {
-                    state.set_byte(op & 15, Byte::Constant(arg));
-                    2
+                ("MOV", Some(S::Byte), O::Immediate { value, .. }, O::Register(R::Byte(r))) => {
+                    state.set_byte(r, Byte::Constant(value as u8))
                 }
-                (0x6e, _) => {
-                    let b = offset(image, base, pc, 4)?;
-                    let d = i16::from_be_bytes([b[2], b[3]]) as i32;
-                    let base_reg = ((arg >> 4) & 7) as usize;
-                    let r = arg & 15;
-                    if arg & 0x80 != 0 {
-                        ensure!(base_reg == 7, "non-stack byte store before helper");
-                        state.stack.insert(state.sp + d, state.get_byte(r));
+                (
+                    "MOV",
+                    Some(S::Byte),
+                    O::Register(R::Byte(r)),
+                    O::Address(Ea::Displacement {
+                        base: R::Long(7),
+                        value,
+                        ..
+                    }),
+                ) => {
+                    state.stack.insert(state.sp + value, state.get_byte(r));
+                }
+                (
+                    "MOV",
+                    Some(S::Byte),
+                    O::Address(Ea::Displacement {
+                        base: R::Long(base_reg),
+                        value,
+                        ..
+                    }),
+                    O::Register(R::Byte(r)),
+                ) => {
+                    let value = if base_reg == 7 {
+                        *state
+                            .stack
+                            .get(&(state.sp + value))
+                            .unwrap_or(&Byte::Unknown)
                     } else {
-                        let value = if base_reg == 7 {
-                            *state.stack.get(&(state.sp + d)).unwrap_or(&Byte::Unknown)
-                        } else {
-                            ensure!(
-                                state.er[base_reg] == cdb_pointer() && (0..16).contains(&d),
-                                "unproven CDB byte load"
-                            );
-                            Byte::Cdb(d as u8)
-                        };
-                        state.set_byte(r, value);
-                    }
-                    4
+                        ensure!(
+                            state.er[base_reg as usize] == cdb_pointer()
+                                && (0..16).contains(&value),
+                            "unproven CDB byte load"
+                        );
+                        Byte::Cdb(value as u8)
+                    };
+                    state.set_byte(r, value);
                 }
-                (0xa0..=0xaf, _) => {
+                ("CMP", Some(S::Byte), O::Immediate { value, .. }, O::Register(R::Byte(r))) => {
                     ensure!(
-                        state.get_byte(op & 15) == Byte::Cdb(2),
+                        state.get_byte(r) == Byte::Cdb(2),
                         "dispatch comparison is not CDB selector"
                     );
-                    compare = Some(arg == selector);
-                    2
+                    compare = Some(value == u32::from(selector));
                 }
-                (0x58, 0x70) | (0x47, _) => {
-                    let (taken, displacement, n) = if op == 0x58 {
-                        let b = offset(image, base, pc, 4)?;
-                        (compare.take(), i16::from_be_bytes([b[2], b[3]]) as i32, 4)
-                    } else {
-                        (compare.take(), arg as i8 as i32, 2)
-                    };
-                    let taken = taken.context("conditional branch without selector comparison")?;
+                ("BEQ", None, O::Address(Ea::PcRelative { value, .. }), O::None) => {
+                    let taken = compare.take().ok_or(Error::Unsupported {
+                        context: "conditional branch without selector comparison",
+                    })?;
                     if taken {
                         ensure!(!selected, "multiple selected dispatch branches");
                         selected = true;
-                        pc = (pc as i64 + n + displacement as i64)
+                        pc = (i64::from(pc) + decoded.len as i64 + i64::from(value))
                             .try_into()
                             .context("branch target overflow")?;
                         continue;
                     }
-                    n as usize
                 }
-                (0x5e, _) => {
+                ("JSR", None, O::Address(Ea::Absolute { value, bits: 24 }), O::None) => {
                     ensure!(selected, "helper call before selecting memory command");
                     ensure!(
                         state.er[0] == object(),
@@ -258,17 +288,18 @@ pub mod abi {
                         state.load(state.sp) == cdb24(6),
                         "helper stack length is not the CDB 24-bit length"
                     );
-                    let target = u32be(offset(image, base, pc, 4)?) & 0xffffff;
-                    offset(image, base, target, 2)?;
-                    return Ok(target);
+                    offset(image, base, value, 2)?;
+                    return Ok(value);
                 }
-                _ => bail!("unsupported argument instruction {op:02x} {arg:02x} at {pc:#x}"),
-            };
+                _ => return Err(Error::Instruction { address: pc }),
+            }
             pc = pc
-                .checked_add(len as u32)
+                .checked_add(decoded.len as u32)
                 .context("instruction address overflow")?;
         }
-        bail!("memory helper trace exceeded instruction budget")
+        Err(Error::Limit {
+            context: "memory helper instruction budget",
+        })
     }
 
     /// Validate both observed stack-save encodings by their ABI, and derive the
@@ -346,26 +377,63 @@ pub mod abi {
 
 /// Structural memory layout inspection.
 pub mod layout {
-    use anyhow::{ensure, Result};
+    use super::{error::ensure, Error, Result};
     use serde::{Deserialize, Serialize};
 
     #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
     /// Half-open CPU address interval.
+    #[serde(try_from = "RangeBounds")]
     pub struct Range {
         /// Inclusive CPU start address.
-        pub start: u32,
+        start: u32,
         /// Exclusive CPU end address.
-        pub end: u32,
+        end: u32,
+    }
+
+    #[derive(Deserialize)]
+    struct RangeBounds {
+        start: u32,
+        end: u32,
+    }
+    impl TryFrom<RangeBounds> for Range {
+        type Error = Error;
+        fn try_from(value: RangeBounds) -> Result<Self> {
+            Self::from_bounds(value.start, value.end)
+        }
     }
 
     impl Range {
         /// Construct a nonempty interval with checked arithmetic.
         pub fn new(start: u32, length: u32) -> Result<Self> {
-            ensure!(length > 0, "empty range");
-            let end = start
-                .checked_add(length)
-                .ok_or_else(|| anyhow::anyhow!("range overflow"))?;
+            if length == 0 {
+                return Err(Error::Malformed {
+                    context: "empty interval",
+                });
+            }
+            let end = start.checked_add(length).ok_or(Error::OutOfRange {
+                context: "range overflow",
+            })?;
             Ok(Self { start, end })
+        }
+
+        /// Construct a nonempty interval from its inclusive start and exclusive end.
+        pub fn from_bounds(start: u32, end: u32) -> Result<Self> {
+            let length = end.checked_sub(start).ok_or(Error::Malformed {
+                context: "reversed interval",
+            })?;
+            Self::new(start, length)
+        }
+        /// Inclusive CPU start address.
+        pub fn start(&self) -> u32 {
+            self.start
+        }
+        /// Exclusive CPU end address.
+        pub fn end(&self) -> u32 {
+            self.end
+        }
+        /// Number of bytes in this nonempty interval.
+        pub fn length(&self) -> u32 {
+            self.end - self.start
         }
 
         /// Whether two intervals intersect.
@@ -384,10 +452,10 @@ pub mod layout {
     pub struct BufferEntry {
         /// OEM buffer identifier.
         pub id: u8,
-        /// Controller-relative start, or the OEM sentinel.
-        pub controller_start: u32,
-        /// Length in bytes, or the OEM sentinel.
-        pub length: u32,
+        /// Controller-relative start; None represents the OEM unspecified sentinel.
+        pub controller_start: Option<u32>,
+        /// Length in bytes; None represents the OEM unspecified sentinel.
+        pub length: Option<u32>,
     }
 
     #[derive(Clone, Debug, Serialize)]
@@ -414,16 +482,80 @@ pub mod layout {
         pub buffer_tables: Vec<BufferTable>,
         /// Aligned end of recognized overlays.
         pub overlay_tail: Option<u32>,
-        /// OEM buffers overlapping the illustrative overlay-tail interval.
-        pub tail_buffer_conflicts: Vec<Range>,
         /// Limitations of the structural findings.
-        pub limitations: Vec<String>,
+        pub limitations: Vec<LayoutLimitation>,
         /// Global-data canary addresses initialized by firmware.
         pub global_canaries: Vec<u32>,
         /// Intervals between recognized global data and OEM buffers.
         pub structural_gaps: Vec<Range>,
         /// End address of the corroborated global-data copy.
         pub global_copy_end: Option<u32>,
+    }
+
+    /// A structural inspection limitation, independent of display wording.
+    #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+    #[non_exhaustive]
+    pub enum LayoutLimitation {
+        /// No COMP directory was present to establish the image base.
+        NoCompDirectory,
+        /// Static gaps do not prove freedom from runtime or DMA accesses.
+        RuntimeOwnershipUnproven,
+    }
+    impl crate::CodedError for LayoutLimitation {
+        fn code(&self) -> &'static str {
+            match self {
+                Self::NoCompDirectory => "pioneer.layout.no_comp_directory",
+                Self::RuntimeOwnershipUnproven => "pioneer.layout.runtime_ownership_unproven",
+            }
+        }
+    }
+    impl BufferEntry {
+        /// Resolve this descriptor within a caller-supplied controller window.
+        /// An unspecified length conservatively extends to the window end.
+        /// An unspecified start has no known interval and returns None.
+        pub fn range(&self, controller_base: u32, controller_length: u32) -> Result<Option<Range>> {
+            let Some(start) = self.controller_start else {
+                return Ok(None);
+            };
+            let available = controller_length
+                .checked_sub(start)
+                .ok_or(Error::OutOfRange {
+                    context: "buffer start",
+                })?;
+            let length = self.length.unwrap_or(available);
+            if length > available {
+                return Err(Error::OutOfRange {
+                    context: "buffer length",
+                });
+            }
+            let start = controller_base
+                .checked_add(start)
+                .ok_or(Error::OutOfRange {
+                    context: "controller address",
+                })?;
+            Ok(Some(Range::new(start, length)?))
+        }
+    }
+    impl Layout {
+        /// Return known OEM buffer intervals intersecting the caller's candidate.
+        /// Descriptors with unspecified starts cannot establish an interval and
+        /// remain available in buffer_tables for the caller's uncertainty policy.
+        pub fn buffer_conflicts(
+            &self,
+            candidate: &Range,
+            controller_base: u32,
+            controller_length: u32,
+        ) -> Result<Vec<Range>> {
+            let mut conflicts = Vec::new();
+            for entry in self.buffer_tables.iter().flat_map(|t| &t.entries) {
+                if let Some(range) = entry.range(controller_base, controller_length)? {
+                    if range.overlaps(candidate) && !conflicts.contains(&range) {
+                        conflicts.push(range);
+                    }
+                }
+            }
+            Ok(conflicts)
+        }
     }
 
     fn be32(b: &[u8]) -> u32 {
@@ -458,8 +590,8 @@ pub mod layout {
             }
             rows.push(BufferEntry {
                 id: row[0],
-                controller_start: start,
-                length,
+                controller_start: (start != u32::MAX).then_some(start),
+                length: (length != u32::MAX).then_some(length),
             });
         }
         None
@@ -473,43 +605,39 @@ pub mod layout {
             overlay_ranges: vec![],
             buffer_tables: vec![],
             overlay_tail: None,
-            tail_buffer_conflicts: vec![],
             limitations: vec![],
             global_canaries: vec![],
             structural_gaps: vec![],
             global_copy_end: None,
         };
-        let Some((base, streams)) = crate::envelope::comp_streams(image) else {
-            out.limitations.push("No supported COMP layout".into());
+        let Some((base, streams)) =
+            crate::comp_streams::read(image, crate::comp::MAX_TOTAL_EXPANDED, &mut || true)
+                .map_err(Error::from)?
+        else {
+            out.limitations.push(LayoutLimitation::NoCompDirectory);
             return Ok(out);
         };
         out.image_base = Some(base);
-        for (off, w) in image.windows(36).enumerate() {
-            if w[..3] != [0xa8, 3, 0x47]
-                || w[4..7] != [0xa8, 4, 0x47]
-                || w[8..12] != [0xa8, 5, 0x58, 0x60]
-                || w[14..16] != [0x7a, 4]
-                || w[20] != 0x40
-                || w[22..24] != [0x7a, 4]
-                || w[28] != 0x40
-                || w[30..32] != [0x7a, 4]
-                || off % 2 != 0
-            {
-                continue;
-            }
-            for (index, pos) in [(5, 16), (4, 24), (3, 32)] {
-                if let Some(stream) = streams.get(index) {
-                    out.overlay_ranges.push(Range::new(
-                        be32(&w[pos..]),
-                        stream.expanded.len().try_into()?,
-                    )?);
-                }
-            }
+        let sizes: Vec<_> = streams
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i, s.expanded.len()))
+            .collect();
+        for destination in
+            crate::comp_runtime::discover(image, base, &sizes).map_err(|_| Error::Ambiguous {
+                context: "COMP runtime destination",
+                candidates: 2,
+            })?
+        {
+            out.overlay_ranges.push(Range::new(
+                destination.address,
+                streams[destination.stream].expanded.len().try_into()?,
+            )?);
         }
         out.overlay_ranges.sort_by_key(|r| r.start);
         out.overlay_ranges.dedup();
-        if let Some(last) = out.overlay_ranges.last() {
-            out.overlay_tail = last.end.checked_add(31).map(|n| n & !31);
+        if let Some(end) = out.overlay_ranges.iter().map(|r| r.end).max() {
+            out.overlay_tail = end.checked_add(31).map(|n| n & !31);
         }
         let mut found = std::collections::BTreeMap::<usize, BufferTable>::new();
         for (off, w) in image.windows(6).enumerate() {
@@ -581,8 +709,11 @@ pub mod layout {
                 .buffer_tables
                 .iter()
                 .flat_map(|t| &t.entries)
-                .filter(|e| e.controller_start != u32::MAX && e.length != u32::MAX)
-                .map(|e| 0xa00000 + e.controller_start)
+                .filter_map(|e| {
+                    e.controller_start
+                        .zip(e.length)
+                        .map(|(start, _)| 0xa00000 + start)
+                })
                 .min();
             if let Some(end) = first_buffer {
                 let start = (last + 2 + 31) & !31;
@@ -591,21 +722,8 @@ pub mod layout {
                 }
             }
         }
-        if let Some(start) = out.overlay_tail {
-            let candidate = Range::new(start, 512)?;
-            for t in &out.buffer_tables {
-                for e in &t.entries {
-                    if e.controller_start == u32::MAX || e.length == u32::MAX {
-                        continue;
-                    }
-                    let r = Range::new(0xa00000 + e.controller_start, e.length)?;
-                    if r.overlaps(&candidate) && !out.tail_buffer_conflicts.contains(&r) {
-                        out.tail_buffer_conflicts.push(r);
-                    }
-                }
-            }
-        }
-        out.limitations.push("Structural gaps are bounded by a copied-data end canary and the first OEM buffer; runtime canaries and stability must be checked. This is not a guarantee against every indirect/DMA access.".into());
+        out.limitations
+            .push(LayoutLimitation::RuntimeOwnershipUnproven);
         Ok(out)
     }
 
@@ -668,9 +786,16 @@ pub mod layout {
     }
 }
 
+#[cfg(test)]
+#[path = "firmware/layout_tests.rs"]
+mod layout_tests;
+
 /// Opcode registry and callback initialization inspection.
 pub mod callbacks {
-    use anyhow::{ensure, Context, Result};
+    use super::{
+        error::{ensure, unique, Context},
+        Error, Result,
+    };
     use serde::Serialize;
     fn word(bytes: &[u8]) -> u32 {
         u32::from_be_bytes(bytes[..4].try_into().expect("bounded slice"))
@@ -680,13 +805,17 @@ pub mod callbacks {
     /// Dispatch registry, object and callback facts recovered from initialization code.
     pub struct OpcodeSite {
         /// Opcode registry CPU address.
-        pub opcode_table: u32,
+        pub registry_address: u32,
         /// Dispatch object CPU address.
-        pub object: u32,
+        pub object_address: u32,
         /// Initialized callback table CPU address.
-        pub table: u32,
+        pub table_address: u32,
+        /// Command validation callback code address.
+        pub check_address: u32,
+        /// Command preparation callback code address.
+        pub prepare_address: u32,
         /// Main callback code address.
-        pub main: u32,
+        pub main_address: u32,
     }
 
     /// Locate the opcode registry, then follow the READ BUFFER object's initializer.
@@ -695,8 +824,8 @@ pub mod callbacks {
     }
 
     /// Locate an opcode object and its initialized callback table.
-    pub fn opcode_site(image: &[u8], base: u32, opcode: usize) -> Result<OpcodeSite> {
-        ensure!(opcode < 256, "opcode outside recognized registry");
+    pub fn opcode_site(image: &[u8], base: u32, opcode: u8) -> Result<OpcodeSite> {
+        let opcode = usize::from(opcode);
         let mut registries = Vec::new();
         for (off, window) in image.windows(256).enumerate() {
             if off % 2 != 0
@@ -717,20 +846,16 @@ pub mod callbacks {
             }
             registries.push(off);
         }
-        ensure!(
-            registries.len() == 1,
-            "opcode registry absent/ambiguous ({})",
-            registries.len()
-        );
-        let registry = registries[0];
+        let registry = unique(registries, "opcode registry")?;
         let entry = image
             .get(registry + opcode * 4..registry + opcode * 4 + 4)
             .context("opcode entry outside image")?;
         let object = word(entry);
-        ensure!(
-            object > 0 && object <= 0x7ffc && object % 2 == 0,
-            "invalid opcode object"
-        );
+        if object == 0 || object > 0x7ffc || object % 2 != 0 {
+            return Err(Error::Malformed {
+                context: "opcode object",
+            });
+        }
         let mut tables = Vec::new();
         for (off, w) in image.windows(14).enumerate() {
             if off % 2 == 0
@@ -741,8 +866,12 @@ pub mod callbacks {
                 tables.push(word(&w[2..]));
             }
         }
-        ensure!(tables.len() == 1, "object initializer absent/ambiguous");
-        let table = tables[0];
+        let table = unique(tables, "object initializer")?;
+        if table % 2 != 0 {
+            return Err(Error::Malformed {
+                context: "unaligned callback table",
+            });
+        }
         let offset = table.checked_sub(base).context("table outside image")? as usize;
         let bytes = image
             .get(offset..offset + 40)
@@ -751,30 +880,35 @@ pub mod callbacks {
             bytes[0x14..0x18] == [0; 4] && bytes[0x1e..0x22] == [0; 4],
             "unsupported object adjustments"
         );
-        let check = word(&bytes[0x10..])
-            .checked_sub(base)
-            .context("check outside image")? as usize;
-        ensure!(
-            opcode != 0x3c || image.get(check..check + 2) == Some(&[0x54, 0x70]),
-            "unsupported check callback"
-        );
-        let main = word(&bytes[0x24..]);
-        ensure!(
-            main % 2 == 0 && main >= base && main < base + image.len() as u32,
-            "callback outside Normal image"
-        );
-        let prep = word(&bytes[0x1a..])
-            .checked_sub(base)
-            .context("prepare outside image")? as usize;
-        ensure!(
-            opcode != 0x3c || image.get(prep..prep + 4) == Some(&[0x18, 0x88, 0x54, 0x70]),
-            "unsupported preparation callback"
-        );
+        let callback = |offset: usize| -> Result<u32> {
+            let address = word(&bytes[offset..]);
+            let relative = address
+                .checked_sub(base)
+                .context("callback outside image")? as usize;
+            if address % 2 != 0 {
+                return Err(Error::Malformed {
+                    context: "unaligned callback",
+                });
+            }
+            if image.get(relative..relative + 2).is_none() {
+                return Err(Error::OutOfRange {
+                    context: "callback",
+                });
+            }
+            Ok(address)
+        };
+        let check = callback(0x10)?;
+        let prepare = callback(0x1a)?;
+        let main = callback(0x24)?;
         Ok(OpcodeSite {
-            opcode_table: base + registry as u32,
-            object,
-            table,
-            main,
+            registry_address: base
+                .checked_add(registry.try_into()?)
+                .context("registry address overflow")?,
+            object_address: object,
+            table_address: table,
+            check_address: check,
+            prepare_address: prepare,
+            main_address: main,
         })
     }
 
@@ -802,11 +936,28 @@ pub mod callbacks {
             for opcode in [0x3c, 0xad] {
                 let site = opcode_site(&image, base, opcode).unwrap();
                 assert_eq!(
-                    (site.object, site.table, site.main),
+                    (site.object_address, site.table_address, site.main_address),
                     (0x1234, base + 2048, base + 3000)
                 );
             }
-            assert!(opcode_site(&image, base, 256).is_err());
+            // Discovery reports substantive OEM callbacks without applying hook policy.
+            image[2900..2902].copy_from_slice(&[0x18, 0x88]);
+            image[2910..2912].copy_from_slice(&[0x19, 0x00]);
+            let site = read_buffer_site(&image, base).unwrap();
+            assert_eq!(
+                (site.check_address, site.prepare_address),
+                (base + 2900, base + 2910)
+            );
+            for offset in [0x10, 0x1a, 0x24] {
+                let original = image[2048 + offset..2052 + offset].to_vec();
+                for address in [base - 2, base + 1, base + 4096, u32::MAX] {
+                    image[2048 + offset..2052 + offset].copy_from_slice(&address.to_be_bytes());
+                    for opcode in [0x3c, 0xad] {
+                        assert!(opcode_site(&image, base, opcode).is_err());
+                    }
+                }
+                image[2048 + offset..2052 + offset].copy_from_slice(&original);
+            }
             for slot in [0u32, 1, 0x7ffe, 0x8000] {
                 image[0xad * 4..0xad * 4 + 4].copy_from_slice(&slot.to_be_bytes());
                 assert!(opcode_site(&image, base, 0xad).is_err());

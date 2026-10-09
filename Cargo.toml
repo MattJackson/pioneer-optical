@@ -1,7 +1,7 @@
 # Self-contained manifest (no workspace inheritance) so it packages for crates.io as-is.
 [package]
 name = "pioneer-optical"
-version = "0.12.2"
+version = "0.12.3"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
@@ -23,11 +23,11 @@ std = []
 # Structured, read-only analysis of a single firmware envelope.
 analysis = ["envelope"]
 # Generic H8 callback, ABI and memory-layout inspection.
-firmware-info = ["envelope", "dep:anyhow"]
+firmware-info = ["std", "image", "dep:serde", "dep:flate2"]
 # Command sequences over a caller-supplied transport. no_std, no alloc.
 drive = []
-# Firmware image analysis. Uses alloc and a zlib inflater.
-image = ["dep:miniz_oxide"]
+# Firmware image analysis. Uses the shared H8 decoder, std and a zlib inflater.
+image = ["std", "dep:miniz_oxide", "dep:h8-asm"]
 # Envelope codec: decode, encode, sign Pioneer firmware envelopes. Requires std.
 envelope = ["std", "image", "dep:serde", "dep:sha2", "dep:flate2", "dep:num-bigint", "dep:num-traits", "dep:sha1", "dep:getrandom"]
 
@@ -35,7 +35,7 @@ envelope = ["std", "image", "dep:serde", "dep:sha2", "dep:flate2", "dep:num-bigi
 all-features = true
 
 [dependencies]
-anyhow = { version = "1", optional = true }
+h8-asm = { version = "0.5", optional = true }
 miniz_oxide = { version = "0.9", optional = true, default-features = false, features = ["with-alloc"] }
 serde = { version = "1", features = ["derive"], optional = true }
 sha2 = { version = "0.10", optional = true }
@@ -56,3 +56,6 @@ required-features = ["image"]
 [[example]]
 name = "device_firmware_scan"
 required-features = ["firmware-info"]
+
+[dev-dependencies]
+serde_json = "1"

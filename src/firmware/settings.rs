@@ -1,6 +1,9 @@
 //! Offline settings-format evidence from recognized H8 response builders.
 //! Literal stores are code observations, not a claim of unconditional runtime support.
-use anyhow::{bail, ensure, Context, Result};
+use super::{
+    error::{ensure, unique, Context},
+    Error, Result,
+};
 
 /// A literal response-byte assignment found in a recognized builder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,13 +67,15 @@ fn literals(b: &[u8], buffer_move: u8) -> impl Iterator<Item = (usize, u8, u8)> 
 /// Inspect a decoded Normal image at its established runtime base.
 /// Unknown/ambiguous layouts return an error, never inferred support or a codec fallback.
 pub fn inspect(b: &[u8], base: u32) -> Result<Evidence> {
-    let site = super::callbacks::read_buffer_site(b, base).context("unsupported dispatch")?;
-    let start = site.main.checked_sub(base).context("handler below image")? as usize;
+    let site = super::callbacks::read_buffer_site(b, base)?;
+    let start = site
+        .main_address
+        .checked_sub(base)
+        .context("handler below image")? as usize;
     ensure!(start < b.len(), "handler outside image");
     let end = start.saturating_add(4096).min(b.len());
     let candidates: Vec<_> = dispatches(&b[start..end]).map(|p| start + p).collect();
-    ensure!(candidates.len() == 1, "F4 branch absent/ambiguous");
-    let p = candidates[0];
+    let p = unique(candidates, "F4 branch")?;
     let stop = branch(b, p + 2).context("invalid following handler branch")?;
     let begin = branch(b, p + 8).context("invalid F4 branch")?;
     if begin >= stop
@@ -78,14 +83,16 @@ pub fn inspect(b: &[u8], base: u32) -> Result<Evidence> {
         || b.get(begin..begin + 5) != Some(&[0x79, 1, 1, 0, 0x0f])
         || !matches!(b.get(begin + 5), Some(0xc0 | 0xd0 | 0xe0))
     {
-        bail!("unrecognized response builder");
+        return Err(Error::Unsupported {
+            context: "response builder",
+        });
     }
     let address = |at: usize| {
         base.checked_add(u32::try_from(at).ok()?)
             .filter(|_| at < b.len())
     };
     let mut evidence = Evidence {
-        read_buffer: site.main,
+        read_buffer: site.main_address,
         response_builder: address(begin).context("address overflow")?,
         next_handler: base
             .checked_add(u32::try_from(stop)?)

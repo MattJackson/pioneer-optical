@@ -111,7 +111,10 @@ fn provided_entries(k: &[u8]) -> Vec<u32> {
             (0x54, 0x70) | (0x56, 0x70) | (0x00, 0x00) | (0xFF, 0xFF)
         );
         // after RTS/RTE/padding, JMP forms, or an unconditional BRA
-        if word_term || matches!(b0, 0x5A | 0x59 | 0x5B | 0x40) || (b0 == 0x58 && b1 == 0x00) {
+        if word_term
+            || (valid(k, p)
+                && (matches!(b0, 0x5A | 0x59 | 0x5B | 0x40) || (b0 == 0x58 && b1 == 0x00)))
+        {
             add(a);
         }
     }

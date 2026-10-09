@@ -7,7 +7,7 @@ pub(crate) const COMP_OFFSET: usize = 0x1000;
 /// Largest expanded size accepted for one stream, in bytes.
 pub(crate) const MAX_EXPANDED: usize = 64 * 1024 * 1024;
 /// Largest total expanded size accepted across the streams of one image.
-#[cfg(feature = "envelope")]
+#[cfg(any(feature = "envelope", feature = "firmware-info"))]
 pub(crate) const MAX_TOTAL_EXPANDED: usize = 256 * 1024 * 1024;
 /// Policy cap on directory address entries (two per stream). The directory
 /// region itself can hold more.

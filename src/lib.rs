@@ -14,7 +14,8 @@
 //! - `drive` — [`drive`]: the command sequences (identify, protected memory
 //!   read, update session) over a caller-supplied [`drive::Transport`].
 //! - `image` — [`image`]: hardware family, UHD capability and Kernel ABI
-//!   analysis of decoded firmware bodies. Uses `alloc` and a zlib inflater.
+//!   analysis of decoded firmware bodies. Uses the shared H8 decoder, `std`,
+//!   `alloc` and a zlib inflater.
 //!   Also enables [`ident`]: plaintext banner parsing and recovery of the
 //!   embedded OEM identity string from captured images.
 //! - `envelope` — [`envelope`]: decode, repack, build and sign firmware
@@ -45,6 +46,12 @@ extern crate alloc;
 
 #[cfg(any(feature = "image", feature = "envelope"))]
 mod comp;
+
+#[cfg(any(feature = "analysis", feature = "firmware-info"))]
+mod comp_runtime;
+
+#[cfg(any(feature = "envelope", feature = "firmware-info"))]
+mod comp_streams;
 
 mod error_codes;
 pub use error_codes::CodedError;

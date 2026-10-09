@@ -4,6 +4,38 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.12.3] - 2026-10-08
+
+### Changed
+- Separate read-only firmware inspection from envelope encoding/signing. Shared
+  bounded COMP decoding avoids hashes and recompression when inspecting layout.
+- Use one validated COMP-loader recognizer for analysis and memory layout;
+  conflicting destinations now reject layout rather than omit occupied memory.
+- Use h8-asm's H8S decoder for instruction boundaries and memory-helper ABI
+  tracing. The `image` feature now requires `std`; default and `drive` remain
+  `no_std` and allocation-free.
+- Firmware inspection returns typed errors with stable `CodedError` identities.
+  Device and settings codec errors also expose stable codes; layout limitations
+  are structured values.
+- Callback discovery reports generic check, preparation and main addresses.
+  Hook-specific acceptance policy belongs to consumers.
+
+### API migration
+- Opcode arguments are `u8`. `OpcodeSite` address fields are named
+  `registry_address`, `object_address`, `table_address`, `check_address`,
+  `prepare_address` and `main_address`.
+- `layout::Range` uses validated constructors and `start()`, `end()`, `length()`
+  accessors; deserialization rejects empty or reversed intervals.
+- Buffer start/length sentinels are `Option<u32>`. `BufferEntry::range` resolves
+  intervals within a caller-supplied controller window. `Layout::buffer_conflicts`
+  accepts the candidate interval instead of assuming a 512-byte allocation.
+
+### Fixed
+- Validate every callback target's bounds/alignment consistently, including
+  check and preparation callbacks for high opcodes.
+- Calculate overlay tail from the greatest occupied end, including overlaps.
+- Preserve cancellation checkpoints through COMP report generation.
+
 ## [0.12.2] - 2026-10-08
 
 ### Added

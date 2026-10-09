@@ -479,11 +479,6 @@ pub mod layout {
             structural_gaps: vec![],
             global_copy_end: None,
         };
-        if !out.is_uhd {
-            out.limitations
-                .push("Excluded: pioneer-optical is_uhd is false".into());
-            return Ok(out);
-        }
         let Some((base, streams)) = crate::envelope::comp_streams(image) else {
             out.limitations.push("No supported COMP layout".into());
             return Ok(out);
@@ -701,7 +696,7 @@ pub mod callbacks {
 
     /// Locate an opcode object and its initialized callback table.
     pub fn opcode_site(image: &[u8], base: u32, opcode: usize) -> Result<OpcodeSite> {
-        ensure!(opcode < 64, "opcode outside recognized registry");
+        ensure!(opcode < 256, "opcode outside recognized registry");
         let mut registries = Vec::new();
         for (off, window) in image.windows(256).enumerate() {
             if off % 2 != 0
@@ -720,14 +715,22 @@ pub mod callbacks {
             {
                 continue;
             }
-            registries.push((off, slots[opcode]));
+            registries.push(off);
         }
         ensure!(
             registries.len() == 1,
             "opcode registry absent/ambiguous ({})",
             registries.len()
         );
-        let (registry, object) = registries[0];
+        let registry = registries[0];
+        let entry = image
+            .get(registry + opcode * 4..registry + opcode * 4 + 4)
+            .context("opcode entry outside image")?;
+        let object = word(entry);
+        ensure!(
+            object > 0 && object <= 0x7ffc && object % 2 == 0,
+            "invalid opcode object"
+        );
         let mut tables = Vec::new();
         for (off, w) in image.windows(14).enumerate() {
             if off % 2 == 0
@@ -773,5 +776,41 @@ pub mod callbacks {
             table,
             main,
         })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn high_opcode_uses_the_full_registry_and_checks_object_bounds() {
+            let base = 0x510000u32;
+            let mut image = vec![0; 4096];
+            for opcode in [0, 1, 3, 4, 0x12, 0x3b, 0x3c, 0xad] {
+                image[opcode * 4..opcode * 4 + 4].copy_from_slice(&0x1234u32.to_be_bytes());
+            }
+            let mut init = vec![0x7a, 1];
+            init.extend((base + 2048).to_be_bytes());
+            init.extend([1, 0, 0x6b, 0xa1]);
+            init.extend(0x1234u32.to_be_bytes());
+            image[1200..1214].copy_from_slice(&init);
+            for (offset, target) in [(0x10, 2900), (0x1a, 2910), (0x24, 3000)] {
+                image[2048 + offset..2052 + offset].copy_from_slice(&(base + target).to_be_bytes());
+            }
+            image[2900..2902].copy_from_slice(&[0x54, 0x70]);
+            image[2910..2914].copy_from_slice(&[0x18, 0x88, 0x54, 0x70]);
+            for opcode in [0x3c, 0xad] {
+                let site = opcode_site(&image, base, opcode).unwrap();
+                assert_eq!(
+                    (site.object, site.table, site.main),
+                    (0x1234, base + 2048, base + 3000)
+                );
+            }
+            assert!(opcode_site(&image, base, 256).is_err());
+            for slot in [0u32, 1, 0x7ffe, 0x8000] {
+                image[0xad * 4..0xad * 4 + 4].copy_from_slice(&slot.to_be_bytes());
+                assert!(opcode_site(&image, base, 0xad).is_err());
+            }
+        }
     }
 }

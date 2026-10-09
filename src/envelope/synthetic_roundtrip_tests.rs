@@ -1579,3 +1579,16 @@ fn rebuild_last_comp_rounds_up_to_the_next_0x100_for_every_residue() {
     }
     assert!(residues.contains(&1) && residues.contains(&0));
 }
+
+#[test]
+#[cfg(feature = "firmware-info")]
+fn non_uhd_layout_inspection_derives_comp_base_without_claiming_free_ram() {
+    for base in [0x410000, 0x420000] {
+        let image = comp_image(base, &[(vec![0x11; 300], 6), (vec![0x22; 300], 6)]);
+        let layout = crate::firmware::layout::inspect(&image).unwrap();
+        assert!(!layout.is_uhd);
+        assert_eq!(layout.image_base, Some(base));
+        assert!(layout.structural_gaps.is_empty());
+        assert!(layout.global_canaries.is_empty());
+    }
+}

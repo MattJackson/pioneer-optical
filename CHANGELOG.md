@@ -4,6 +4,17 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.12.2] - 2026-10-08
+
+### Added
+- Discover callback objects for all 256 opcode registry entries, including
+  READ DISC STRUCTURE, with complete object-pointer bounds checks.
+
+### Fixed
+- Inspect generic COMP memory-layout evidence for BD firmware as well as UHD.
+  UHD capability remains reported separately; recognizing an image does not
+  establish a free RAM region.
+
 ## [0.12.1] - 2026-10-08
 
 ### Added

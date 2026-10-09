@@ -4,6 +4,22 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.12.1] - 2026-10-08
+
+### Added
+- Generic, allocation-free settings codecs with typed current/saved values,
+  supported feature children, choices, editability and persistence metadata.
+- Live device snapshots, MMC media information, and typed Quiet Drive, PureRead
+  and DVD region get/set operations with explicit policies and readback outcomes.
+- Offline settings-builder evidence and a per-image Pioneer hoard census.
+- Rust regression coverage for malformed and truncated responses, unknown flags,
+  alternate codecs, partial transfers, command direction and read-only settings.
+
+### Fixed
+- Reject real-time PureRead changes and persistence policies disallowed by the codec.
+- Reject contradictory saved Quiet mode readback and include firmware signatures
+  that end exactly at an analysis boundary.
+
 ## [0.11.3] - 2026-10-08
 
 ### Added

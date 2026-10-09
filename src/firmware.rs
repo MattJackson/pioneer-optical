@@ -1,5 +1,7 @@
 //! Generic H8 firmware facts. Does not allocate drive RAM or construct payloads.
 
+pub mod settings;
+
 /// Bounded symbolic analysis of memory-helper calling conventions.
 pub mod abi {
     // Bounded symbolic tracing of OEM argument construction. Unknown instructions

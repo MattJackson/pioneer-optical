@@ -53,6 +53,9 @@ pub use error_codes::CodedError;
 pub mod firmware;
 
 pub mod cdb;
+/// Typed live device information and settings over a caller-owned transport.
+#[cfg(feature = "drive")]
+pub mod device;
 /// Bounded diagnostic read surfaces.
 pub mod diagnostic;
 #[cfg(feature = "drive")]
@@ -69,6 +72,7 @@ pub mod logging;
 #[cfg(feature = "envelope")]
 pub mod receiver;
 pub mod rpc;
+pub mod settings;
 
 /// Length of a standard INQUIRY response header, in bytes.
 pub const INQUIRY_LEN: usize = 36;

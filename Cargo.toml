@@ -1,7 +1,7 @@
 # Self-contained manifest (no workspace inheritance) so it packages for crates.io as-is.
 [package]
 name = "pioneer-optical"
-version = "0.12.0"
+version = "0.12.1"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT"
@@ -52,3 +52,7 @@ required-features = ["image"]
 [[example]]
 name = "logging_scan"
 required-features = ["image"]
+
+[[example]]
+name = "device_firmware_scan"
+required-features = ["firmware-info"]

@@ -78,6 +78,10 @@ pub enum Error {
     OperandTooLarge,
     /// The freshly produced signature failed verification.
     SelfVerification,
+    /// No positional LCG fill stream was found in the Kernel image.
+    KernelFillNotFound,
+    /// The source drive name does not occur in the Kernel image.
+    DriveNameNotFound,
 }
 
 impl fmt::Display for Error {
@@ -124,6 +128,8 @@ impl fmt::Display for Error {
             Error::InvalidPoint => "invalid curve point",
             Error::OperandTooLarge => "ECDSA operand exceeds 160 bits",
             Error::SelfVerification => "self-signed envelope failed verification",
+            Error::KernelFillNotFound => "Kernel image has no recognizable fill stream",
+            Error::DriveNameNotFound => "source drive name does not occur in the Kernel image",
         })
     }
 }

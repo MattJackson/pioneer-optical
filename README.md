@@ -213,6 +213,13 @@ message and preserve the diagnostic details.
 
 Envelope inspection also exposes `header()`, `encoding_key()`, `encoding_seed()`,
 `signature_bytes()`, `signature_status()` and `reconstruction_placeholder()`.
+
+`clone_kernel(source, &KernelIdentity { drive_name, hardware, kernel_tag,
+kernel_version2 }, &KernelBuild { .. })` re-identifies an existing Kernel. Kernel
+content is the decoded image minus the identity block, drive name, checksum and
+the build's positional fill stream (`kernel_content_mask`); a clone keeps the
+content and fills with the seed-0 stream, so `kernel_fill_seed(image) == Some(0)`
+identifies it. Cloning does not establish that a drive accepts the result.
 These report format facts, not manufacturer provenance. A valid mathematical
 signature does not identify an OEM signer. A zero seed alone is not a placeholder;
 Normal detection additionally requires an entirely zero signature slot, and Kernel
@@ -230,7 +237,8 @@ and cooperative cancellation, and expansion is bounded by the supplied options.
 
 This API describes one envelope. Pairing two analyses, aligning their contents,
 resolving cross-image correspondence and calculating differences belong to the
-consumer. Pioneer Optical does not provide a pairwise comparison API.
+consumer. The one pairwise check provided is Kernel program equality
+(`kernel_equality`), whose masked fields are fixed by the Kernel format.
 
 ## Device-settings firmware audit
 

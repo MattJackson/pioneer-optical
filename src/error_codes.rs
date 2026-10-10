@@ -89,6 +89,8 @@ impl CodedError for crate::envelope::Error {
             Self::InvalidPoint => "pioneer.envelope.invalid_point",
             Self::OperandTooLarge => "pioneer.envelope.operand_too_large",
             Self::SelfVerification => "pioneer.envelope.self_verification",
+            Self::KernelFillNotFound => "pioneer.envelope.kernel_fill_not_found",
+            Self::DriveNameNotFound => "pioneer.envelope.drive_name_not_found",
         }
     }
 }

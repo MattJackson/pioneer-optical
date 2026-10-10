@@ -4,6 +4,24 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.13.0] - 2026-10-09
+
+### Added
+- `envelope::clone_kernel` re-identifies an existing Kernel envelope: it keeps
+  the program, rewrites the drive name and the `0x1000` identity block
+  (hardware, Kernel tag, Version2), replaces the build's positional LCG fill
+  with the seed-0 stream, recomputes the `0x1020` checksum and re-encodes with
+  the supplied revision, date and key. `clone_kernel_image` does the same on a
+  decoded image.
+- `envelope::kernel_fill_seed` recovers a Kernel build's fill seed; `Some(0)`
+  marks a Kernel produced by `clone_kernel`.
+- `envelope::kernel_equality` (envelopes) and `kernel_image_equality` (decoded
+  images) compare two Kernels by program content, ignoring identity, drive
+  name, checksum and fill.
+- `envelope::kernel_content_mask` marks identity, checksum, drive-name and fill
+  bytes so two Kernels can be compared by program content.
+- `Error::KernelFillNotFound` and `Error::DriveNameNotFound`.
+
 ## [0.12.4] - 2026-10-09
 
 ### Added

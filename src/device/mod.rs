@@ -133,6 +133,13 @@ impl<'a, T: Transport> Device<'a, T> {
     pub fn info(&mut self) -> info::Information<T::Error> {
         info::read(self)
     }
+    /// Read the parameters response for [`crate::production::parse`].
+    pub fn parameters(
+        &mut self,
+        b: &mut [u8; crate::production::PARAMETERS_LEN],
+    ) -> Result<usize, Error<T::Error>> {
+        self.read(&crate::production::parameters(), b)
+    }
     /// Read the vendor block once for a consistent Quiet Drive/PureRead view.
     pub fn settings(&mut self) -> Result<settings::Settings, Error<T::Error>> {
         let command = self.settings_codec.query().map_err(codec_error)?;

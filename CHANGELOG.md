@@ -4,6 +4,13 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.12.4] - 2026-10-09
+
+### Added
+- `production`: decode the original product code and factory test date from
+  the read-only A0 parameters response, and the country of manufacture from
+  the serial suffix (`JP` Japan, `WL` China). `Device::parameters` reads it.
+
 ## [0.12.3] - 2026-10-08
 
 ### Changed

@@ -76,6 +76,8 @@ pub mod image;
 /// Firmware-derived diagnostic logging.
 #[cfg(feature = "image")]
 pub mod logging;
+/// Factory production data from the parameters read.
+pub mod production;
 #[cfg(feature = "envelope")]
 pub mod receiver;
 pub mod rpc;

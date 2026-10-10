@@ -79,6 +79,35 @@ fn erased_padding_kernels_compare_without_a_fill_stream() {
 }
 
 #[test]
+fn legacy_sized_kernels_compare_as_raw_bytes_minus_drive_name() {
+    // Smaller legacy little-endian DVR layout: identity is the header, not the
+    // body, so no SAT identity/checksum masking applies.
+    const LEGACY: usize = 0x5000;
+    let pio = "PIONEER DVD-RW  DVR-107D";
+    let asus = "ASUS    DRW-0804P";
+    let mut a = vec![0u8; LEGACY];
+    for (i, b) in a.iter_mut().enumerate() {
+        *b = (i * 13 + 7) as u8;
+    }
+    a[0x900..0x900 + DRIVE_NAME_LEN].copy_from_slice(&drive_name_field(pio).unwrap());
+    let mut b = a.clone();
+    // Same program, rebranded ASUS: differs only in the drive-name field.
+    b[0x900..0x900 + DRIVE_NAME_LEN].copy_from_slice(&drive_name_field(asus).unwrap());
+    assert_eq!(kernel_fill_seed(&a), None);
+    assert_eq!(kernel_image_equality(&a, pio, &b, asus), Some(true));
+    // A real program-byte change is still seen.
+    b[0x40] ^= 1;
+    assert_eq!(kernel_image_equality(&a, pio, &b, asus), Some(false));
+    // Different decoded length => different program.
+    assert_eq!(
+        kernel_image_equality(&a, NAME, &a[..LEGACY - 4], NAME),
+        Some(false)
+    );
+    // Too small to be a Kernel body.
+    assert_eq!(kernel_image_equality(&a[..16], NAME, &a, NAME), None);
+}
+
+#[test]
 fn clone_rewrites_identity_and_marks_fill_with_seed_zero() {
     let source = oem_kernel(0x6123fa, NAME, "GENERAL");
     let clone = clone_kernel_image(&source, NAME, &id52()).unwrap();

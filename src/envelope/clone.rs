@@ -128,16 +128,21 @@ pub fn kernel_fill_seed(image: &[u8]) -> Option<u32> {
 /// every build and needs no mask. Two Kernels have the same content when, at
 /// every offset, the bytes are equal or both masks are set. A program byte
 /// that happens to equal the fill is masked in one image only, so it is still
-/// compared. `None` when the image is not 64 KiB.
+/// compared. The 64 KiB SAT H8 layout, the erased-`0xFF` SAT generations and
+/// the smaller legacy little-endian DVR layout are all handled: the identity
+/// block and checksum are only masked where a SAT identity actually sits, so a
+/// legacy Kernel (whose identity is the header, not the body) compares as raw
+/// bytes minus its drive name. `None` when the image is too small to be a
+/// Kernel body.
 pub fn kernel_content_mask(image: &[u8], drive_name: &str) -> Option<Vec<bool>> {
-    if image.len() != KERNEL_LEN {
+    if image.len() < IDENTITY.end {
         return None;
     }
     let mut mask = match lock_fill(image) {
         Some((_, fill)) => image.iter().zip(&fill).map(|(a, b)| a == b).collect(),
         None => vec![false; image.len()],
     };
-    if image[HARDWARE].starts_with(b"SAT ") {
+    if image.len() == KERNEL_LEN && image[HARDWARE].starts_with(b"SAT ") {
         mask[IDENTITY].fill(true);
         mask[CHECKSUM].fill(true);
     }
@@ -151,8 +156,9 @@ pub fn kernel_content_mask(image: &[u8], drive_name: &str) -> Option<Vec<bool>> 
 
 /// Program-content equality of two Kernel envelopes, ignoring identity block,
 /// checksum, drive name (each envelope's `ID`) and fill. Identity is not
-/// compared: two drives' Kernels can be the same program. `None` when either
-/// side is not a decodable 64 KiB Kernel.
+/// compared: two drives' Kernels can be the same program. Kernels of different
+/// decoded length are different programs (`Some(false)`). `None` when either
+/// side is not a decodable Kernel envelope.
 pub fn kernel_equality(a: &[u8], b: &[u8]) -> Option<bool> {
     let decoded = |data: &[u8]| {
         let envelope = decode_envelope(data)?;
@@ -169,6 +175,9 @@ pub fn kernel_image_equality(a: &[u8], a_name: &str, b: &[u8], b_name: &str) -> 
         kernel_content_mask(a, a_name)?,
         kernel_content_mask(b, b_name)?,
     );
+    if a.len() != b.len() {
+        return Some(false);
+    }
     Some((0..a.len()).all(|p| (ma[p] && mb[p]) || a[p] == b[p]))
 }
 

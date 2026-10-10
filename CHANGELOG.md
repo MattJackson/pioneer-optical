@@ -4,6 +4,15 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.14.0] - 2026-10-09
+
+### Changed
+- `kernel_content_mask` / `kernel_equality` now compare Kernels of any decoded
+  length, not only the 64 KiB SAT layout. Identity-block and checksum masking
+  applies only where a SAT identity sits, so legacy little-endian DVR Kernels
+  (identity in the header, no positional fill) compare as raw bytes minus their
+  drive name. Kernels of different decoded length are different programs.
+
 ## [0.13.0] - 2026-10-09
 
 ### Added

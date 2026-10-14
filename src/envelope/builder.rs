@@ -565,7 +565,17 @@ pub fn encode_kernel_envelope(
         &name,
     )?
     .to_vec();
-    let key: Vec<u8> = match build.key {
+    enc.extend(kernel_body(kernel_image, layout, &build.key)?);
+    Ok(enc)
+}
+
+// Key table and ciphertext of a Kernel envelope, in its file layout.
+fn kernel_body(
+    kernel_image: &[u8],
+    layout: Layout,
+    key_source: &KernelKeySource<'_>,
+) -> Result<Vec<u8>, Error> {
+    let key: Vec<u8> = match *key_source {
         KernelKeySource::Seed(seed) => make_key(seed & 0x00ff_ffff, 0x1000),
         KernelKeySource::RawKey(bytes) => {
             if bytes.len() != 0x1000 {
@@ -575,13 +585,14 @@ pub fn encode_kernel_envelope(
         }
     };
     let cipher = transform(kernel_image, &key, true).ok_or(Error::KernelEncode)?;
+    let mut enc = Vec::with_capacity(0x11000);
     match layout {
         Layout::KernelFront => {
             enc.extend_from_slice(&key);
             enc.extend_from_slice(&cipher);
         }
         Layout::KernelDerived => {
-            let KernelKeySource::Seed(seed) = build.key else {
+            let KernelKeySource::Seed(seed) = *key_source else {
                 return Err(Error::RawKeyNotAllowed);
             };
             enc.extend_from_slice(&cipher);
@@ -594,6 +605,40 @@ pub fn encode_kernel_envelope(
             enc.extend_from_slice(&make_key(trailer_start, 0x1000));
         }
         _ => return Err(Error::AmbiguousKernelLayout),
+    }
+    Ok(enc)
+}
+
+fn supplied_header(header: &[u8], role: ComponentKind) -> Result<Vec<u8>, Error> {
+    if header.len() != 0x200 || super::header_info(header).and_then(|h| h.kind) != Some(role) {
+        return Err(Error::InvalidHeader);
+    }
+    Ok(header.to_vec())
+}
+
+/// Encode a Kernel image behind a caller-supplied 0x200-byte header, copied
+/// verbatim. Body framing follows the Kernel's own dispatcher, as in
+/// [`encode_kernel_envelope`]; use this when the header carries bytes the
+/// image cannot supply (for example a source envelope's opaque fields).
+pub fn encode_kernel_envelope_with_header(
+    kernel_image: &[u8],
+    header: &[u8],
+    key: KernelKeySource<'_>,
+) -> Result<Vec<u8>, Error> {
+    if kernel_image.len() != crate::image::KERNEL_LEN
+        || !be32_sum_zero(kernel_image)
+        || !kernel_image
+            .get(0x1000..0x1008)
+            .is_some_and(|v| v.starts_with(b"SAT "))
+    {
+        return Err(Error::KernelStructure);
+    }
+    let layout = kernel_layout_from_image(kernel_image).ok_or(Error::AmbiguousKernelLayout)?;
+    let mut enc = supplied_header(header, ComponentKind::Kernel)?;
+    enc.extend(kernel_body(kernel_image, layout, &key)?);
+    let decoded = decode_envelope(&enc).ok_or(Error::KernelUndecodable)?;
+    if decoded.image != kernel_image || decoded.info.layout != layout {
+        return Err(Error::RoundTripMismatch);
     }
     Ok(enc)
 }
@@ -614,6 +659,165 @@ fn derived_normal_pad(seed: u32) -> Vec<u8> {
         DERIVED_NORMAL_PAD_LEN - 0x1000,
     ));
     pad
+}
+
+/// Key material for a Normal envelope's key table.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub enum NormalKeySource<'a> {
+    /// 24-bit LCG seed; the low 24 bits are expanded into the key table.
+    Seed(u32),
+    /// The key table verbatim: 0x10000 bytes, or the scaled key length an
+    /// older receiver's geometry requires. Not allowed for the derived-key
+    /// generation, whose pad is generated from the seed.
+    RawKey(&'a [u8]),
+}
+
+// Key table, ciphertext and authentication of a Normal for `kernel`'s
+// receiver, appended to `enc` (a complete 0x200-byte Normal header). Returns
+// the envelope and whether its signature was deliberately left zero.
+#[allow(clippy::too_many_arguments)]
+fn encode_normal_body(
+    kernel: &[u8],
+    normal: &[u8],
+    mut normal_enc: Vec<u8>,
+    scaled: Option<ScaledNormalGeometry>,
+    exceptions: &[u32],
+    key: NormalKeySource<'_>,
+    signature: NormalSignature<'_>,
+) -> Result<(Vec<u8>, bool), Error> {
+    let rotation = normal_rotation_from_kernel(kernel).ok_or(Error::UnknownRotation)?;
+    if scaled.is_some() && rotation != NormalRotation::Forward {
+        return Err(Error::UnknownRotation);
+    }
+    let key_len = scaled.map_or(crate::image::KERNEL_LEN, |g| g.key_len);
+    let derived = kernel_layout_from_image(kernel) == Some(Layout::KernelDerived);
+    let normal_key = match key {
+        NormalKeySource::Seed(seed) => {
+            let seed = seed & 0x00ff_ffff;
+            if derived {
+                normal_enc.extend(derived_normal_pad(seed));
+            }
+            make_key(seed, key_len)
+        }
+        NormalKeySource::RawKey(_) if derived => return Err(Error::RawKeyNotAllowed),
+        NormalKeySource::RawKey(bytes) if bytes.len() != key_len => {
+            return Err(Error::RawKeyLength)
+        }
+        NormalKeySource::RawKey(bytes) => bytes.to_vec(),
+    };
+    normal_enc.extend_from_slice(&normal_key);
+    normal_enc.extend_from_slice(
+        &transform_with_policy(
+            normal,
+            &normal_key,
+            true,
+            rotation == NormalRotation::Reverse,
+            exceptions,
+        )
+        .ok_or(Error::NormalEncode)?,
+    );
+    // Policies that carry no body signature ignore the `signature` argument
+    // and keep the header's signature-region bytes.
+    let policy = normal_authentication_from_kernel(kernel).ok_or(Error::UnknownAuthentication)?;
+    let mut zeroed_signature = false;
+    match policy {
+        NormalAuthentication::Unsigned | NormalAuthentication::ScaledChecksumOnly => {}
+        NormalAuthentication::KeyAndCiphertext | NormalAuthentication::CiphertextOnly => {
+            match signature {
+                NormalSignature::Sign(signer) => {
+                    if matches!(policy, NormalAuthentication::KeyAndCiphertext) {
+                        signer.sign_normal(&mut normal_enc)?
+                    } else {
+                        signer.sign_normal_ciphertext_only(&mut normal_enc)?
+                    }
+                }
+                NormalSignature::Oem(bytes) => {
+                    if bytes.len() != NORMAL_SIGNATURE_RANGE.len() {
+                        return Err(Error::SignatureBlockLength);
+                    }
+                    normal_enc[NORMAL_SIGNATURE_RANGE].copy_from_slice(bytes);
+                }
+                // Zero the signature region: the explicit non-OEM sentinel.
+                NormalSignature::Zeroed => {
+                    normal_enc[NORMAL_SIGNATURE_RANGE].fill(0);
+                    zeroed_signature = true;
+                }
+            }
+        }
+    }
+    Ok((normal_enc, zeroed_signature))
+}
+
+/// Encode a Normal image for the receiver in `kernel_image`, behind a
+/// caller-supplied 0x200-byte Normal header copied verbatim (outside the
+/// signature region a signed policy writes).
+///
+/// The receiver rules come from the Kernel's code: XOR-skip offsets, word
+/// rotation, derived-key pad, scaled geometry and authentication. This is the
+/// re-encoding primitive: the result decodes with that Kernel to exactly
+/// `normal_image`, which is verified before returning. It does not establish
+/// that a drive running this Kernel accepts the image or the signer.
+pub fn encode_normal_for_kernel(
+    kernel_image: &[u8],
+    normal_image: &[u8],
+    header: &[u8],
+    key: NormalKeySource<'_>,
+    signature: NormalSignature<'_>,
+) -> Result<Vec<u8>, Error> {
+    let (kernel, normal) = (kernel_image, normal_image);
+    let enc = supplied_header(header, ComponentKind::Normal)?;
+    if let (Some(required), Some(provided)) = (
+        crate::image::required_abi(normal),
+        crate::image::provided_abi(kernel),
+    ) {
+        if !required.is_satisfied_by(&provided) {
+            return Err(Error::AbiMismatch);
+        }
+    }
+    let scaled = scaled_normal_geometry_from_kernel(kernel);
+    if kernel.len() != crate::image::KERNEL_LEN
+        || normal.len() < 0x2000
+        || normal.len() % 0x100 != 0
+        || !be32_sum_zero(kernel)
+        || !be32_sum_zero(normal)
+        || !normal.starts_with(b"PIONEER ")
+        || match scaled {
+            Some(geometry) => geometry.image_len != normal.len(),
+            None => u32::from_be_bytes(normal[20..24].try_into().unwrap()) as usize != normal.len(),
+        }
+    {
+        return Err(Error::ImageStructure);
+    }
+    let branches = kernel_xor_branches(kernel);
+    let [(_, exceptions)] = branches.as_slice() else {
+        return Err(Error::XorPolicyNotUnique);
+    };
+    if exceptions
+        .iter()
+        .any(|off| *off as usize >= normal.len() || off % 4 != 0)
+    {
+        return Err(Error::XorExceptionOutOfRange);
+    }
+    let layout = kernel_layout_from_image(kernel).ok_or(Error::AmbiguousKernelLayout)?;
+    let (enc, zeroed) =
+        encode_normal_body(kernel, normal, enc, scaled, exceptions, key, signature)?;
+    if !zeroed && !normal_authentication_valid(&enc, kernel) {
+        return Err(Error::InvalidSignedEnvelope);
+    }
+    // Decode through the real receiver-aware path with this Kernel.
+    let id = super::header_info(header).ok_or(Error::InvalidHeader)?.id;
+    let kernel_enc = encode_kernel_envelope(kernel, &id, &KernelBuild::from_seed(0))?;
+    let k = decode_envelope(&kernel_enc).ok_or(Error::KernelUndecodable)?;
+    let n = decode_envelope_with_kernel(&enc, &k).ok_or(Error::NormalUndecodable)?;
+    let rotation = normal_rotation_from_kernel(kernel).ok_or(Error::UnknownRotation)?;
+    if k.info.layout != layout
+        || !normal_layout_matches(n.info.layout, scaled, rotation)
+        || n.image != normal
+    {
+        return Err(Error::RoundTripMismatch);
+    }
+    Ok(enc)
 }
 
 /// Build Kernel and Normal envelopes without a source `.enc` file.
@@ -687,7 +891,7 @@ pub fn encode_encrypted_pair(
     kernel_layout_from_image(kernel).ok_or(Error::AmbiguousKernelLayout)?;
     let kernel_enc = encode_kernel_envelope(kernel, id, &input.kernel)?;
 
-    let mut normal_enc = header(
+    let normal_enc = header(
         id,
         hardware,
         kernel_tag,
@@ -698,52 +902,15 @@ pub fn encode_encrypted_pair(
         &normal_name,
     )?
     .to_vec();
-    let rotation = normal_rotation_from_kernel(kernel).ok_or(Error::UnknownRotation)?;
-    if scaled.is_some() && rotation != NormalRotation::Forward {
-        return Err(Error::UnknownRotation);
-    }
-    let seed = input.normal_key_seed & 0x00ff_ffff;
-    if kernel_layout_from_image(kernel) == Some(Layout::KernelDerived) {
-        normal_enc.extend(derived_normal_pad(seed));
-    }
-    let normal_key = make_key(seed, scaled.map_or(crate::image::KERNEL_LEN, |g| g.key_len));
-    normal_enc.extend_from_slice(&normal_key);
-    normal_enc.extend_from_slice(
-        &transform_with_policy(
-            normal,
-            &normal_key,
-            true,
-            rotation == NormalRotation::Reverse,
-            exceptions,
-        )
-        .ok_or(Error::NormalEncode)?,
-    );
-    // Policies that carry no body signature ignore the `signature` argument;
-    // the header's signature region stays zero either way.
-    let policy = normal_authentication_from_kernel(kernel).ok_or(Error::UnknownAuthentication)?;
-    let mut zeroed_signature = false;
-    match policy {
-        NormalAuthentication::Unsigned | NormalAuthentication::ScaledChecksumOnly => {}
-        NormalAuthentication::KeyAndCiphertext | NormalAuthentication::CiphertextOnly => {
-            match signature {
-                NormalSignature::Sign(signer) => {
-                    if matches!(policy, NormalAuthentication::KeyAndCiphertext) {
-                        signer.sign_normal(&mut normal_enc)?
-                    } else {
-                        signer.sign_normal_ciphertext_only(&mut normal_enc)?
-                    }
-                }
-                NormalSignature::Oem(bytes) => {
-                    if bytes.len() != NORMAL_SIGNATURE_RANGE.len() {
-                        return Err(Error::SignatureBlockLength);
-                    }
-                    normal_enc[NORMAL_SIGNATURE_RANGE].copy_from_slice(bytes);
-                }
-                // Leave the signature region zero: the explicit non-OEM sentinel.
-                NormalSignature::Zeroed => zeroed_signature = true,
-            }
-        }
-    }
+    let (normal_enc, zeroed_signature) = encode_normal_body(
+        kernel,
+        normal,
+        normal_enc,
+        scaled,
+        exceptions,
+        NormalKeySource::Seed(input.normal_key_seed),
+        signature,
+    )?;
     let pair = EncryptedPair {
         kernel: kernel_enc,
         normal: normal_enc,

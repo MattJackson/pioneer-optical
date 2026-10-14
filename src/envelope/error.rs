@@ -11,6 +11,8 @@ use core::fmt;
 pub enum Error {
     /// The Kernel's Normal word-rotation direction is not recognized.
     UnknownRotation,
+    /// A supplied header is not 0x200 bytes with the expected file type.
+    InvalidHeader,
     /// The embedded filename is too long or not ASCII.
     InvalidFilename,
     /// The envelope `ID` string has no model token.
@@ -90,6 +92,9 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Error::UnknownRotation => "Kernel Normal rotation direction is unknown",
+            Error::InvalidHeader => {
+                "supplied header is not a 0x200-byte header of the expected file type"
+            }
             Error::InvalidFilename => "invalid embedded filename",
             Error::MissingModel => "envelope ID has no model",
             Error::HeaderFieldsDoNotFit => "Pioneer header fields do not fit",

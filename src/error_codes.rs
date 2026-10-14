@@ -59,6 +59,7 @@ impl CodedError for crate::envelope::Error {
     fn code(&self) -> &'static str {
         match self {
             Self::UnknownRotation => "pioneer.envelope.unknown_rotation",
+            Self::InvalidHeader => "pioneer.envelope.invalid_header",
             Self::InvalidFilename => "pioneer.envelope.invalid_filename",
             Self::MissingModel => "pioneer.envelope.missing_model",
             Self::HeaderFieldsDoNotFit => "pioneer.envelope.header_fields_do_not_fit",

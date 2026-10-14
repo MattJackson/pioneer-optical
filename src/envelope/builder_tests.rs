@@ -1111,3 +1111,162 @@ fn derived_generation_normal_carries_the_key_stream_pad() {
         SignatureCheck::ValidCiphertextOnly
     );
 }
+
+fn opaque_header(role: ComponentKind) -> Vec<u8> {
+    let info = HeaderInfo {
+        id: "PIONEER BD-RW   BDR-TEST".into(),
+        model: "BDR-TEST".into(),
+        revision: "1.00".into(),
+        hardware_version: "SAT 8A10".into(),
+        kernel_version: "GENERAL".into(),
+        destination: "GENERAL".into(),
+        generated_date: "00/00/00".into(),
+        kernel_version2: "0000".into(),
+        kind: Some(role),
+    };
+    let mut opaque = HeaderOpaque::default();
+    opaque.validation[0x10..0x14].copy_from_slice(b"DK\xff\x01");
+    opaque.extension.fill(0xa5);
+    opaque.filename[..12].copy_from_slice(b"S8A10490.100");
+    super::super::build_header(&info, &opaque).unwrap().to_vec()
+}
+
+#[test]
+fn kernel_behind_a_supplied_header_keeps_every_header_byte() {
+    let k = front_kernel();
+    let header = opaque_header(ComponentKind::Kernel);
+    let enc =
+        encode_kernel_envelope_with_header(&k, &header, KernelKeySource::Seed(0x123456)).unwrap();
+    assert_eq!(&enc[..0x200], header.as_slice());
+    // The body is the one the template-free encoder emits for the same key.
+    let free =
+        encode_kernel_envelope(&k, "PIONEER BDR-TEST", &KernelBuild::from_seed(0x123456)).unwrap();
+    assert_eq!(&enc[0x200..], &free[0x200..]);
+    assert_eq!(decode_envelope(&enc).unwrap().image, k);
+    // Wrong role, wrong length and a missing banner are rejected.
+    let normal_header = opaque_header(ComponentKind::Normal);
+    for bad in [&normal_header[..], &header[..0x1ff], &[0u8; 0x200][..]] {
+        assert_eq!(
+            encode_kernel_envelope_with_header(&k, bad, KernelKeySource::Seed(1)).unwrap_err(),
+            Error::InvalidHeader
+        );
+    }
+}
+
+#[test]
+fn normal_for_kernel_keeps_the_header_and_accepts_a_raw_key() {
+    let kernel = front_kernel();
+    let n = normal_image(0x2000);
+    let header = opaque_header(ComponentKind::Normal);
+    let seeded = encode_normal_for_kernel(
+        &kernel,
+        &n,
+        &header,
+        NormalKeySource::Seed(0x47d001),
+        NormalSignature::Sign(&a_signer()),
+    )
+    .unwrap();
+    // Everything outside the signature block is the supplied header.
+    assert_eq!(&seeded[..0x170], &header[..0x170]);
+    assert_eq!(&seeded[0x1c0..0x200], &header[0x1c0..0x200]);
+    assert_eq!(
+        verify_normal_signature(&seeded),
+        SignatureCheck::ValidKeyAndCiphertext
+    );
+    // A verbatim key table gives the same bytes as the seed that made it.
+    let key = make_key(0x47d001, 0x10000);
+    let raw = encode_normal_for_kernel(
+        &kernel,
+        &n,
+        &header,
+        NormalKeySource::RawKey(&key),
+        NormalSignature::Oem(&seeded[NORMAL_SIGNATURE_RANGE]),
+    )
+    .unwrap();
+    assert_eq!(raw, seeded);
+    assert_eq!(
+        encode_normal_for_kernel(
+            &kernel,
+            &n,
+            &header,
+            NormalKeySource::RawKey(&key[..0x1000]),
+            NormalSignature::Zeroed
+        )
+        .unwrap_err(),
+        Error::RawKeyLength
+    );
+    // The derived generation's pad is generated from the seed.
+    let mut derived = front_kernel();
+    derived[0x40] = 0xad;
+    derived[0x46] = 0xad;
+    be32_fix(&mut derived, 0xff00);
+    assert_eq!(
+        encode_normal_for_kernel(
+            &derived,
+            &n,
+            &header,
+            NormalKeySource::RawKey(&key),
+            NormalSignature::Zeroed
+        )
+        .unwrap_err(),
+        Error::RawKeyNotAllowed
+    );
+    // Zeroed clears a supplied signature block rather than keeping stale bytes.
+    let zeroed = encode_normal_for_kernel(
+        &kernel,
+        &n,
+        &seeded[..0x200],
+        NormalKeySource::Seed(0x47d001),
+        NormalSignature::Zeroed,
+    )
+    .unwrap();
+    assert!(zeroed[NORMAL_SIGNATURE_RANGE].iter().all(|b| *b == 0));
+    assert_eq!(
+        encode_normal_for_kernel(
+            &kernel,
+            &n,
+            &opaque_header(ComponentKind::Kernel),
+            NormalKeySource::Seed(1),
+            NormalSignature::Zeroed
+        )
+        .unwrap_err(),
+        Error::InvalidHeader
+    );
+}
+
+#[test]
+fn normal_for_kernel_follows_the_receiving_kernels_rules() {
+    // One body, two receivers with different XOR-skip offsets and rotations:
+    // each envelope decodes with its own Kernel to the same image, and the
+    // bodies differ because the receiver rules differ.
+    let n = normal_image(0x2000);
+    let header = opaque_header(ComponentKind::Normal);
+    let forward = front_kernel_with([0x100, 0x200]);
+    let reverse = {
+        let mut k = front_kernel_with([0x300, 0x400]);
+        write_two_path_rotation(&mut k, 0x100 + 20, true);
+        be32_fix(&mut k, 0xff00);
+        k
+    };
+    let mut bodies = Vec::new();
+    for kernel in [&forward, &reverse] {
+        let enc = encode_normal_for_kernel(
+            kernel,
+            &n,
+            &header,
+            NormalKeySource::Seed(0x47d001),
+            NormalSignature::Zeroed,
+        )
+        .unwrap();
+        let k = decode_envelope(
+            &encode_kernel_envelope(kernel, "PIONEER BDR-TEST", &KernelBuild::from_seed(9))
+                .unwrap(),
+        )
+        .unwrap();
+        let decoded = decode_envelope_with_kernel(&enc, &k).unwrap();
+        assert_eq!(decoded.image, n);
+        assert!(be32_sum_zero(&decoded.image));
+        bodies.push(enc[0x10200..].to_vec());
+    }
+    assert_ne!(bodies[0], bodies[1]);
+}

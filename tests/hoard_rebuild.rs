@@ -13,9 +13,10 @@
 #![cfg(feature = "envelope")]
 
 use pioneer_optical::envelope::builder::{
-    encode_encrypted_pair, encode_kernel_envelope, normal_authentication_from_kernel,
-    normal_rotation_from_kernel, BuildInputs, KernelBuild, KernelKeySource, NormalAuthentication,
-    NormalRotation, NormalSignature, NORMAL_SIGNATURE_RANGE,
+    encode_encrypted_pair, encode_kernel_envelope, encode_kernel_envelope_with_header,
+    encode_normal_for_kernel, normal_authentication_from_kernel, normal_rotation_from_kernel,
+    BuildInputs, KernelBuild, KernelKeySource, NormalAuthentication, NormalKeySource,
+    NormalRotation, NormalSignature, DERIVED_NORMAL_PAD_LEN, NORMAL_SIGNATURE_RANGE,
 };
 use pioneer_optical::envelope::signature::{verify_normal_signature, SignatureCheck, SigningKey};
 use pioneer_optical::envelope::{
@@ -153,12 +154,105 @@ pub enum Outcome {
     OutOfScope(String),
     Exact,
     SignatureModuloExact,
+    /// Template-free rebuild failed (cause), but the body encoders reproduce
+    /// both files exactly behind the OEM 0x200-byte headers; `raw_key` when
+    /// the Normal key table is not LCG-derived and is supplied verbatim, and
+    /// `signed` when exactness is signature-modulo as above.
+    HeaderExact {
+        cause: String,
+        raw_key: bool,
+        signed: bool,
+    },
     /// Failure cause and detail.
     Failed(String, String),
 }
 
+/// Rebuild both bodies behind the OEM headers (opaque header bytes and
+/// filename included) with the OEM seed, or the OEM key table when it is
+/// not LCG-derived. `Ok(raw_key)` when both envelopes are reproduced.
+fn rebuild_behind_oem_headers(pair: &Pair, signer: &SigningKey) -> Result<bool, String> {
+    let k = decode_envelope(&pair.kernel).ok_or("kernel undecodable")?;
+    let kraw = pair.kernel[0x200..0x1200].to_vec();
+    let kkey = k
+        .encoding_seed()
+        .map_or(KernelKeySource::RawKey(&kraw), KernelKeySource::Seed);
+    let kernel = encode_kernel_envelope_with_header(&k.image, &pair.kernel[..0x200], kkey)
+        .map_err(|e| format!("kernel: {e}"))?;
+    if let Some(d) = diff(&kernel, &pair.kernel) {
+        return Err(format!("kernel {d}"));
+    }
+    let n = decode_envelope_with_kernel(&pair.normal, &k).ok_or("normal undecodable")?;
+    let key_start = 0x200
+        + if k.info().layout == Layout::KernelDerived {
+            DERIVED_NORMAL_PAD_LEN
+        } else {
+            0
+        };
+    let raw = &pair.normal[key_start..n.info().payload_offset];
+    let (key, raw_key) = match n.encoding_seed() {
+        Some(seed) => (NormalKeySource::Seed(seed), false),
+        None => (NormalKeySource::RawKey(raw), true),
+    };
+    let oem_sig = pair.normal[NORMAL_SIGNATURE_RANGE].to_vec();
+    let header = &pair.normal[..0x200];
+    let stamped = encode_normal_for_kernel(
+        &k.image,
+        &n.image,
+        header,
+        key,
+        NormalSignature::Oem(&oem_sig),
+    )
+    .map_err(|e| format!("normal: {e}"))?;
+    if let Some(d) = diff(&stamped, &pair.normal) {
+        return Err(format!("normal {d}"));
+    }
+    if matches!(
+        normal_authentication_from_kernel(&k.image),
+        Some(NormalAuthentication::KeyAndCiphertext | NormalAuthentication::CiphertextOnly)
+    ) {
+        let fresh = encode_normal_for_kernel(
+            &k.image,
+            &n.image,
+            header,
+            key,
+            NormalSignature::Sign(signer),
+        )
+        .map_err(|e| format!("normal fresh: {e}"))?;
+        if diff_outside_signature(&fresh, &pair.normal).is_some()
+            || !matches!(
+                verify_normal_signature(&fresh),
+                SignatureCheck::ValidKeyAndCiphertext | SignatureCheck::ValidCiphertextOnly
+            )
+        {
+            return Err("fresh signature".into());
+        }
+    }
+    Ok(raw_key)
+}
+
 /// Rebuild one OEM pair through the public builder and classify the result.
 pub fn rebuild(pair: &Pair, signer: &SigningKey) -> Outcome {
+    match rebuild_template_free(pair, signer) {
+        Outcome::Failed(cause, detail) => match rebuild_behind_oem_headers(pair, signer) {
+            Ok(raw_key) => Outcome::HeaderExact {
+                cause,
+                raw_key,
+                signed: matches!(
+                    decode_envelope(&pair.kernel)
+                        .and_then(|k| normal_authentication_from_kernel(&k.image)),
+                    Some(
+                        NormalAuthentication::KeyAndCiphertext
+                            | NormalAuthentication::CiphertextOnly
+                    )
+                ),
+            },
+            Err(why) => Outcome::Failed(cause, format!("{detail}; behind OEM headers: {why}")),
+        },
+        other => other,
+    }
+}
+
+fn rebuild_template_free(pair: &Pair, signer: &SigningKey) -> Outcome {
     let Some(k) = decode_envelope(&pair.kernel) else {
         let hw = header_info(&pair.kernel).map_or("?".into(), |h| h.hardware_version);
         if !hw.starts_with("SAT ") {
@@ -274,6 +368,7 @@ fn every_hoard_pair_rebuilds_byte_exact_when_configured() {
     let pairs = hoard_pairs(&PathBuf::from(root));
     let signer = SigningKey::from_bytes([7; 20]).unwrap();
     let (mut exact, mut modulo) = (0, 0);
+    let mut header_exact = BTreeMap::<String, Vec<String>>::new();
     let mut out_of_scope = BTreeMap::<String, usize>::new();
     let mut failures = BTreeMap::<String, Vec<String>>::new();
     for pair in &pairs {
@@ -281,6 +376,22 @@ fn every_hoard_pair_rebuilds_byte_exact_when_configured() {
             Outcome::OutOfScope(layout) => *out_of_scope.entry(layout).or_default() += 1,
             Outcome::Exact => exact += 1,
             Outcome::SignatureModuloExact => modulo += 1,
+            Outcome::HeaderExact {
+                cause,
+                raw_key,
+                signed,
+            } => header_exact
+                .entry(format!(
+                    "{}{}",
+                    if signed {
+                        "signature-modulo-exact"
+                    } else {
+                        "exact"
+                    },
+                    if raw_key { " with raw Normal key" } else { "" }
+                ))
+                .or_default()
+                .push(format!("{} :: template-free cause: {cause}", pair.label)),
             Outcome::Failed(cause, detail) => failures
                 .entry(cause)
                 .or_default()
@@ -294,6 +405,12 @@ fn every_hoard_pair_rebuilds_byte_exact_when_configured() {
         pairs.len(),
         pairs.len() - skipped,
     );
+    for (class, items) in &header_exact {
+        eprintln!("behind OEM headers, {class}: {}", items.len());
+        for item in items {
+            eprintln!("    {item}");
+        }
+    }
     for (class, n) in &out_of_scope {
         eprintln!("out of scope: {class}: {n}");
     }

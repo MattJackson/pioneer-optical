@@ -424,3 +424,168 @@ fn every_hoard_pair_rebuilds_byte_exact_when_configured() {
         assert_eq!(failed, 0, "hoard pairs failed to rebuild");
     }
 }
+
+/// `decode(encode(decode(x))) == decode(x)` for every SAT Normal, and the
+/// receiver-policy round trip: a body encoded with a Kernel's rules decodes
+/// back to that body with its decode. Gated by `PIONEER_HOARD_ROOT`.
+#[test]
+fn hoard_round_trip_properties_when_configured() {
+    let Ok(root) = std::env::var("PIONEER_HOARD_ROOT") else {
+        return;
+    };
+    let pairs = hoard_pairs(&PathBuf::from(root));
+    let signer = SigningKey::from_bytes([9; 20]).unwrap();
+    let mut checked = 0;
+    let mut skipped = 0;
+    for pair in &pairs {
+        let Some(k) = decode_envelope(&pair.kernel) else {
+            skipped += 1;
+            continue;
+        };
+        if !matches!(k.info().layout, Layout::KernelFront | Layout::KernelDerived) {
+            skipped += 1;
+            continue;
+        }
+        let Some(n) = decode_envelope_with_kernel(&pair.normal, &k) else {
+            skipped += 1;
+            continue;
+        };
+        if normal_rotation_from_kernel(&k.image).is_none() {
+            skipped += 1;
+            continue;
+        }
+        // Re-encode the decoded body for this same Kernel, then decode again.
+        let header = &pair.normal[..0x200];
+        let key_start = 0x200
+            + if k.info().layout == Layout::KernelDerived {
+                DERIVED_NORMAL_PAD_LEN
+            } else {
+                0
+            };
+        let raw = &pair.normal[key_start..n.info().payload_offset];
+        let key = n
+            .encoding_seed()
+            .map_or(NormalKeySource::RawKey(raw), NormalKeySource::Seed);
+        let signed = matches!(
+            normal_authentication_from_kernel(&k.image),
+            Some(NormalAuthentication::KeyAndCiphertext | NormalAuthentication::CiphertextOnly)
+        );
+        let sig = if signed {
+            NormalSignature::Sign(&signer)
+        } else {
+            NormalSignature::Zeroed
+        };
+        // Spliced OEM Normals do not carry their whole image, so encoding the
+        // recovered image is a different, longer body; skip those here.
+        if !n.spliced_blocks().is_empty() {
+            skipped += 1;
+            continue;
+        }
+        let re = encode_normal_for_kernel(&k.image, &n.image, header, key, sig)
+            .unwrap_or_else(|e| panic!("{}: {e}", pair.label));
+        let re_decoded = decode_envelope_with_kernel(&re, &k)
+            .unwrap_or_else(|| panic!("{}: re-encoded body does not decode", pair.label));
+        // decode(encode(decode(x))) == decode(x), and the image is checksum-zero.
+        assert_eq!(re_decoded.image, n.image, "{}", pair.label);
+        assert!(
+            re_decoded.image.chunks_exact(4).fold(0u32, |s, w| s
+                .wrapping_add(u32::from_be_bytes(w.try_into().unwrap())))
+                == 0,
+            "{}: BE32 checksum not zero",
+            pair.label
+        );
+        // Receiver-policy round trip: the re-encoded envelope decodes with K's
+        // rules to the same body, and carries the receiver XOR policy.
+        assert!(
+            re_decoded.receiver_xor_exceptions().is_some(),
+            "{}: no receiver policy",
+            pair.label
+        );
+        checked += 1;
+    }
+    eprintln!("round-trip properties held for {checked} pairs ({skipped} skipped)");
+    assert!(checked > 100);
+}
+
+/// Cross-receiver re-encode: the BDR-PR1ML 1.30 Normal body, re-packed for the
+/// BDR-207M 1.60 Kernel's transport, decodes with the 207M Kernel's rules to
+/// the identical PR1ML body with a zero BE32 checksum. Gated by the two paths.
+#[test]
+fn pr1ml_body_reencoded_for_207m_receiver_when_configured() {
+    let (Ok(pr1ml_path), Ok(k207_path)) = (
+        std::env::var("PIONEER_PR1ML_130_TAR"),
+        std::env::var("PIONEER_207M_160_TAR"),
+    ) else {
+        return;
+    };
+    let pr1ml = tar_members(&std::fs::read(pr1ml_path).unwrap());
+    let k207m = tar_members(&std::fs::read(k207_path).unwrap());
+    // Pick components by decoded role, not by filename: the 207M Kernel and
+    // Normal carry different revisions in their names.
+    let role_member = |members: &[(String, Vec<u8>)], kind| {
+        members
+            .iter()
+            .find(|(_, d)| header_info(d).and_then(|h| h.kind) == Some(kind))
+            .map(|(_, d)| d.clone())
+            .unwrap()
+    };
+    let pr1ml_kernel_enc = role_member(&pr1ml, pioneer_optical::ComponentKind::Kernel);
+    let pr1ml_normal_enc = role_member(&pr1ml, pioneer_optical::ComponentKind::Normal);
+    let k207_kernel_enc = role_member(&k207m, pioneer_optical::ComponentKind::Kernel);
+    let k207_normal_enc = role_member(&k207m, pioneer_optical::ComponentKind::Normal);
+
+    let pr1ml_kernel = decode_envelope(&pr1ml_kernel_enc).unwrap();
+    let pr1ml_body = decode_envelope_with_kernel(&pr1ml_normal_enc, &pr1ml_kernel).unwrap();
+    let k207 = decode_envelope(&k207_kernel_enc).unwrap();
+    assert_eq!(k207.info().model, "BDR-207M");
+    assert_eq!(pr1ml_kernel.info().model, "BDR-PR1ML");
+    // The two receivers differ: PR1ML reverses the rotation, 207M does not.
+    assert_eq!(
+        normal_rotation_from_kernel(&pr1ml_kernel.image),
+        Some(NormalRotation::Reverse)
+    );
+    assert_eq!(
+        normal_rotation_from_kernel(&k207.image),
+        Some(NormalRotation::Forward)
+    );
+
+    // Re-encode the PR1ML body for the 207M receiver, using the 207M Normal's
+    // own header so the envelope identifies as a 207M component.
+    let header_207 = k207_normal_enc[..0x200].to_vec();
+    let signer = SigningKey::from_bytes([3; 20]).unwrap();
+    let reencoded = encode_normal_for_kernel(
+        &k207.image,
+        &pr1ml_body.image,
+        &header_207,
+        NormalKeySource::Seed(0x5a_5a5a),
+        NormalSignature::Sign(&signer),
+    )
+    .expect("PR1ML body re-encodes for the 207M receiver");
+
+    // Decoding with the 207M Kernel's rules yields the identical PR1ML body.
+    let decoded = decode_envelope_with_kernel(&reencoded, &k207).unwrap();
+    assert_eq!(
+        decoded.image, pr1ml_body.image,
+        "cross-receiver body differs"
+    );
+    let checksum = decoded.image.chunks_exact(4).fold(0u32, |s, w| {
+        s.wrapping_add(u32::from_be_bytes(w.try_into().unwrap()))
+    });
+    assert_eq!(
+        checksum, 0,
+        "re-decoded PR1ML body BE32 checksum is not zero"
+    );
+
+    // A valid signature is produced under the envelope's own scheme (the 207M
+    // front-key receiver signs the key table and ciphertext from 0x200). It is
+    // a caller-owned key, not the OEM public point.
+    assert_eq!(
+        verify_normal_signature(&reencoded),
+        SignatureCheck::ValidKeyAndCiphertext
+    );
+    eprintln!(
+        "PR1ML->207M: {} bytes, body {:#x}, checksum 0, signature valid (key-and-ciphertext, caller key)",
+        reencoded.len(),
+        decoded.image.len()
+    );
+}

@@ -4,6 +4,36 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.15.0] - 2026-10-13
+
+### Added
+- `envelope::builder::normal_rotation_from_kernel` reads the word-rotation
+  direction (`NormalRotation::Forward`/`Reverse`) a Kernel's receiver applies
+  to its Normal, from the decode loop's count shift. Role-selected receivers
+  that carry both directions are resolved by the stack flag the routine clears
+  only for the Kernel offset. Reverse-rotation receivers (WX1DM, PR1ML) now
+  build `NormalReverse` envelopes; an unrecognized direction fails closed with
+  `Error::UnknownRotation`.
+- `envelope::builder::encode_normal_for_kernel` encodes a Normal image for a
+  given Kernel's receiver (XOR-skip offsets, rotation, derived-key pad, scaled
+  geometry and authentication) behind a caller-supplied 0x200-byte header, and
+  verifies the result decodes through that Kernel to the same image. This is
+  the re-encoding primitive for re-packing firmware for another Kernel's
+  transport. `NormalKeySource` selects an LCG seed or a verbatim key table
+  (for the older SAT 10xx Normals whose key tables are not LCG-derived).
+- `envelope::builder::encode_kernel_envelope_with_header` encodes a Kernel
+  image behind a caller-supplied header, for Kernels whose headers carry bytes
+  the image cannot supply.
+- `envelope::builder::DERIVED_NORMAL_PAD_LEN` and `Error::InvalidHeader`.
+
+### Changed
+- Derived-key generation Normals are now rebuilt with their 64 KiB pre-key pad
+  (the key's own LCG stream) and the key table at 0x10200, matching every OEM
+  derived-key Normal.
+- OEM embedded filenames now derive the 8.3 extension by dropping the
+  revision's second character (`E102` -> `E02`, `0.05e` -> `005`), and a
+  single-token envelope `ID` is treated as its own model.
+
 ## [0.14.0] - 2026-10-09
 
 ### Changed

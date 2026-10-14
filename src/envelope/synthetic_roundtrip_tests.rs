@@ -33,6 +33,22 @@ fn write_branch(buf: &mut [u8], at: usize, offs: [u32; 2]) {
     buf[at + 14] = 0x47;
     buf[at + 15] = 4;
     buf[at + 16..at + 20].copy_from_slice(&[1, 0xf0, 0x65, 5]);
+    write_rotation(buf, at + 20, true);
+}
+
+/// After the XOR, a forward (`right`) or reverse rotation: mask the key into
+/// R3, pass it as the shift count to an inline SHLR.L/SHLL.L helper, OR the
+/// halves. Written only when the buffer has room for it.
+fn write_rotation(buf: &mut [u8], at: usize, right: bool) {
+    if buf.len() < at + 18 {
+        return;
+    }
+    let helper = (0x0040_0000 + at as u32 + 14).to_be_bytes();
+    buf[at..at + 4].copy_from_slice(&[0x79, 0x63, 0, 0x1f]);
+    buf[at + 4..at + 6].copy_from_slice(&[0x0d, 0x31]);
+    buf[at + 6..at + 10].copy_from_slice(&[0x5e, helper[1], helper[2], helper[3]]);
+    buf[at + 10..at + 14].copy_from_slice(&[1, 0xf0, 0x64, 0x40]);
+    buf[at + 14..at + 18].copy_from_slice(&[if right { 0x11 } else { 0x10 }, 0x70, 0x54, 0x70]);
 }
 
 fn header_bytes(file_type: &str, hardware: &str, destination: &str) -> [u8; 0x200] {

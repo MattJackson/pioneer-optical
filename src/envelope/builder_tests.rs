@@ -135,6 +135,22 @@ fn write_branch(buf: &mut [u8], at: usize, offs: [u32; 2]) {
     buf[at + 14] = 0x47;
     buf[at + 15] = 4;
     buf[at + 16..at + 20].copy_from_slice(&[1, 0xf0, 0x65, 5]);
+    write_rotation(buf, at + 20, true);
+}
+
+/// After the XOR, a forward (`right`) or reverse rotation: mask the key into
+/// R3, pass it as the shift count to an inline SHLR.L/SHLL.L helper, OR the
+/// halves. Written only when the buffer has room for it.
+fn write_rotation(buf: &mut [u8], at: usize, right: bool) {
+    if buf.len() < at + 18 {
+        return;
+    }
+    let helper = (0x0040_0000 + at as u32 + 14).to_be_bytes();
+    buf[at..at + 4].copy_from_slice(&[0x79, 0x63, 0, 0x1f]);
+    buf[at + 4..at + 6].copy_from_slice(&[0x0d, 0x31]);
+    buf[at + 6..at + 10].copy_from_slice(&[0x5e, helper[1], helper[2], helper[3]]);
+    buf[at + 10..at + 14].copy_from_slice(&[1, 0xf0, 0x64, 0x40]);
+    buf[at + 14..at + 18].copy_from_slice(&[if right { 0x11 } else { 0x10 }, 0x70, 0x54, 0x70]);
 }
 
 fn front_kernel_with(branch: [u32; 2]) -> Vec<u8> {
@@ -337,14 +353,51 @@ fn filename_rejects_overlong_or_non_ascii() {
 }
 
 #[test]
-fn kernel_filename_follows_the_oem_scheme() {
+fn oem_filename_follows_the_oem_scheme() {
+    let kernel = ComponentKind::Kernel;
     assert_eq!(
-        kernel_filename("SAT 8A10", "GENERAL", "1.00"),
+        oem_filename("SAT 8A10", "GENERAL", kernel, "1.00"),
         "S8A10000.100"
     );
-    assert_eq!(kernel_filename("SAT 8A10", "ID72", "1.14"), "S8A10720.114");
+    assert_eq!(
+        oem_filename("SAT 8A10", "ID72", kernel, "1.14"),
+        "S8A10720.114"
+    );
+    assert_eq!(
+        oem_filename("SAT 8A10", "ID72", ComponentKind::Normal, "1.14"),
+        "S8A10721.114"
+    );
     // Tags with no destination mapping fall back to a generated label.
-    assert_eq!(kernel_filename("SAT 8A10", "OTHER", "1.00"), "KERNEL.100");
+    assert_eq!(
+        oem_filename("SAT 8A10", "OTHER", kernel, "1.00"),
+        "KERNEL.100"
+    );
+    assert_eq!(
+        oem_filename("SAT 8A10", "OTHER", ComponentKind::Normal, "1.00"),
+        "NORMAL.100"
+    );
+}
+
+#[test]
+fn filename_extension_drops_the_revision_second_character() {
+    // OEM 8.3 names keep characters 0, 2 and 3 of the revision, which is the
+    // dotted form's digits and also covers undotted and five-character
+    // revisions observed in OEM envelopes.
+    for (revision, extension) in [
+        ("1.30", "130"),
+        ("E102", "E02"),
+        ("HLE2", "HE2"),
+        ("B20X", "B0X"),
+        ("0.05e", "005"),
+    ] {
+        assert_eq!(revision_extension(revision), extension, "{revision}");
+    }
+    assert_eq!(
+        oem_filename("SAT 8600", "ID76", ComponentKind::Normal, "E102"),
+        "S8600761.E02"
+    );
+    // Too short for the 8.3 rule: keep the digits-only form.
+    assert_eq!(revision_extension("1.0"), "10");
 }
 
 // A high-word-length call site; `with_1a91` toggles the required marker.
@@ -596,8 +649,14 @@ fn encode_kernel_envelope_rejects_bad_identity_and_image() {
     assert!(
         encode_kernel_envelope(&no_sat, "PIONEER BDR-TEST", &KernelBuild::from_seed(1)).is_err()
     );
-    // Envelope ID without a model token.
-    assert!(encode_kernel_envelope(&k, "PIONEER", &KernelBuild::from_seed(1)).is_err());
+    // Envelope ID without any token.
+    assert!(encode_kernel_envelope(&k, "   ", &KernelBuild::from_seed(1)).is_err());
+    // A single-token ID is its own model, as in the OEM `SlimtypeEB1` envelopes.
+    let single = encode_kernel_envelope(&k, "SlimtypeEB1", &KernelBuild::from_seed(1)).unwrap();
+    assert_eq!(
+        super::super::header_info(&single).unwrap().model,
+        "SlimtypeEB1"
+    );
     // Non-ASCII identity.
     assert!(encode_kernel_envelope(&k, "PIONEER BDR-É", &KernelBuild::from_seed(1)).is_err());
     // Empty revision and too-long date.
@@ -719,7 +778,7 @@ fn encode_kernel_envelope_exact_errors_per_guard() {
     assert_eq!(kernel_err(&tag0, ID, "1.00", "00/00/00"), incomplete);
     let v20 = front_kernel_field(|k| k[0x1010..0x1014].copy_from_slice(b"    "));
     assert_eq!(kernel_err(&v20, ID, "1.00", "00/00/00"), incomplete);
-    assert_eq!(kernel_err(&k, "PIONEER", "1.00", "00/00/00"), incomplete);
+    assert_eq!(kernel_err(&k, " ", "1.00", "00/00/00"), incomplete);
     assert_eq!(
         kernel_err(&k, "PIONEER BDR-\u{c9}", "1.00", "00/00/00"),
         incomplete
@@ -782,7 +841,7 @@ fn encode_pair_exact_errors_per_guard() {
     let v20 = front_kernel_field(|k| k[0x1010..0x1014].copy_from_slice(b"    "));
     assert_eq!(pair_err(&base_inputs(&v20, &n)), incomplete);
     for id in [
-        "PIONEER",
+        "",
         "PIONEER BDR-\u{c9}",
         "PIONEER BDR-\x01",
         "PIONEER BDR-\x7f",
@@ -905,5 +964,150 @@ fn kernel_layout_mismatch_alone_is_a_round_trip_error() {
     assert_eq!(
         validate_encrypted_pair(&swapped, &kernel, &n),
         Err(Error::RoundTripMismatch)
+    );
+}
+
+// The role-selected receiver: the routine clears its stack flag only when the
+// payload is at staging base + 0x1200 (the Kernel), then after the XOR picks a
+// right-shift-by-count path (Kernel) or a left-shift-by-count path (Normal).
+fn write_two_path_rotation(buf: &mut [u8], at: usize, with_setter: bool) {
+    let right = (0x0040_0000 + at as u32 + 50).to_be_bytes();
+    let left = (0x0040_0000 + at as u32 + 54).to_be_bytes();
+    let code: [u8; 58] = [
+        0x79, 0x66, 0, 0x1f, // AND.W #0x1F,R6
+        0x6e, 0x78, 0, 4, // MOV.B @(4,ER7),R0L
+        0x46, 10, // BNE Normal path
+        0x0d, 0x61, // MOV.W R6,R1
+        0x5e, right[1], right[2], right[3], // JSR right shift
+        0x40, 8, // BRA join
+        0, 0, // NOP
+        0x0c, 0xe9, // MOV.B R6L,R1L
+        0x5e, left[1], left[2], left[3], // JSR left shift
+        1, 0xf0, 0x64, 4, // OR.L ER0,ER4
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // pad
+        0x11, 0x70, 0x54, 0x70, // SHLR.L #2,ER0; RTS
+        0x10, 0x70, 0x54, 0x70, // SHLL.L #2,ER0; RTS
+    ];
+    buf[at..at + code.len()].copy_from_slice(&code);
+    if with_setter {
+        buf[0x700..0x710].copy_from_slice(&[
+            0x7a, 0x10, 0, 0, 0x12, 0, 0x1f, 0x81, 0x46, 0x14, 0x18, 0, 0x6e, 0xf0, 0, 4,
+        ]);
+    }
+}
+
+fn reverse_kernel(with_setter: bool) -> Vec<u8> {
+    let mut k = front_kernel();
+    write_two_path_rotation(&mut k, 0x100 + 20, with_setter);
+    be32_fix(&mut k, 0xff00);
+    k
+}
+
+#[test]
+fn rotation_is_read_from_the_count_shift_after_the_xor() {
+    assert_eq!(
+        normal_rotation_from_kernel(&front_kernel()),
+        Some(NormalRotation::Forward)
+    );
+    // The same loop with a left-shift helper rotates the other way.
+    let mut left = front_kernel();
+    write_rotation(&mut left, 0x100 + 20, false);
+    assert_eq!(
+        normal_rotation_from_kernel(&left),
+        Some(NormalRotation::Reverse)
+    );
+    // A helper mixing both shift directions is not a rotation half.
+    let mut mixed = front_kernel();
+    mixed[0x100 + 20 + 14..0x100 + 20 + 22]
+        .copy_from_slice(&[0x11, 0x70, 0x10, 0x70, 0x54, 0x70, 0, 0]);
+    assert_eq!(normal_rotation_from_kernel(&mixed), None);
+    // A call whose count register is not the masked key is ignored.
+    let mut other = front_kernel();
+    other[0x100 + 20 + 4..0x100 + 20 + 6].copy_from_slice(&[0x0d, 0x21]);
+    assert_eq!(normal_rotation_from_kernel(&other), None);
+    // No XOR-skip branch: nothing to anchor the decode loop.
+    assert_eq!(normal_rotation_from_kernel(&[0u8; 0x100]), None);
+}
+
+#[test]
+fn role_selected_rotation_gives_the_normal_the_flag_set_path() {
+    assert_eq!(
+        normal_rotation_from_kernel(&reverse_kernel(true)),
+        Some(NormalRotation::Reverse)
+    );
+    // Without the Kernel-offset flag setter, the paths' roles are unproven.
+    assert_eq!(normal_rotation_from_kernel(&reverse_kernel(false)), None);
+}
+
+#[test]
+fn reverse_receiver_encodes_a_normal_reverse_envelope() {
+    let kernel = reverse_kernel(true);
+    let n = normal_image(0x2000);
+    let pair = encode_encrypted_pair(
+        &base_inputs(&kernel, &n),
+        NormalSignature::Sign(&a_signer()),
+    )
+    .unwrap();
+    let dk = decode_envelope(&pair.kernel).unwrap();
+    let dn = decode_envelope_with_kernel(&pair.normal, &dk).unwrap();
+    assert_eq!(dn.info.layout, Layout::NormalReverse);
+    assert_eq!(dn.image, n);
+    // The forward codec would not reproduce the image from these bytes.
+    let forward = transform_with_policy(
+        &pair.normal[0x10200..],
+        &pair.normal[0x200..0x10200],
+        false,
+        false,
+        &[0x100, 0x200],
+    )
+    .unwrap();
+    assert_ne!(forward, n);
+    validate_encrypted_pair(&pair, &kernel, &n).unwrap();
+    // An unrecognized rotation fails closed rather than assuming forward.
+    let unknown = reverse_kernel(false);
+    assert_eq!(
+        encode_encrypted_pair(&base_inputs(&unknown, &n), NormalSignature::Zeroed).unwrap_err(),
+        Error::UnknownRotation
+    );
+}
+
+#[test]
+fn derived_generation_normal_carries_the_key_stream_pad() {
+    let mut kernel = front_kernel();
+    kernel[0x40] = 0xad;
+    kernel[0x46] = 0xad;
+    be32_fix(&mut kernel, 0xff00);
+    let n = normal_image(0x2000);
+    let input = base_inputs(&kernel, &n);
+    let pair = encode_encrypted_pair(&input, NormalSignature::Sign(&a_signer())).unwrap();
+    assert_eq!(
+        pair.normal.len(),
+        0x200 + DERIVED_NORMAL_PAD_LEN + 0x10000 + n.len()
+    );
+    let seed = input.normal_key_seed;
+    let key = &pair.normal[0x10200..0x20200];
+    assert_eq!(key, make_key(seed, 0x10000).as_slice());
+    // The pad's first 0x1000 bytes run straight into the key ...
+    let lead = make_key(super::super::jump_seed(seed, 0x1000, true), 0x11000);
+    assert_eq!(&pair.normal[0x200..0x1200], &lead[..0x1000]);
+    assert_eq!(&lead[0x1000..], key);
+    // ... and the rest continues the same stream 0x11000 bytes past the key.
+    let tail = make_key(seed, 0x20000);
+    assert_eq!(&pair.normal[0x1200..0x10200], &tail[0x11000..]);
+    let dk = decode_envelope(&pair.kernel).unwrap();
+    let dn = decode_envelope_with_kernel(&pair.normal, &dk).unwrap();
+    assert_eq!(dn.info.payload_offset, 0x20200);
+    assert_eq!(dn.encoding_seed(), Some(seed));
+    assert_eq!(dn.image, n);
+    // The signed range from 0x10200 is the key and ciphertext, not the pad.
+    assert_eq!(
+        verify_normal_signature(&pair.normal),
+        SignatureCheck::ValidCiphertextOnly
+    );
+    let mut pad_edit = pair.normal.clone();
+    pad_edit[0x300] ^= 1;
+    assert_eq!(
+        verify_normal_signature(&pad_edit),
+        SignatureCheck::ValidCiphertextOnly
     );
 }

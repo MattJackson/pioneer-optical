@@ -214,6 +214,116 @@ pub fn kernel_layout_from_image(kernel: &[u8]) -> Option<Layout> {
     }
 }
 
+/// Word-rotation direction a Kernel's receiver applies when decoding a Normal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum NormalRotation {
+    /// Decode XORs then rotates right ([`Layout::Normal`]).
+    Forward,
+    /// Decode XORs then rotates left ([`Layout::NormalReverse`]).
+    Reverse,
+}
+
+// Shift direction of a variable-count 32-bit shift helper: `Some(true)` for a
+// helper built only from SHLR.L, `Some(false)` for one built only from SHLL.L.
+fn shift_helper_is_right(kernel: &[u8], target: u32) -> Option<bool> {
+    let start = target.checked_sub(crate::image::KERNEL_BASE)? as usize;
+    let end = kernel.len().min(start.checked_add(0x40)?);
+    let (mut left, mut right) = (false, false);
+    let mut at = start;
+    while at + 2 <= end {
+        let (op, mode) = (kernel[at], kernel[at + 1] & 0xf0);
+        if matches!(mode, 0x30 | 0x70) {
+            left |= op == 0x10;
+            right |= op == 0x11;
+        }
+        if kernel[at..at + 2] == [0x54, 0x70] && (left || right) {
+            break;
+        }
+        at += crate::image::h8::ilen(kernel, at);
+    }
+    (left != right).then_some(right)
+}
+
+/// The rotation a Kernel's receiver applies to Normal words, read from the
+/// decode loop that holds the unique XOR-skip branch.
+///
+/// After the XOR the loop combines two variable shifts of the word; the one
+/// whose count register is the key's `AND.W #0x1F` operand decides direction
+/// (a right shift by the key decodes as a right rotation). Some receivers carry
+/// two such paths selected by a stack flag that the routine clears only when
+/// the payload sits at staging base + 0x1200, the Kernel offset; the Normal
+/// then takes the flag-set path. Unknown or ambiguous code returns `None`.
+pub fn normal_rotation_from_kernel(kernel: &[u8]) -> Option<NormalRotation> {
+    let branches = kernel_xor_branches(kernel);
+    let [(site, _)] = branches.as_slice() else {
+        return None;
+    };
+    let site = *site;
+    // `AND.W #0x1F,Rk` makes Rk the key's rotation count. Registers masked
+    // shortly before the branch seed the set; the walk below adds the rest.
+    let is_mask = |w: &[u8]| w[0] == 0x79 && w[1] & 0xf8 == 0x60 && w[2..4] == [0, 0x1f];
+    let mut counts: u8 = kernel
+        .get(site.saturating_sub(0x40)..site)?
+        .windows(4)
+        .filter(|w| is_mask(w))
+        .fold(0, |set, w| set | 1 << (w[1] & 7));
+    // Walk the loop body: track whether R1 holds the count, the role flag
+    // test, and each call made with the count in R1.
+    let mut flag: Option<(u8, usize)> = None;
+    let mut r1_is_count = false;
+    let mut calls: Vec<(usize, Option<bool>)> = Vec::new();
+    let mut at = site;
+    while at < (site + 0x70).min(kernel.len()) {
+        let b = kernel.get(at..at + 6).unwrap_or(&[]);
+        match b {
+            [0x6e, 0x78, 0, d, 0x46, disp, ..] if flag.is_none() => {
+                flag = Some((*d, at + 6 + usize::from(*disp)));
+            }
+            w if w.len() >= 4 && is_mask(w) => {
+                counts |= 1 << (w[1] & 7);
+                r1_is_count |= w[1] & 7 == 1;
+            }
+            // MOV.W Rs,R1 or MOV.B RsL,R1L.
+            [0x0d, sd, ..] if sd & 0x0f == 1 => r1_is_count = counts & 1 << (sd >> 4) != 0,
+            [0x0c, sd, ..] if sd & 0x0f == 9 => {
+                r1_is_count = sd >> 4 >= 8 && counts & 1 << ((sd >> 4) - 8) != 0
+            }
+            // Other writes of R1: immediate, subtract, long move.
+            [0x79, 0x01, ..] | [0x19 | 0x0f, _, ..] if b[1] & 0x0f == 1 => r1_is_count = false,
+            [0x5e, t0, t1, t2, ..] if r1_is_count => {
+                let target = u32::from_be_bytes([0, *t0, *t1, *t2]);
+                calls.push((at, shift_helper_is_right(kernel, target)));
+            }
+            [0x01, 0xf0, 0x64, ..] if flag.map_or(true, |(_, taken)| at > taken) => break,
+            _ => {}
+        }
+        at += crate::image::h8::ilen(kernel, at);
+    }
+    let direction = |right: Option<bool>| match right? {
+        true => Some(NormalRotation::Forward),
+        false => Some(NormalRotation::Reverse),
+    };
+    match (flag, calls.as_slice()) {
+        (None, [(_, right)]) => direction(*right),
+        (Some((d, taken)), [(kernel_call, kernel_right), (normal_call, normal_right)])
+            if *kernel_call < taken && *normal_call >= taken =>
+        {
+            // ADD.L #0x1200,ER0; CMP.L ER0,ER1; BNE; SUB.B R0H,R0H;
+            // MOV.B R0H,@(d,ER7): the flag is clear only for the Kernel offset.
+            let setter = [0x7a, 0x10, 0, 0, 0x12, 0, 0x1f, 0x81, 0x46];
+            let clears = kernel
+                .windows(16)
+                .filter(|w| w[..9] == setter && w[10..] == [0x18, 0, 0x6e, 0xf0, 0, d])
+                .count();
+            (clears == 1 && *kernel_right == Some(true))
+                .then(|| direction(*normal_right))
+                .flatten()
+        }
+        _ => None,
+    }
+}
+
 /// A built Kernel envelope and the Normal envelope that matches it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EncryptedPair {
@@ -373,14 +483,35 @@ fn destination_code(kernel_tag: &str) -> Option<&str> {
     }
 }
 
-/// OEM Kernel filename scheme: `S<hw[4..]><dest>0.<revision digits>` (e.g.
-/// hardware `SAT 8A10`, GENERAL, revision `1.00` -> `S8A10000.100`). Tags with
-/// no destination mapping fall back to a generated archival label.
-fn kernel_filename(hardware: &str, kernel_tag: &str, revision: &str) -> String {
-    let rev = revision.replace('.', "");
+/// The three-character 8.3 extension of an OEM filename: the revision without
+/// its second character (`1.30` -> `130`, `E102` -> `E02`, `0.05e` -> `005`).
+/// Shorter revisions keep the earlier digits-only form.
+fn revision_extension(revision: &str) -> String {
+    let chars: Vec<char> = revision.chars().collect();
+    if chars.len() >= 4 && revision.is_ascii() {
+        [chars[0], chars[2], chars[3]].iter().collect()
+    } else {
+        revision.replace('.', "")
+    }
+}
+
+/// OEM filename scheme: `S<hw[4..]><dest><role>.<extension>` (e.g. hardware
+/// `SAT 8A10`, GENERAL, Kernel role `0`, revision `1.00` -> `S8A10000.100`).
+/// Tags with no destination mapping fall back to a generated archival label.
+fn oem_filename(hardware: &str, kernel_tag: &str, role: ComponentKind, revision: &str) -> String {
+    let (digit, label) = match role {
+        ComponentKind::Kernel => ('0', "KERNEL"),
+        _ => ('1', "NORMAL"),
+    };
     match destination_code(kernel_tag) {
-        Some(code) => format!("S{}{code}0.{rev}", &hardware[4..]),
-        None => format!("KERNEL.{rev}"),
+        Some(code) => format!(
+            "S{}{code}{digit}.{}",
+            &hardware[4..],
+            revision_extension(revision)
+        ),
+        // Generated archival label; retain the actual destination in the
+        // header instead of inventing an OEM destination-to-filename mapping.
+        None => format!("{label}.{}", revision.replace('.', "")),
     }
 }
 
@@ -411,7 +542,7 @@ pub fn encode_kernel_envelope(
         || hardware.len() != 8
         || kernel_tag.is_empty()
         || kernel_version2.is_empty()
-        || envelope_id.split_whitespace().count() < 2
+        || envelope_id.split_whitespace().next().is_none()
         || !envelope_id.is_ascii()
         || envelope_id.bytes().any(|b| b < 0x20 || b == 0x7f)
         || build.revision.is_empty()
@@ -422,7 +553,7 @@ pub fn encode_kernel_envelope(
         return Err(Error::KernelIncomplete);
     }
     let layout = kernel_layout_from_image(kernel_image).ok_or(Error::AmbiguousKernelLayout)?;
-    let name = kernel_filename(hardware, kernel_tag, build.revision);
+    let name = oem_filename(hardware, kernel_tag, ComponentKind::Kernel, build.revision);
     let mut enc = header(
         envelope_id,
         hardware,
@@ -467,6 +598,24 @@ pub fn encode_kernel_envelope(
     Ok(enc)
 }
 
+/// Bytes between the header and the key of a derived-key generation Normal.
+///
+/// Every OEM Normal paired with a derived-key Kernel carries 64 KiB here, and
+/// the key moves to 0x10200. The pad is the key's own LCG stream: its first
+/// 0x1000 bytes are the 0x1000 stream bytes just before the key, and the rest
+/// continue the stream from 0x11000 bytes past the key's start. The signed
+/// range from 0x10200 therefore covers the key and ciphertext, not the pad.
+pub const DERIVED_NORMAL_PAD_LEN: usize = 0x10000;
+
+fn derived_normal_pad(seed: u32) -> Vec<u8> {
+    let mut pad = make_key(super::jump_seed(seed, 0x1000, true), 0x1000);
+    pad.extend(make_key(
+        super::jump_seed(seed, 0x11000, false),
+        DERIVED_NORMAL_PAD_LEN - 0x1000,
+    ));
+    pad
+}
+
 /// Build Kernel and Normal envelopes without a source `.enc` file.
 /// This is an encrypted package candidate, not a proven rollback artifact.
 pub fn encode_encrypted_pair(
@@ -508,20 +657,19 @@ pub fn encode_encrypted_pair(
         || hardware.len() != 8
         || kernel_tag.is_empty()
         || kernel_version2.is_empty()
-        || id.split_whitespace().count() < 2
+        || id.split_whitespace().next().is_none()
         || !id.is_ascii()
         || id.bytes().any(|b| b < 0x20 || b == 0x7f)
         || input.normal_revision.is_empty()
     {
         return Err(Error::ImageIncomplete);
     }
-    let normal_revision_digits = input.normal_revision.replace('.', "");
-    let normal_name = match destination_code(kernel_tag) {
-        Some(code) => format!("S{}{code}1.{normal_revision_digits}", &hardware[4..]),
-        // Generated archival label; retain the actual destination in the
-        // header instead of inventing an OEM destination-to-filename mapping.
-        None => format!("NORMAL.{normal_revision_digits}"),
-    };
+    let normal_name = oem_filename(
+        hardware,
+        kernel_tag,
+        ComponentKind::Normal,
+        input.normal_revision,
+    );
     if input.normal_date.is_empty() || input.normal_date.len() > 10 || !input.normal_date.is_ascii()
     {
         return Err(Error::InvalidDate);
@@ -550,14 +698,25 @@ pub fn encode_encrypted_pair(
         &normal_name,
     )?
     .to_vec();
-    let normal_key = make_key(
-        input.normal_key_seed & 0x00ff_ffff,
-        scaled.map_or(crate::image::KERNEL_LEN, |g| g.key_len),
-    );
+    let rotation = normal_rotation_from_kernel(kernel).ok_or(Error::UnknownRotation)?;
+    if scaled.is_some() && rotation != NormalRotation::Forward {
+        return Err(Error::UnknownRotation);
+    }
+    let seed = input.normal_key_seed & 0x00ff_ffff;
+    if kernel_layout_from_image(kernel) == Some(Layout::KernelDerived) {
+        normal_enc.extend(derived_normal_pad(seed));
+    }
+    let normal_key = make_key(seed, scaled.map_or(crate::image::KERNEL_LEN, |g| g.key_len));
     normal_enc.extend_from_slice(&normal_key);
     normal_enc.extend_from_slice(
-        &transform_with_policy(normal, &normal_key, true, false, exceptions)
-            .ok_or(Error::NormalEncode)?,
+        &transform_with_policy(
+            normal,
+            &normal_key,
+            true,
+            rotation == NormalRotation::Reverse,
+            exceptions,
+        )
+        .ok_or(Error::NormalEncode)?,
     );
     // Policies that carry no body signature ignore the `signature` argument;
     // the header's signature region stays zero either way.
@@ -615,8 +774,15 @@ fn validate_pair_inner(
     check_signature: bool,
 ) -> Result<()> {
     let scaled = scaled_normal_geometry_from_kernel(kernel_image);
+    let pad = if kernel_layout_from_image(kernel_image) == Some(Layout::KernelDerived) {
+        DERIVED_NORMAL_PAD_LEN
+    } else {
+        0
+    };
+    let rotation = normal_rotation_from_kernel(kernel_image).ok_or(Error::UnknownRotation)?;
     if pair.kernel.len() != 0x1200 + kernel_image.len()
-        || pair.normal.len() != scaled.map_or(0x10200 + normal_image.len(), |g| g.envelope_len)
+        || pair.normal.len()
+            != scaled.map_or(0x10200 + pad + normal_image.len(), |g| g.envelope_len)
         || (check_signature && !normal_authentication_valid(&pair.normal, kernel_image))
     {
         return Err(Error::InvalidSignedEnvelope);
@@ -627,7 +793,7 @@ fn validate_pair_inner(
     let expected_kernel_layout =
         kernel_layout_from_image(kernel_image).ok_or(Error::AmbiguousKernelLayout)?;
     if kernel.info.layout != expected_kernel_layout
-        || !normal_layout_matches(normal.info.layout, scaled)
+        || !normal_layout_matches(normal.info.layout, scaled, rotation)
         || kernel.image != kernel_image
         || normal.image != normal_image
     {
@@ -638,7 +804,14 @@ fn validate_pair_inner(
 
 /// A scaled Normal decodes as `NormalScaledKey`, except at a 64 KiB key where
 /// its bytes are identical to a plain keyed Normal and decode as `Normal`.
-fn normal_layout_matches(layout: Layout, scaled: Option<ScaledNormalGeometry>) -> bool {
+fn normal_layout_matches(
+    layout: Layout,
+    scaled: Option<ScaledNormalGeometry>,
+    rotation: NormalRotation,
+) -> bool {
+    if rotation == NormalRotation::Reverse {
+        return scaled.is_none() && layout == Layout::NormalReverse;
+    }
     match scaled {
         Some(g) if g.key_len == crate::image::KERNEL_LEN => {
             matches!(layout, Layout::NormalScaledKey | Layout::Normal)

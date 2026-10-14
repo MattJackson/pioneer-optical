@@ -9,6 +9,8 @@ use core::fmt;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Error {
+    /// The Kernel's Normal word-rotation direction is not recognized.
+    UnknownRotation,
     /// The embedded filename is too long or not ASCII.
     InvalidFilename,
     /// The envelope `ID` string has no model token.
@@ -87,6 +89,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Error::UnknownRotation => "Kernel Normal rotation direction is unknown",
             Error::InvalidFilename => "invalid embedded filename",
             Error::MissingModel => "envelope ID has no model",
             Error::HeaderFieldsDoNotFit => "Pioneer header fields do not fit",

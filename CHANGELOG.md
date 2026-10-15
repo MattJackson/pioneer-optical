@@ -4,6 +4,23 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.15.1] - 2026-10-14
+
+### Added
+- Receive plans for update transfers. `drive::Segment` and `drive::Plan`
+  describe a component as an ordered list of `WRITE BUFFER` segments — each with
+  its own buffer id, wire offset and chunk size — and `drive::execute_plan`
+  executes one. `execute_update` is now the linear single-segment case of it
+  (one buffer per role from offset zero), so existing behaviour is unchanged.
+- `cdb::transfer_with_id` and `Session::write_raw` address a transfer to an
+  explicit receive buffer id, so one component can span more than one buffer.
+- `receiver::transport`: `detect` reads a decoded kernel body's loader
+  fingerprint and `plan` builds its receive plan. The BD 10xx-generation kernel
+  loader stages the body at wire offset 0 and the front-key block at `0x10200`
+  (not a linear `0x10000`); delivering it as one linear stream is rejected by
+  the drive. Loaders without the fingerprint keep the linear plan. Exact CDBs
+  are covered by tests.
+
 ## [0.15.0] - 2026-10-13
 
 ### Added

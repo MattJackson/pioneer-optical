@@ -1,6 +1,7 @@
 //! Execute receiver plans with descriptor binding and Kernel verification.
 use super::{Control, PreparedNormal, PreparedUpdate, DESCRIPTOR_LEN};
-use crate::drive::{self, Transport, UpdateOptions, UpdateRuntime, UpdateTransfer};
+use super::transport;
+use crate::drive::{self, Segment, Transport, UpdateOptions, UpdateRuntime, UpdateTransfer};
 
 const DESCRIPTOR_ADDRESS: u32 = 0x0041_0000;
 const READ_CHUNK: usize = 0x8000;
@@ -86,6 +87,12 @@ pub enum FlashError<E> {
         /// Address of the first differing byte.
         address: u32,
     },
+    /// The installed loader's kernel receive transport could not be satisfied;
+    /// no entry was attempted, so no firmware was written.
+    UnsupportedTransport {
+        /// Pass being prepared.
+        pass: FlashPass,
+    },
 }
 impl<E: core::fmt::Debug> core::fmt::Display for FlashError<E> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -106,6 +113,10 @@ impl<E: core::fmt::Debug> core::fmt::Display for FlashError<E> {
             Self::ReadbackMismatch { pass, address } => {
                 write!(f, "{pass:?} Kernel readback differs at {address:#x}")
             }
+            Self::UnsupportedTransport { pass } => write!(
+                f,
+                "{pass:?} installed loader kernel receive transport is unsupported for this image"
+            ),
         }
     }
 }
@@ -144,19 +155,22 @@ impl PreparedUpdate {
                     source,
                 })?;
         bind(io.reads, &self.control, FlashPass::Initial)?;
-        drive::execute_update(
-            io.writes,
-            runtime,
-            &self.control,
-            UpdateTransfer {
-                kernel: Some(self.kernel_transfer()),
-                normal: self.normal_transfer(),
-            },
-            options,
+        let receive = transport::detect(self.first_kernel_image());
+        let mut storage = [Segment::PLACEHOLDER; 3];
+        let plan = transport::plan(
+            Some(self.kernel_transfer()),
+            self.normal_transfer(),
+            receive,
+            &mut storage,
         )
-        .map_err(|source| FlashError::Update {
+        .map_err(|_| FlashError::UnsupportedTransport {
             pass: FlashPass::Initial,
-            source,
+        })?;
+        drive::execute_plan(io.writes, runtime, &self.control, plan, options).map_err(|source| {
+            FlashError::Update {
+                pass: FlashPass::Initial,
+                source,
+            }
         })?;
         verify(io.reads, self.first_kernel_image(), FlashPass::Initial)?;
         if let Some(kernel) = self.restoration_kernel_transfer() {
@@ -171,19 +185,17 @@ impl PreparedUpdate {
                 })?;
             let control = receiver.control();
             bind(io.reads, &control, FlashPass::Restoration)?;
-            drive::execute_update(
-                io.writes,
-                runtime,
-                &control,
-                UpdateTransfer {
-                    kernel: Some(kernel),
-                    normal: self.normal_transfer(),
-                },
-                options,
-            )
-            .map_err(|source| FlashError::Update {
-                pass: FlashPass::Restoration,
-                source,
+            let receive = transport::detect(self.final_kernel_image());
+            let mut storage = [Segment::PLACEHOLDER; 3];
+            let plan = transport::plan(Some(kernel), self.normal_transfer(), receive, &mut storage)
+                .map_err(|_| FlashError::UnsupportedTransport {
+                    pass: FlashPass::Restoration,
+                })?;
+            drive::execute_plan(io.writes, runtime, &control, plan, options).map_err(|source| {
+                FlashError::Update {
+                    pass: FlashPass::Restoration,
+                    source,
+                }
             })?;
             verify(io.reads, self.final_kernel_image(), FlashPass::Restoration)?;
         }

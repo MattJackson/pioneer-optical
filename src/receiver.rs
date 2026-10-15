@@ -12,6 +12,8 @@ pub use preparation::{PreparationError, PreparedNormal, PreparedUpdate};
 #[cfg(feature = "drive")]
 mod execution;
 #[cfg(feature = "drive")]
+pub mod transport;
+#[cfg(feature = "drive")]
 pub use execution::{FlashError, FlashPass, FlashRuntime, FlashTransport};
 
 type Control = [u8; cdb::CONTROL_LEN as usize];

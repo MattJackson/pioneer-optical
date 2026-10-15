@@ -176,6 +176,7 @@ impl<E> CodedError for crate::receiver::FlashError<E> {
             Self::Update { .. } => "pioneer.flash.update",
             Self::Readback { .. } => "pioneer.flash.readback",
             Self::ReadbackMismatch { .. } => "pioneer.flash.readback_mismatch",
+            Self::UnsupportedTransport { .. } => "pioneer.flash.unsupported_transport",
         }
     }
 }

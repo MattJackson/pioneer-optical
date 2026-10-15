@@ -29,6 +29,50 @@ pub struct UpdateTransfer<'a> {
     pub normal: &'a [u8],
 }
 
+/// One contiguous run of a component delivered to a single receive buffer.
+///
+/// A plan's segments are written in order. `bytes` is split into
+/// `max_chunk`-sized `WRITE BUFFER` commands addressed from `dest_offset`, all
+/// to buffer `buffer_id`. `role` labels the segment for progress and settle
+/// timing only; it does not pick the buffer. This is how one component (e.g. a
+/// Kernel whose loader stages the body and its header to different receive
+/// buffers) spreads across more than one destination.
+#[derive(Clone, Copy, Debug)]
+pub struct Segment<'a> {
+    /// Component this segment belongs to, for progress and post-settle.
+    pub role: Role,
+    /// Receive buffer the chunks are written to (e.g. [`cdb::KERNEL_ID`]).
+    pub buffer_id: u8,
+    /// Wire offset of the first chunk within `buffer_id`.
+    pub dest_offset: u32,
+    /// Payload for this segment.
+    pub bytes: &'a [u8],
+    /// Largest `WRITE BUFFER` data-out this segment uses.
+    pub max_chunk: u32,
+}
+
+impl Segment<'_> {
+    /// A filler segment for initialising fixed-size plan storage before the
+    /// real segments are written in; never transferred.
+    pub const PLACEHOLDER: Segment<'static> = Segment {
+        role: Role::Normal,
+        buffer_id: cdb::NORMAL_ID,
+        dest_offset: 0,
+        bytes: &[],
+        max_chunk: 1,
+    };
+}
+
+/// An ordered receive plan: the exact buffers, offsets and chunking a specific
+/// installed loader accepts for an update. The linear one-buffer-per-role form
+/// is just the common case ([`UpdateTransfer`] builds it); a loader with a
+/// multi-destination receiver supplies its own segments instead.
+#[derive(Clone, Copy, Debug)]
+pub struct Plan<'a> {
+    /// Segments written in order.
+    pub segments: &'a [Segment<'a>],
+}
+
 /// Entry dialect and explicitly requested recovery behavior.
 #[derive(Clone, Copy, Debug)]
 pub struct UpdateOptions {
@@ -146,23 +190,72 @@ pub fn execute_update<T: Transport, R: UpdateRuntime>(
     transfer: UpdateTransfer<'_>,
     options: UpdateOptions,
 ) -> Result<(), UpdateError<T::Error>> {
-    for (role, bytes) in [
-        (Role::Kernel, transfer.kernel),
-        (Role::Normal, Some(transfer.normal)),
-    ] {
-        if let Some(bytes) = bytes {
-            if bytes.is_empty() || bytes.len() > ADDRESS_SPACE {
-                return Err(UpdateError::InvalidSpan {
-                    role,
-                    length: bytes.len(),
-                });
-            }
+    let mut storage = [Segment::PLACEHOLDER; 2];
+    let mut len = 0;
+    if let Some(kernel) = transfer.kernel {
+        storage[len] = Segment {
+            role: Role::Kernel,
+            buffer_id: cdb::KERNEL_ID,
+            dest_offset: 0,
+            bytes: kernel,
+            max_chunk: CHUNK_LEN as u32,
+        };
+        len += 1;
+    }
+    storage[len] = Segment {
+        role: Role::Normal,
+        buffer_id: cdb::NORMAL_ID,
+        dest_offset: 0,
+        bytes: transfer.normal,
+        max_chunk: CHUNK_LEN as u32,
+    };
+    len += 1;
+    execute_plan(
+        transport,
+        runtime,
+        control,
+        Plan {
+            segments: &storage[..len],
+        },
+        options,
+    )
+}
+
+/// Total bytes in `plan` tagged with `role`.
+fn role_total(plan: Plan<'_>, role: Role) -> usize {
+    plan.segments
+        .iter()
+        .filter(|s| s.role == role)
+        .map(|s| s.bytes.len())
+        .sum()
+}
+
+/// Execute entry, revision gate, an ordered receive [`Plan`], finish and
+/// readiness. [`execute_update`] is the linear-plan special case of this.
+///
+/// The caller must establish compatibility, capture a backup, bind the control
+/// buffer to the live receiver and enforce its tray/consent policy first. Use a
+/// strict transport that never retries writes. One pass only; no readback or
+/// pristine-restoration pass.
+pub fn execute_plan<T: Transport, R: UpdateRuntime>(
+    transport: &mut T,
+    runtime: &mut R,
+    control: &Control,
+    plan: Plan<'_>,
+    options: UpdateOptions,
+) -> Result<(), UpdateError<T::Error>> {
+    for segment in plan.segments {
+        let end = segment.dest_offset as usize + segment.bytes.len();
+        if segment.bytes.is_empty() || segment.max_chunk == 0 || end > ADDRESS_SPACE {
+            return Err(UpdateError::InvalidSpan {
+                role: segment.role,
+                length: segment.bytes.len(),
+            });
         }
     }
-    runtime.starting(
-        transfer.kernel.map_or(0, <[u8]>::len),
-        transfer.normal.len(),
-    );
+    let kernel_bytes = role_total(plan, Role::Kernel);
+    let normal_bytes = role_total(plan, Role::Normal);
+    runtime.starting(kernel_bytes, normal_bytes);
     let mut session =
         enter_update(transport, options.class, control).map_err(UpdateError::Entry)?;
     runtime.sleep(ENTRY_SETTLE);
@@ -182,26 +275,40 @@ pub fn execute_update<T: Transport, R: UpdateRuntime>(
         }
     }
     runtime.entered(options.recover);
-    for (role, bytes) in [
-        (Role::Kernel, transfer.kernel),
-        (Role::Normal, Some(transfer.normal)),
-    ] {
-        if let Some(bytes) = bytes {
-            for (index, chunk) in bytes.chunks(CHUNK_LEN).enumerate() {
-                let offset = index * CHUNK_LEN;
-                session
-                    .write(role, offset as u32, chunk)
-                    .map_err(|source| UpdateError::Transfer {
-                        role,
-                        offset: offset as u32,
-                        length: chunk.len(),
-                        source,
-                    })?;
-                runtime.progress(role, offset + chunk.len(), bytes.len());
-            }
-            if role == Role::Kernel {
-                runtime.sleep(KERNEL_SETTLE);
-            }
+    let last_kernel = plan
+        .segments
+        .iter()
+        .rposition(|s| s.role == Role::Kernel);
+    for (index, segment) in plan.segments.iter().enumerate() {
+        // Cumulative progress across every earlier segment of the same role, so
+        // a multi-segment component still reports one monotonic total.
+        let mut done: usize = plan.segments[..index]
+            .iter()
+            .filter(|s| s.role == segment.role)
+            .map(|s| s.bytes.len())
+            .sum();
+        let component_total = if segment.role == Role::Kernel {
+            kernel_bytes
+        } else {
+            normal_bytes
+        };
+        let mut written = 0usize;
+        for chunk in segment.bytes.chunks(segment.max_chunk as usize) {
+            let offset = segment.dest_offset + written as u32;
+            session
+                .write_raw(segment.buffer_id, offset, chunk)
+                .map_err(|source| UpdateError::Transfer {
+                    role: segment.role,
+                    offset,
+                    length: chunk.len(),
+                    source,
+                })?;
+            written += chunk.len();
+            done += chunk.len();
+            runtime.progress(segment.role, done, component_total);
+        }
+        if Some(index) == last_kernel {
+            runtime.sleep(KERNEL_SETTLE);
         }
     }
     session.finish().map_err(UpdateError::Finish)?;

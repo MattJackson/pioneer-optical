@@ -20,7 +20,10 @@ use crate::cdb::{self, CONTROL_LEN, DVR_CHALLENGE_LEN};
 use crate::{DriveClass, Identity, Role, IDENTITY_LEN, INQUIRY_LEN};
 
 mod update;
-pub use update::{execute_update, UpdateError, UpdateOptions, UpdateRuntime, UpdateTransfer};
+pub use update::{
+    execute_plan, execute_update, Plan, Segment, UpdateError, UpdateOptions, UpdateRuntime,
+    UpdateTransfer,
+};
 
 /// The control buffer carried by [`cdb::enter_update`] and [`cdb::finish`].
 pub type Control = [u8; CONTROL_LEN as usize];
@@ -262,6 +265,16 @@ impl<T: Transport> Session<'_, T> {
         let len = field(data.len())?;
         field::<T::Error>(off as usize)?;
         write(self.t, &cdb::transfer(role, off, len), data)
+    }
+
+    /// Write `data` to an explicit receive buffer `id` at wire offset `off`.
+    /// Like [`Self::write`] but the destination buffer is chosen by the caller,
+    /// so a receive plan can steer one component's segments to different buffers.
+    /// Both `off` and `data.len()` must fit in 24 bits.
+    pub fn write_raw(&mut self, id: u8, off: u32, data: &[u8]) -> Result<(), Error<T::Error>> {
+        let len = field(data.len())?;
+        field::<T::Error>(off as usize)?;
+        write(self.t, &cdb::transfer_with_id(id, off, len), data)
     }
 
     /// Commit the update with the session's control buffer.

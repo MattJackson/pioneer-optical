@@ -143,6 +143,14 @@ pub fn transfer(role: Role, off: u32, len: u32) -> [u8; 10] {
         Role::Kernel => KERNEL_ID,
         Role::Normal => NORMAL_ID,
     };
+    transfer_with_id(id, off, len)
+}
+
+/// A `TRANSFER_MODE` [`WRITE_BUFFER`] to an explicit buffer `id`. A receive
+/// plan addresses segments by raw buffer id, so a single component can target
+/// more than one receive buffer (the role-keyed [`transfer`] cannot). Offset
+/// and length must fit 24 bits; the caller range-checks.
+pub fn transfer_with_id(id: u8, off: u32, len: u32) -> [u8; 10] {
     vendor(WRITE_BUFFER, TRANSFER_MODE, id, off, len)
 }
 

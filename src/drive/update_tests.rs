@@ -156,6 +156,100 @@ fn transfer_order_bytes_offsets_delays_and_progress_are_preserved() {
 }
 
 #[test]
+fn two_region_kernel_plan_emits_exact_approved_cdbs() {
+    // The BD 10xx kernel receive transport: body to buffer 0xFE at offset 0,
+    // then the front-key block to 0xFE at offset 0x10200 (NOT a linear 0x10000),
+    // then Normal to 0xF0. This locks the exact WRITE BUFFER commands the loader
+    // accepts; a regression here can brick a drive, so the bytes are asserted.
+    let body = vec![0xa5u8; 0x1_0000];
+    let front = vec![0x5au8; 0x1200];
+    let normal = vec![0x33u8; 0x8000];
+    let segments = [
+        Segment {
+            role: Role::Kernel,
+            buffer_id: cdb::KERNEL_ID,
+            dest_offset: 0,
+            bytes: &body,
+            max_chunk: 0x8000,
+        },
+        Segment {
+            role: Role::Kernel,
+            buffer_id: cdb::KERNEL_ID,
+            dest_offset: 0x1_0200,
+            bytes: &front,
+            max_chunk: 0x8000,
+        },
+        Segment {
+            role: Role::Normal,
+            buffer_id: cdb::NORMAL_ID,
+            dest_offset: 0,
+            bytes: &normal,
+            max_chunk: 0x8000,
+        },
+    ];
+    let mut mock = Mock::default();
+    let mut clock = Clock::default();
+    execute_plan(
+        &mut mock,
+        &mut clock,
+        &[7; 256],
+        Plan {
+            segments: &segments,
+        },
+        options(false),
+    )
+    .unwrap();
+
+    let expected = [
+        cdb::enter_update().to_vec(),
+        cdb::inquiry(0x60).to_vec(),
+        cdb::transfer_with_id(cdb::KERNEL_ID, 0, 0x8000).to_vec(),
+        cdb::transfer_with_id(cdb::KERNEL_ID, 0x8000, 0x8000).to_vec(),
+        cdb::transfer_with_id(cdb::KERNEL_ID, 0x1_0200, 0x1200).to_vec(),
+        cdb::transfer_with_id(cdb::NORMAL_ID, 0, 0x8000).to_vec(),
+        cdb::finish().to_vec(),
+        cdb::get_event_status().to_vec(),
+        cdb::test_unit_ready().to_vec(),
+    ];
+    assert_eq!(
+        mock.calls.iter().map(|c| c.0.clone()).collect::<Vec<_>>(),
+        expected
+    );
+    // The exact front-block CDB — the one byte that was wrong in the field
+    // failure (offset 0x10000 -> 0x10200).
+    assert_eq!(
+        mock.calls[4].0,
+        [0x3b, 0x07, 0xfe, 0x01, 0x02, 0x00, 0x00, 0x12, 0x00, 0x00]
+    );
+    // Payloads land verbatim: body across its two chunks, then the front block.
+    assert_eq!(
+        [mock.calls[2].1.as_slice(), mock.calls[3].1.as_slice()].concat(),
+        body
+    );
+    assert_eq!(mock.calls[4].1, front);
+    assert_eq!(mock.calls[5].1, normal);
+    // One kernel settle, after the LAST kernel segment (the front block).
+    assert_eq!(
+        clock.sleeps,
+        [
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+            Duration::from_secs(2)
+        ]
+    );
+    // Kernel progress is cumulative across both kernel segments (0x11200 total).
+    assert_eq!(
+        clock.progress,
+        [
+            (Role::Kernel, 0x8000, 0x1_1200),
+            (Role::Kernel, 0x1_0000, 0x1_1200),
+            (Role::Kernel, 0x1_1200, 0x1_1200),
+            (Role::Normal, 0x8000, 0x8000),
+        ]
+    );
+}
+
+#[test]
 fn bad_or_short_entry_revision_stops_before_components_and_recovery_skips_only_gate() {
     for short in [false, true] {
         let mut mock = Mock {

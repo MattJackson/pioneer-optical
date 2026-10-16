@@ -70,6 +70,109 @@ fn envelope_and_receiver_codes_preserve_nested_errors_and_parameters() {
     );
 }
 
+#[cfg(feature = "envelope")]
+#[test]
+fn envelope_error_catalogue_has_stable_codes_and_actionable_text() {
+    use crate::envelope::Error;
+    let cases = [
+        (Error::UnknownRotation, "pioneer.envelope.unknown_rotation"),
+        (Error::InvalidHeader, "pioneer.envelope.invalid_header"),
+        (Error::InvalidFilename, "pioneer.envelope.invalid_filename"),
+        (Error::MissingModel, "pioneer.envelope.missing_model"),
+        (
+            Error::HeaderFieldsDoNotFit,
+            "pioneer.envelope.header_fields_do_not_fit",
+        ),
+        (Error::KernelStructure, "pioneer.envelope.kernel_structure"),
+        (
+            Error::KernelIncomplete,
+            "pioneer.envelope.kernel_incomplete",
+        ),
+        (
+            Error::AmbiguousKernelLayout,
+            "pioneer.envelope.ambiguous_kernel_layout",
+        ),
+        (Error::RawKeyLength, "pioneer.envelope.raw_key_length"),
+        (
+            Error::RawKeyNotAllowed,
+            "pioneer.envelope.raw_key_not_allowed",
+        ),
+        (Error::KernelEncode, "pioneer.envelope.kernel_encode"),
+        (Error::ImageStructure, "pioneer.envelope.image_structure"),
+        (Error::ImageIncomplete, "pioneer.envelope.image_incomplete"),
+        (Error::InvalidDate, "pioneer.envelope.invalid_date"),
+        (
+            Error::XorPolicyNotUnique,
+            "pioneer.envelope.xor_policy_not_unique",
+        ),
+        (
+            Error::XorExceptionOutOfRange,
+            "pioneer.envelope.xor_exception_out_of_range",
+        ),
+        (Error::NormalEncode, "pioneer.envelope.normal_encode"),
+        (
+            Error::UnknownAuthentication,
+            "pioneer.envelope.unknown_authentication",
+        ),
+        (
+            Error::SignatureBlockLength,
+            "pioneer.envelope.signature_block_length",
+        ),
+        (
+            Error::InvalidSignedEnvelope,
+            "pioneer.envelope.invalid_signed_envelope",
+        ),
+        (Error::AbiMismatch, "pioneer.envelope.abi_mismatch"),
+        (
+            Error::KernelUndecodable,
+            "pioneer.envelope.kernel_undecodable",
+        ),
+        (
+            Error::NormalUndecodable,
+            "pioneer.envelope.normal_undecodable",
+        ),
+        (
+            Error::RoundTripMismatch,
+            "pioneer.envelope.round_trip_mismatch",
+        ),
+        (
+            Error::NotSignableNormal,
+            "pioneer.envelope.not_signable_normal",
+        ),
+        (Error::NotAscii, "pioneer.envelope.not_ascii"),
+        (
+            Error::EntropyUnavailable,
+            "pioneer.envelope.entropy_unavailable",
+        ),
+        (Error::Randomness, "pioneer.envelope.randomness"),
+        (Error::InvalidPoint, "pioneer.envelope.invalid_point"),
+        (Error::OperandTooLarge, "pioneer.envelope.operand_too_large"),
+        (
+            Error::SelfVerification,
+            "pioneer.envelope.self_verification",
+        ),
+        (
+            Error::KernelFillNotFound,
+            "pioneer.envelope.kernel_fill_not_found",
+        ),
+        (
+            Error::DriveNameNotFound,
+            "pioneer.envelope.drive_name_not_found",
+        ),
+    ];
+    for (error, code) in cases {
+        assert_eq!(error.code(), code);
+        assert!(!error.to_string().is_empty());
+    }
+    for error in [
+        Error::KernelBodySize { got: 3 },
+        Error::UnknownMarker { marker: 0x42 },
+    ] {
+        assert!(!error.code().is_empty());
+        assert!(!error.to_string().is_empty());
+    }
+}
+
 #[cfg(all(feature = "envelope", feature = "drive"))]
 #[test]
 fn flash_code_is_independent_of_pass_and_retains_pass_for_presentation() {

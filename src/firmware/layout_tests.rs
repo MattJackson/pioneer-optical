@@ -120,3 +120,86 @@ fn inspection_failures_have_typed_categories_and_stable_codes() {
         vec![LayoutLimitation::NoCompDirectory]
     );
 }
+
+#[test]
+fn interval_operations_match_finite_address_sets() {
+    for a in 0..12 {
+        for b in a + 1..=12 {
+            let left = Range::from_bounds(a, b).unwrap();
+            let left_bytes: std::collections::BTreeSet<_> = (a..b).collect();
+            for c in 0..12 {
+                for d in c + 1..=12 {
+                    let right = Range::from_bounds(c, d).unwrap();
+                    let right_bytes: std::collections::BTreeSet<_> = (c..d).collect();
+                    assert_eq!(left.overlaps(&right), !left_bytes.is_disjoint(&right_bytes));
+                    assert_eq!(left.contains(&right), right_bytes.is_subset(&left_bytes));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn free_ranges_match_an_independent_byte_occupancy_map() {
+    let window_sets = [
+        vec![(1, 15)],
+        vec![(1, 6), (6, 15)],
+        vec![(1, 10), (4, 15)],
+        vec![(12, 15), (1, 6)],
+    ];
+    for windows in window_sets {
+        for a in 0..16 {
+            for b in a + 1..=16 {
+                for second in [None, Some((0, 3)), Some((5, 12)), Some((13, 16))] {
+                    let mut blocks = vec![(a, b)];
+                    blocks.extend(second);
+                    for alignment in [2, 4, 8] {
+                        let mut free = [false; 16];
+                        for (at, is_free) in free.iter_mut().enumerate() {
+                            *is_free = windows.iter().any(|&(s, e)| (s..e).contains(&at))
+                                && !blocks.iter().any(|&(s, e)| (s..e).contains(&at));
+                        }
+                        let mut expected = Vec::new();
+                        let mut at = 0;
+                        while at < 16 {
+                            if !free[at] {
+                                at += 1;
+                                continue;
+                            }
+                            let mut start = at;
+                            while at < 16 && free[at] {
+                                at += 1;
+                            }
+                            while start % alignment != 0 {
+                                start += 1;
+                            }
+                            if start < at {
+                                expected.push((start as u32, at as u32));
+                            }
+                        }
+                        let make = |v: &[(usize, usize)]| {
+                            v.iter()
+                                .map(|&(s, e)| Range::from_bounds(s as u32, e as u32).unwrap())
+                                .collect::<Vec<_>>()
+                        };
+                        let actual =
+                            free_ranges(&make(&windows), &make(&blocks), alignment as u32).unwrap();
+                        assert_eq!(
+                            actual
+                                .iter()
+                                .map(|r| (r.start(), r.end()))
+                                .collect::<Vec<_>>(),
+                            expected,
+                            "windows={windows:?}, occupied={blocks:?}, alignment={alignment}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    for alignment in [0, 1, 3, 6, u32::MAX] {
+        assert!(free_ranges(&[], &[], alignment).is_err());
+    }
+    let top = Range::new(u32::MAX - 1, 1).unwrap();
+    assert!(free_ranges(&[top], &[], 4).unwrap().is_empty());
+}

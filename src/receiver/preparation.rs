@@ -8,6 +8,8 @@ use crate::image::{kernel_marker_policy, KernelMarkerPolicy};
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum PreparationError {
+    /// Installed updater cannot hand control to the replacement Kernel.
+    KernelHandoff(crate::image::KernelHandoffError),
     /// Target validation failed against the installed Kernel.
     Target(UpdateError),
     /// Normal-only preparation requires the captured installed Kernel.
@@ -29,6 +31,7 @@ pub enum PreparationError {
 impl core::fmt::Display for PreparationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::KernelHandoff(error) => write!(f, "Kernel replacement: {error}"),
             Self::Target(error) => write!(f, "target preparation: {error}"),
             Self::MissingInstalledKernel => {
                 f.write_str("Normal-only preparation requires captured installed Kernel evidence")
@@ -53,6 +56,7 @@ impl core::fmt::Display for PreparationError {
 impl std::error::Error for PreparationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::KernelHandoff(error) => Some(error),
             Self::Target(error) => Some(error),
             Self::Compatibility(error) | Self::RestorationEntry(error) => Some(error),
             _ => None,
@@ -186,7 +190,21 @@ impl Receiver {
         let policy = self
             .kernel_policy
             .ok_or(PreparationError::UnknownInstalledKernel)?;
-        self.codec.prepare(policy, target, self.control())
+        let prepared = self.codec.prepare(policy, target, self.control())?;
+        let installed = self
+            .installed_kernel
+            .as_ref()
+            .ok_or(PreparationError::UnknownInstalledKernel)?;
+        crate::image::check_kernel_handoff(&installed.image, prepared.first_kernel_image())
+            .map_err(PreparationError::KernelHandoff)?;
+        if prepared.restoration.is_some() {
+            crate::image::check_kernel_handoff(
+                prepared.first_kernel_image(),
+                prepared.final_kernel_image(),
+            )
+            .map_err(PreparationError::KernelHandoff)?;
+        }
+        Ok(prepared)
     }
 }
 

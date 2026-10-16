@@ -17,6 +17,7 @@ fn fix_sum(bytes: &mut [u8]) {
 
 pub(in crate::receiver) fn update(gated: bool, marker: u8, family: u8, entry: bool) -> Update {
     let mut kernel = front_kernel();
+    crate::image::handoff_fixture(&mut kernel);
     let receiver = crate::image::receiver_fixture(gated);
     // Relocate the finalizer away from the independent envelope decoder fixture.
     kernel[0x300..0x380].copy_from_slice(&receiver[0x100..0x180]);
@@ -78,6 +79,32 @@ fn prepares_patch_and_pristine_restore_before_any_io() {
             .is_ok());
         assert!(restore.entry_control(b"PIONEER WRONG   ").is_err());
     }
+}
+
+#[test]
+fn restoration_handoff_is_checked_before_the_first_pass() {
+    let installed = update(true, 1, 0x12, true);
+    let receiver = Receiver::from_installed(&installed).unwrap();
+    let target = update(false, 0, 0x12, true);
+    let mut kernel = target.kernel().clone();
+    // Initial installed->target entry matches, but the new programmer would
+    // restart the pristine restoration at the wrong address.
+    kernel.image[0x2107] = 0x2a;
+    fix_sum(&mut kernel.image);
+    let target = Update::load(
+        &kernel.repack(&kernel.image).unwrap(),
+        &target.normal().repack(&target.normal().image).unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(
+        receiver.prepare(target),
+        Err(PreparationError::KernelHandoff(
+            crate::image::KernelHandoffError::Mismatch {
+                installed: 0x40002a,
+                target: 0x400020
+            }
+        ))
+    ));
 }
 
 #[test]

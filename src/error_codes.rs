@@ -152,6 +152,7 @@ impl CodedError for crate::receiver::PreparationError {
     fn code(&self) -> &'static str {
         match self {
             Self::Target(..) => "pioneer.preparation.target",
+            Self::KernelHandoff(..) => "pioneer.preparation.kernel_handoff",
             Self::MissingInstalledKernel => "pioneer.preparation.missing_installed_kernel",
             Self::InstalledKernelRepresentation => {
                 "pioneer.preparation.installed_kernel_representation"

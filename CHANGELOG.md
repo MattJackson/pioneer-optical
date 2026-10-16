@@ -6,6 +6,8 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 
 ## Unreleased
 
+- Harden wire-response parsing, layout-boundary handling, and diagnostic error
+  contracts with corpus-backed and boundary tests.
 - Correct the selected two-segment Kernel plan: header/key at command offset
   zero, body at 0x1200. The OEM staging base is not a host command offset.
 - Add 228 hash-pinned OEM placement regression cases and adversarial receiver

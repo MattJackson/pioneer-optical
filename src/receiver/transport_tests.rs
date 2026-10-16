@@ -43,19 +43,30 @@ fn two_region_plan_splits_body_and_front() {
 
     assert_eq!(plan.segments.len(), 3);
 
-    // Body: the trailing 0x10000 of the wire, to transfer offset 0.
-    let body = plan.segments[0];
-    assert_eq!(body.role, Role::Kernel);
-    assert_eq!(body.buffer_id, cdb::KERNEL_ID);
-    assert_eq!(body.dest_offset, 0);
+    // Front/key bytes precede the body in the receiver's staging area.
+    let front = plan.segments[0];
+    assert_eq!(front.role, Role::Kernel);
+    assert_eq!(front.buffer_id, cdb::KERNEL_ID);
+    assert_eq!(front.dest_offset, 0);
+    assert_eq!(front.bytes.len(), FRONT_LEN);
+    assert!(front.bytes.iter().all(|&b| b == 0xAA));
+
+    let body = plan.segments[1];
+    assert_eq!(body.dest_offset, BODY_DEST_OFFSET);
     assert_eq!(body.bytes.len(), BODY_LEN);
     assert!(body.bytes.iter().all(|&b| b == 0xBB));
 
-    // Front: the leading 0x1200, to transfer offset 0x10200.
-    let front = plan.segments[1];
-    assert_eq!(front.dest_offset, FRONT_DEST_OFFSET);
-    assert_eq!(front.bytes.len(), FRONT_LEN);
-    assert!(front.bytes.iter().all(|&b| b == 0xAA));
+    // The OEM loader reads the key at staging + 0x200 and the image at
+    // staging + 0x1200. Reconstruct those bytes from the planned CDB offsets;
+    // comparing only emitted CDBs once let the reversed plan pass tests.
+    let mut staged = vec![0u8; WIRE_LEN];
+    for segment in &plan.segments[..2] {
+        let start = segment.dest_offset as usize;
+        staged[start..start + segment.bytes.len()].copy_from_slice(segment.bytes);
+    }
+    assert_eq!(staged, wire);
+    assert_eq!(&staged[0x200..0x1200], &wire[0x200..0x1200]);
+    assert_eq!(&staged[0x1200..], &wire[0x1200..]);
 
     // Normal unchanged: linear from zero on the Normal buffer.
     let n = plan.segments[2];

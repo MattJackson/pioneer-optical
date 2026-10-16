@@ -4,6 +4,17 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- Correct the selected two-segment Kernel plan: header/key at command offset
+  zero, body at 0x1200. The OEM staging base is not a host command offset.
+- Add 228 hash-pinned OEM placement regression cases and adversarial receiver
+  model checks. Baseline: 192 pass/36 fail; corrected: all 228 pass.
+
+- Add independent OEM file checks for all 290 modern Kernel envelopes and 324
+  continuous Normal envelopes, plus the BDR-205-to-BDR-206 receiver regression.
+  Record 27 Normal files outside the independent oracle's proven scope.
+
 ## [0.15.1] - 2026-10-14
 
 ### Added

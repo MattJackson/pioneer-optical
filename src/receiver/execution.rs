@@ -1,6 +1,6 @@
 //! Execute receiver plans with descriptor binding and Kernel verification.
-use super::{Control, PreparedNormal, PreparedUpdate, DESCRIPTOR_LEN};
 use super::transport;
+use super::{Control, PreparedNormal, PreparedUpdate, DESCRIPTOR_LEN};
 use crate::drive::{self, Segment, Transport, UpdateOptions, UpdateRuntime, UpdateTransfer};
 
 const DESCRIPTOR_ADDRESS: u32 = 0x0041_0000;
@@ -166,12 +166,12 @@ impl PreparedUpdate {
         .map_err(|_| FlashError::UnsupportedTransport {
             pass: FlashPass::Initial,
         })?;
-        drive::execute_plan(io.writes, runtime, &self.control, plan, options).map_err(|source| {
-            FlashError::Update {
+        drive::execute_plan(io.writes, runtime, &self.control, plan, options).map_err(
+            |source| FlashError::Update {
                 pass: FlashPass::Initial,
                 source,
-            }
-        })?;
+            },
+        )?;
         verify(io.reads, self.first_kernel_image(), FlashPass::Initial)?;
         if let Some(kernel) = self.restoration_kernel_transfer() {
             let receiver = self

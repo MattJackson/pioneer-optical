@@ -3,14 +3,14 @@
 //! A component's bytes are delivered to the installed loader by a [`Plan`] of
 //! [`Segment`]s. Normal images, and kernels whose loader streams the whole wire
 //! image linearly, use one segment per component. The BD 10xx-generation kernel
-//! loader instead stages the transfer in two regions at distinct wire offsets;
-//! its wire image must be split and repositioned or the loader rejects the
-//! transfer (the body and front-key blocks land in the wrong staging windows).
+//! loader instead accepts the front/key block and body as separate transfers
+//! into consecutive offsets. Its internal staging base is `0x10200`; that is
+//! not a WRITE BUFFER offset.
 //!
-//! The transport is a property of the *installed* loader, but Pioneer
-//! compatibility gating requires the installed and target kernels to share a
-//! hardware family, and the two-region receiver is uniform across the whole
-//! 10xx family, so the target kernel's own body carries the deciding signature.
+//! The existing fingerprint selects segmentation for the target's kernel family.
+//! Both paths preserve the same front-key wire layout. This selector is not a
+//! general installed-receiver analyser and does not prove separate transfers
+//! are required by the OEM receiver.
 
 use crate::drive::{Plan, Segment};
 use crate::{cdb, Role};
@@ -23,18 +23,18 @@ const FRONT_LEN: usize = 0x1200;
 const BODY_LEN: usize = 0x1_0000;
 const WIRE_LEN: usize = FRONT_LEN + BODY_LEN; // 0x11200
 
-/// Transfer offset the 10xx loader stages the front/descriptor block at. The
-/// body occupies `[0, 0x10000)`; a 0x200 reserved gap precedes the front block,
-/// so the next legal offset after the body is `0x10200`, not `0x10000`.
-const FRONT_DEST_OFFSET: u32 = 0x1_0200;
+/// The front/key block occupies transfer offsets `[0, 0x1200)` and the body
+/// occupies `[0x1200, 0x11200)`. The loader adds its internal staging base
+/// (`0x10200`) to each transfer offset before copying the bytes.
+const BODY_DEST_OFFSET: u32 = FRONT_LEN as u32;
 
 /// How the installed loader expects a kernel to arrive.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KernelReceive {
     /// One linear stream to the Kernel buffer from offset zero.
     Linear,
-    /// Body to offset 0, front-key block to `0x10200`, both to the Kernel
-    /// buffer (BD 10xx generation).
+    /// Front/key block to offset 0, body to offset `0x1200`, both to the
+    /// Kernel buffer (BD 10xx generation).
     FrontKeyTwoRegion,
 }
 
@@ -42,7 +42,7 @@ pub enum KernelReceive {
 ///
 /// Recognises the 10xx loader by its WRITE BUFFER handler fingerprint: the
 /// `ADD.L #0x10200,ER0` staging-base add that precedes the 64-byte alignment
-/// gate, together with the two-region flush constants. Absent that proof the
+/// gate, together with the receiver finalization constants. Absent that proof the
 /// transport is treated as a plain linear stream.
 pub fn detect(kernel_image: &[u8]) -> KernelReceive {
     // `ADD.L #H'10200,ER0` — the staging-base add unique to this handler.
@@ -91,11 +91,11 @@ pub fn plan<'a>(
                     return Err(PlanError::KernelLayout);
                 }
                 let (front, body) = wire.split_at(FRONT_LEN);
-                // Body first (transfer offset 0), then the front-key block at
-                // 0x10200; the loader finalises on the 0x11200 byte total.
-                storage[n] = kernel_segment(0, body);
+                // Keep the wire layout intact in the receiver's staging area.
+                // The loader finalises when the received-byte count is 0x11200.
+                storage[n] = kernel_segment(0, front);
                 n += 1;
-                storage[n] = kernel_segment(FRONT_DEST_OFFSET, front);
+                storage[n] = kernel_segment(BODY_DEST_OFFSET, body);
                 n += 1;
             }
         }

@@ -275,10 +275,7 @@ pub fn execute_plan<T: Transport, R: UpdateRuntime>(
         }
     }
     runtime.entered(options.recover);
-    let last_kernel = plan
-        .segments
-        .iter()
-        .rposition(|s| s.role == Role::Kernel);
+    let last_kernel = plan.segments.iter().rposition(|s| s.role == Role::Kernel);
     for (index, segment) in plan.segments.iter().enumerate() {
         // Cumulative progress across every earlier segment of the same role, so
         // a multi-segment component still reports one monotonic total.

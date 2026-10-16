@@ -1,0 +1,245 @@
+[
+  {
+    "envelope_sha256": "802c1d1f6f5aec040cb4224718dd8d2f3393ecd6071049d5e8d3ae1d2e31979b",
+    "kernel_sha256": "87a53f8fa6bc65c824eed777bee438d8ff2812affb644936adae30912bcc415d",
+    "source": {
+      "package": "1003/GENERAL/1.08/7cd3ee14a88c7e109eb339037749c664a45231b01bafb07d6b205c43b2934048.installer.tar",
+      "member": "components/S1003001.108.enc"
+    },
+    "reason": "not proven continuous standard rotation + OEM skip offsets + declared size + zero checksum"
+  },
+  {
+    "envelope_sha256": "7b50bb9099c6cdfed9efecd338db12aeb8b416488690b242c0dd2ab9b02f6c14",
+    "kernel_sha256": "8cb61be9c341d749e61cd125b8259a36441fc129efa59fe11d64a80c69f7b2e9",
+    "source": {
+      "package": "1003/ID58/1.04/84a1f7f2c13ace0bcefdedbf42b0c4b8676e31dd22a849af15d2d0a47f947c19.installer.tar",
+      "member": "components/S1003581.104.enc"
+    },
+    "reason": "not proven continuous standard rotation + OEM skip offsets + declared size + zero checksum"
+  },
+  {
+    "envelope_sha256": "62b5761dff779bf89765c8de7dec3b470ade42f15c25f31bb244035bd9069f08",
+    "kernel_sha256": "8cb61be9c341d749e61cd125b8259a36441fc129efa59fe11d64a80c69f7b2e9",
+    "source": {
+      "package": "1003/ID58/1.07/c59dbc1ad653c1c3b8860d0d528ea0325be40eeca3eea79d0e7a71b85d77f038.installer.tar",
+      "member": "components/S1003581.107.enc"
+    },
+    "reason": "not proven continuous standard rotation + OEM skip offsets + declared size + zero checksum"
+  },
+  {
+    "envelope_sha256": "baa7fd91d78506fd27c8832b79eedeb7c1b92c28025d627326c6e7c8e189795d",
+    "kernel_sha256": "190bfaaf3d911a36862a1acd76d347b925d8ffa46ea2385004823d3ae456397e",
+    "source": {
+      "package": "1003/ID66/1.10/5e4790660c74b38f6f4a8aa8c0e33f63c9c56e74cf6fe75bcaf01bf1d0c5c564.installer.tar",
+      "member": "components/S1003661.110.enc"
+    },
+    "reason": "not proven continuous standard rotation + OEM skip offsets + declared size + zero checksum"
+  },
+  {
+    "envelope_sha256": "cc65ac3b422149f3a62569c98382ded689cd3f9e0b60420534f44c95f5be7428",
+    "kernel_sha256": "918b08a71980ea44c5cdc98a1dddb0fa42cc4092fc77f572fb9a91e760f84da2",
+    "source": {
+      "package": "1003/PIO_ADV/1.04/8fa348c7a6dd509523e9f3a74cc0b73dbdfe03e893fc21b5796ba68feed05556.installer.tar",
+      "member": "components/S1003431.104.enc"
+    },
+    "reason": "not proven continuous standard rotation + OEM skip offsets + declared size + zero checksum"
+  },
+  {
+    "envelope_sha256": "6bd56e32973e5fa7d6a1857c1a8f3289e83ca679b9391d19e3796beaba7afb29",
+    "kernel_sha256": "8a653207e29baa6cc475151d09f5cd6014cfaddba8ea439d84f54dc73fa789be",
+    "source": {
+      "package": "1003/PIO_ADV/1.07/1effe6113931c42aa1a893ba7ddf2d64570b3fb6a80f80492251165133193ade.installer.tar",
+      "member": "components/S1003431.107.enc"
+    },
+    "reason": "not proven continuous standard rotation + OEM skip offsets + declared size + zero checksum"
+  },
+  {
+    "envelope_sha256": "e8482e27933da150e3a31564dfb4181a6c5f7f2a002e847082840b06385a9d04",
+    "kernel_sha256": "0f13d48995cae5f74d90511fd86f16c8b5419f4404e08046258a8bb55eaa9bb5",
+    "source": {
+      "package": "8000/ID76/1.10/bb2cfc18f732d2173cb3fc154f8db245ccd7544504905fad36563340f56164c7.installer.tar",
+      "member": "components/S8000761.110.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  },
+  {
+    "envelope_sha256": "664ef90dd59470bef992a0015e93b828087a95c0bdd3cbfe4948b11a97977da8",
+    "kernel_sha256": "3a56e9fa83ea70cf86de149eb5a8beca2ddd6a12bfb9cbec5ae6764a857fd0de",
+    "source": {
+      "package": "8000/ID84/1.74/256687ead5edc2f36ae2cb0ca661b9be8c9f324b048185c218bebe536b6073be.installer.tar",
+      "member": "components/S8000841.174.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  },
+  {
+    "envelope_sha256": "84073ee4b780d7a2d0e3531834215b3f3f4ce8096eca70a81b8d19b3c65af527",
+    "kernel_sha256": "21516d0142a837924eada939b577efa6d28c01b6053b5e01fdb905a7bbc2283d",
+    "source": {
+      "package": "8000/ID88/1.30/dc2bd48ef64c2106f3527f0637c66ce120b88d0f8470e97fc511268ade19edcd.installer.tar",
+      "member": "components/S8000881.130.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  },
+  {
+    "envelope_sha256": "aec11ca3bff106a01e60436999be11bf6bd6edbbf4a8477972c60ff1d0b43f0a",
+    "kernel_sha256": "f7c63703c7899dc7621fc379337eda059ed8d83481a0f43d0d5137ad7be4895e",
+    "source": {
+      "package": "8000/ID88/1.75/a1fea2b6390c668cb3c499e46c77ec4dcae0e9522b08a6c19928feb0b1ccdd00.installer.tar",
+      "member": "components/S8000881.175.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  },
+  {
+    "envelope_sha256": "8ecf99f71a238fc2abdd45a925f3d9c1915c994340c1bfdeaccb4ea390adccb8",
+    "kernel_sha256": "b313f4dbd934d84d008751589ae9b1da6d2627bae567aff55710dc075db2c072",
+    "source": {
+      "package": "8000/ID90/1.06/b8883fb44d7553cae424386b6c3eb1dfdeca0d9d210bf25c9df37c291b7e9196.installer.tar",
+      "member": "components/S8000901.106.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  },
+  {
+    "envelope_sha256": "10424c2ba3709e79f9e8d12fa7e363d9efc003c9631ab391021aa5c4e2bfede3",
+    "kernel_sha256": "b3ca0de4f691a284a370fe63ae31cbdd988accae13d97ec00a08d9658175365f",
+    "source": {
+      "package": "8211/ID01/1.01/65c461e7a96702fc620296974ed0dc0b3447752de4985afdd68287db003ff4ce.installer.tar",
+      "member": "components/S8211011.101.enc"
+    },
+    "reason": "not proven continuous standard rotation + OEM skip offsets + declared size + zero checksum"
+  },
+  {
+    "envelope_sha256": "7a97691fa0ed3ecc53ecc7cdda65db674f80cd7a0ee1c6455c536239bd43e560",
+    "kernel_sha256": "36d0e3542a34a653250295f86d489d5e1e4f7931043351d856f27e57477d72ae",
+    "source": {
+      "package": "8510/ID19/1.03/202bd6f7991814bc5da1e1bb9556e91a26759316999145f5815a5e53d2425f48.installer.tar",
+      "member": "components/S8510191.103.enc"
+    },
+    "reason": "not proven continuous standard rotation + OEM skip offsets + declared size + zero checksum"
+  },
+  {
+    "envelope_sha256": "c1a35715245043ba6e4bad5119454cb36eadcf5d8795eda9b4ff93db56ddddef",
+    "kernel_sha256": "ad7238ba43f3402dbc2f0f50c815e84c3c9bb075ba3626b9e540a5bb4f26f0c8",
+    "source": {
+      "package": "8600/ID73/1.00/712e4ca5e30fadb43f151f6d6dac256b3e806007807c2fc8093403e24c4a7d2b.installer.tar",
+      "member": "components/S8600731.100.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  },
+  {
+    "envelope_sha256": "0ab236a72a3fa48141c857d8a68ed53e80cd4b8a48e9cb8e1de328e346789819",
+    "kernel_sha256": "7c6d05589fe0ec3e1faaac972fb801b51121a5b9a2509209434d2a23ab5ea6fc",
+    "source": {
+      "package": "8801/ID36/1.00/ed367d09bcfcec76e49c1aa61d289cf7b6cac1dd3ff9aef7ef00af63fe75b67d.installer.tar",
+      "member": "components/S8801361.100.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  },
+  {
+    "envelope_sha256": "9b44cfbe5134d4f992b4f1b6e4cdea930c61f83cdbd6808f858f87ba27eedb23",
+    "kernel_sha256": "100ebef645a65f7e1ac99b5558fd20885f9ac2db8c3f649df0a11bc48e2ef0fc",
+    "source": {
+      "package": "8801/ID36/1.01/8c076cfcb7868a0ba7076f87540eac695857b8adcb1ecb1466f2aa7e51ad49ea.installer.tar",
+      "member": "components/S8801361.101.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  },
+  {
+    "envelope_sha256": "b9881736fabf57c683f5be933df9dfd25cc5c08437c719206af6e77a8fcb8e30",
+    "kernel_sha256": "74f84f9b42fa7f0ff6115045ec05f2cf73ee9779f1eabc10a39247c9f61b17be",
+    "source": {
+      "package": "8801/ID36/1.02/f4c22bd848330068c3cfddc273dbc4a01fdc5dc6f78dafe29dd5fa64cd3be0b7.installer.tar",
+      "member": "components/S8801361.102.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  },
+  {
+    "envelope_sha256": "c9773d500bc61f3254666318c116bdd05fd1c08f3bbed296173875a6c3afbeb1",
+    "kernel_sha256": "46975e1445fd680d32335e76e885e085bc4f6ba22b722c08a6eaf11e147e0e01",
+    "source": {
+      "package": "8801/ID75/2.01/ffa402e28cfdff0835ab1bebf50039caa2ffd660c0c1811316483868eb3cb8ac.installer.tar",
+      "member": "components/S8801751.201.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  },
+  {
+    "envelope_sha256": "b73b0cb9c0212b360464bdfd7b6da0ffbb48b839f9b936659324a9f67fed5fe5",
+    "kernel_sha256": "358de3c4fb91c5bee92367459f11d68c56d9d29a7ccf85e97342ab494222b8aa",
+    "source": {
+      "package": "8801/ID75/2.02/a38d3337f3a80e22ba35144fe9ed1be3c33ed25eb674d60b0afb8718101bee7b.installer.tar",
+      "member": "components/S8801751.202.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  },
+  {
+    "envelope_sha256": "aba7861cd2787e35d09887ff211a5e920fa28314ab8e5361268f203595cbf020",
+    "kernel_sha256": "c44bade551141b98334422e0b0206f01cd72a17b6601b98608931222dc850c64",
+    "source": {
+      "package": "8801/ID76/1.00/5e16c2d62f00cf2b1457353c9e0c15c2d6a545ef672468d8f3d80dc33ea1f9b2.installer.tar",
+      "member": "components/S8801761.100.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  },
+  {
+    "envelope_sha256": "69b04e1edc85f2091d2ab3713dec406b8403dc74e7d402f35f906f2f9eefd651",
+    "kernel_sha256": "2ec84621e0a0b4a1ba7cb0f35fa5cf4ae331fd8d4f9975f8c7f93d7c4f0cba24",
+    "source": {
+      "package": "8801/ID76/2.02/15a514a94c0e3dbf6f091642a043cc2a2ca353b7ffc63fe60b960d2417e01c3b.installer.tar",
+      "member": "components/S8801761.202.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  },
+  {
+    "envelope_sha256": "e5b7ac4333411b3476bfab4b326abca1ff6373551b25bb625b8909cdcd1332c5",
+    "kernel_sha256": "756f2b7fe5629304776dfed9a3a706e41a090a5c96a4921155f930a097ae3c61",
+    "source": {
+      "package": "8801/ID86/1.04/354b578e3423b397025552b51fd4b0b43b7b2ed3f14047b0bea82ccdbe2b0ab4.installer.tar",
+      "member": "components/S8801861.104.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  },
+  {
+    "envelope_sha256": "55b5e7a8d9e6ab4d29ba96af190512cb513d37166cc2c0b0d4e52f963262448a",
+    "kernel_sha256": "07f959e9b618d063df45330d713d54e557e448131fe085fa882e8a59383762c0",
+    "source": {
+      "package": "8801/ID87/1.02/819eb34851bb7190add3b01543807040cafe9ffffba6c31f12e3d375c94f2628.installer.tar",
+      "member": "components/S8801871.102.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  },
+  {
+    "envelope_sha256": "12e3b82d971db577ef6cafed54f31393bc3061359ce0fd60e3bdcfdbe82f889b",
+    "kernel_sha256": "8304d8a6d9f9d13fcfb178b9d4d7512961419be319f79cdde69cd27195384ccc",
+    "source": {
+      "package": "8801/ID88/1.05/1a39e48cc18d092e84d99b13063135df657894c347c1957dec07fbe8c800016e.installer.tar",
+      "member": "components/S8801881.105.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  },
+  {
+    "envelope_sha256": "cdc579c67dcefc76aecd05ff1c86a5a3c8742aee79fcdf1925b493b265056cbc",
+    "kernel_sha256": "687ec475c0fd6ba87f9736012a26d057390e0726896394d5057d062cc769f9c3",
+    "source": {
+      "package": "8801/ID89/1.03/c6905e2c8550fe9280024bbbaa96414eaffc77cf757b60746b4586b9589a6d03.installer.tar",
+      "member": "components/S8801891.103.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  },
+  {
+    "envelope_sha256": "605ca887b510577b8e9f1a589df9d991a2b931b68e14d56a07109b886b08dfe1",
+    "kernel_sha256": "ca491cd54f86b90ad4e28a20d30cc6325726f3f4d6d545cb5549c775eb33945c",
+    "source": {
+      "package": "8801/ID89/1.04/13d89487a90c0e49dab81015f4f18e57e870092d4e73f9a4449559cde4578b9e.installer.tar",
+      "member": "components/S8801891.104.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  },
+  {
+    "envelope_sha256": "0a3954c01e54510eea5c870fe633fd0532d2415744e5a860962acfd06bb7430c",
+    "kernel_sha256": "05fc3aaa7f86ecb69107b75d5c1ec4ea5dbd23b6671673327ccb4c6b9cf1448b",
+    "source": {
+      "package": "8801/ID92/1.01/424d43dcd33e38c7755d96302de5dd30562204505e0392e0150b9b74aab751a7.installer.tar",
+      "member": "components/S8801921.101.enc"
+    },
+    "reason": "no unique audited two-compare XOR branch"
+  }
+]

@@ -6,6 +6,14 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 
 ## Unreleased
 
+## [0.16.0] - 2026-10-16
+
+- Classify Kernel replacement using signature-derived updater handoff
+  compatibility. A matching hardware family alone no longer authorizes an
+  incoming Kernel whose entry contract differs from the installed receiver.
+- Expose supported, future and incompatible compatibility outcomes so callers
+  can distinguish a possible future adaptation from an executable update.
+
 - Harden wire-response parsing, layout-boundary handling, and diagnostic error
   contracts with corpus-backed and boundary tests.
 - Correct the selected two-segment Kernel plan: header/key at command offset

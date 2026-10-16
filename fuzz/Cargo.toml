@@ -1,0 +1,22 @@
+[package]
+name = "pioneer-optical-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+pioneer-optical = { path = "..", features = ["envelope", "drive"] }
+
+[[bin]]
+name = "firmware"
+path = "fuzz_targets/firmware.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

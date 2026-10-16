@@ -173,6 +173,49 @@ fn envelope_error_catalogue_has_stable_codes_and_actionable_text() {
     }
 }
 
+#[cfg(feature = "envelope")]
+#[test]
+fn normal_layout_error_catalogue_preserves_every_failure_class() {
+    use crate::envelope::NormalLayoutError as E;
+    let cases = [
+        (E::NotKernel, "pioneer.normal_layout.not_kernel"),
+        (E::InvalidKernel, "pioneer.normal_layout.invalid_kernel"),
+        (E::Unsupported, "pioneer.normal_layout.unsupported"),
+        (E::Ambiguous, "pioneer.normal_layout.ambiguous"),
+        (
+            E::ConflictingGeometry,
+            "pioneer.normal_layout.conflicting_geometry",
+        ),
+        (
+            E::ShortHeader {
+                expected: 8,
+                actual: 3,
+            },
+            "pioneer.normal_layout.short_header",
+        ),
+        (
+            E::DescriptorMismatch,
+            "pioneer.normal_layout.descriptor_mismatch",
+        ),
+        (
+            E::InvalidLength { length: 3 },
+            "pioneer.normal_layout.invalid_length",
+        ),
+        (
+            E::ImageLength {
+                expected: 8,
+                actual: 3,
+            },
+            "pioneer.normal_layout.image_length",
+        ),
+        (E::ImageChecksum, "pioneer.normal_layout.image_checksum"),
+    ];
+    for (error, code) in cases {
+        assert_eq!(error.code(), code);
+        assert!(!error.to_string().is_empty());
+    }
+}
+
 #[cfg(all(feature = "envelope", feature = "drive"))]
 #[test]
 fn flash_code_is_independent_of_pass_and_retains_pass_for_presentation() {

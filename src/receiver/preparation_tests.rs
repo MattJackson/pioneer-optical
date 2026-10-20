@@ -202,6 +202,10 @@ fn captured_receiver_evidence_does_not_require_a_distribution_signature() {
     let captured = Envelope::load_with_kernel(&bytes, installed.kernel()).unwrap();
     let receiver = Receiver::detect_with_kernel(&captured, installed.kernel()).unwrap();
     assert_eq!(receiver.family(), installed.family());
+    assert_eq!(
+        receiver.installed_kernel().unwrap().image,
+        installed.kernel().image
+    );
     assert!(receiver.prepare(update(false, 0, 0x12, true)).is_ok());
     assert!(Update::load(installed.kernel_transfer(), &bytes).is_err());
     assert_eq!(

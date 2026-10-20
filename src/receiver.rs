@@ -239,6 +239,13 @@ impl Receiver {
         self.family
     }
 
+    /// The already decoded installed Kernel supplied during receiver detection.
+    ///
+    /// This is captured file evidence, not proof of the live drive's identity.
+    pub fn installed_kernel(&self) -> Option<&Envelope> {
+        self.installed_kernel.as_ref()
+    }
+
     /// Require the target Normal to describe the same hardware family.
     ///
     /// This is the hardware compatibility gate. A matching family does not

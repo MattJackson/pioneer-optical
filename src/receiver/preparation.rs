@@ -108,6 +108,8 @@ impl PreparedNormal {
 pub struct PreparedUpdate {
     #[cfg(feature = "drive")]
     pub(super) control: Control,
+    #[cfg(feature = "drive")]
+    pub(super) initial_receive: Option<super::transport::KernelReceive>,
     target: Update,
     restoration: Option<Restoration>,
     startup_setting: Option<crate::startup::Setting>,
@@ -222,6 +224,10 @@ impl Receiver {
             .installed_kernel
             .as_ref()
             .ok_or(PreparationError::UnknownInstalledKernel)?;
+        #[cfg(feature = "drive")]
+        {
+            prepared.initial_receive = Some(super::transport::detect(&installed.image));
+        }
         crate::image::check_kernel_handoff(&installed.image, prepared.first_kernel_image())
             .map_err(PreparationError::KernelHandoff)?;
         if prepared.restoration.is_some() {
@@ -287,6 +293,8 @@ pub(super) fn prepare_oem(
     Ok(PreparedUpdate {
         #[cfg(feature = "drive")]
         control: _control,
+        #[cfg(feature = "drive")]
+        initial_receive: None,
         target,
         restoration,
         startup_setting: None,

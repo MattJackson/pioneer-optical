@@ -194,7 +194,11 @@ impl PreparedUpdate {
                     source,
                 })?;
         bind(io.reads, &self.control, FlashPass::Initial)?;
-        let receive = transport::detect(self.first_kernel_image());
+        // The resident loader receives the first Kernel. The incoming Kernel
+        // cannot decide how its own bytes must be segmented on the wire.
+        let receive = self
+            .initial_receive
+            .expect("prepared installed receiver transport");
         let mut storage = [Segment::PLACEHOLDER; 3];
         let plan = transport::plan(
             Some(self.kernel_transfer()),
@@ -224,7 +228,9 @@ impl PreparedUpdate {
                 })?;
             let control = receiver.control();
             bind(io.reads, &control, FlashPass::Restoration)?;
-            let receive = transport::detect(self.final_kernel_image());
+            // The temporary Kernel installed by the first pass receives the
+            // pristine OEM Kernel in the restoration pass.
+            let receive = transport::detect(self.first_kernel_image());
             let mut storage = [Segment::PLACEHOLDER; 3];
             let plan = transport::plan(Some(kernel), self.normal_transfer(), receive, &mut storage)
                 .map_err(|_| FlashError::UnsupportedTransport {

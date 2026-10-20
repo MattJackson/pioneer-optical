@@ -4,13 +4,15 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## [0.16.3] - 2026-10-20
 
 - Expose the update-entry drive class from an already decoded Kernel envelope,
   using its recognized layout and body policy. This lets flash callers reuse
   the decoded firmware rather than infer the protocol from a product name.
 - Cover the Pioneer PR1AME 1.05 and legacy DVR Kernel signatures with captured
   fixtures.
+- Let a detected receiver expose its retained decoded installed Kernel to
+  callers, so they can ask it for the entry dialect without another decode.
 
 ## [0.16.2] - 2026-10-19
 

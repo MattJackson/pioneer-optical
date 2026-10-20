@@ -95,6 +95,8 @@ pub struct Receiver {
     family: Option<Family>,
     kernel_policy: Option<crate::image::KernelMarkerPolicy>,
     installed_kernel: Option<Envelope>,
+    startup_word_access: bool,
+    startup_check_present: bool,
     codec: &'static dyn ReceiverCodec,
 }
 
@@ -193,6 +195,8 @@ impl Receiver {
             family: family(image),
             kernel_policy: None,
             installed_kernel: None,
+            startup_word_access: crate::startup::surface::discover(image).is_some(),
+            startup_check_present: !matches!(crate::startup::discover(image), Ok(None)),
             codec,
         })
     }

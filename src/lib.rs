@@ -82,6 +82,9 @@ pub mod production;
 pub mod receiver;
 pub mod rpc;
 pub mod settings;
+/// Read-only discovery of persistent startup prerequisites in Normal firmware.
+#[cfg(feature = "image")]
+pub mod startup;
 
 /// Length of a standard INQUIRY response header, in bytes.
 pub const INQUIRY_LEN: usize = 36;

@@ -162,6 +162,9 @@ pub struct FirmwareAnalysis<'a> {
     pub identity: Identity,
     /// Disjoint logical regions, covering all decoded storage.
     pub regions: Vec<Region<'a>>,
+    /// Recognized persistent-word comparison with loader-flag mismatch behavior.
+    /// None means unknown/not recognized, not a default value or write approval.
+    pub startup_requirement: Option<crate::startup::Requirement>,
     /// Known limits of this analysis.
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -171,6 +174,7 @@ impl FirmwareAnalysis<'_> {
         FirmwareAnalysis {
             identity: self.identity,
             regions: self.regions.into_iter().map(Region::into_owned).collect(),
+            startup_requirement: self.startup_requirement,
             diagnostics: self.diagnostics,
         }
     }
@@ -217,8 +221,18 @@ impl Envelope {
                 encoding_seed: self.encoding_seed(),
             },
             regions: Vec::new(),
+            startup_requirement: None,
             diagnostics: Vec::new(),
         };
+        if info.kind == crate::ComponentKind::Normal {
+            match crate::startup::discover(&self.image) {
+                Ok(requirement) => result.startup_requirement = requirement,
+                Err(_) => result.diagnostics.push(Diagnostic {
+                    code: "pioneer.analysis.startup_ambiguous",
+                    message: "Multiple persistent startup comparisons were recognized; no automatic setting value was selected.".into(),
+                }),
+            }
+        }
         if self.unrecovered_tail().is_some() {
             result.diagnostics.push(Diagnostic {
                 code: "pioneer.analysis.unrecovered_tail",

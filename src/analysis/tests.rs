@@ -68,6 +68,7 @@ fn direct_reference_facts_are_extracted_from_one_image() {
     };
     // Framing/target interpretation is image-local, independent of any comparison.
     let mut analysis = FirmwareAnalysis {
+        startup_requirement: None,
         identity: Identity {
             family: None,
             family_scheme: "test",

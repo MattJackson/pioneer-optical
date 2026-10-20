@@ -33,6 +33,9 @@ struct Mock {
     writes: usize,
     busy: usize,
     fail_event: bool,
+    restart_pending: bool,
+    require_sense_restart: bool,
+    fail_sense: bool,
 }
 impl Default for Mock {
     fn default() -> Self {
@@ -44,6 +47,9 @@ impl Default for Mock {
             writes: 0,
             busy: 0,
             fail_event: false,
+            restart_pending: false,
+            require_sense_restart: false,
+            fail_sense: false,
         }
     }
 }
@@ -62,9 +68,22 @@ impl Transport for Mock {
                 if self.fail_write == Some(index) {
                     return Err("write failed");
                 }
+                if cdb == crate::cdb::finish() && self.require_sense_restart {
+                    self.restart_pending = true;
+                }
                 Ok(bytes.len())
             }
             Data::In(buf) => {
+                if cdb == crate::cdb::request_sense(18) && self.fail_sense {
+                    return Err("sense unavailable");
+                }
+                if self.restart_pending {
+                    if cdb == crate::cdb::request_sense(18) {
+                        self.restart_pending = false;
+                    } else {
+                        return Err("programming counter still set: initializing command required");
+                    }
+                }
                 if cdb[0] == 0x12 {
                     if self.short {
                         return Ok(0);
@@ -96,6 +115,71 @@ fn options(recover: bool) -> UpdateOptions {
 }
 
 #[test]
+fn programming_counter_requires_request_sense_to_reach_restart() {
+    // WX1DM 1.01 Kernel: 402b00 checks 14d; only opcode 03 bypasses
+    // the busy return at 402b26 and reaches the restart check at 402b72.
+    let mut mock = Mock {
+        require_sense_restart: true,
+        ..Mock::default()
+    };
+    let mut clock = Clock::default();
+    execute_update(
+        &mut mock,
+        &mut clock,
+        &[7; 256],
+        UpdateTransfer {
+            kernel: None,
+            normal: &[1; 256],
+        },
+        options(true),
+    )
+    .unwrap();
+    assert!(!mock.restart_pending);
+    assert_eq!(clock.failures, 0);
+    let finish = mock
+        .calls
+        .iter()
+        .position(|c| c.0 == cdb::finish())
+        .unwrap();
+    assert_eq!(mock.calls[finish + 1].0, cdb::request_sense(18));
+    assert_eq!(mock.calls.last().unwrap().0, cdb::test_unit_ready());
+}
+
+#[test]
+fn sense_failure_neither_reports_ready_nor_retries_the_update() {
+    for require_sense_restart in [false, true] {
+        let mut mock = Mock {
+            fail_sense: true,
+            require_sense_restart,
+            ..Mock::default()
+        };
+        let mut clock = Clock::default();
+        let result = execute_update(
+            &mut mock,
+            &mut clock,
+            &[7; 256],
+            UpdateTransfer {
+                kernel: None,
+                normal: &[1; 256],
+            },
+            options(true),
+        );
+        if require_sense_restart {
+            assert!(matches!(result, Err(UpdateError::ReadyTimeout(_))));
+            assert!(mock.restart_pending);
+        } else {
+            // A receiver that is ready does not need a successful sense read.
+            result.unwrap();
+        }
+        assert_eq!(
+            mock.calls.iter().filter(|c| c.0 == cdb::finish()).count(),
+            1
+        );
+        assert_eq!(mock.writes, 3); // entry, Normal, finish; no write retries
+    }
+}
+
+#[test]
 fn transfer_order_bytes_offsets_delays_and_progress_are_preserved() {
     let kernel = vec![0xa5; 0x8001];
     let normal = vec![0x5a; 0x8001];
@@ -120,6 +204,7 @@ fn transfer_order_bytes_offsets_delays_and_progress_are_preserved() {
         cdb::transfer(Role::Normal, 0, 0x8000).to_vec(),
         cdb::transfer(Role::Normal, 0x8000, 1).to_vec(),
         cdb::finish().to_vec(),
+        cdb::request_sense(18).to_vec(),
         cdb::get_event_status().to_vec(),
         cdb::test_unit_ready().to_vec(),
     ];
@@ -205,6 +290,7 @@ fn two_region_kernel_plan_preserves_front_then_body_placement() {
         cdb::transfer_with_id(cdb::KERNEL_ID, 0x9200, 0x8000).to_vec(),
         cdb::transfer_with_id(cdb::NORMAL_ID, 0, 0x8000).to_vec(),
         cdb::finish().to_vec(),
+        cdb::request_sense(18).to_vec(),
         cdb::get_event_status().to_vec(),
         cdb::test_unit_ready().to_vec(),
     ];

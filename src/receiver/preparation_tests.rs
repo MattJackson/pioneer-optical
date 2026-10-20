@@ -15,6 +15,46 @@ fn fix_sum(bytes: &mut [u8]) {
     bytes[end..].copy_from_slice(&sum.wrapping_neg().to_be_bytes());
 }
 
+#[test]
+fn startup_selection_requires_a_known_surface_and_never_uses_history() {
+    let installed = update(false, 1, 0x12, true);
+    let mut receiver = Receiver::from_installed(&installed).unwrap();
+    receiver.startup_word_access = true;
+    let neutral = receiver.startup_setting_for(&[]).unwrap().unwrap();
+    assert_eq!(
+        (neutral.parameter, neutral.value, neutral.explicit),
+        (0x9f, 0xffff, false)
+    );
+    let mut normal = vec![0; 0x200];
+    normal[0x20..0x34].copy_from_slice(&[
+        0x79, 0, 0, 0x9f, 0x5e, 0x41, 1, 0, 0x79, 0x20, 0xfe, 0x24, 0x47, 6, 0xf8, 1, 0x5e, 0x41,
+        1, 0x80,
+    ]);
+    normal[0x180..0x186].copy_from_slice(&[0x5e, 0x40, 0x0a, 0x1a, 0x54, 0x70]);
+    let setting = receiver.startup_setting_for(&normal).unwrap().unwrap();
+    assert_eq!(
+        (setting.parameter, setting.value, setting.explicit),
+        (0x9f, 0xfe24, true)
+    );
+    assert_eq!(receiver.startup_setting_for(&[]).unwrap(), Some(neutral));
+    receiver.startup_word_access = false;
+    assert_eq!(
+        receiver.startup_setting_for(&normal),
+        Err(PreparationError::UnknownStartupAccess)
+    );
+    receiver.startup_check_present = true;
+    assert_eq!(
+        receiver.startup_setting_for(&[]),
+        Err(PreparationError::UnknownStartupAccess)
+    );
+    let duplicate = normal[0x20..0x34].to_vec();
+    normal[0x60..0x74].copy_from_slice(&duplicate);
+    assert_eq!(
+        receiver.startup_setting_for(&normal),
+        Err(PreparationError::AmbiguousStartup)
+    );
+}
+
 pub(in crate::receiver) fn update(gated: bool, marker: u8, family: u8, entry: bool) -> Update {
     let mut kernel = front_kernel();
     crate::image::handoff_fixture(&mut kernel);

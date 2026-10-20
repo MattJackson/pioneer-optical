@@ -131,12 +131,51 @@ impl<E: core::fmt::Debug + 'static> std::error::Error for FlashError<E> {
 }
 
 impl PreparedUpdate {
+    /// Apply an independently verified native parameter migration around the
+    /// actual prepared flash, including both passes and their readbacks.
+    ///
+    /// The caller must prove the installed Normal's A0 write contract and
+    /// derive `parameter`/`target` from target firmware semantics, not a model
+    /// list or detector miss. No value is persisted outside this attempt.
+    pub fn flash_with_parameter<R, W, H>(
+        &self,
+        io: FlashTransport<'_, R, W>,
+        runtime: &mut H,
+        parameter: u16,
+        target: u16,
+    ) -> Result<(), crate::startup::migration::Error<W::Error, FlashError<W::Error>>>
+    where
+        W: Transport,
+        R: Transport<Error = W::Error>,
+        H: FlashRuntime<W::Error>,
+    {
+        runtime.prepare_pass(FlashPass::Initial).map_err(|source| {
+            crate::startup::migration::Error::Preflight(FlashError::Preflight {
+                pass: FlashPass::Initial,
+                source,
+            })
+        })?;
+        bind(io.reads, &self.control, FlashPass::Initial)
+            .map_err(crate::startup::migration::Error::Preflight)?;
+        crate::startup::migration::execute(io.writes, parameter, target, |writes| {
+            self.flash(
+                FlashTransport {
+                    reads: io.reads,
+                    writes,
+                },
+                runtime,
+            )
+        })
+    }
+
     /// Execute both prepared passes when needed, verifying each Kernel readback.
     ///
     /// First capture a backup, enforce tray/consent policy, establish the entry
     /// dialect and exclude other device users. Both adapters must address the
     /// drive from which receiver evidence was captured. A failed step stops
     /// immediately; no automatic recovery writes or rollback are attempted.
+    /// If `startup_setting()` is present, use `flash_with_parameter` with that
+    /// setting instead; this low-level entry point does not migrate settings.
     pub fn flash<R, W, H>(
         &self,
         io: FlashTransport<'_, R, W>,
@@ -203,10 +242,46 @@ impl PreparedUpdate {
     }
 }
 impl PreparedNormal {
+    /// Apply an independently verified native parameter migration before a
+    /// Normal-only transfer. The caller must establish the current A0 contract
+    /// and target semantics, just as for `PreparedUpdate::flash_with_parameter`.
+    /// No Kernel is written and no old value is retained after this attempt.
+    pub fn flash_with_parameter<R, W, H>(
+        &self,
+        io: FlashTransport<'_, R, W>,
+        runtime: &mut H,
+        parameter: u16,
+        target: u16,
+    ) -> Result<(), crate::startup::migration::Error<W::Error, FlashError<W::Error>>>
+    where
+        W: Transport,
+        R: Transport<Error = W::Error>,
+        H: FlashRuntime<W::Error>,
+    {
+        runtime.prepare_pass(FlashPass::Initial).map_err(|source| {
+            crate::startup::migration::Error::Preflight(FlashError::Preflight {
+                pass: FlashPass::Initial,
+                source,
+            })
+        })?;
+        bind(io.reads, &self.control, FlashPass::Initial)
+            .map_err(crate::startup::migration::Error::Preflight)?;
+        crate::startup::migration::execute(io.writes, parameter, target, |writes| {
+            self.flash(
+                FlashTransport {
+                    reads: io.reads,
+                    writes,
+                },
+                runtime,
+            )
+        })
+    }
+
     /// Execute Normal-only after binding the live descriptor to captured evidence.
     ///
     /// First capture a backup, enforce tray/consent policy, establish the entry
     /// dialect and exclude other device users. No Kernel is written.
+    /// Use `flash_with_parameter` when `startup_setting()` is present.
     pub fn flash<R, W, H>(
         &self,
         io: FlashTransport<'_, R, W>,

@@ -6,6 +6,19 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 
 ## Unreleased
 
+## [0.16.1] - 2026-10-19
+
+- Poll REQUEST SENSE before event/readiness commands after update completion.
+- Recognize persistent startup comparisons and the direct native A0 word-write
+  surface from firmware instructions, without model-specific tables.
+- Attach target-driven startup settings to prepared updates: an explicit
+  comparison value, otherwise neutral FFFF for the recognized word surface.
+- Provide guarded read/change/verify/flash execution for paired and Normal-only
+  updates. Bind the live descriptor before changing settings; retain the old
+  value only in memory and restore it only before update commands are attempted.
+- Expose startup analysis and an offline corpus audit. Firmware-bound witnesses
+  and mock transactions do not constitute physical-drive validation.
+
 ## [0.16.0] - 2026-10-16
 
 - Classify Kernel replacement using signature-derived updater handoff

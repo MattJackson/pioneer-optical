@@ -312,6 +312,13 @@ pub fn execute_plan<T: Transport, R: UpdateRuntime>(
     runtime.sleep(FINISH_SETTLE);
     let start = runtime.elapsed();
     loop {
+        // The resident loader rejects other opcodes while its programming
+        // counter is nonzero, bypassing the end-of-command restart check.
+        // REQUEST SENSE is allowed through that guard, even after programming
+        // finishes but before the restart resets the counter. It is not proof
+        // of readiness: still require TEST UNIT READY below.
+        let mut sense = [0; 18];
+        let _ = transport.exec(&cdb::request_sense(18), Data::In(&mut sense));
         let mut event = [0; EVENT_ALLOCATION];
         let _ = transport.exec(&cdb::get_event_status(), Data::In(&mut event));
         // TEST UNIT READY has a zero-length data-in phase in existing adapters.

@@ -151,6 +151,8 @@ impl CodedError for crate::receiver::Error {
 impl CodedError for crate::receiver::PreparationError {
     fn code(&self) -> &'static str {
         match self {
+            Self::AmbiguousStartup => "pioneer.preparation.ambiguous_startup",
+            Self::UnknownStartupAccess => "pioneer.preparation.unknown_startup_access",
             Self::Target(..) => "pioneer.preparation.target",
             Self::KernelHandoff(..) => "pioneer.preparation.kernel_handoff",
             Self::MissingInstalledKernel => "pioneer.preparation.missing_installed_kernel",

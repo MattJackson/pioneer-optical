@@ -8,6 +8,10 @@ use crate::image::{kernel_marker_policy, KernelMarkerPolicy};
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum PreparationError {
+    /// More than one startup comparison prevents selecting a target value.
+    AmbiguousStartup,
+    /// Target requires a setting but the installed write surface is unknown.
+    UnknownStartupAccess,
     /// Installed updater cannot hand control to the replacement Kernel.
     KernelHandoff(crate::image::KernelHandoffError),
     /// Target validation failed against the installed Kernel.
@@ -31,6 +35,8 @@ pub enum PreparationError {
 impl core::fmt::Display for PreparationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::AmbiguousStartup => f.write_str("target startup checks are ambiguous; no startup setting can be selected"),
+            Self::UnknownStartupAccess => f.write_str("startup-setting migration is required but the installed firmware's parameter write command is unrecognized; no firmware was written"),
             Self::KernelHandoff(error) => write!(f, "Kernel replacement: {error}"),
             Self::Target(error) => write!(f, "target preparation: {error}"),
             Self::MissingInstalledKernel => {
@@ -74,9 +80,14 @@ pub struct PreparedNormal {
     pub(super) control: Control,
     normal: Envelope,
     transfer: Vec<u8>,
+    startup_setting: Option<crate::startup::Setting>,
 }
 
 impl PreparedNormal {
+    /// Target-derived startup migration, when the installed surface is recognized.
+    pub fn startup_setting(&self) -> Option<crate::startup::Setting> {
+        self.startup_setting
+    }
     /// Normal bytes validated under the installed Kernel's authentication rules.
     pub fn normal_transfer(&self) -> &[u8] {
         &self.transfer
@@ -99,6 +110,7 @@ pub struct PreparedUpdate {
     pub(super) control: Control,
     target: Update,
     restoration: Option<Restoration>,
+    startup_setting: Option<crate::startup::Setting>,
 }
 
 #[derive(Debug)]
@@ -109,6 +121,10 @@ struct Restoration {
 }
 
 impl PreparedUpdate {
+    /// Target-derived startup migration, shared by both prepared passes.
+    pub fn startup_setting(&self) -> Option<crate::startup::Setting> {
+        self.startup_setting
+    }
     /// Kernel transfer bytes for the first update pass.
     pub fn kernel_transfer(&self) -> &[u8] {
         self.restoration.as_ref().map_or_else(
@@ -144,6 +160,20 @@ impl PreparedUpdate {
 }
 
 impl Receiver {
+    fn startup_setting_for(
+        &self,
+        normal: &[u8],
+    ) -> Result<Option<crate::startup::Setting>, PreparationError> {
+        let setting =
+            crate::startup::setting(normal).map_err(|_| PreparationError::AmbiguousStartup)?;
+        if self.startup_word_access {
+            Ok(Some(setting))
+        } else if setting.explicit || self.startup_check_present {
+            Err(PreparationError::UnknownStartupAccess)
+        } else {
+            Ok(None)
+        }
+    }
     /// Prepare a Normal-only update using captured installed Kernel evidence.
     pub fn prepare_normal(&self, target: &[u8]) -> Result<PreparedNormal, PreparationError> {
         let prepared = self.prepare_normal_without_family_check(target)?;
@@ -164,7 +194,9 @@ impl Receiver {
             .installed_kernel
             .as_ref()
             .ok_or(PreparationError::MissingInstalledKernel)?;
-        self.codec.prepare_normal(kernel, target, self.control())
+        let mut prepared = self.codec.prepare_normal(kernel, target, self.control())?;
+        prepared.startup_setting = self.startup_setting_for(&prepared.normal.image)?;
+        Ok(prepared)
     }
 
     /// Prepare both passes of a complete update before issuing any commands.
@@ -190,7 +222,8 @@ impl Receiver {
         let policy = self
             .kernel_policy
             .ok_or(PreparationError::UnknownInstalledKernel)?;
-        let prepared = self.codec.prepare(policy, target, self.control())?;
+        let mut prepared = self.codec.prepare(policy, target, self.control())?;
+        prepared.startup_setting = self.startup_setting_for(&prepared.target.normal().image)?;
         let installed = self
             .installed_kernel
             .as_ref()
@@ -223,6 +256,7 @@ pub(super) fn prepare_normal_oem(
         control: _control,
         normal,
         transfer,
+        startup_setting: None,
     })
 }
 
@@ -261,6 +295,7 @@ pub(super) fn prepare_oem(
         control: _control,
         target,
         restoration,
+        startup_setting: None,
     })
 }
 

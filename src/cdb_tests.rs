@@ -11,9 +11,28 @@ fn offset_and_length_use_all_24_bits() {
 use super::*;
 
 #[test]
+fn parameter_word_commands_are_bounded_and_use_native_mode() {
+    assert_eq!(
+        read_parameter_word(0x9f),
+        Some([0x3c, 2, 0xa0, 0, 1, 0x3e, 0, 0, 2, 0])
+    );
+    assert_eq!(
+        write_parameter_word(0x9f),
+        Some([0x3b, 2, 0xa0, 0, 1, 0x3e, 0, 0, 2, 0])
+    );
+    assert!(read_parameter_word(0x3ff).is_some());
+    assert!(write_parameter_word(0x3ff).is_some());
+    for index in [0x400, 0xffff] {
+        assert!(read_parameter_word(index).is_none());
+        assert!(write_parameter_word(index).is_none());
+    }
+}
+
+#[test]
 fn bytes() {
     assert_eq!(inquiry(0x60), [0x12, 0, 0, 0, 0x60, 0]);
     assert_eq!(test_unit_ready(), [0; 6]);
+    assert_eq!(request_sense(18), [0x03, 0, 0, 0, 18, 0]);
     assert_eq!(get_event_status(), [0x4A, 0, 0, 0, 0x10, 0, 0, 0, 0x08, 0]);
     assert_eq!(
         vendor_identity(),

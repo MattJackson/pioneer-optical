@@ -4,6 +4,8 @@ use std::{cell::RefCell, rc::Rc, time::Duration};
 
 #[derive(Default)]
 struct State {
+    parameter: u16,
+    parameter_writes: Vec<u16>,
     descriptor: [u8; DESCRIPTOR_LEN],
     memory: Vec<u8>,
     kernels: Vec<Vec<u8>>,
@@ -26,6 +28,23 @@ impl Transport for Port {
     type Error = &'static str;
     fn exec(&mut self, command: &[u8], data: Data<'_>) -> Result<usize, Self::Error> {
         let mut state = self.state.borrow_mut();
+        if command == cdb::read_parameter_word(0x9f).unwrap() {
+            let Data::In(bytes) = data else {
+                panic!("parameter read phase")
+            };
+            bytes.copy_from_slice(&state.parameter.to_be_bytes());
+            return Ok(2);
+        }
+        if command == cdb::write_parameter_word(0x9f).unwrap() {
+            assert!(!self.reads, "parameter write must be strict");
+            let Data::Out(bytes) = data else {
+                panic!("parameter write phase")
+            };
+            state.parameter = u16::from_be_bytes(bytes.try_into().unwrap());
+            let value = state.parameter;
+            state.parameter_writes.push(value);
+            return Ok(2);
+        }
         if self.reads {
             if command == cdb::knock() {
                 assert!(matches!(data, Data::None));
@@ -98,7 +117,9 @@ impl Transport for Port {
                     bytes[32..36].copy_from_slice(b"000 ");
                 } else {
                     assert!(
-                        command == cdb::get_event_status() || command == cdb::test_unit_ready()
+                        command == cdb::get_event_status()
+                            || command == cdb::test_unit_ready()
+                            || command == cdb::request_sense(18)
                     );
                 }
                 Ok(bytes.len())
@@ -201,6 +222,142 @@ fn executes_exact_prepared_passes_and_verifies_final_kernel() {
             .all(|bytes| bytes == plan.normal_transfer()));
         assert_eq!(state.memory, plan.final_kernel_image());
     }
+}
+
+#[test]
+fn parameter_transaction_wraps_both_real_prepared_passes() {
+    let plan = plan(true);
+    let state = state(&plan);
+    state.borrow_mut().parameter = 0xffff;
+    let mut reads = Port {
+        state: state.clone(),
+        reads: true,
+    };
+    let mut writes = Port {
+        state: state.clone(),
+        reads: false,
+    };
+    plan.flash_with_parameter(
+        FlashTransport {
+            reads: &mut reads,
+            writes: &mut writes,
+        },
+        &mut Clock::default(),
+        0x9f,
+        0xfe24,
+    )
+    .unwrap();
+    let state = state.borrow();
+    assert_eq!(state.parameter_writes, [0xfe24]);
+    assert_eq!(state.finishes, 2);
+    assert_eq!(state.memory, plan.final_kernel_image());
+}
+
+#[test]
+fn failed_prepared_binding_restores_parameter_without_entry() {
+    let plan = plan(false);
+    let state = state(&plan);
+    state.borrow_mut().parameter = 0xffff;
+    state.borrow_mut().change_descriptor_at = Some(4);
+    let mut reads = Port {
+        state: state.clone(),
+        reads: true,
+    };
+    let mut writes = Port {
+        state: state.clone(),
+        reads: false,
+    };
+    let mut clock = Clock::default();
+    let error = plan
+        .flash_with_parameter(
+            FlashTransport {
+                reads: &mut reads,
+                writes: &mut writes,
+            },
+            &mut clock,
+            0x9f,
+            0xfe24,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::startup::migration::Error::Flash {
+            rollback: crate::startup::migration::Rollback::Restored,
+            ..
+        }
+    ));
+    let state = state.borrow();
+    assert_eq!(state.parameter_writes, [0xfe24, 0xffff]);
+    assert_eq!(state.entries, 0);
+}
+
+#[test]
+fn initial_policy_refusal_never_changes_startup_settings() {
+    let plan = plan(false);
+    let state = state(&plan);
+    let mut reads = Port {
+        state: state.clone(),
+        reads: true,
+    };
+    let mut writes = Port {
+        state: state.clone(),
+        reads: false,
+    };
+    let mut clock = Clock {
+        deny: Some(FlashPass::Initial),
+        ..Clock::default()
+    };
+    let error = plan
+        .flash_with_parameter(
+            FlashTransport {
+                reads: &mut reads,
+                writes: &mut writes,
+            },
+            &mut clock,
+            0x9f,
+            0xfe24,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::startup::migration::Error::Preflight(_)
+    ));
+    let state = state.borrow();
+    assert!(state.parameter_writes.is_empty());
+    assert_eq!(state.entries, 0);
+}
+
+#[test]
+fn initial_binding_refusal_never_changes_startup_settings() {
+    let plan = plan(false);
+    let state = state(&plan);
+    state.borrow_mut().change_descriptor_at = Some(2);
+    let mut reads = Port {
+        state: state.clone(),
+        reads: true,
+    };
+    let mut writes = Port {
+        state: state.clone(),
+        reads: false,
+    };
+    let result = plan.flash_with_parameter(
+        FlashTransport {
+            reads: &mut reads,
+            writes: &mut writes,
+        },
+        &mut Clock::default(),
+        0x9f,
+        0xfe24,
+    );
+    assert!(matches!(
+        result,
+        Err(crate::startup::migration::Error::Preflight(
+            FlashError::DescriptorChanged { .. }
+        ))
+    ));
+    let state = state.borrow();
+    assert!(state.parameter_writes.is_empty());
+    assert_eq!(state.entries, 0);
 }
 
 #[test]
@@ -313,6 +470,90 @@ fn normal_only_binds_receiver_and_never_writes_or_reads_kernel() {
     assert_eq!(state.normals, [plan.normal_transfer()]);
     assert!(state.memory.is_empty());
     assert_eq!(clock.starts, [(0, plan.normal_transfer().len())]);
+}
+
+#[test]
+fn normal_only_parameter_migration_obeys_the_same_rollback_boundary() {
+    use crate::startup::migration::{Error, Rollback};
+    let installed = super::super::preparation::tests::update(true, 1, 0x12, true);
+    let receiver = Receiver::from_installed(&installed).unwrap();
+    let plan = receiver
+        .prepare_normal(installed.normal_transfer())
+        .unwrap();
+    for scenario in 0..5 {
+        let state = Rc::new(RefCell::new(State {
+            parameter: 0xfe24,
+            descriptor: plan.control[..DESCRIPTOR_LEN].try_into().unwrap(),
+            change_descriptor_at: match scenario {
+                1 => Some(4),
+                4 => Some(2),
+                _ => None,
+            },
+            fail_write: (scenario == 2).then_some(1),
+            ..State::default()
+        }));
+        let mut reads = Port {
+            state: state.clone(),
+            reads: true,
+        };
+        let mut writes = Port {
+            state: state.clone(),
+            reads: false,
+        };
+        let mut clock = Clock {
+            deny: (scenario == 3).then_some(FlashPass::Initial),
+            ..Clock::default()
+        };
+        let result = plan.flash_with_parameter(
+            FlashTransport {
+                reads: &mut reads,
+                writes: &mut writes,
+            },
+            &mut clock,
+            0x9f,
+            0xffff,
+        );
+        let state = state.borrow();
+        match scenario {
+            0 => {
+                result.unwrap();
+                assert_eq!(state.parameter_writes, [0xffff]);
+                assert_eq!(state.entries, 1);
+                assert_eq!(state.finishes, 1);
+                assert_eq!(state.normals, [plan.normal_transfer()]);
+                assert_eq!(state.kernels, [Vec::<u8>::new()]);
+            }
+            1 => {
+                assert!(matches!(
+                    result,
+                    Err(Error::Flash {
+                        rollback: Rollback::Restored,
+                        ..
+                    })
+                ));
+                assert_eq!(state.parameter_writes, [0xffff, 0xfe24]);
+                assert_eq!(state.entries, 0);
+            }
+            2 => {
+                assert!(matches!(
+                    result,
+                    Err(Error::Flash {
+                        rollback: Rollback::UnsafeAfterFirmwareWrite,
+                        ..
+                    })
+                ));
+                assert_eq!(state.parameter_writes, [0xffff]);
+                assert_eq!(state.writes, 1);
+            }
+            3 | 4 => {
+                assert!(matches!(result, Err(Error::Preflight(_))));
+                assert!(state.parameter_writes.is_empty());
+                assert_eq!(state.writes, 0);
+            }
+            _ => unreachable!(),
+        }
+        assert!(state.memory.is_empty());
+    }
 }
 
 #[test]

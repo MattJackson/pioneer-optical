@@ -230,18 +230,24 @@ fn identity<T: Transport>(
         target,
     })
 }
-fn optical(id: &Identity) -> bool {
-    id.device_type() == 5 && id.vendor() == "PIONEER"
+fn optical(id: &Identity, firmware: &Envelope) -> bool {
+    // OEM-branded drives run this protocol too. Bind the observed vendor to
+    // the supplied firmware; the decoded Kernel establishes the dialect.
+    id.device_type() == 5
+        && !firmware.info().vendor.is_empty()
+        && firmware.info().vendor == id.vendor()
 }
-fn loader(id: &Identity) -> bool {
-    optical(id)
+fn loader(id: &Identity, firmware: &Envelope) -> bool {
+    optical(id, firmware)
         && id.revision() == "0000"
         && id.normal_tag().is_empty()
         && !id.kernel_tag().is_empty()
 }
 fn receiver_matches(id: &Identity, kernel: &Envelope) -> bool {
     let info = kernel.info();
-    optical(id) && id.platform() == info.hardware_version && id.kernel_tag() == info.kernel_version
+    optical(id, kernel)
+        && id.platform() == info.hardware_version
+        && id.kernel_tag() == info.kernel_version
 }
 fn check_receiver<T: Transport>(
     t: &mut T,
@@ -253,7 +259,7 @@ fn check_receiver<T: Transport>(
     let id = identity(t, pass, false)?;
     // Loader mode may expose a partially installed Kernel identity. Recovery
     // uses explicit Current firmware evidence for that loader's protocol.
-    if mode == ExecutionMode::Recovery && loader(&id) {
+    if mode == ExecutionMode::Recovery && loader(&id, kernel) {
         return Ok(true);
     }
     if !receiver_matches(&id, kernel)
@@ -269,6 +275,16 @@ fn check_receiver<T: Transport>(
     execution::bind(t, control, pass).map_err(ExecutionError::Flash)?;
     Ok(false)
 }
+fn revision_matches(id: &Identity, revision: &str) -> bool {
+    let bytes = revision.as_bytes();
+    if bytes.is_empty() || !bytes.is_ascii() {
+        return false;
+    }
+    let mut expected = [b' '; 4];
+    let len = bytes.len().min(expected.len());
+    expected[..len].copy_from_slice(&bytes[..len]);
+    id.inquiry_bytes()[32..36] == expected
+}
 fn target_identity<T: Transport>(
     t: &mut T,
     target: &Envelope,
@@ -278,9 +294,12 @@ fn target_identity<T: Transport>(
     let info = target.info();
     // Revision is display evidence here, not the source of dialect/compatibility.
     // The descriptor and readback below identify the actual target bytes.
-    if !optical(&id)
+    if !optical(&id, target)
         || !target.targets(&id)
-        || id.revision() != info.revision
+        // Standard INQUIRY exposes exactly four revision bytes. OEM envelope
+        // revisions can carry a longer suffix (for example 0.05e); readback
+        // proves the selected body, while this compares the defined field.
+        || !revision_matches(&id, &info.revision)
         || id.revision().starts_with("000")
         || id.normal_tag() != info.kernel_version
     {

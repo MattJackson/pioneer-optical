@@ -16,6 +16,9 @@ All notable changes to `pioneer-optical` are documented here. The format follows
   verification, and reject readable mismatches even after an unreadable chunk.
 - Confirm the target model, revision and firmware tags; readiness alone is
   insufficient. Retain failure phase and temporary-firmware state.
+- Bind OEM vendor identity to cached envelope metadata, including PLEXTOR,
+  TEAC, ASUS and SONY firmware. Compare revision evidence using the exact
+  four-byte INQUIRY field and reject malformed non-ASCII revisions.
 - Add complete-operation and failure-order regressions while preserving the
   existing low-level protocol and external OEM corpus tests.
 

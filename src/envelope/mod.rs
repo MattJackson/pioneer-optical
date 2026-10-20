@@ -126,6 +126,8 @@ impl core::fmt::Display for Layout {
 #[derive(Clone, Debug, Serialize)]
 #[non_exhaustive]
 pub struct EnvelopeInfo {
+    /// Vendor token from the header `ID`, including OEM brands.
+    pub vendor: String,
     /// Drive model from the header `ID`, e.g. `BDR-UD04`.
     pub model: String,
     /// Header `Revision Level`.
@@ -1092,6 +1094,12 @@ fn decode_selected(
     let header = data.get(..HEADER_LEN).ok_or(DecodeError::InvalidHeader)?;
     let file_type = parsed.kind.ok_or(DecodeError::InvalidHeader)?;
     let (layout, payload_off, payload_end, key, suffix) = selected;
+    let vendor = parsed
+        .id
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_owned();
     let model = parsed.model;
     let hardware_version = parsed.hardware_version;
     let kernel_version = parsed.kernel_version;
@@ -1134,6 +1142,7 @@ fn decode_selected(
     }
     Ok(DecodedEnvelope {
         info: EnvelopeInfo {
+            vendor,
             model,
             revision,
             kind: file_type,

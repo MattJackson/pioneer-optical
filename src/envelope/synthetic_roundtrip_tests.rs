@@ -869,6 +869,7 @@ fn repack_resized_normal_guard_isolation() {
     let valid = normal_image(0x2000);
     let tmpl = |image: Vec<u8>, ft: &str| DecodedEnvelope {
         info: EnvelopeInfo {
+            vendor: "PIONEER".into(),
             model: "BDR".into(),
             revision: "1".into(),
             kind: ComponentKind::from_header(ft).unwrap(),
@@ -939,6 +940,7 @@ fn kernel_xor_policy_requires_kernel_layout() {
     let env = DecodedEnvelope {
         image,
         info: EnvelopeInfo {
+            vendor: "PIONEER".into(),
             model: "BDR".into(),
             revision: "1".into(),
             kind: ComponentKind::Kernel,

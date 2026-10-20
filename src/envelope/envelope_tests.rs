@@ -191,6 +191,7 @@ fn resized_normal_requires_complete_declared_image() {
     let template = DecodedEnvelope {
         image: original.clone(),
         info: EnvelopeInfo {
+            vendor: "PIONEER".into(),
             model: "BDR-TEST".into(),
             revision: "1.00".into(),
             kind: ComponentKind::Normal,

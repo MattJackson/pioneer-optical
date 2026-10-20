@@ -63,10 +63,10 @@ fn id(envelope: &Envelope) -> Identity {
     let info = envelope.info();
     let mut inquiry = [b' '; crate::INQUIRY_LEN];
     inquiry[0] = 5;
-    inquiry[8..16].copy_from_slice(b"PIONEER ");
+    inquiry[8..16].copy_from_slice(format!("{:<8}", info.vendor).as_bytes());
     let product = format!("BD-RW   {}", info.model);
     inquiry[16..32].copy_from_slice(format!("{product:<16}").as_bytes());
-    inquiry[32..36].copy_from_slice(info.revision.as_bytes());
+    inquiry[32..36].copy_from_slice(&format!("{:<4}", info.revision).as_bytes()[..4]);
     let mut vendor = [b' '; crate::IDENTITY_LEN];
     vendor[16..24].copy_from_slice(format!("{:<8}", info.hardware_version).as_bytes());
     vendor[24..32].copy_from_slice(format!("{:<8}", info.kernel_version).as_bytes());
@@ -74,8 +74,9 @@ fn id(envelope: &Envelope) -> Identity {
     Identity::parse(&inquiry, &vendor).unwrap()
 }
 fn setup(restore: bool) -> (PreparedUpdate, Rc<RefCell<State>>) {
-    let installed = fixture(restore, 1);
-    let target = fixture(false, 0xff);
+    setup_updates(fixture(restore, 1), fixture(false, 0xff))
+}
+fn setup_updates(installed: Update, target: Update) -> (PreparedUpdate, Rc<RefCell<State>>) {
     let plan = Receiver::from_installed(&installed)
         .unwrap()
         .prepare(target.clone())
@@ -87,7 +88,7 @@ fn setup(restore: bool) -> (PreparedUpdate, Rc<RefCell<State>>) {
     layout
         .validate(&target.normal().image)
         .expect("fixture Normal body");
-    let kernels = if restore {
+    let kernels = if plan.restoration_receiver().is_some() {
         vec![
             plan.first_kernel_image().to_vec(),
             plan.final_kernel_image().to_vec(),
@@ -436,4 +437,90 @@ fn changed_host_policy_after_parameter_migration_refuses_transfer_and_restores_s
     assert!(!error.firmware_write_started());
     assert_eq!(state.borrow().entries, 0);
     assert_eq!(state.borrow().parameter_writes, [0xffff, 0xfe24]);
+}
+
+// Change only envelope identity fields; the independent instruction/body
+// fixtures and transfer verification remain the same.
+fn branded_fixture(vendor: &str, revision: &str) -> Update {
+    let source = fixture(false, 0xff);
+    let edit = |bytes: &[u8]| {
+        let mut bytes = bytes.to_vec();
+        for (key, value) in [
+            ("ID : ", format!("{vendor} BDR-TEST")),
+            ("Revision Level : ", revision.to_owned()),
+        ] {
+            let start = bytes
+                .windows(key.len())
+                .position(|w| w == key.as_bytes())
+                .unwrap()
+                + key.len();
+            let end = start + bytes[start..].iter().position(|&b| b == b'\r').unwrap();
+            assert!(value.len() < end - start);
+            bytes[start..end].fill(b' ');
+            bytes[start..start + value.len()].copy_from_slice(value.as_bytes());
+            bytes[start + value.len()] = 0;
+        }
+        bytes
+    };
+    Update::load(
+        &edit(source.kernel_transfer()),
+        &edit(source.normal_transfer()),
+    )
+    .unwrap()
+}
+
+#[test]
+fn oem_vendor_is_bound_to_firmware_instead_of_a_pioneer_brand_literal() {
+    for vendor in ["PLEXTOR", "TEAC", "ASUS", "SONY"] {
+        let firmware = branded_fixture(vendor, "1.00");
+        let (plan, state) = setup_updates(firmware.clone(), firmware);
+        let result = run(&plan, &state, ExecutionMode::Flash).unwrap();
+        assert_eq!(result.identity.vendor(), vendor);
+        assert!(result.kernel_verified && result.normal_verified);
+
+        let firmware = branded_fixture(vendor, "1.00");
+        let (plan, state) = setup_updates(firmware.clone(), firmware);
+        let observed = state.borrow().installed_id.clone().unwrap();
+        let mut inquiry = *observed.inquiry_bytes();
+        inquiry[8..16].copy_from_slice(b"WRONG   ");
+        state.borrow_mut().installed_id =
+            Some(Identity::parse(&inquiry, observed.vendor_bytes()).unwrap());
+        let error = run(&plan, &state, ExecutionMode::Flash).unwrap_err();
+        assert_eq!(error.phase(), "receiver binding");
+        assert_eq!(state.borrow().writes, 0);
+    }
+}
+
+#[test]
+fn longer_oem_revision_compares_the_exact_four_byte_inquiry_projection() {
+    let firmware = branded_fixture("PIONEER", "0.05e");
+    let (plan, state) = setup_updates(firmware.clone(), firmware.clone());
+    let result = run(&plan, &state, ExecutionMode::Flash).unwrap();
+    assert_eq!(result.identity.revision(), "0.05");
+    assert!(result.kernel_verified && result.normal_verified);
+
+    let (plan, state) = setup_updates(firmware.clone(), firmware);
+    let observed = state.borrow().target_id.clone().unwrap();
+    let mut inquiry = *observed.inquiry_bytes();
+    inquiry[32..36].copy_from_slice(b"0.06");
+    state.borrow_mut().target_id =
+        Some(Identity::parse(&inquiry, observed.vendor_bytes()).unwrap());
+    assert_eq!(
+        run(&plan, &state, ExecutionMode::Flash)
+            .unwrap_err()
+            .phase(),
+        "target startup"
+    );
+}
+
+#[test]
+fn malformed_non_ascii_revision_never_matches_inquiry_projection() {
+    let firmware = branded_fixture("PIONEER", "0.05é");
+    let (plan, state) = setup_updates(firmware.clone(), firmware);
+    assert_eq!(
+        run(&plan, &state, ExecutionMode::Flash)
+            .unwrap_err()
+            .phase(),
+        "target startup"
+    );
 }

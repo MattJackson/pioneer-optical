@@ -6,6 +6,12 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 
 ## Unreleased
 
+- Expose the update-entry drive class from an already decoded Kernel envelope,
+  using its recognized layout and body policy. This lets flash callers reuse
+  the decoded firmware rather than infer the protocol from a product name.
+- Cover the Pioneer PR1AME 1.05 and legacy DVR Kernel signatures with captured
+  fixtures.
+
 ## [0.16.2] - 2026-10-19
 
 - Select the startup word from the target even when the installed Normal image

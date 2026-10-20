@@ -15,7 +15,7 @@
 )]
 
 use crate::comp::COMP_OFFSET;
-use crate::ComponentKind;
+use crate::{ComponentKind, DriveClass};
 use serde::Serialize;
 use std::io::Write;
 
@@ -1208,6 +1208,29 @@ impl DecodedEnvelope {
     /// Header and framing metadata.
     pub fn info(&self) -> &EnvelopeInfo {
         &self.info
+    }
+
+    /// The update-entry command dialect evidenced by this decoded Kernel.
+    ///
+    /// `None` means this is not a Kernel or its body does not identify a
+    /// supported dialect. This describes the file only: a caller must still
+    /// bind a captured installed Kernel to the live drive and check that the
+    /// receiver accepts the proposed update before writing.
+    pub fn update_dialect(&self) -> Option<DriveClass> {
+        if self.info.kind != ComponentKind::Kernel {
+            return None;
+        }
+        match self.info.layout {
+            Layout::KernelFront | Layout::KernelDerived
+                if crate::image::kernel_marker_policy(&self.image).is_some() =>
+            {
+                Some(DriveClass::Bd)
+            }
+            Layout::KernelLegacyLe | Layout::KernelRom | Layout::SparseChecksum => {
+                Some(DriveClass::Dvr)
+            }
+            _ => None,
+        }
     }
 
     /// Locate this Kernel's companion Normal using its decoded instructions.

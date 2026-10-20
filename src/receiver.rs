@@ -12,6 +12,10 @@ pub use preparation::{PreparationError, PreparedNormal, PreparedUpdate};
 #[cfg(feature = "drive")]
 mod execution;
 #[cfg(feature = "drive")]
+mod execution_safe;
+#[cfg(feature = "drive")]
+pub use execution_safe::{ExecutionError, ExecutionMode, ExecutionRuntime, FlashOutcome};
+#[cfg(feature = "drive")]
 pub mod transport;
 #[cfg(feature = "drive")]
 pub use execution::{FlashError, FlashPass, FlashRuntime, FlashTransport};
@@ -86,8 +90,9 @@ impl std::error::Error for Error {}
 /// needed. A target envelope must not be substituted for installed evidence.
 /// Normal-only detection establishes entry requirements and the hardware family
 /// gate. [`Self::from_installed`] also enables complete-pair preparation using
-/// the installed Kernel's code. Callers still own transport sequencing and
-/// readback verification; preparation performs no device I/O.
+/// the installed Kernel's code. With the `drive` feature, execute the prepared
+/// operation to apply migrations, sequence transfers and verify completion.
+/// Callers own backup, consent and exclusive access; preparation performs no I/O.
 #[derive(Debug)]
 pub struct Receiver {
     descriptor: [u8; DESCRIPTOR_LEN],

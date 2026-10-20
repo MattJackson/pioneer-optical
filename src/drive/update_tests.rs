@@ -479,3 +479,44 @@ fn invalid_component_spans_are_refused_before_entry() {
         assert!(mock.calls.is_empty());
     }
 }
+
+#[test]
+fn all_segment_bounds_are_checked_before_entry_or_loader_resume() {
+    let too_large_chunk = vec![0; ADDRESS_SPACE];
+    for segment in [
+        Segment {
+            bytes: &[1],
+            dest_offset: 0x100_0000,
+            ..Segment::PLACEHOLDER
+        },
+        Segment {
+            bytes: &[1],
+            max_chunk: 0,
+            ..Segment::PLACEHOLDER
+        },
+        Segment {
+            bytes: &too_large_chunk,
+            max_chunk: ADDRESS_SPACE as u32,
+            ..Segment::PLACEHOLDER
+        },
+    ] {
+        for already_updating in [false, true] {
+            let mut mock = Mock::default();
+            assert!(matches!(
+                execute_plan_with_entry(
+                    &mut mock,
+                    &mut Clock::default(),
+                    &[0; 256],
+                    Plan {
+                        segments: &[segment]
+                    },
+                    options(true),
+                    already_updating
+                ),
+                Err(UpdateError::InvalidSpan { .. })
+            ));
+            assert!(mock.calls.is_empty());
+        }
+    }
+    assert!(validate_plan::<()>(Plan { segments: &[] }).is_err());
+}

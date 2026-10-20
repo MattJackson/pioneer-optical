@@ -164,6 +164,8 @@ impl CodedError for crate::receiver::PreparationError {
             Self::UnsupportedRestoration => "pioneer.preparation.unsupported_restoration",
             Self::RestorationEntry(..) => "pioneer.preparation.restoration_entry",
             Self::PatchedRepresentation => "pioneer.preparation.patched_representation",
+            Self::UnsupportedDialect => "pioneer.preparation.unsupported_dialect",
+            Self::UnsupportedTransport => "pioneer.preparation.unsupported_transport",
         }
     }
 }

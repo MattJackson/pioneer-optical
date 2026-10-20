@@ -4,6 +4,21 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.17.0] - Unreleased
+
+- Own the complete Flash and Recovery procedure: cached dialect and layout,
+  startup migration, validated transfer spans, receiver binding, required
+  restoration passes and target-specific completion checks.
+- Make high-level `flash` execute the complete procedure. Rename explicit
+  protocol-only primitives to `transfer_unchecked` and
+  `transfer_with_parameter_unchecked` (breaking API change).
+- Verify Kernel and Normal bytes, preserve unreadable Normal regions as limited
+  verification, and reject readable mismatches even after an unreadable chunk.
+- Confirm the target model, revision and firmware tags; readiness alone is
+  insufficient. Retain failure phase and temporary-firmware state.
+- Add complete-operation and failure-order regressions while preserving the
+  existing low-level protocol and external OEM corpus tests.
+
 ## [0.16.3] - 2026-10-20
 
 - Expose the update-entry drive class from an already decoded Kernel envelope,

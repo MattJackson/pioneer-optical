@@ -192,7 +192,7 @@ fn run(
         reads: false,
     };
     let mut clock = Clock::default();
-    plan.flash(
+    plan.transfer_unchecked(
         FlashTransport {
             reads: &mut reads,
             writes: &mut writes,
@@ -277,7 +277,7 @@ fn parameter_transaction_wraps_both_real_prepared_passes() {
         state: state.clone(),
         reads: false,
     };
-    plan.flash_with_parameter(
+    plan.transfer_with_parameter_unchecked(
         FlashTransport {
             reads: &mut reads,
             writes: &mut writes,
@@ -309,7 +309,7 @@ fn failed_prepared_binding_restores_parameter_without_entry() {
     };
     let mut clock = Clock::default();
     let error = plan
-        .flash_with_parameter(
+        .transfer_with_parameter_unchecked(
             FlashTransport {
                 reads: &mut reads,
                 writes: &mut writes,
@@ -348,7 +348,7 @@ fn initial_policy_refusal_never_changes_startup_settings() {
         ..Clock::default()
     };
     let error = plan
-        .flash_with_parameter(
+        .transfer_with_parameter_unchecked(
             FlashTransport {
                 reads: &mut reads,
                 writes: &mut writes,
@@ -380,7 +380,7 @@ fn initial_binding_refusal_never_changes_startup_settings() {
         state: state.clone(),
         reads: false,
     };
-    let result = plan.flash_with_parameter(
+    let result = plan.transfer_with_parameter_unchecked(
         FlashTransport {
             reads: &mut reads,
             writes: &mut writes,
@@ -494,7 +494,7 @@ fn normal_only_binds_receiver_and_never_writes_or_reads_kernel() {
         reads: false,
     };
     let mut clock = Clock::default();
-    plan.flash(
+    plan.transfer_unchecked(
         FlashTransport {
             reads: &mut reads,
             writes: &mut writes,
@@ -544,7 +544,7 @@ fn normal_only_parameter_migration_obeys_the_same_rollback_boundary() {
             deny: (scenario == 3).then_some(FlashPass::Initial),
             ..Clock::default()
         };
-        let result = plan.flash_with_parameter(
+        let result = plan.transfer_with_parameter_unchecked(
             FlashTransport {
                 reads: &mut reads,
                 writes: &mut writes,
@@ -614,7 +614,7 @@ fn host_policy_can_refuse_either_pass_before_entry() {
             ..Clock::default()
         };
         let error = plan
-            .flash(
+            .transfer_unchecked(
                 FlashTransport {
                     reads: &mut reads,
                     writes: &mut writes,

@@ -20,8 +20,8 @@ pub struct Setting {
 
 /// Apply the flasher's target-driven policy: match a recognized startup check,
 /// otherwise use neutral FFFF at word 9F. This is a selected update policy,
-/// not proof that an arbitrary image has no unrecognized check. Callers must
-/// separately establish the installed native word-write surface.
+/// not proof that an arbitrary image has no unrecognized check. The live A0
+/// transaction must succeed before firmware transfer.
 pub fn setting(normal: &[u8]) -> Result<Setting, Ambiguous> {
     Ok(match discover(normal)? {
         Some(r) => Setting {

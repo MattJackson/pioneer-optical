@@ -16,10 +16,10 @@ fn fix_sum(bytes: &mut [u8]) {
 }
 
 #[test]
-fn startup_selection_requires_a_known_surface_and_never_uses_history() {
+fn startup_selection_uses_target_even_when_installed_surface_is_unknown() {
     let installed = update(false, 1, 0x12, true);
-    let mut receiver = Receiver::from_installed(&installed).unwrap();
-    receiver.startup_word_access = true;
+    assert!(crate::startup::surface::discover(&installed.normal().image).is_none());
+    let receiver = Receiver::from_installed(&installed).unwrap();
     let neutral = receiver.startup_setting_for(&[]).unwrap().unwrap();
     assert_eq!(
         (neutral.parameter, neutral.value, neutral.explicit),
@@ -37,15 +37,9 @@ fn startup_selection_requires_a_known_surface_and_never_uses_history() {
         (0x9f, 0xfe24, true)
     );
     assert_eq!(receiver.startup_setting_for(&[]).unwrap(), Some(neutral));
-    receiver.startup_word_access = false;
     assert_eq!(
-        receiver.startup_setting_for(&normal),
-        Err(PreparationError::UnknownStartupAccess)
-    );
-    receiver.startup_check_present = true;
-    assert_eq!(
-        receiver.startup_setting_for(&[]),
-        Err(PreparationError::UnknownStartupAccess)
+        receiver.startup_setting_for(&normal).unwrap(),
+        Some(setting)
     );
     let duplicate = normal[0x20..0x34].to_vec();
     normal[0x60..0x74].copy_from_slice(&duplicate);

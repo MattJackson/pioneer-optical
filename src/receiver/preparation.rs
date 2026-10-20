@@ -84,7 +84,7 @@ pub struct PreparedNormal {
 }
 
 impl PreparedNormal {
-    /// Target-derived startup migration, when the installed surface is recognized.
+    /// Target-derived startup migration to verify on the live drive before transfer.
     pub fn startup_setting(&self) -> Option<crate::startup::Setting> {
         self.startup_setting
     }
@@ -164,15 +164,9 @@ impl Receiver {
         &self,
         normal: &[u8],
     ) -> Result<Option<crate::startup::Setting>, PreparationError> {
-        let setting =
-            crate::startup::setting(normal).map_err(|_| PreparationError::AmbiguousStartup)?;
-        if self.startup_word_access {
-            Ok(Some(setting))
-        } else if setting.explicit || self.startup_check_present {
-            Err(PreparationError::UnknownStartupAccess)
-        } else {
-            Ok(None)
-        }
+        crate::startup::setting(normal)
+            .map(Some)
+            .map_err(|_| PreparationError::AmbiguousStartup)
     }
     /// Prepare a Normal-only update using captured installed Kernel evidence.
     pub fn prepare_normal(&self, target: &[u8]) -> Result<PreparedNormal, PreparationError> {

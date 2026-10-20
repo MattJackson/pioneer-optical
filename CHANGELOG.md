@@ -6,6 +6,14 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 
 ## Unreleased
 
+## [0.16.2] - 2026-10-19
+
+- Select the startup word from the target even when the installed Normal image
+  does not match the static A0 code fingerprint. The live A0 read, write and
+  readback now decide whether firmware transfer can begin.
+- Report unsupported or failed A0 commands clearly before firmware transfer.
+- Test the missed installed-code pattern and A0 failure paths.
+
 ## [0.16.1] - 2026-10-19
 
 - Poll REQUEST SENSE before event/readiness commands after update completion.

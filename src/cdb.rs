@@ -75,15 +75,14 @@ pub fn read_diagnostic(id: u8, off: u32, len: u32) -> [u8; 10] {
     vendor(READ_BUFFER, READ_MODE, id, off, len)
 }
 
-/// Read one big-endian word in the audited 0x800-byte A0 parameter surface.
-/// A command constructor does not establish firmware support for this surface.
+/// Read one big-endian word from the A0 parameter surface.
+/// The drive may reject the command when its Normal firmware does not implement A0.
 pub fn read_parameter_word(index: u16) -> Option<[u8; 10]> {
     (index < 0x400).then(|| vendor(READ_BUFFER, READ_MODE, 0xa0, u32::from(index) * 2, 2))
 }
 
 /// Persist one word through the firmware's native A0 record writer.
-/// Requires independent proof of the current firmware's write contract; never
-/// send this based solely on target startup-check detection.
+/// The caller must check the command result and read the word back.
 pub fn write_parameter_word(index: u16) -> Option<[u8; 10]> {
     (index < 0x400).then(|| vendor(WRITE_BUFFER, READ_MODE, 0xa0, u32::from(index) * 2, 2))
 }

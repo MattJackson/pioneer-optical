@@ -1,6 +1,6 @@
 //! Attempt-local parameter migration. No history files or saved defaults.
-//! Call only after proving the current firmware's A0 word-write contract and
-//! deriving the target value. This API does not turn a detector miss into FFFF.
+//! Select the target value before calling. The live A0 read/write/verify result
+//! determines whether firmware transfer may begin.
 use crate::drive::{self, Data, Transport};
 
 /// Result of an attempted rollback before any firmware write was attempted.
@@ -75,14 +75,14 @@ impl<E: core::fmt::Debug> core::fmt::Display for Rollback<E> {
     }
 }
 
-impl<E: core::fmt::Debug, F: core::fmt::Debug> core::fmt::Display for Error<E, F> {
+impl<E: core::fmt::Debug, F: core::fmt::Display> core::fmt::Display for Error<E, F> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Preflight(source)=>write!(f,"update preflight refused before changing startup settings or firmware: {source:?}"),
+            Self::Preflight(source)=>write!(f,"update preflight refused before changing startup settings or firmware: {source}"),
             Self::InvalidParameter(p)=>write!(f,"startup parameter {p:#x} is outside the supported parameter surface; no command was sent"),
-            Self::Read(e)=>write!(f,"unable to read the current startup setting; firmware flashing did not begin: {e}"),
-            Self::Change{source,rollback,..}=>write!(f,"unable to change and verify the startup setting; firmware flashing did not begin: {source}; {rollback}"),
-            Self::Flash{source,rollback,..}=>write!(f,"firmware update failed: {source:?}; {rollback}"),
+            Self::Read(e)=>write!(f,"A0 startup parameter read failed; no firmware was written. The drive may not implement this command in its current mode: {e}"),
+            Self::Change{source,rollback,..}=>write!(f,"A0 startup parameter write or verification failed; no firmware was written: {source}; {rollback}"),
+            Self::Flash{source,rollback,..}=>write!(f,"firmware update failed: {source}; {rollback}"),
         }
     }
 }
@@ -164,9 +164,9 @@ fn rollback<T: Transport>(
 /// Read the original word, change and verify it, then invoke one flash attempt.
 ///
 /// The callback MUST send all device writes through the supplied adapter and
-/// use a transport which never retries writes. The caller must establish A0
-/// support and target semantics first. There is no model table or default-value
-/// inference here. Original state stays in RAM and is discarded on success.
+/// use a transport which never retries writes. The caller must select the target
+/// value first. A0 support is established by the live command result, not by a
+/// static code match. Original state stays in RAM and is discarded on success.
 /// A failed change prevents flash. A failed callback restores the original word
 /// only before any update-entry/firmware command was attempted; otherwise it
 /// returns an explicit unsafe-rollback outcome without sending restoration.
@@ -282,10 +282,11 @@ mod tests {
     fn failed_change_verification_never_calls_flash() {
         let mut t = mock(0xffff);
         t.bad_verification = true;
-        let err = execute(&mut t, 0x9f, 0xfe24, |_| -> Result<(), ()> {
+        let err = execute(&mut t, 0x9f, 0xfe24, |_| -> Result<(), &str> {
             panic!("flash must not run")
         })
         .unwrap_err();
+        assert!(format!("{err}").contains("A0 startup parameter write or verification failed"));
         assert!(matches!(
             err,
             Error::Change {
@@ -355,10 +356,11 @@ mod tests {
     fn unreadable_original_prevents_change_and_flash() {
         let mut t = mock(0xffff);
         t.fail_initial_read = true;
-        let err = execute(&mut t, 0x9f, 0xfe24, |_| -> Result<(), ()> {
+        let err = execute(&mut t, 0x9f, 0xfe24, |_| -> Result<(), &str> {
             panic!("flash must not run without original state")
         })
         .unwrap_err();
+        assert!(format!("{err}").contains("A0 startup parameter read failed"));
         assert!(matches!(err, Error::Read(_)));
         assert!(t.writes.is_empty());
         assert_eq!(t.firmware_attempts, 0);

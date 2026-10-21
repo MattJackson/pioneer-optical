@@ -11,15 +11,15 @@
 //!
 //! Optional features add:
 //!
-//! - `drive` — [`drive`]: the command sequences (identify, protected memory
-//!   read, update session) over a caller-supplied [`drive::Transport`].
-//! - `image` — [`image`]: hardware family, UHD capability and Kernel ABI
+//! - `drive` — `drive`: the command sequences (identify, protected memory
+//!   read, update session) over a caller-supplied `drive::Transport`.
+//! - `image` — `image`: hardware family, UHD capability and Kernel ABI
 //!   analysis of decoded firmware bodies. Uses the shared H8 decoder, `std`,
 //!   `alloc` and a zlib inflater.
-//!   Also enables [`ident`]: plaintext banner parsing and recovery of the
+//!   Also enables `ident`: plaintext banner parsing and recovery of the
 //!   embedded OEM identity string from captured images.
-//! - `envelope` — [`envelope`]: decode, repack, build and sign firmware
-//!   envelopes; the decoded image feeds [`image`]. Implies `image` and `std`.
+//! - `envelope` — `envelope`: decode, repack, build and sign firmware
+//!   envelopes; the decoded image feeds `image`. Implies `image` and `std`.
 //! - `std` — links the standard library (implied by `envelope`).
 //!
 //! ## Drive state
@@ -367,3 +367,7 @@ pub mod sense {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(all(feature = "drive", feature = "envelope"))]
+#[doc = include_str!("../README.md")]
+mod readme_examples {}

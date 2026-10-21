@@ -44,11 +44,24 @@ pub struct FlashOutcome {
     pub identity: Identity,
 }
 
+impl FlashOutcome {
+    fn require_complete<E>(self) -> Result<Self, ExecutionError<E>> {
+        if self.normal_verified {
+            Ok(self)
+        } else {
+            Err(ExecutionError::VerificationIncomplete(self))
+        }
+    }
+}
+
 /// Failure of a complete operation. A readable mismatch is never downgraded to
 /// limited verification. No failing write is retried.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ExecutionError<E> {
+    /// The target started, but Normal readback was unavailable. Retains the
+    /// completed operation's evidence; a readable mismatch is a different error.
+    VerificationIncomplete(FlashOutcome),
     /// Firmware did not establish an unambiguous executable plan.
     Plan(&'static str),
     /// Identity could not be obtained at a required boundary.
@@ -84,6 +97,9 @@ pub enum ExecutionError<E> {
 impl<E: core::fmt::Debug> core::fmt::Display for ExecutionError<E> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::VerificationIncomplete(_) => {
+                f.write_str("target firmware started, but complete Normal readback is unavailable")
+            }
             Self::Plan(reason) => {
                 write!(f, "update plan refused before firmware transfer: {reason}")
             }
@@ -131,6 +147,7 @@ impl<E> ExecutionError<E> {
     /// Firmware transfer may have been attempted; conservative for uncertain entry failures.
     pub fn firmware_write_started(&self) -> bool {
         match self {
+            Self::VerificationIncomplete(_) => true,
             Self::Plan(_) => false,
             Self::IdentityRead { pass, target, .. }
             | Self::IdentityMismatch { pass, target, .. } => {
@@ -178,6 +195,7 @@ impl<E> ExecutionError<E> {
     /// The boundary which failed, suitable for operation diagnostics.
     pub fn phase(&self) -> &'static str {
         match self {
+            Self::VerificationIncomplete(_) => "Normal readback",
             Self::Plan(_) => "preflight",
             Self::IdentityRead { target, .. } | Self::IdentityMismatch { target, .. } => {
                 if *target {
@@ -204,6 +222,7 @@ impl<E> ExecutionError<E> {
 impl<E> crate::CodedError for ExecutionError<E> {
     fn code(&self) -> &'static str {
         match self {
+            Self::VerificationIncomplete(_) => "pioneer.execute.verification_incomplete",
             Self::Plan(_) => "pioneer.execute.plan",
             Self::IdentityRead { .. } => "pioneer.execute.identity_read",
             Self::IdentityMismatch { .. } => "pioneer.execute.identity_mismatch",
@@ -387,9 +406,24 @@ fn plan<'a, E>(
 }
 
 impl PreparedUpdate {
-    /// Flash through the complete receiver-owned procedure. Required migrations
-    /// and verification cannot be omitted through this high-level entry point.
+    /// Flash and require complete Kernel and Normal readback. The completed
+    /// operation's evidence is retained if Normal verification is unavailable.
     pub fn flash<R, W, H>(
+        &self,
+        io: FlashTransport<'_, R, W>,
+        runtime: &mut H,
+    ) -> Result<FlashOutcome, ExecutionError<W::Error>>
+    where
+        W: Transport,
+        R: Transport<Error = W::Error>,
+        H: ExecutionRuntime<W::Error>,
+    {
+        self.flash_completed(io, runtime)?.require_complete()
+    }
+
+    /// Execute the complete procedure and confirm target startup, retaining
+    /// unavailable Normal readback as explicit limited-verification evidence.
+    pub fn flash_completed<R, W, H>(
         &self,
         io: FlashTransport<'_, R, W>,
         runtime: &mut H,
@@ -595,8 +629,24 @@ impl PreparedUpdate {
     }
 }
 impl PreparedNormal {
-    /// Flash Normal through the complete receiver-owned procedure.
+    /// Flash Normal and require complete Normal readback. Kernel readback is
+    /// not required because this operation does not write the Kernel.
     pub fn flash<R, W, H>(
+        &self,
+        io: FlashTransport<'_, R, W>,
+        runtime: &mut H,
+    ) -> Result<FlashOutcome, ExecutionError<W::Error>>
+    where
+        W: Transport,
+        R: Transport<Error = W::Error>,
+        H: ExecutionRuntime<W::Error>,
+    {
+        self.flash_completed(io, runtime)?.require_complete()
+    }
+
+    /// Execute Normal-only and confirm target startup, preserving unavailable
+    /// Normal readback as explicit limited-verification evidence.
+    pub fn flash_completed<R, W, H>(
         &self,
         io: FlashTransport<'_, R, W>,
         runtime: &mut H,

@@ -308,6 +308,43 @@ fn target_identity_with_unreadable_normal_is_qualified_not_fully_verified() {
     assert!(result.kernel_verified);
     assert!(!result.normal_verified);
 }
+
+#[test]
+fn flash_requires_complete_readback_and_completed_preserves_qualified_evidence() {
+    use crate::CodedError;
+    let (plan, state) = setup(false);
+    state.borrow_mut().unreadable_normal = true;
+    let error = plan
+        .flash(
+            FlashTransport {
+                reads: &mut Port(state.clone()),
+                writes: &mut Port(state.clone()),
+            },
+            &mut Clock::default(),
+        )
+        .unwrap_err();
+    assert_eq!(error.code(), "pioneer.execute.verification_incomplete");
+    assert!(error.write_started() && error.firmware_write_started());
+    let ExecutionError::VerificationIncomplete(outcome) = error else {
+        panic!("completed evidence was lost");
+    };
+    assert!(outcome.kernel_verified && !outcome.normal_verified);
+    assert_eq!(outcome.completed_passes, 1);
+
+    let (plan, state) = setup(false);
+    state.borrow_mut().unreadable_normal = true;
+    let outcome = plan
+        .flash_completed(
+            FlashTransport {
+                reads: &mut Port(state.clone()),
+                writes: &mut Port(state.clone()),
+            },
+            &mut Clock::default(),
+        )
+        .unwrap();
+    assert!(outcome.kernel_verified && !outcome.normal_verified);
+    assert_eq!(outcome.completed_passes, 1);
+}
 #[test]
 fn normal_mismatch_is_fatal_and_stops_restoration() {
     let (plan, state) = setup(true);

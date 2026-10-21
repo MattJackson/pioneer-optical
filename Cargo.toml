@@ -1,8 +1,9 @@
 # Self-contained manifest (no workspace inheritance) so it packages for crates.io as-is.
 [package]
 name = "pioneer-optical"
-version = "0.17.0"
+version = "1.0.0"
 edition = "2021"
+autoexamples = false
 rust-version = "1.75"
 license = "MIT"
 authors = ["Matthew Jackson <1085847+MattJackson@users.noreply.github.com>"]
@@ -11,6 +12,22 @@ repository = "https://github.com/MattJackson/pioneer-optical"
 homepage = "https://github.com/MattJackson/pioneer-optical"
 documentation = "https://docs.rs/pioneer-optical"
 readme = "README.md"
+include = [
+    "/src/**",
+    "/tests/**",
+    "/docs/**",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/RELEASE.md",
+    "/LICENSE-MIT",
+    "/CODE_OF_CONDUCT.md",
+    "/.github/scripts/check-features.py",
+    "/examples/flash.rs",
+    "/examples/image_scan.rs",
+    "/examples/logging_scan.rs",
+    "/examples/startup_corpus.rs",
+    "/examples/device_firmware_scan.rs",
+]
 keywords = ["pioneer", "optical", "scsi", "firmware", "bluray"]
 categories = ["hardware-support", "no-std::no-alloc"]
 
@@ -59,7 +76,11 @@ required-features = ["envelope"]
 
 [[example]]
 name = "device_firmware_scan"
-required-features = ["firmware-info"]
+required-features = ["firmware-info", "envelope"]
+
+[[example]]
+name = "flash"
+required-features = ["drive", "envelope"]
 
 [dev-dependencies]
 serde_json = "1"

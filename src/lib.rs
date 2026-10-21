@@ -177,6 +177,19 @@ pub enum DriveClass {
     Dvr,
 }
 
+impl DriveClass {
+    /// Whether a host may offer automatic installed-firmware acquisition.
+    ///
+    /// Both vendor dialects provide firmware reads. Individual reads can still
+    /// fail or be protected; callers must validate the returned evidence and
+    /// must not treat this capability as a successful or complete backup.
+    pub const fn can_read(self) -> bool {
+        match self {
+            Self::Bd | Self::Dvr => true,
+        }
+    }
+}
+
 /// Trim trailing ASCII spaces and NULs and decode as UTF-8; `""` if invalid.
 fn field(raw: &[u8]) -> &str {
     let end = raw

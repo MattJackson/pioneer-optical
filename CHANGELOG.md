@@ -6,6 +6,9 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 
 ## [1.0.0] - 2026-10-21
 
+- Expose `DriveClass::can_read()` so hosts can offer automatic installed-firmware
+  acquisition through the supported Pioneer vendor read protocols.
+
 - Establish the stable 1.0 public API alongside the sister optical library.
 - Align complete-operation success with MediaTek: `flash` requires full readback;
   `flash_completed` explicitly preserves limited-verification outcomes.

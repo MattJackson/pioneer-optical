@@ -7,10 +7,10 @@
 //! into consecutive offsets. Its internal staging base is `0x10200`; that is
 //! not a WRITE BUFFER offset.
 //!
-//! The existing fingerprint selects segmentation for the target's kernel family.
-//! Both paths preserve the same front-key wire layout. This selector is not a
-//! general installed-receiver analyser and does not prove separate transfers
-//! are required by the OEM receiver.
+//! The installed Kernel's fingerprint selects segmentation for the first pass.
+//! If a temporary Kernel is installed, its fingerprint selects segmentation
+//! for the restoration pass. Both paths preserve the same front-key wire layout.
+//! This selector does not prove every behavior of an OEM receiver.
 
 use crate::drive::{Plan, Segment};
 use crate::{cdb, Role};

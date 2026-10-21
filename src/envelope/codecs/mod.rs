@@ -124,5 +124,10 @@ fn equivalent(a: &SelectedLayout, b: &SelectedLayout) -> bool {
         return false;
     }
     let same_rotation = for_layout(a.0).reverse_rotation() == for_layout(b.0).reverse_rotation();
-    same_rotation || a.3.chunks_exact(4).all(|word| word[0] & 15 == 0)
+    same_rotation || rotations_equivalent(&a.3)
+}
+
+/// Every word rotates by zero or sixteen bits, so both directions agree.
+pub(super) fn rotations_equivalent(key: &[u8]) -> bool {
+    !key.is_empty() && key.len() % 4 == 0 && key.chunks_exact(4).all(|word| word[0] & 15 == 0)
 }

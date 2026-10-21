@@ -812,7 +812,7 @@ pub fn encode_normal_for_kernel(
     let n = decode_envelope_with_kernel(&enc, &k).ok_or(Error::NormalUndecodable)?;
     let rotation = normal_rotation_from_kernel(kernel).ok_or(Error::UnknownRotation)?;
     if k.info.layout != layout
-        || !normal_layout_matches(n.info.layout, scaled, rotation)
+        || !normal_layout_matches(n.info.layout, scaled, rotation, &n.key)
         || n.image != normal
     {
         return Err(Error::RoundTripMismatch);
@@ -960,7 +960,7 @@ fn validate_pair_inner(
     let expected_kernel_layout =
         kernel_layout_from_image(kernel_image).ok_or(Error::AmbiguousKernelLayout)?;
     if kernel.info.layout != expected_kernel_layout
-        || !normal_layout_matches(normal.info.layout, scaled, rotation)
+        || !normal_layout_matches(normal.info.layout, scaled, rotation, &normal.key)
         || kernel.image != kernel_image
         || normal.image != normal_image
     {
@@ -975,9 +975,15 @@ fn normal_layout_matches(
     layout: Layout,
     scaled: Option<ScaledNormalGeometry>,
     rotation: NormalRotation,
+    key: &[u8],
 ) -> bool {
     if rotation == NormalRotation::Reverse {
-        return scaled.is_none() && layout == Layout::NormalReverse;
+        // Detection canonically names equivalent forward/reverse codecs
+        // `Normal`. Retain the receiver's reverse policy while accepting that
+        // name only when the complete key proves equivalent rotations.
+        return scaled.is_none()
+            && (layout == Layout::NormalReverse
+                || (layout == Layout::Normal && super::codecs::rotations_equivalent(key)));
     }
     match scaled {
         Some(g) if g.key_len == crate::image::KERNEL_LEN => {

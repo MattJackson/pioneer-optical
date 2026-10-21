@@ -21,8 +21,8 @@ use crate::{DriveClass, Identity, Role, IDENTITY_LEN, INQUIRY_LEN};
 
 mod update;
 pub use update::{
-    execute_plan, execute_update, Plan, Segment, UpdateError, UpdateOptions, UpdateRuntime,
-    UpdateTransfer,
+    execute_plan, execute_plan_with_entry, execute_update, validate_plan, Plan, Segment,
+    UpdateError, UpdateOptions, UpdateRuntime, UpdateTransfer,
 };
 
 /// The control buffer carried by [`cdb::enter_update`] and [`cdb::finish`].

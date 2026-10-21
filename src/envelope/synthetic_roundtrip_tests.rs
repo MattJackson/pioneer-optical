@@ -171,6 +171,50 @@ fn frontkey_recognizers_classify_dispatcher_and_policy() {
 }
 
 #[test]
+fn reverse_receiver_accepts_self_inverse_raw_key_rotations() {
+    let mut kernel = front_kernel();
+    write_rotation(&mut kernel, 0x114, false);
+    be32_fix(&mut kernel, 0xff00);
+    assert_eq!(
+        normal_rotation_from_kernel(&kernel),
+        Some(NormalRotation::Reverse)
+    );
+    let mut normal = normal_image(0x2000);
+    normal[0x800..0x804].copy_from_slice(&[0x12, 0x34, 0x56, 0x78]);
+    be32_fix(&mut normal, 0x1f00);
+    let kernel_enc =
+        encode_kernel_envelope(&kernel, "PIONEER TEST", &KernelBuild::from_seed(0)).unwrap();
+    let receiver = Envelope::load(&kernel_enc).unwrap();
+    let header = header_bytes("Normal", "SAT 8A10", "GENERAL");
+    // Zero- and sixteen-bit rotations are identical in either direction.
+    for rotation in [0, 16, 1] {
+        let mut key = vec![0; 0x10000];
+        for word in key.chunks_exact_mut(4) {
+            word.copy_from_slice(&[rotation, 0x23, 0x45, 0x67]);
+        }
+        let bytes = encode_normal_for_kernel(
+            &kernel,
+            &normal,
+            &header,
+            NormalKeySource::RawKey(&key),
+            NormalSignature::Zeroed,
+        )
+        .unwrap();
+        let decoded = Envelope::load_with_kernel(&bytes, &receiver).unwrap();
+        assert_eq!(
+            decoded.info().layout,
+            if rotation == 1 {
+                Layout::NormalReverse
+            } else {
+                Layout::Normal
+            }
+        );
+        assert_eq!(decoded.image, normal);
+        assert_eq!(decoded.repack(&decoded.image).unwrap(), bytes);
+    }
+}
+
+#[test]
 fn derivedkey_dispatcher_classifies_as_ciphertext_only() {
     let kernel = derived_kernel();
     assert_eq!(
@@ -869,6 +913,7 @@ fn repack_resized_normal_guard_isolation() {
     let valid = normal_image(0x2000);
     let tmpl = |image: Vec<u8>, ft: &str| DecodedEnvelope {
         info: EnvelopeInfo {
+            vendor: "PIONEER".into(),
             model: "BDR".into(),
             revision: "1".into(),
             kind: ComponentKind::from_header(ft).unwrap(),
@@ -939,6 +984,7 @@ fn kernel_xor_policy_requires_kernel_layout() {
     let env = DecodedEnvelope {
         image,
         info: EnvelopeInfo {
+            vendor: "PIONEER".into(),
             model: "BDR".into(),
             revision: "1".into(),
             kind: ComponentKind::Kernel,

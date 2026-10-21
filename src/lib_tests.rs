@@ -1,5 +1,11 @@
 use super::*;
 
+#[test]
+fn installed_firmware_read_capability_is_available_for_both_dialects() {
+    assert!(DriveClass::Bd.can_read());
+    assert!(DriveClass::Dvr.can_read());
+}
+
 fn inquiry(product: &[u8; 16]) -> [u8; INQUIRY_LEN] {
     let mut b = [b' '; INQUIRY_LEN];
     b[0] = 0x05;

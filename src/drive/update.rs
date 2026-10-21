@@ -244,22 +244,61 @@ pub fn execute_plan<T: Transport, R: UpdateRuntime>(
     plan: Plan<'_>,
     options: UpdateOptions,
 ) -> Result<(), UpdateError<T::Error>> {
+    execute_plan_with_entry(transport, runtime, control, plan, options, false)
+}
+
+/// Check every transfer span and actual command length before any device mutation.
+pub fn validate_plan<E>(plan: Plan<'_>) -> Result<(), UpdateError<E>> {
+    if plan.segments.is_empty() {
+        return Err(UpdateError::InvalidSpan {
+            role: Role::Normal,
+            length: 0,
+        });
+    }
     for segment in plan.segments {
-        let end = segment.dest_offset as usize + segment.bytes.len();
-        if segment.bytes.is_empty() || segment.max_chunk == 0 || end > ADDRESS_SPACE {
+        let end = (segment.dest_offset as usize).checked_add(segment.bytes.len());
+        if segment.bytes.is_empty()
+            || segment.max_chunk == 0
+            || end.map_or(true, |end| end > ADDRESS_SPACE)
+            || segment.bytes.len().min(segment.max_chunk as usize) >= ADDRESS_SPACE
+        {
             return Err(UpdateError::InvalidSpan {
                 role: segment.role,
                 length: segment.bytes.len(),
             });
         }
     }
+    Ok(())
+}
+
+/// Execute an already validated plan, optionally resuming a receiver which
+/// independently reported loader mode. This is a low-level protocol primitive;
+/// applications should use receiver::PreparedUpdate::execute for binding,
+/// migrations, restoration and completion verification.
+pub fn execute_plan_with_entry<T: Transport, R: UpdateRuntime>(
+    transport: &mut T,
+    runtime: &mut R,
+    control: &Control,
+    plan: Plan<'_>,
+    options: UpdateOptions,
+    already_updating: bool,
+) -> Result<(), UpdateError<T::Error>> {
+    validate_plan(plan)?;
     let kernel_bytes = role_total(plan, Role::Kernel);
     let normal_bytes = role_total(plan, Role::Normal);
     runtime.starting(kernel_bytes, normal_bytes);
-    let mut session =
-        enter_update(transport, options.class, control).map_err(UpdateError::Entry)?;
-    runtime.sleep(ENTRY_SETTLE);
-    if !options.recover {
+    let mut session = if already_updating {
+        super::Session {
+            t: transport,
+            control,
+        }
+    } else {
+        let session =
+            enter_update(transport, options.class, control).map_err(UpdateError::Entry)?;
+        runtime.sleep(ENTRY_SETTLE);
+        session
+    };
+    if !options.recover && !already_updating {
         let mut inquiry = [0; INQUIRY_ALLOCATION];
         read(
             session.t,
@@ -324,6 +363,7 @@ pub fn execute_plan<T: Transport, R: UpdateRuntime>(
         // TEST UNIT READY has a zero-length data-in phase in existing adapters.
         match super::exec(transport, &cdb::test_unit_ready(), Data::In(&mut [])) {
             Ok(_) => return Ok(()),
+            Err(_) if matches!(transport.sense(), Some((2, 0x3a, _))) => return Ok(()),
             Err(error) => {
                 let elapsed = runtime.elapsed().saturating_sub(start);
                 runtime.poll_failed(elapsed, &error);

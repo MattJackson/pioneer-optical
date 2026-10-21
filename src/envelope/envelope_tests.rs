@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn decoded_kernel_selects_update_dialect_from_firmware() {
+    let bd = Envelope::load(include_bytes!(
+        "../../tests/fixtures/update-dialect/pr1ame_1_05_kernel.enc"
+    ))
+    .unwrap();
+    assert_eq!(bd.info().kind, ComponentKind::Kernel);
+    assert_eq!(bd.update_dialect(), Some(DriveClass::Bd));
+
+    let dvr = Envelope::load(include_bytes!(
+        "../../tests/fixtures/update-dialect/dvr_109_1_58_kernel.enc"
+    ))
+    .unwrap();
+    assert_eq!(dvr.info().kind, ComponentKind::Kernel);
+    assert_eq!(dvr.update_dialect(), Some(DriveClass::Dvr));
+}
+
+#[test]
 fn lcg_seed_and_transform_roundtrip() {
     let seed = 0x4a6d5e;
     let key = make_key(seed, 0x1000);
@@ -174,6 +191,7 @@ fn resized_normal_requires_complete_declared_image() {
     let template = DecodedEnvelope {
         image: original.clone(),
         info: EnvelopeInfo {
+            vendor: "PIONEER".into(),
             model: "BDR-TEST".into(),
             revision: "1.00".into(),
             kind: ComponentKind::Normal,

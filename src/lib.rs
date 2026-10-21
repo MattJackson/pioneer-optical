@@ -11,15 +11,15 @@
 //!
 //! Optional features add:
 //!
-//! - `drive` — [`drive`]: the command sequences (identify, protected memory
-//!   read, update session) over a caller-supplied [`drive::Transport`].
-//! - `image` — [`image`]: hardware family, UHD capability and Kernel ABI
+//! - `drive` — `drive`: the command sequences (identify, protected memory
+//!   read, update session) over a caller-supplied `drive::Transport`.
+//! - `image` — `image`: hardware family, UHD capability and Kernel ABI
 //!   analysis of decoded firmware bodies. Uses the shared H8 decoder, `std`,
 //!   `alloc` and a zlib inflater.
-//!   Also enables [`ident`]: plaintext banner parsing and recovery of the
+//!   Also enables `ident`: plaintext banner parsing and recovery of the
 //!   embedded OEM identity string from captured images.
-//! - `envelope` — [`envelope`]: decode, repack, build and sign firmware
-//!   envelopes; the decoded image feeds [`image`]. Implies `image` and `std`.
+//! - `envelope` — `envelope`: decode, repack, build and sign firmware
+//!   envelopes; the decoded image feeds `image`. Implies `image` and `std`.
 //! - `std` — links the standard library (implied by `envelope`).
 //!
 //! ## Drive state
@@ -175,6 +175,19 @@ pub enum DriveClass {
     Bd,
     /// DVR generations: the [`dvr`] handshake precedes [`cdb::enter_update`].
     Dvr,
+}
+
+impl DriveClass {
+    /// Whether a host may offer automatic installed-firmware acquisition.
+    ///
+    /// Both vendor dialects provide firmware reads. Individual reads can still
+    /// fail or be protected; callers must validate the returned evidence and
+    /// must not treat this capability as a successful or complete backup.
+    pub const fn can_read(self) -> bool {
+        match self {
+            Self::Bd | Self::Dvr => true,
+        }
+    }
 }
 
 /// Trim trailing ASCII spaces and NULs and decode as UTF-8; `""` if invalid.
@@ -367,3 +380,7 @@ pub mod sense {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(all(feature = "drive", feature = "envelope"))]
+#[doc = include_str!("../README.md")]
+mod readme_examples {}

@@ -137,7 +137,7 @@ impl PreparedUpdate {
     /// The caller must prove the installed Normal's A0 write contract and
     /// derive `parameter`/`target` from target firmware semantics, not a model
     /// list or detector miss. No value is persisted outside this attempt.
-    pub fn flash_with_parameter<R, W, H>(
+    pub fn transfer_with_parameter_unchecked<R, W, H>(
         &self,
         io: FlashTransport<'_, R, W>,
         runtime: &mut H,
@@ -158,7 +158,7 @@ impl PreparedUpdate {
         bind(io.reads, &self.control, FlashPass::Initial)
             .map_err(crate::startup::migration::Error::Preflight)?;
         crate::startup::migration::execute(io.writes, parameter, target, |writes| {
-            self.flash(
+            self.transfer_unchecked(
                 FlashTransport {
                     reads: io.reads,
                     writes,
@@ -168,15 +168,18 @@ impl PreparedUpdate {
         })
     }
 
-    /// Execute both prepared passes when needed, verifying each Kernel readback.
+    /// Low-level transfer primitive: execute both prepared passes and Kernel readbacks.
+    ///
+    /// This omits required startup migration and target startup/Normal verification.
+    /// Application callers must use [`Self::execute`] instead.
     ///
     /// First capture a backup, enforce tray/consent policy, establish the entry
     /// dialect and exclude other device users. Both adapters must address the
     /// drive from which receiver evidence was captured. A failed step stops
     /// immediately; no automatic recovery writes or rollback are attempted.
-    /// If `startup_setting()` is present, use `flash_with_parameter` with that
+    /// If `startup_setting()` is present, use `transfer_with_parameter_unchecked` with that
     /// setting instead; this low-level entry point does not migrate settings.
-    pub fn flash<R, W, H>(
+    pub fn transfer_unchecked<R, W, H>(
         &self,
         io: FlashTransport<'_, R, W>,
         runtime: &mut H,
@@ -194,7 +197,11 @@ impl PreparedUpdate {
                     source,
                 })?;
         bind(io.reads, &self.control, FlashPass::Initial)?;
-        let receive = transport::detect(self.first_kernel_image());
+        // The resident loader receives the first Kernel. The incoming Kernel
+        // cannot decide how its own bytes must be segmented on the wire.
+        let receive = self
+            .initial_receive
+            .expect("prepared installed receiver transport");
         let mut storage = [Segment::PLACEHOLDER; 3];
         let plan = transport::plan(
             Some(self.kernel_transfer()),
@@ -224,7 +231,9 @@ impl PreparedUpdate {
                 })?;
             let control = receiver.control();
             bind(io.reads, &control, FlashPass::Restoration)?;
-            let receive = transport::detect(self.final_kernel_image());
+            // The temporary Kernel installed by the first pass receives the
+            // pristine OEM Kernel in the restoration pass.
+            let receive = transport::detect(self.first_kernel_image());
             let mut storage = [Segment::PLACEHOLDER; 3];
             let plan = transport::plan(Some(kernel), self.normal_transfer(), receive, &mut storage)
                 .map_err(|_| FlashError::UnsupportedTransport {
@@ -244,9 +253,9 @@ impl PreparedUpdate {
 impl PreparedNormal {
     /// Apply an independently verified native parameter migration before a
     /// Normal-only transfer. The caller must establish the current A0 contract
-    /// and target semantics, just as for `PreparedUpdate::flash_with_parameter`.
+    /// and target semantics, just as for `PreparedUpdate::transfer_with_parameter_unchecked`.
     /// No Kernel is written and no old value is retained after this attempt.
-    pub fn flash_with_parameter<R, W, H>(
+    pub fn transfer_with_parameter_unchecked<R, W, H>(
         &self,
         io: FlashTransport<'_, R, W>,
         runtime: &mut H,
@@ -267,7 +276,7 @@ impl PreparedNormal {
         bind(io.reads, &self.control, FlashPass::Initial)
             .map_err(crate::startup::migration::Error::Preflight)?;
         crate::startup::migration::execute(io.writes, parameter, target, |writes| {
-            self.flash(
+            self.transfer_unchecked(
                 FlashTransport {
                     reads: io.reads,
                     writes,
@@ -277,12 +286,15 @@ impl PreparedNormal {
         })
     }
 
-    /// Execute Normal-only after binding the live descriptor to captured evidence.
+    /// Low-level Normal transfer primitive after descriptor binding.
+    ///
+    /// This omits required startup migration and target completion verification.
+    /// Application callers must use [`Self::execute`] instead.
     ///
     /// First capture a backup, enforce tray/consent policy, establish the entry
     /// dialect and exclude other device users. No Kernel is written.
-    /// Use `flash_with_parameter` when `startup_setting()` is present.
-    pub fn flash<R, W, H>(
+    /// Use `transfer_with_parameter_unchecked` when `startup_setting()` is present.
+    pub fn transfer_unchecked<R, W, H>(
         &self,
         io: FlashTransport<'_, R, W>,
         runtime: &mut H,
@@ -330,7 +342,7 @@ fn exact<T: Transport>(
     }
     Ok(())
 }
-fn bind<T: Transport>(
+pub(super) fn bind<T: Transport>(
     transport: &mut T,
     control: &Control,
     pass: FlashPass,
@@ -349,7 +361,7 @@ fn bind<T: Transport>(
     }
     Ok(())
 }
-fn verify<T: Transport>(
+pub(super) fn verify<T: Transport>(
     transport: &mut T,
     expected: &[u8],
     pass: FlashPass,

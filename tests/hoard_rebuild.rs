@@ -284,6 +284,26 @@ fn rebuild_template_free(pair: &Pair, signer: &SigningKey) -> Outcome {
         details.push(format!("framing-only layout {plain:?}"));
         return Outcome::Failed(causes.join(" + "), details.join("; "));
     };
+    // This KAT measures continuous signed-file rebuilding. A spliced file
+    // includes foreign ciphertext blocks which the image-only builder cannot
+    // recreate. Still require the lossless envelope repacker to preserve it.
+    if !n.spliced_blocks().is_empty() {
+        assert_eq!(n.repack(&n.image).unwrap(), pair.normal, "{}", pair.label);
+        return Outcome::OutOfScope("spliced Normal (lossless repack checked)".into());
+    }
+    // The hoard also contains reconstruction placeholders. Their absent
+    // signature is not an OEM signature oracle. The separate property test
+    // below still re-encodes their bodies with fresh signatures and raw keys.
+    if n.signature_bytes()
+        .is_some_and(|bytes| bytes.iter().all(|b| *b == 0))
+        && matches!(
+            normal_authentication_from_kernel(&k.image),
+            Some(NormalAuthentication::KeyAndCiphertext | NormalAuthentication::CiphertextOnly)
+        )
+    {
+        assert_eq!(n.repack(&n.image).unwrap(), pair.normal, "{}", pair.label);
+        return Outcome::OutOfScope("Normal reconstruction placeholder (absent signature)".into());
+    }
     let nlayout = n.info().layout;
     let predicted = normal_rotation_from_kernel(&k.image);
     let observed = match nlayout {

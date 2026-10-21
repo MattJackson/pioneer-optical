@@ -13,7 +13,7 @@ mod handoff;
 mod receiver;
 pub use abi::{provided_abi, required_abi, Abi};
 pub use control::{receiver_control, ReceiverControl};
-#[cfg(test)]
+#[cfg(all(test, feature = "envelope"))]
 pub(crate) use handoff::tests::fixture as handoff_fixture;
 pub use handoff::{
     check_kernel_handoff, kernel_handoff_entry, kernel_startup_entry, KernelHandoffError,

@@ -115,6 +115,36 @@ fn prepares_patch_and_pristine_restore_before_any_io() {
     }
 }
 
+#[cfg(feature = "drive")]
+#[test]
+fn first_kernel_transport_is_selected_from_installed_loader() {
+    let original = update(false, 1, 0x12, true);
+    let mut kernel = original.kernel().clone();
+    kernel.image[0x5000..0x5006].copy_from_slice(&[0x7a, 0x10, 0, 1, 2, 0]);
+    kernel.image[0x5010..0x5014].copy_from_slice(&0x11200u32.to_be_bytes());
+    kernel.image[0x5020..0x5024].copy_from_slice(&0x20400u32.to_be_bytes());
+    kernel.image[0x5030..0x5034].copy_from_slice(&0x410000u32.to_be_bytes());
+    fix_sum(&mut kernel.image);
+    let installed = Update::load(
+        &kernel.repack(&kernel.image).unwrap(),
+        &original.normal().repack(&original.normal().image).unwrap(),
+    )
+    .unwrap();
+    let target = update(false, 1, 0x12, true);
+    assert_eq!(
+        crate::receiver::transport::detect(&target.kernel().image),
+        crate::receiver::transport::KernelReceive::Linear
+    );
+    let prepared = Receiver::from_installed(&installed)
+        .unwrap()
+        .prepare(target)
+        .unwrap();
+    assert_eq!(
+        prepared.initial_receive,
+        Some(crate::receiver::transport::KernelReceive::FrontKeyTwoRegion)
+    );
+}
+
 #[test]
 fn restoration_handoff_is_checked_before_the_first_pass() {
     let installed = update(true, 1, 0x12, true);
@@ -202,6 +232,10 @@ fn captured_receiver_evidence_does_not_require_a_distribution_signature() {
     let captured = Envelope::load_with_kernel(&bytes, installed.kernel()).unwrap();
     let receiver = Receiver::detect_with_kernel(&captured, installed.kernel()).unwrap();
     assert_eq!(receiver.family(), installed.family());
+    assert_eq!(
+        receiver.installed_kernel().unwrap().image,
+        installed.kernel().image
+    );
     assert!(receiver.prepare(update(false, 0, 0x12, true)).is_ok());
     assert!(Update::load(installed.kernel_transfer(), &bytes).is_err());
     assert_eq!(

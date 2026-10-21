@@ -9,6 +9,7 @@ struct State {
     descriptor: [u8; DESCRIPTOR_LEN],
     memory: Vec<u8>,
     kernels: Vec<Vec<u8>>,
+    kernel_chunks: Vec<Vec<usize>>,
     normals: Vec<Vec<u8>>,
     entries: usize,
     finishes: usize,
@@ -84,6 +85,7 @@ impl Transport for Port {
                 if command == cdb::enter_update() {
                     state.entries += 1;
                     state.kernels.push(Vec::new());
+                    state.kernel_chunks.push(Vec::new());
                     state.normals.push(Vec::new());
                 } else if command == cdb::finish() {
                     state.finishes += 1;
@@ -100,6 +102,9 @@ impl Transport for Port {
                     } else {
                         Role::Normal
                     };
+                    if role == Role::Kernel {
+                        state.kernel_chunks.last_mut().unwrap().push(bytes.len());
+                    }
                     let transfer = match role {
                         Role::Kernel => state.kernels.last_mut().unwrap(),
                         Role::Normal => state.normals.last_mut().unwrap(),
@@ -187,7 +192,7 @@ fn run(
         reads: false,
     };
     let mut clock = Clock::default();
-    plan.flash(
+    plan.transfer_unchecked(
         FlashTransport {
             reads: &mut reads,
             writes: &mut writes,
@@ -225,6 +230,41 @@ fn executes_exact_prepared_passes_and_verifies_final_kernel() {
 }
 
 #[test]
+fn installed_loader_selects_first_pass_kernel_segmentation() {
+    let original = super::super::preparation::tests::update(false, 1, 0x12, true);
+    let mut kernel = original.kernel().clone();
+    kernel.image[0x5000..0x5006].copy_from_slice(&[0x7a, 0x10, 0, 1, 2, 0]);
+    kernel.image[0x5010..0x5014].copy_from_slice(&0x11200u32.to_be_bytes());
+    kernel.image[0x5020..0x5024].copy_from_slice(&0x20400u32.to_be_bytes());
+    kernel.image[0x5030..0x5034].copy_from_slice(&0x410000u32.to_be_bytes());
+    let end = kernel.image.len() - 4;
+    kernel.image[end..].fill(0);
+    let sum = kernel.image.chunks_exact(4).fold(0u32, |sum, word| {
+        sum.wrapping_add(u32::from_be_bytes(word.try_into().unwrap()))
+    });
+    kernel.image[end..].copy_from_slice(&sum.wrapping_neg().to_be_bytes());
+    let installed = crate::envelope::Update::load(
+        &kernel.repack(&kernel.image).unwrap(),
+        &original.normal().repack(&original.normal().image).unwrap(),
+    )
+    .unwrap();
+    let target = super::super::preparation::tests::update(false, 1, 0x12, true);
+    assert_eq!(
+        transport::detect(&target.kernel().image),
+        transport::KernelReceive::Linear
+    );
+    let plan = Receiver::from_installed(&installed)
+        .unwrap()
+        .prepare(target)
+        .unwrap();
+    let state = state(&plan);
+    run(&plan, &state).unwrap();
+    let state = state.borrow();
+    assert_eq!(state.kernel_chunks[0][0], 0x1200);
+    assert_eq!(state.kernels[0], plan.kernel_transfer());
+}
+
+#[test]
 fn parameter_transaction_wraps_both_real_prepared_passes() {
     let plan = plan(true);
     let state = state(&plan);
@@ -237,7 +277,7 @@ fn parameter_transaction_wraps_both_real_prepared_passes() {
         state: state.clone(),
         reads: false,
     };
-    plan.flash_with_parameter(
+    plan.transfer_with_parameter_unchecked(
         FlashTransport {
             reads: &mut reads,
             writes: &mut writes,
@@ -269,7 +309,7 @@ fn failed_prepared_binding_restores_parameter_without_entry() {
     };
     let mut clock = Clock::default();
     let error = plan
-        .flash_with_parameter(
+        .transfer_with_parameter_unchecked(
             FlashTransport {
                 reads: &mut reads,
                 writes: &mut writes,
@@ -308,7 +348,7 @@ fn initial_policy_refusal_never_changes_startup_settings() {
         ..Clock::default()
     };
     let error = plan
-        .flash_with_parameter(
+        .transfer_with_parameter_unchecked(
             FlashTransport {
                 reads: &mut reads,
                 writes: &mut writes,
@@ -340,7 +380,7 @@ fn initial_binding_refusal_never_changes_startup_settings() {
         state: state.clone(),
         reads: false,
     };
-    let result = plan.flash_with_parameter(
+    let result = plan.transfer_with_parameter_unchecked(
         FlashTransport {
             reads: &mut reads,
             writes: &mut writes,
@@ -454,7 +494,7 @@ fn normal_only_binds_receiver_and_never_writes_or_reads_kernel() {
         reads: false,
     };
     let mut clock = Clock::default();
-    plan.flash(
+    plan.transfer_unchecked(
         FlashTransport {
             reads: &mut reads,
             writes: &mut writes,
@@ -504,7 +544,7 @@ fn normal_only_parameter_migration_obeys_the_same_rollback_boundary() {
             deny: (scenario == 3).then_some(FlashPass::Initial),
             ..Clock::default()
         };
-        let result = plan.flash_with_parameter(
+        let result = plan.transfer_with_parameter_unchecked(
             FlashTransport {
                 reads: &mut reads,
                 writes: &mut writes,
@@ -574,7 +614,7 @@ fn host_policy_can_refuse_either_pass_before_entry() {
             ..Clock::default()
         };
         let error = plan
-            .flash(
+            .transfer_unchecked(
                 FlashTransport {
                     reads: &mut reads,
                     writes: &mut writes,

@@ -28,6 +28,10 @@ pub enum PreparationError {
     UnsupportedRestoration,
     /// The target Normal's entry requirements could not be established.
     RestorationEntry(Error),
+    /// A required pass has no firmware-derived entry dialect.
+    UnsupportedDialect,
+    /// A required pass has no valid transfer layout.
+    UnsupportedTransport,
     /// A patched Kernel could not be encoded in the required transfer format.
     PatchedRepresentation,
 }
@@ -53,6 +57,8 @@ impl core::fmt::Display for PreparationError {
                 "target Kernel does not establish a supported pristine restoration path",
             ),
             Self::RestorationEntry(error) => write!(f, "pristine restoration entry: {error}"),
+            Self::UnsupportedDialect => f.write_str("a required receiver has no unique update-entry dialect signature"),
+            Self::UnsupportedTransport => f.write_str("a required receiver transfer layout is unsupported"),
             Self::PatchedRepresentation => {
                 f.write_str("temporarily patched Kernel cannot be represented for transfer")
             }
@@ -78,9 +84,14 @@ impl std::error::Error for PreparationError {
 pub struct PreparedNormal {
     #[cfg(feature = "drive")]
     pub(super) control: Control,
-    normal: Envelope,
+    pub(super) normal: Envelope,
     transfer: Vec<u8>,
-    startup_setting: Option<crate::startup::Setting>,
+    pub(super) startup_setting: Option<crate::startup::Setting>,
+    pub(super) installed_kernel: Option<Envelope>,
+    #[cfg(feature = "drive")]
+    pub(super) initial_class: Option<crate::DriveClass>,
+    #[cfg(feature = "drive")]
+    pub(super) normal_region: Option<crate::envelope::NormalRegion>,
 }
 
 impl PreparedNormal {
@@ -103,14 +114,25 @@ impl PreparedNormal {
 ///
 /// Preparation performs no device I/O. With the `drive` feature, `flash` binds
 /// live descriptors, executes the protocol and verifies each Kernel before
-/// proceeding. Success requires the final readback to match the pristine target.
+/// proceeding. The complete executor also verifies target startup and records
+/// whether Normal readback was available. Success requires the final Kernel
+/// readback to match the pristine target.
 #[derive(Debug)]
 pub struct PreparedUpdate {
     #[cfg(feature = "drive")]
     pub(super) control: Control,
-    target: Update,
+    #[cfg(feature = "drive")]
+    pub(super) initial_receive: Option<super::transport::KernelReceive>,
+    #[cfg(feature = "drive")]
+    pub(super) target_class: Option<crate::DriveClass>,
+    pub(super) target: Update,
     restoration: Option<Restoration>,
-    startup_setting: Option<crate::startup::Setting>,
+    pub(super) startup_setting: Option<crate::startup::Setting>,
+    pub(super) installed_kernel: Option<Envelope>,
+    #[cfg(feature = "drive")]
+    pub(super) initial_class: Option<crate::DriveClass>,
+    #[cfg(feature = "drive")]
+    pub(super) normal_region: Option<crate::envelope::NormalRegion>,
 }
 
 #[derive(Debug)]
@@ -190,6 +212,15 @@ impl Receiver {
             .ok_or(PreparationError::MissingInstalledKernel)?;
         let mut prepared = self.codec.prepare_normal(kernel, target, self.control())?;
         prepared.startup_setting = self.startup_setting_for(&prepared.normal.image)?;
+        prepared.installed_kernel = Some(kernel.clone());
+        #[cfg(feature = "drive")]
+        {
+            // Normal-only codec preparation does not require Kernel marker
+            // semantics. A complete live execution still requires a recognized
+            // entry dialect before any parameter or firmware mutation.
+            prepared.initial_class = kernel.update_dialect();
+            prepared.normal_region = normal_region(kernel, &prepared.normal.image);
+        }
         Ok(prepared)
     }
 
@@ -222,6 +253,19 @@ impl Receiver {
             .installed_kernel
             .as_ref()
             .ok_or(PreparationError::UnknownInstalledKernel)?;
+        prepared.installed_kernel = Some(installed.clone());
+        #[cfg(feature = "drive")]
+        {
+            prepared.initial_receive = Some(super::transport::detect(&installed.image));
+            prepared.initial_class = Some(
+                installed
+                    .update_dialect()
+                    .ok_or(PreparationError::UnsupportedDialect)?,
+            );
+            prepared.target_class = prepared.target.kernel().update_dialect();
+            prepared.normal_region =
+                normal_region(prepared.target.kernel(), &prepared.target.normal().image);
+        }
         crate::image::check_kernel_handoff(&installed.image, prepared.first_kernel_image())
             .map_err(PreparationError::KernelHandoff)?;
         if prepared.restoration.is_some() {
@@ -230,6 +274,30 @@ impl Receiver {
                 prepared.final_kernel_image(),
             )
             .map_err(PreparationError::KernelHandoff)?;
+        }
+        #[cfg(feature = "drive")]
+        {
+            let mut storage = [crate::drive::Segment::PLACEHOLDER; 3];
+            super::transport::plan(
+                Some(prepared.kernel_transfer()),
+                prepared.normal_transfer(),
+                prepared.initial_receive.expect("prepared receive layout"),
+                &mut storage,
+            )
+            .map_err(|_| PreparationError::UnsupportedTransport)?;
+            if let Some(kernel) = prepared.restoration_kernel_transfer() {
+                prepared
+                    .target_class
+                    .ok_or(PreparationError::UnsupportedDialect)?;
+                let mut storage = [crate::drive::Segment::PLACEHOLDER; 3];
+                super::transport::plan(
+                    Some(kernel),
+                    prepared.normal_transfer(),
+                    super::transport::detect(prepared.first_kernel_image()),
+                    &mut storage,
+                )
+                .map_err(|_| PreparationError::UnsupportedTransport)?;
+            }
         }
         Ok(prepared)
     }
@@ -251,6 +319,11 @@ pub(super) fn prepare_normal_oem(
         normal,
         transfer,
         startup_setting: None,
+        installed_kernel: None,
+        #[cfg(feature = "drive")]
+        initial_class: None,
+        #[cfg(feature = "drive")]
+        normal_region: None,
     })
 }
 
@@ -287,9 +360,18 @@ pub(super) fn prepare_oem(
     Ok(PreparedUpdate {
         #[cfg(feature = "drive")]
         control: _control,
+        #[cfg(feature = "drive")]
+        initial_receive: None,
+        #[cfg(feature = "drive")]
+        target_class: None,
         target,
         restoration,
         startup_setting: None,
+        installed_kernel: None,
+        #[cfg(feature = "drive")]
+        initial_class: None,
+        #[cfg(feature = "drive")]
+        normal_region: None,
     })
 }
 
@@ -300,3 +382,13 @@ fn needs_patch(policy: KernelMarkerPolicy, marker: Option<u8>) -> bool {
 #[cfg(test)]
 #[path = "preparation_tests.rs"]
 pub(super) mod tests;
+
+#[cfg(feature = "drive")]
+pub(super) fn normal_region(
+    kernel: &Envelope,
+    normal: &[u8],
+) -> Option<crate::envelope::NormalRegion> {
+    let layout = kernel.normal_layout().ok()?;
+    layout.validate(normal).ok()?;
+    layout.resolve(normal).ok()
+}

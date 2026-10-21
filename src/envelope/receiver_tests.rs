@@ -82,6 +82,7 @@ fn policy_rejects_missing_ambiguous_unaligned_and_repeated_offsets() {
     let mut kernel = DecodedEnvelope {
         image: branch([0x16900, 0x77300]),
         info: EnvelopeInfo {
+            vendor: "PIONEER".into(),
             model: "BDR-TEST".into(),
             revision: "1.00".into(),
             kind: ComponentKind::Kernel,

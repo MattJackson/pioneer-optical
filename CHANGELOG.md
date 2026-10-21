@@ -4,7 +4,47 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## [1.0.0] - 2026-10-21
+
+- Expose `DriveClass::can_read()` so hosts can offer automatic installed-firmware
+  acquisition through the supported Pioneer vendor read protocols.
+
+- Establish the stable 1.0 public API alongside the sister optical library.
+- Align complete-operation success with MediaTek: `flash` requires full readback;
+  `flash_completed` explicitly preserves limited-verification outcomes.
+- Accept canonical Normal layout names for reverse receivers only when every
+  raw-key word proves identical zero/sixteen-bit rotations; retain full image
+  round-trip validation and cover distinct rotations with a regression.
+- Validate every distinct feature configuration, doctests, all-feature packaging,
+  Rust 1.75 and bare-metal `no_std` builds in CI before publication.
+- Correct optional-feature documentation and test/example feature requirements;
+  add a compiled receiver-bound host integration example and update API guidance.
+
+- Own the complete Flash and Recovery procedure: cached dialect and layout,
+  startup migration, validated transfer spans, receiver binding, required
+  restoration passes and target-specific completion checks.
+- Make high-level `flash` execute the complete procedure. Rename explicit
+  protocol-only primitives to `transfer_unchecked` and
+  `transfer_with_parameter_unchecked` (breaking API change).
+- Verify Kernel and Normal bytes, preserve unreadable Normal regions as limited
+  verification, and reject readable mismatches even after an unreadable chunk.
+- Confirm the target model, revision and firmware tags; readiness alone is
+  insufficient. Retain failure phase and temporary-firmware state.
+- Bind OEM vendor identity to cached envelope metadata, including PLEXTOR,
+  TEAC, ASUS and SONY firmware. Compare revision evidence using the exact
+  four-byte INQUIRY field and reject malformed non-ASCII revisions.
+- Add complete-operation and failure-order regressions while preserving the
+  existing low-level protocol and external OEM corpus tests.
+
+## [0.16.3] - 2026-10-20
+
+- Expose the update-entry drive class from an already decoded Kernel envelope,
+  using its recognized layout and body policy. This lets flash callers reuse
+  the decoded firmware rather than infer the protocol from a product name.
+- Cover the Pioneer PR1AME 1.05 and legacy DVR Kernel signatures with captured
+  fixtures.
+- Let a detected receiver expose its retained decoded installed Kernel to
+  callers, so they can ask it for the entry dialect without another decode.
 
 ## [0.16.2] - 2026-10-19
 

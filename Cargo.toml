@@ -1,7 +1,7 @@
 # Self-contained manifest (no workspace inheritance) so it packages for crates.io as-is.
 [package]
 name = "pioneer-optical"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 autoexamples = false
 rust-version = "1.75"
@@ -24,6 +24,8 @@ include = [
     "/.github/scripts/check-features.py",
     "/examples/flash.rs",
     "/examples/image_scan.rs",
+    "/examples/hardware_report.rs",
+    "/examples/hardware_probe.rs",
     "/examples/logging_scan.rs",
     "/examples/startup_corpus.rs",
     "/examples/device_firmware_scan.rs",
@@ -84,3 +86,11 @@ required-features = ["drive", "envelope"]
 
 [dev-dependencies]
 serde_json = "1"
+
+[[example]]
+name = "hardware_report"
+required-features = ["envelope"]
+
+[[example]]
+name = "hardware_probe"
+required-features = ["analysis"]

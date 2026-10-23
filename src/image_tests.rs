@@ -372,3 +372,38 @@ fn is_uhd_exact_length_signature() {
 fn family_debug_format() {
     assert_eq!(alloc::format!("{:?}", Family(0xabc)), "Family(abc)");
 }
+
+#[test]
+fn ffc5_high_boards_still_compare_servo_tables() {
+    // Identical hardware-register setup; only servo evidence differs.
+    let mut body = vec![
+        0xF6, 0x12, 0x6A, 0x86, 0xE4, 0x36, 0xF6, 0x20, 0x6A, 0x86, 0xFF, 0xC5,
+    ];
+    let missing = family_fingerprint(&body).unwrap();
+    assert_eq!(missing.board, "ffc5=20 edcc=- edcd=-");
+    assert_eq!(missing.servo, "none");
+    let first = servo_row(0x11);
+    body.extend_from_slice(&first);
+    let found = family_fingerprint(&body).unwrap();
+    assert_ne!(found.family, missing.family);
+    assert_eq!(found.servo, servo_hash(&[&first]));
+    assert_eq!(Some(found.family), family(&body));
+    let mut changed = body.clone();
+    *changed.last_mut().unwrap() ^= 1;
+    assert_ne!(family(&changed), family(&body));
+    assert_eq!(family_fingerprint(&[]), None);
+}
+
+#[test]
+fn ffc5_high_servo_base_is_stable_across_duplicates_and_later_rows() {
+    let mut body = vec![
+        0xF6, 0x12, 0x6A, 0x86, 0xE4, 0x36, 0xF6, 0x20, 0x6A, 0x86, 0xFF, 0xC5,
+    ];
+    for i in 0..7 {
+        body.extend_from_slice(&servo_row(i));
+    }
+    let before = family(&body);
+    body.extend_from_slice(&servo_row(0));
+    body.extend_from_slice(&servo_row(8));
+    assert_eq!(family(&body), before);
+}

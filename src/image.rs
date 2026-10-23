@@ -44,6 +44,9 @@ const BOARD_REGS: [u16; 3] = [0xFFC5, 0xEDCC, 0xEDCD];
 const SERVO_ROW: [u8; 10] = [0x7f, 0x97, 0x7f, 0x51, 0x7f, 0x51, 0x7f, 0x51, 0x7f, 0x51];
 /// Number of distinct servo rows that form the version-stable base.
 const SERVO_BASE: usize = 7;
+/// Family identifier namespace. Version 2 always includes the servo signature.
+pub const FAMILY_SCHEME: &str = "pioneer.hardware.v2";
+
 /// Full servo coefficient row width.
 const SERVO_ROW_LEN: usize = 40;
 
@@ -303,6 +306,26 @@ fn fmt_board(ints: Option<&BTreeSet<u8>>, strs: Option<&BTreeSet<String>>) -> St
 /// The hardware family of a body, or `None` when the body carries no front-end
 /// configuration (a Kernel, an undecodable body, or unrelated data).
 pub fn family(body: &[u8]) -> Option<Family> {
+    family_fingerprint(body).map(|f| f.family)
+}
+
+/// Exact configuration inputs used to calculate a hardware family.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FamilyFingerprint {
+    /// Calculated hardware-family identifier.
+    pub family: Family,
+    /// Canonical servo/RF register values.
+    pub asic: String,
+    /// Canonical board marker writes and bit operations.
+    pub board: String,
+    /// Canonical pin configuration register values.
+    pub pins: String,
+    /// Servo coefficient hash, or `"none"` when no anchor rows were found.
+    pub servo: String,
+}
+
+/// Extract the configuration evidence used by [`family`].
+pub fn family_fingerprint(body: &[u8]) -> Option<FamilyFingerprint> {
     // Code = the uncompressed head plus stream 5; servo rows live in the head.
     let (code, main): (Vec<u8>, &[u8]) = match comp_streams(body) {
         Some(st) => {
@@ -317,10 +340,15 @@ pub fn family(body: &[u8]) -> Option<Family> {
         None => (body.to_vec(), body),
     };
 
-    family_parts(&code, main)
+    fingerprint_parts(&code, main)
 }
 
+#[cfg(feature = "analysis")]
 pub(crate) fn family_parts(code: &[u8], main: &[u8]) -> Option<Family> {
+    fingerprint_parts(code, main).map(|f| f.family)
+}
+
+fn fingerprint_parts(code: &[u8], main: &[u8]) -> Option<FamilyFingerprint> {
     let wanted: BTreeSet<u16> = ASIC_REGS
         .iter()
         .chain(PIN_REGS.iter())
@@ -347,16 +375,17 @@ pub(crate) fn family_parts(code: &[u8], main: &[u8]) -> Option<Family> {
     let pins = regs(&PIN_REGS, &|a| fmt_ints(w.get(a)));
     let board = regs(&BOARD_REGS, &|a| fmt_board(w.get(a), b.get(a)));
 
-    // Boards with FFC5 driven high carry no distinguishing servo table.
-    let key = if board.contains("ffc5=20") {
-        format!("asic={asic}\u{1f}board={board}\u{1f}pins={pins}")
-    } else {
-        format!(
-            "asic={asic}\u{1f}board={board}\u{1f}pins={pins}\u{1f}servo={}",
-            servo(main)
-        )
-    };
-    Some(Family(fnv1a(key.as_bytes())))
+    // Servo is independent evidence even on boards whose FFC5 writes include
+    // 0x20. Omitting it conflates SAT 8000/8680 and SAT 8301/8600/8800.
+    let servo = servo(main);
+    let key = format!("asic={asic}\u{1f}board={board}\u{1f}pins={pins}\u{1f}servo={servo}");
+    Some(FamilyFingerprint {
+        family: Family(fnv1a(key.as_bytes())),
+        asic,
+        board,
+        pins,
+        servo,
+    })
 }
 
 /// Whether the body is UHD-capable.

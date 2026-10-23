@@ -4,6 +4,17 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [1.0.1] - 2026-10-22
+
+- Always include the servo coefficient fingerprint in hardware-family IDs,
+  including boards with `ffc5=20`. This separates the previously conflated
+  SAT 8000/8680 and SAT 8301/8600/8800 groups; a missing signature remains the
+  explicit `none` fingerprint value. The analysis namespace is now
+  `pioneer.hardware.v2`; consumers must regenerate cached family IDs and matches.
+- Expose canonical hardware-family inputs through `image::family_fingerprint`.
+
 ## [1.0.0] - 2026-10-21
 
 - Expose `DriveClass::can_read()` so hosts can offer automatic installed-firmware

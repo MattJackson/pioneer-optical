@@ -209,7 +209,7 @@ impl Envelope {
         let mut result = FirmwareAnalysis {
             identity: Identity {
                 family: None,
-                family_scheme: "pioneer.hardware.v1",
+                family_scheme: crate::image::FAMILY_SCHEME,
                 model: info.model.clone(),
                 component: info.kind.to_string(),
                 revision: info.revision.clone(),

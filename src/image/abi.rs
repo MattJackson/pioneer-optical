@@ -72,9 +72,9 @@ fn abs24_target(c: &[u8], i: usize) -> Option<u32> {
 
 /// Entry addresses a Normal body calls: targets of `JSR/JMP @aa:24` in
 /// `0x400000..=0x40FFFF` (even), seen in the synchronised instruction stream.
-fn required_entries(body: &[u8]) -> Vec<u32> {
+fn required_entries_from(body: &[u8], start: usize) -> Vec<u32> {
     let mut out = Vec::new();
-    let (mut i, mut run) = (NORMAL_CODE_START, 0u32);
+    let (mut i, mut run) = (start, 0u32);
     while i + 4 <= body.len() {
         let v = valid(body, i);
         if v && run >= SYNC_RUN {
@@ -148,7 +148,17 @@ pub fn required_abi(body: &[u8]) -> Option<Abi> {
     if body.len() <= KERNEL_LEN {
         return None;
     }
-    let e = required_entries(body);
+    let regions = super::regions(body)?;
+    let mut e = Vec::new();
+    for (i, region) in regions.stored.iter().enumerate() {
+        e.extend(required_entries_from(
+            super::aligned_code_region(region, body),
+            if i == 0 { NORMAL_CODE_START } else { 0 },
+        ));
+    }
+    for region in &regions.expanded {
+        e.extend(required_entries_from(region, 0));
+    }
     (!e.is_empty()).then(|| Abi::new(e))
 }
 
@@ -161,3 +171,8 @@ pub fn provided_abi(body: &[u8]) -> Option<Abi> {
 #[cfg(test)]
 #[path = "abi_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+fn required_entries(body: &[u8]) -> Vec<u32> {
+    required_entries_from(body, NORMAL_CODE_START)
+}

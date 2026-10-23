@@ -6,9 +6,7 @@ pub(crate) struct Stream {
     pub address_start: u32,
     #[cfg(feature = "envelope")]
     pub address_end: u32,
-    #[cfg(feature = "envelope")]
     pub image_offset: usize,
-    #[cfg(feature = "envelope")]
     pub compressed_size: usize,
     pub expanded: Vec<u8>,
 }
@@ -97,9 +95,7 @@ pub(crate) fn read(
                 address_start: start,
                 #[cfg(feature = "envelope")]
                 address_end: end,
-                #[cfg(feature = "envelope")]
                 image_offset: offset,
-                #[cfg(feature = "envelope")]
                 compressed_size: compressed.len(),
                 expanded,
             });

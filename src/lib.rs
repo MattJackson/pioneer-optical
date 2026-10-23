@@ -50,7 +50,7 @@ mod comp;
 #[cfg(any(feature = "analysis", feature = "firmware-info"))]
 mod comp_runtime;
 
-#[cfg(any(feature = "envelope", feature = "firmware-info"))]
+#[cfg(feature = "image")]
 mod comp_streams;
 
 mod error_codes;

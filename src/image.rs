@@ -26,6 +26,7 @@ use alloc::borrow::ToOwned;
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 
 /// Load address of the Kernel component.
@@ -44,8 +45,8 @@ const BOARD_REGS: [u16; 3] = [0xFFC5, 0xEDCC, 0xEDCD];
 const SERVO_ROW: [u8; 10] = [0x7f, 0x97, 0x7f, 0x51, 0x7f, 0x51, 0x7f, 0x51, 0x7f, 0x51];
 /// Number of distinct servo rows that form the version-stable base.
 const SERVO_BASE: usize = 7;
-/// Family identifier namespace. Version 2 always includes the servo signature.
-pub const FAMILY_SCHEME: &str = "pioneer.hardware.v2";
+/// Version 3 normalizes decoded regions and servo base-row order.
+pub const FAMILY_SCHEME: &str = "pioneer.hardware.v3";
 
 /// Full servo coefficient row width.
 const SERVO_ROW_LEN: usize = 40;
@@ -91,65 +92,85 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     h
 }
 
-/// A decompressed COMP stream: `(offset_in_body, decompressed_bytes)`.
-type Stream = (usize, Vec<u8>);
-
-/// Decompress the streams of a COMP container. `None` for an uncompressed body
-/// or an unparseable container.
-fn comp_streams(img: &[u8]) -> Option<Vec<Stream>> {
-    let pairs = crate::comp::comp_pairs(img)?;
-    let npairs = pairs.len();
-    let first = pairs[0].0 as u64;
-    let len = img.len() as u64;
-    // The load base is unknown: try each 4 KiB-aligned base that fits.
-    let start = (first.saturating_sub(len)) & !0xFFF;
-    let stop = first & !0xFFF; // inclusive
-    let mut base = start;
-    while base <= stop {
-        let mut out: Vec<Stream> = Vec::with_capacity(npairs);
-        let mut ok = true;
-        for &(s, e) in &pairs {
-            let (s, e) = (s as u64, e as u64);
-            if s < base || e <= s {
-                ok = false;
-                break;
-            }
-            let o = (s - base) as usize;
-            if o + 4 > img.len() {
-                ok = false;
-                break;
-            }
-            let n = crate::comp::be_u32(img, o)? as usize;
-            if n > crate::comp::MAX_EXPANDED {
-                ok = false;
-                break;
-            }
-            // Compressed data runs to the stream end, clamped to the body.
-            let end = core::cmp::min((e - base + 4) as usize, img.len());
-            let cstart = o + 4;
-            if cstart > end {
-                ok = false;
-                break;
-            }
-            let c = &img[cstart..end];
-            if c.first() != Some(&0x78) {
-                ok = false;
-                break;
-            }
-            match miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(c, n) {
-                Ok(x) if x.len() == n => out.push((o, x)),
-                _ => {
-                    ok = false;
-                    break;
-                }
-            }
-        }
-        if ok && out.len() == npairs {
-            return Some(out);
-        }
-        base += 0x1000;
+/// A logical region, kept separate so unrelated spans never form instructions.
+pub(crate) struct Regions<'a> {
+    pub stored: Vec<&'a [u8]>,
+    pub expanded: Vec<Vec<u8>>,
+}
+impl Regions<'_> {
+    pub fn slices(&self) -> Vec<&[u8]> {
+        self.stored
+            .iter()
+            .copied()
+            .chain(self.expanded.iter().map(Vec::as_slice))
+            .collect()
     }
-    None
+}
+
+/// Shared checked decoding: malformed COMP never falls back to scanning compressed bytes.
+pub(crate) fn regions(body: &[u8]) -> Option<Regions<'_>> {
+    let streams =
+        crate::comp_streams::read(body, crate::comp::MAX_TOTAL_EXPANDED, &mut || true).ok()?;
+    let Some((_, mut streams)) = streams else {
+        return Some(Regions {
+            stored: vec![body],
+            expanded: Vec::new(),
+        });
+    };
+    streams.sort_by_key(|s| s.image_offset);
+    let spans: Vec<_> = streams
+        .iter()
+        .map(|s| (s.image_offset, s.compressed_size))
+        .collect();
+    let stored = stored_regions(body, &spans)?;
+    Some(Regions {
+        stored,
+        expanded: streams.into_iter().map(|s| s.expanded).collect(),
+    })
+}
+
+/// Remove compressed spans without joining unrelated stored bytes.
+/// Callers supply spans in physical order after validated COMP decoding.
+pub(crate) fn stored_regions<'a>(
+    body: &'a [u8],
+    spans: &[(usize, usize)],
+) -> Option<Vec<&'a [u8]>> {
+    let mut regions = Vec::new();
+    let mut cursor = 0;
+    for &(offset, size) in spans {
+        if offset < cursor {
+            return None;
+        }
+        regions.push(body.get(cursor..offset)?);
+        cursor = offset.checked_add(4)?.checked_add(size)?;
+    }
+    regions.push(body.get(cursor..)?);
+    Some(regions)
+}
+
+#[cfg(test)]
+fn comp_streams(body: &[u8]) -> Option<Vec<(usize, Vec<u8>)>> {
+    crate::comp_streams::read(body, crate::comp::MAX_TOTAL_EXPANDED, &mut || true)
+        .ok()?
+        .map(|(_, streams)| {
+            streams
+                .into_iter()
+                .map(|s| (s.image_offset, s.expanded))
+                .collect()
+        })
+}
+
+/// Stored gaps retain the image's instruction alignment; expanded streams start
+/// at their own logical origin. Byte signatures still use the complete regions.
+pub(crate) fn aligned_code_region<'a>(region: &'a [u8], body: &[u8]) -> &'a [u8] {
+    let start = region.as_ptr() as usize;
+    let origin = body.as_ptr() as usize;
+    let skip = if start >= origin && start - origin < body.len() {
+        (start - origin) & 1
+    } else {
+        0
+    };
+    region.get(skip..).unwrap_or_default()
 }
 
 /// `{reg16 -> set(imm)}` for `MOV.B #imm,Rn` immediately followed by
@@ -240,33 +261,33 @@ fn bit_ops(code: &[u8], want: &BTreeSet<u16>) -> BTreeMap<u16, BTreeSet<String>>
 }
 
 /// Servo coefficient fingerprint: hash of the first [`SERVO_BASE`] distinct
-/// 40-byte rows (in table order), or `"none"`.
+/// 40-byte base rows, sorted before hashing, or `"none"`.
+#[cfg(test)]
 fn servo(code: &[u8]) -> String {
+    servo_regions(&[code])
+}
+
+fn servo_regions(regions: &[&[u8]]) -> String {
     let mut rows: Vec<&[u8]> = Vec::new();
-    if code.len() >= SERVO_ROW.len() {
-        let mut i = 0;
-        while i + SERVO_ROW.len() <= code.len() {
-            if code[i..i + SERVO_ROW.len()] == SERVO_ROW {
-                let end = core::cmp::min(i + SERVO_ROW_LEN, code.len());
-                let row = &code[i..end];
-                if !rows.contains(&row) {
-                    rows.push(row);
-                    // Only the first SERVO_BASE distinct rows are used.
-                    if rows.len() == SERVO_BASE {
-                        break;
-                    }
+    for region in regions {
+        for row in region.windows(SERVO_ROW_LEN) {
+            if row.starts_with(&SERVO_ROW) && !rows.contains(&row) {
+                rows.push(row);
+                if rows.len() == SERVO_BASE {
+                    break;
                 }
             }
-            i += 1;
+        }
+        if rows.len() == SERVO_BASE {
+            break;
         }
     }
     if rows.is_empty() {
         return "none".to_owned();
     }
-    let mut concat: Vec<u8> = Vec::new();
-    for r in rows.iter().take(SERVO_BASE) {
-        concat.extend_from_slice(r);
-    }
+    // The version-stable base may be laid out in different physical orders.
+    rows.sort_unstable();
+    let concat: Vec<u8> = rows.into_iter().flatten().copied().collect();
     format!("{:016x}", fnv1a(&concat))
 }
 
@@ -326,29 +347,17 @@ pub struct FamilyFingerprint {
 
 /// Extract the configuration evidence used by [`family`].
 pub fn family_fingerprint(body: &[u8]) -> Option<FamilyFingerprint> {
-    // Code = the uncompressed head plus stream 5; servo rows live in the head.
-    let (code, main): (Vec<u8>, &[u8]) = match comp_streams(body) {
-        Some(st) => {
-            let first = st.iter().map(|(o, _)| *o).min().unwrap_or(0);
-            let main = &body[..first.min(body.len())];
-            let mut code = main.to_vec();
-            if let Some((_, s5)) = st.get(5) {
-                code.extend_from_slice(s5);
-            }
-            (code, main)
-        }
-        None => (body.to_vec(), body),
-    };
-
-    fingerprint_parts(&code, main)
+    let regions = regions(body)?;
+    fingerprint_regions(&regions.slices(), body)
 }
 
+/// Already-decoded regions supplied by the analysis pipeline.
 #[cfg(feature = "analysis")]
-pub(crate) fn family_parts(code: &[u8], main: &[u8]) -> Option<Family> {
-    fingerprint_parts(code, main).map(|f| f.family)
+pub(crate) fn family_regions(regions: &[&[u8]], body: &[u8]) -> Option<Family> {
+    fingerprint_regions(regions, body).map(|f| f.family)
 }
 
-fn fingerprint_parts(code: &[u8], main: &[u8]) -> Option<FamilyFingerprint> {
+fn fingerprint_regions(regions: &[&[u8]], body: &[u8]) -> Option<FamilyFingerprint> {
     let wanted: BTreeSet<u16> = ASIC_REGS
         .iter()
         .chain(PIN_REGS.iter())
@@ -357,14 +366,23 @@ fn fingerprint_parts(code: &[u8], main: &[u8]) -> Option<FamilyFingerprint> {
         .collect();
     let board_wanted: BTreeSet<u16> = BOARD_REGS.iter().copied().collect();
 
-    let w = reg_writes(code, &wanted);
+    let mut w: BTreeMap<u16, BTreeSet<u8>> = BTreeMap::new();
+    let mut b: BTreeMap<u16, BTreeSet<String>> = BTreeMap::new();
+    for region in regions {
+        let region = aligned_code_region(region, body);
+        for (key, values) in reg_writes(region, &wanted) {
+            w.entry(key).or_default().extend(values);
+        }
+        for (key, values) in bit_ops(region, &board_wanted) {
+            b.entry(key).or_default().extend(values);
+        }
+    }
     if !ASIC_REGS
         .iter()
         .any(|a| w.get(a).is_some_and(|s| !s.is_empty()))
     {
         return None;
     }
-    let b = bit_ops(code, &board_wanted);
     let regs = |set: &[u16], f: &dyn Fn(&u16) -> String| {
         set.iter()
             .map(|a| format!("{:04x}={}", a, f(a)))
@@ -377,7 +395,7 @@ fn fingerprint_parts(code: &[u8], main: &[u8]) -> Option<FamilyFingerprint> {
 
     // Servo is independent evidence even on boards whose FFC5 writes include
     // 0x20. Omitting it conflates SAT 8000/8680 and SAT 8301/8600/8800.
-    let servo = servo(main);
+    let servo = servo_regions(regions);
     let key = format!("asic={asic}\u{1f}board={board}\u{1f}pins={pins}\u{1f}servo={servo}");
     Some(FamilyFingerprint {
         family: Family(fnv1a(key.as_bytes())),
@@ -390,10 +408,13 @@ fn fingerprint_parts(code: &[u8], main: &[u8]) -> Option<FamilyFingerprint> {
 
 /// Whether the body is UHD-capable.
 pub fn is_uhd(body: &[u8]) -> bool {
-    if body.len() < SIG0.len() {
-        return false;
-    }
-    body.windows(SIG0.len()).any(|w| w == SIG0)
+    regions(body).is_some_and(|r| uhd_regions(&r.slices()))
+}
+
+pub(crate) fn uhd_regions(regions: &[&[u8]]) -> bool {
+    regions
+        .iter()
+        .any(|s| s.windows(SIG0.len()).any(|w| w == SIG0))
 }
 
 #[cfg(test)]

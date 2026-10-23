@@ -36,8 +36,9 @@ pub const KERNEL_LEN: usize = 0x1_0000;
 
 /// Front-end servo/RF ASIC register block (low 16 bits of `0xFFExxx`).
 const ASIC_REGS: [u16; 7] = [0xE436, 0xE43A, 0xE43B, 0xE45B, 0xE463, 0xE46A, 0xE46B];
-/// Board pin-function / port configuration registers.
-const PIN_REGS: [u16; 4] = [0xFE8F, 0xFE94, 0xFE9D, 0xFEC0];
+/// Hardware/interface initialization registers. Exact electrical roles are not
+/// established; FE8F/FE9D/FE9F occur in ATA/ATAPI host-interface bring-up.
+const PIN_REGS: [u16; 5] = [0xFE8F, 0xFE94, 0xFE9D, 0xFE9F, 0xFEC0];
 /// PCB-revision marker registers.
 const BOARD_REGS: [u16; 3] = [0xFFC5, 0xEDCC, 0xEDCD];
 
@@ -173,19 +174,22 @@ pub(crate) fn aligned_code_region<'a>(region: &'a [u8], body: &[u8]) -> &'a [u8]
     region.get(skip..).unwrap_or_default()
 }
 
-/// `{reg16 -> set(imm)}` for `MOV.B #imm,Rn` immediately followed by
+/// `{reg16 -> set(value)}` for `MOV.B #imm,Rn` or self SUB/XOR byte zeroing, followed by
 /// `MOV.B Rn,@aa:8` (`30|n`) or `MOV.B Rn,@aa:16` (`6a 80|n`). Even offsets only.
 fn reg_writes(code: &[u8], want: &BTreeSet<u16>) -> BTreeMap<u16, BTreeSet<u8>> {
     let mut out: BTreeMap<u16, BTreeSet<u8>> = BTreeMap::new();
     let mut i = 0;
     while i + 2 < code.len() {
         let b0 = code[i];
-        if !(0xF0..=0xFF).contains(&b0) {
+        let (r, imm) = if (0xF0..=0xFF).contains(&b0) {
+            (b0 & 0x0F, code[i + 1])
+        } else if matches!(b0, 0x18 | 0x15) && code[i + 1] >> 4 == code[i + 1] & 0x0F {
+            // SUB.B Rn,Rn / XOR.B Rn,Rn writes a known zero, not missing evidence.
+            (code[i + 1] & 0x0F, 0)
+        } else {
             i += 2;
             continue;
-        }
-        let r = b0 & 0x0F;
-        let imm = code[i + 1];
+        };
         let b2 = code[i + 2];
         let a: Option<u16> = if b2 == (0x30 | r) {
             code.get(i + 3).map(|&lo| 0xFF00u16 | lo as u16)
@@ -339,7 +343,8 @@ pub struct FamilyFingerprint {
     pub asic: String,
     /// Canonical board marker writes and bit operations.
     pub board: String,
-    /// Canonical pin configuration register values.
+    /// Canonical hardware/interface setup values, including FE9F.
+    /// The legacy field name does not imply verified physical pin assignments.
     pub pins: String,
     /// Servo coefficient hash, or `"none"` when no anchor rows were found.
     pub servo: String,

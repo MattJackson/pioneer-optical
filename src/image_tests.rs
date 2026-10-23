@@ -463,3 +463,32 @@ fn stored_code_regions_preserve_image_alignment() {
         family_fingerprint(&body)
     );
 }
+
+#[test]
+fn interface_fe9f_distinguishes_known_zero_missing_and_other_values() {
+    let setup = [0xf8, 0x0d, 0x6a, 0x88, 0xe4, 0x36];
+    let with = |write: &[u8]| {
+        let mut body = setup.to_vec();
+        body.extend_from_slice(write);
+        body
+    };
+    let immediate = with(&[0xf8, 0, 0x6a, 0x88, 0xfe, 0x9f]);
+    let subtract = with(&[0x18, 0x88, 0x6a, 0x88, 0xfe, 0x9f]);
+    let xor = with(&[0x15, 0x88, 0x6a, 0x88, 0xfe, 0x9f]);
+    assert_eq!(family(&immediate), family(&subtract));
+    assert_eq!(family(&immediate), family(&xor));
+    assert_ne!(family(&immediate), family(&setup));
+    assert_ne!(
+        family(&immediate),
+        family(&with(&[0xf8, 0x18, 0x6a, 0x88, 0xfe, 0x9f]))
+    );
+    assert!(family_fingerprint(&subtract)
+        .unwrap()
+        .pins
+        .contains("fe9f=0"));
+    let unknown = with(&[0x18, 0x98, 0x6a, 0x88, 0xfe, 0x9f]);
+    assert!(family_fingerprint(&unknown)
+        .unwrap()
+        .pins
+        .contains("fe9f=-"));
+}

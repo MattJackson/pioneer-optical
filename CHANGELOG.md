@@ -6,6 +6,10 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 
 ## [1.0.2] - 2026-10-23
 
+- Track FE9F with hardware/interface initialization settings and recognize
+  explicit byte-register zeroing before stores. Missing evidence remains
+  distinct from zero; these settings do not imply verified pin assignments.
+
 - Normalize checked COMP regions for hardware-family, UHD and required-ABI
   analysis. Scan decoded regions independently rather than compressed bytes or
   a fixed stream number; malformed containers provide no fingerprint.

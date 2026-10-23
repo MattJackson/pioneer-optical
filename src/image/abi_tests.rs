@@ -185,3 +185,21 @@ fn provided_call_and_branch_targets() {
         vec![0, (KERNEL_LEN - 4 + 3) as u32]
     );
 }
+
+#[test]
+fn required_abi_includes_compressed_code_and_does_not_scan_failed_comp() {
+    use std::io::Write;
+    let normal = normal_calling(0x400102, false);
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(&normal).unwrap();
+    let compressed = encoder.finish().unwrap();
+    let mut packed = vec![0xff; 0x20000];
+    packed[0x1000..0x1004].copy_from_slice(b"COMP");
+    packed[0x1004..0x1008].copy_from_slice(&0x411200u32.to_be_bytes());
+    packed[0x1008..0x100c].copy_from_slice(&(0x411200 + compressed.len() as u32).to_be_bytes());
+    packed[0x1200..0x1204].copy_from_slice(&(normal.len() as u32).to_be_bytes());
+    packed[0x1204..0x1204 + compressed.len()].copy_from_slice(&compressed);
+    assert_eq!(required_abi(&packed), required_abi(&normal));
+    packed[0x1204] = 0;
+    assert!(required_abi(&packed).is_none());
+}

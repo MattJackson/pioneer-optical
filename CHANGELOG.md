@@ -4,7 +4,14 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.2] - 2026-10-23
+
+- Normalize checked COMP regions for hardware-family, UHD and required-ABI
+  analysis. Scan decoded regions independently rather than compressed bytes or
+  a fixed stream number; malformed containers provide no fingerprint.
+- Canonicalize servo base-row order across stored and compressed regions, and
+  ignore truncated rows. The family namespace is `pioneer.hardware.v3`; all
+  consumer catalogs and caches must regenerate their fingerprints together.
 
 ## [1.0.1] - 2026-10-22
 

@@ -328,13 +328,12 @@ fn servo_late_row_and_short_tail_row() {
     let mut code = vec![0u8; 50];
     code.extend_from_slice(&a);
     code.extend_from_slice(&SERVO_ROW); // exactly 10 bytes at the end
-    let tail = SERVO_ROW.to_vec();
-    assert_eq!(servo(&code), servo_hash(&[&a, &tail]));
+    assert_eq!(servo(&code), servo_hash(&[&a]));
     // a row truncated to 25 bytes by the end of the code
     let mut code = vec![0u8; 5];
     code.extend_from_slice(&SERVO_ROW);
     code.extend_from_slice(&[0x44u8; 15]);
-    assert_eq!(servo(&code), servo_hash(&[&code[5..]]));
+    assert_eq!(servo(&code), "none");
 }
 
 #[test]
@@ -406,4 +405,61 @@ fn ffc5_high_servo_base_is_stable_across_duplicates_and_later_rows() {
     body.extend_from_slice(&servo_row(0));
     body.extend_from_slice(&servo_row(8));
     assert_eq!(family(&body), before);
+}
+
+#[test]
+fn decoded_regions_make_compression_and_base_row_order_irrelevant() {
+    let mut data = vec![0xf6, 0x12, 0x6a, 0x86, 0xe4, 0x36];
+    data.extend_from_slice(&SIG0);
+    let rows: Vec<_> = (0..7).map(|i| servo_row(0x20 + i)).collect();
+    let mut plain = data.clone();
+    for row in &rows {
+        plain.extend_from_slice(row);
+    }
+    let stream0 = stream_bytes(&data, data.len());
+    let backwards: Vec<u8> = rows.iter().rev().flatten().copied().collect();
+    let stream1 = stream_bytes(&backwards, backwards.len());
+    let o0 = 0x1200;
+    let o1 = 0x1800;
+    let directory = [
+        BASE + o0,
+        BASE + o0 + stream0.len() as u32 - 4,
+        BASE + o1,
+        BASE + o1 + stream1.len() as u32 - 4,
+    ];
+    let packed = comp_body(
+        0x2200,
+        &directory,
+        &[(o0 as usize, stream0), (o1 as usize, stream1)],
+    );
+    assert_eq!(family_fingerprint(&plain), family_fingerprint(&packed));
+    assert!(is_uhd(&packed));
+    let mut reversed = packed.clone();
+    reversed[0x1004..0x100c].copy_from_slice(&packed[0x100c..0x1014]);
+    reversed[0x100c..0x1014].copy_from_slice(&packed[0x1004..0x100c]);
+    assert_eq!(family_fingerprint(&plain), family_fingerprint(&reversed));
+    let mut corrupt = packed;
+    corrupt[0x1204] = 0;
+    // Invalid compression must not become apparent hardware evidence from the head.
+    corrupt[..data.len()].copy_from_slice(&data);
+    assert!(family_fingerprint(&corrupt).is_none());
+    assert!(!is_uhd(&corrupt));
+}
+
+#[test]
+fn regions_never_synthesize_patterns_across_boundaries() {
+    let a = &SIG0[..10];
+    let b = &SIG0[10..];
+    assert!(!uhd_regions(&[a, b]));
+    assert!(fingerprint_regions(&[&[0xf6, 0x12], &[0x6a, 0x86, 0xe4, 0x36]], &[]).is_none());
+}
+
+#[test]
+fn stored_code_regions_preserve_image_alignment() {
+    let body = [0xff, 0xff, 0xf6, 0x12, 0x6a, 0x86, 0xe4, 0x36];
+    assert_eq!(aligned_code_region(&body[1..], &body), &body[2..]);
+    assert_eq!(
+        fingerprint_regions(&[&body[1..]], &body),
+        family_fingerprint(&body)
+    );
 }

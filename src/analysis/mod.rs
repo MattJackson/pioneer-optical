@@ -217,7 +217,7 @@ impl Envelope {
                 codec: info.layout.as_str().into(),
                 sha256: hash(&self.image),
                 size: self.image.len(),
-                uhd: (info.kind == crate::ComponentKind::Normal).then(|| self.is_uhd()),
+                uhd: None,
                 encoding_seed: self.encoding_seed(),
             },
             regions: Vec::new(),
@@ -258,11 +258,13 @@ impl Envelope {
                 None
             }
         };
-        // Match the established family API's fallback when streams are unavailable.
-        // Stream diagnostics still prevent claiming complete decomposition.
-        if streams.is_none() {
+        // Only non-COMP images may be scanned without decoded streams.
+        if streams.is_none() && self.image.get(0x1000..0x1004) != Some(b"COMP") {
             result.identity.family =
-                crate::image::family_parts(&self.image, &self.image).map(|f| f.to_string());
+                crate::image::family_regions(&[&self.image], &self.image).map(|f| f.to_string());
+            if info.kind == crate::ComponentKind::Normal {
+                result.identity.uhd = Some(crate::image::uhd_regions(&[&self.image]));
+            }
         }
         let body_base = streams.as_ref().map(|(base, _)| *base).or_else(|| {
             (info.kind == crate::ComponentKind::Kernel
@@ -271,20 +273,20 @@ impl Envelope {
         });
         let mut cursor = 0;
         if let Some((_, mut streams)) = streams {
-            let first = streams
+            let mut ordered: Vec<_> = streams.iter().collect();
+            ordered.sort_by_key(|s| s.info.image_offset);
+            let spans: Vec<_> = ordered
                 .iter()
-                .map(|s| s.info.image_offset)
-                .min()
-                .unwrap_or(0);
-            let head = &self.image[..first];
-            let mut family_code = head.to_vec();
-            // Reuse the existing family algorithm's input convention. This is
-            // not a semantic classification of arbitrary stream number five.
-            if let Some(stream) = streams.get(5) {
-                family_code.extend_from_slice(&stream.expanded);
+                .map(|s| (s.info.image_offset, s.info.compressed_size))
+                .collect();
+            if let Some(mut regions) = crate::image::stored_regions(&self.image, &spans) {
+                regions.extend(ordered.iter().map(|s| s.expanded.as_slice()));
+                result.identity.family =
+                    crate::image::family_regions(&regions, &self.image).map(|f| f.to_string());
+                if info.kind == crate::ComponentKind::Normal {
+                    result.identity.uhd = Some(crate::image::uhd_regions(&regions));
+                }
             }
-            result.identity.family =
-                crate::image::family_parts(&family_code, head).map(|f| f.to_string());
             let total = streams
                 .iter()
                 .try_fold(0usize, |n, s| n.checked_add(s.expanded.len()))

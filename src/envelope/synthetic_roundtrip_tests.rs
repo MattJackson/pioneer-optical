@@ -76,6 +76,10 @@ fn header_bytes(file_type: &str, hardware: &str, destination: &str) -> [u8; 0x20
 /// 0x10000 Kernel image with a FrontKey dispatcher (one AE compare pair),
 /// the SAT identity block, and exactly one XOR-skip branch.
 pub(crate) fn front_kernel() -> Vec<u8> {
+    front_kernel_with([0x100, 0x200])
+}
+
+pub(crate) fn front_kernel_with(branch: [u32; 2]) -> Vec<u8> {
     let mut k = vec![0u8; 0x10000];
     k[0x1000..0x1008].copy_from_slice(b"SAT 8A10");
     k[0x1008..0x1010].copy_from_slice(b"GENERAL ");
@@ -85,7 +89,7 @@ pub(crate) fn front_kernel() -> Vec<u8> {
     k[0x41] = 0xfe;
     k[0x46] = 0xae;
     k[0x47] = 0xf0;
-    write_branch(&mut k, 0x100, [0x100, 0x200]);
+    write_branch(&mut k, 0x100, branch);
     be32_fix(&mut k, 0xff00);
     k
 }
@@ -792,6 +796,20 @@ fn carve_finds_an_image_ending_exactly_at_the_dump_end() {
 }
 
 #[test]
+fn carve_skips_images_nested_inside_an_accepted_image() {
+    let mut dump = small_comp_dump(0x20000);
+    dump.resize(0x20000, 0);
+    let mut inner = small_comp_dump(0x10000)[..0x2000].to_vec();
+    for at in [0x1004usize, 0x1008] {
+        let addr = u32::from_be_bytes(inner[at..at + 4].try_into().unwrap()) + 0x10000;
+        inner[at..at + 4].copy_from_slice(&addr.to_be_bytes());
+    }
+    dump[0x10000..0x12000].copy_from_slice(&inner);
+    dump.resize(0x20000, 0);
+    assert_eq!(carve_live_main(&dump).len(), 1);
+}
+
+#[test]
 fn rebuild_last_comp_refuses_a_stream_that_overlaps_the_directory() {
     // One stored-block stream at 0x100 whose payload covers the COMP
     // directory: it parses, but cannot be rebuilt (the directory word
@@ -962,6 +980,40 @@ fn repack_resized_normal_guard_isolation() {
     assert!(tmpl(comp_self, "Normal")
         .repack_resized_normal(&comp_big)
         .is_some());
+}
+
+#[test]
+fn repack_resized_normal_refuses_when_original_comp_directory_is_unparseable() {
+    // A COMP marker whose directory does not parse is missing evidence, not a match.
+    let mut original = normal_image(0x2000);
+    original[0x1000..0x1004].copy_from_slice(b"COMP");
+    original[0x1004..0x100c].copy_from_slice(&[0, 0, 0, 1, 0, 0, 0, 0]);
+    assert!(comp_streams(&original).is_none());
+    let d = DecodedEnvelope {
+        info: EnvelopeInfo {
+            vendor: "PIONEER".into(),
+            model: "BDR".into(),
+            revision: "1".into(),
+            kind: ComponentKind::Normal,
+            hardware_version: String::new(),
+            kernel_version: String::new(),
+            layout: Layout::Normal,
+            payload_offset: 0x10200,
+            payload_size: original.len(),
+            declared_size: Some(original.len()),
+            unknown_word_0x10: None,
+            uniform_ranges: vec![],
+            receiver_xor_policy: None,
+        },
+        image: original,
+        header: vec![0u8; HEADER_LEN],
+        prefix: vec![0u8; 0x10200 - HEADER_LEN],
+        suffix: vec![],
+        key: make_key(0x123456, 0x10000),
+        xor_exceptions: vec![],
+        splices: vec![],
+    };
+    assert!(d.repack_resized_normal(&normal_image(0x2100)).is_none());
 }
 
 #[test]

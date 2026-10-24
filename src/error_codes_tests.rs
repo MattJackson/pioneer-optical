@@ -61,6 +61,10 @@ fn envelope_and_receiver_codes_preserve_nested_errors_and_parameters() {
         panic!("nested typed cause lost");
     }
     assert_eq!(
+        envelope::UpdateError::Abi { missing: vec![1] }.code(),
+        "pioneer.update.abi_mismatch"
+    );
+    assert_eq!(
         envelope::Error::KernelBodySize { got: 3 }.code(),
         "pioneer.envelope.kernel_body_size"
     );

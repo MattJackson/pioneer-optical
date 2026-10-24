@@ -19,6 +19,12 @@ pub enum ExecutionMode {
 pub trait ExecutionRuntime<E>: UpdateRuntime {
     /// Check host conditions (for example, an empty tray) before each pass.
     fn check_pass(&mut self, pass: FlashPass) -> Result<(), E>;
+    /// A component comparison completed; emitted before any later failure.
+    fn verified(&mut self, _pass: FlashPass, _role: crate::Role, _matched: bool) {}
+    /// The device responded after transfer. This alone does not prove startup.
+    fn observed_identity(&mut self, _pass: FlashPass, _identity: &Identity) {}
+    /// Normal runtime and receiver continuity were confirmed.
+    fn startup_confirmed(&mut self, _pass: FlashPass) {}
     /// A component could not be fully read back. This is evidence for a
     /// qualified outcome, never permission to ignore a readable mismatch.
     fn verification_unavailable(
@@ -40,7 +46,7 @@ pub struct FlashOutcome {
     pub normal_verified: bool,
     /// Number of completed passes, including required pristine restoration.
     pub completed_passes: usize,
-    /// Observed identity checked against the target firmware.
+    /// Observed identity after runtime/receiver confirmation; branding is informational.
     pub identity: Identity,
 }
 
@@ -274,12 +280,12 @@ fn check_receiver<T: Transport>(
     control: &super::Control,
     mode: ExecutionMode,
     pass: FlashPass,
-) -> Result<bool, ExecutionError<T::Error>> {
+) -> Result<(bool, Identity), ExecutionError<T::Error>> {
     let id = identity(t, pass, false)?;
     // Loader mode may expose a partially installed Kernel identity. Recovery
     // uses explicit Current firmware evidence for that loader's protocol.
     if mode == ExecutionMode::Recovery && loader(&id, kernel) {
-        return Ok(true);
+        return Ok((true, id));
     }
     if !receiver_matches(&id, kernel)
         || id.revision().starts_with("000")
@@ -292,35 +298,29 @@ fn check_receiver<T: Transport>(
         });
     }
     execution::bind(t, control, pass).map_err(ExecutionError::Flash)?;
-    Ok(false)
+    Ok((false, id))
 }
-fn revision_matches(id: &Identity, revision: &str) -> bool {
-    let bytes = revision.as_bytes();
-    if bytes.is_empty() || !bytes.is_ascii() {
-        return false;
-    }
-    let mut expected = [b' '; 4];
-    let len = bytes.len().min(expected.len());
-    expected[..len].copy_from_slice(&bytes[..len]);
-    id.inquiry_bytes()[32..36] == expected
-}
-fn target_identity<T: Transport>(
+// Enclosures and envelope headers may rename identical firmware. Binding uses
+// physical continuity and receiver fields; exact component readback proves the
+// requested firmware. Never use vendor/model/revision equality as that proof.
+fn target_identity<T: Transport, H: ExecutionRuntime<T::Error>>(
     t: &mut T,
     target: &Envelope,
     pass: FlashPass,
+    serial: &str,
+    runtime: &mut H,
 ) -> Result<Identity, ExecutionError<T::Error>> {
     let id = identity(t, pass, true)?;
+    runtime.observed_identity(pass, &id);
     let info = target.info();
-    // Revision is display evidence here, not the source of dialect/compatibility.
-    // The descriptor and readback below identify the actual target bytes.
-    if !optical(&id, target)
-        || !target.targets(&id)
-        // Standard INQUIRY exposes exactly four revision bytes. OEM envelope
-        // revisions can carry a longer suffix (for example 0.05e); readback
-        // proves the selected body, while this compares the defined field.
-        || !revision_matches(&id, &info.revision)
-        || id.revision().starts_with("000")
+    if id.device_type() != 5
+        || id.serial() != serial
+        || id.platform() != info.hardware_version
+        || id.kernel_tag() != info.kernel_version
         || id.normal_tag() != info.kernel_version
+        || id.normal_tag().is_empty()
+        || id.revision().is_empty()
+        || id.revision().starts_with("000")
     {
         return Err(ExecutionError::IdentityMismatch {
             pass,
@@ -328,7 +328,35 @@ fn target_identity<T: Transport>(
             target: true,
         });
     }
+    runtime.startup_confirmed(pass);
     Ok(id)
+}
+fn verify_kernel<T: Transport, H: ExecutionRuntime<T::Error>>(
+    t: &mut T,
+    expected: &[u8],
+    pass: FlashPass,
+    runtime: &mut H,
+) -> Result<(), ExecutionError<T::Error>> {
+    match execution::verify(t, expected, pass) {
+        Ok(()) => {
+            runtime.verified(pass, crate::Role::Kernel, true);
+            Ok(())
+        }
+        Err(error) => {
+            match &error {
+                FlashError::ReadbackMismatch { .. } => {
+                    runtime.verified(pass, crate::Role::Kernel, false)
+                }
+                _ => runtime.verification_unavailable(
+                    pass,
+                    crate::Role::Kernel,
+                    None,
+                    &"Kernel readback unavailable",
+                ),
+            }
+            Err(ExecutionError::Flash(error))
+        }
+    }
 }
 fn normal_readback<T: Transport, H: ExecutionRuntime<T::Error>>(
     t: &mut T,
@@ -346,7 +374,15 @@ fn normal_readback<T: Transport, H: ExecutionRuntime<T::Error>>(
         );
         return Ok(false);
     };
-    verify_normal_at(t, expected, region.address(), pass, runtime)
+    let result = verify_normal_at(t, expected, region.address(), pass, runtime);
+    match &result {
+        Ok(true) => runtime.verified(pass, crate::Role::Normal, true),
+        Err(ExecutionError::NormalMismatch { .. }) => {
+            runtime.verified(pass, crate::Role::Normal, false)
+        }
+        _ => {}
+    }
+    result
 }
 fn verify_normal_at<T: Transport, H: ExecutionRuntime<T::Error>>(
     t: &mut T,
@@ -365,7 +401,9 @@ fn verify_normal_at<T: Transport, H: ExecutionRuntime<T::Error>>(
                 // Even a short read must not hide a readable mismatch. Continue
                 // later spans after inaccessible spans so all readable bytes count.
                 let n = n.min(actual.len());
-                if let Some(offset) = actual[..n].iter().zip(chunk).position(|(a, b)| a != b) {
+                if let crate::envelope::ByteComparison::Different { offset, .. } =
+                    crate::envelope::compare_bytes(&chunk[..n], &actual[..n])
+                {
                     return Err(ExecutionError::NormalMismatch {
                         pass,
                         address: address + offset as u32,
@@ -479,7 +517,7 @@ impl PreparedUpdate {
                 source,
             })
         })?;
-        let updating =
+        let (updating, _) =
             check_receiver(io.reads, installed, &self.control, mode, FlashPass::Initial)?;
         if !updating {
             if let Some(setting) = self.startup_setting {
@@ -528,7 +566,7 @@ impl PreparedUpdate {
             })
         })?;
         // Re-bind after the startup transaction, before entering the loader.
-        check_receiver(
+        let (_, before) = check_receiver(
             io.reads,
             installed,
             &self.control,
@@ -563,9 +601,19 @@ impl PreparedUpdate {
                 source,
             })
         })?;
-        execution::verify(io.reads, self.first_kernel_image(), FlashPass::Initial)
-            .map_err(ExecutionError::Flash)?;
-        let mut observed = target_identity(io.reads, self.target.normal(), FlashPass::Initial)?;
+        verify_kernel(
+            io.reads,
+            self.first_kernel_image(),
+            FlashPass::Initial,
+            runtime,
+        )?;
+        let mut observed = target_identity(
+            io.reads,
+            self.target.normal(),
+            FlashPass::Initial,
+            before.serial(),
+            runtime,
+        )?;
         let mut normal_verified = normal_readback(
             io.reads,
             &self.target.normal().image,
@@ -583,13 +631,15 @@ impl PreparedUpdate {
                 .restoration_receiver()
                 .expect("prepared restoration")
                 .control();
-            check_receiver(
+            // Rebind to the verified running target, not its package branding.
+            target_identity(
                 io.reads,
-                self.target.kernel(),
-                &control,
-                ExecutionMode::Flash,
+                self.target.normal(),
                 pass,
+                before.serial(),
+                runtime,
             )?;
+            execution::bind(io.reads, &control, pass).map_err(ExecutionError::Flash)?;
             let mut storage = [Segment::PLACEHOLDER; 3];
             let transfer = plan(
                 Some(kernel),
@@ -608,9 +658,14 @@ impl PreparedUpdate {
                 },
             )
             .map_err(|source| ExecutionError::Flash(FlashError::Update { pass, source }))?;
-            execution::verify(io.reads, self.final_kernel_image(), pass)
-                .map_err(ExecutionError::Flash)?;
-            observed = target_identity(io.reads, self.target.normal(), pass)?;
+            verify_kernel(io.reads, self.final_kernel_image(), pass, runtime)?;
+            observed = target_identity(
+                io.reads,
+                self.target.normal(),
+                pass,
+                before.serial(),
+                runtime,
+            )?;
             normal_verified = normal_readback(
                 io.reads,
                 &self.target.normal().image,
@@ -732,7 +787,7 @@ impl PreparedNormal {
             .installed_kernel
             .as_ref()
             .expect("checked installed Kernel");
-        check_receiver(
+        let (_, before) = check_receiver(
             io.reads,
             installed,
             &self.control,
@@ -753,7 +808,7 @@ impl PreparedNormal {
             },
         )
         .map_err(|source| ExecutionError::Flash(FlashError::Update { pass, source }))?;
-        let identity = target_identity(io.reads, &self.normal, pass)?;
+        let identity = target_identity(io.reads, &self.normal, pass, before.serial(), runtime)?;
         let normal_verified = normal_readback(
             io.reads,
             &self.normal.image,

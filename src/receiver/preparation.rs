@@ -95,6 +95,11 @@ pub struct PreparedNormal {
 }
 
 impl PreparedNormal {
+    /// Advertised target identity, for presentation rather than startup gating.
+    pub fn target_info(&self) -> &crate::envelope::EnvelopeInfo {
+        self.normal.info()
+    }
+
     /// Target-derived startup migration to verify on the live drive before transfer.
     pub fn startup_setting(&self) -> Option<crate::startup::Setting> {
         self.startup_setting
@@ -143,6 +148,11 @@ struct Restoration {
 }
 
 impl PreparedUpdate {
+    /// Advertised target identity, for presentation rather than startup gating.
+    pub fn target_info(&self) -> &crate::envelope::EnvelopeInfo {
+        self.target.normal().info()
+    }
+
     /// Target-derived startup migration, shared by both prepared passes.
     pub fn startup_setting(&self) -> Option<crate::startup::Setting> {
         self.startup_setting

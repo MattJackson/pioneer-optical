@@ -30,6 +30,10 @@ pub enum Error<E> {
     /// Region changes are exhausted or the drive is permanently locked.
     RegionLocked,
 }
+/// Outcome of a mutating command that was sent: `Err` means the drive may have
+/// received it (transport failure or short response), unlike a pre-send refusal.
+pub(super) type SentWrite<E> = Result<(), Error<E>>;
+
 impl<E: core::fmt::Debug> core::fmt::Display for Error<E> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -153,11 +157,10 @@ impl<'a, T: Transport> Device<'a, T> {
             .map(|s| s.with_controls(self.settings_codec))
             .map_err(codec_error)
     }
-    #[allow(clippy::type_complexity)]
     pub(super) fn write_setting(
         &mut self,
         command: &settings::Command,
-    ) -> Result<Result<(), Error<T::Error>>, Error<T::Error>> {
+    ) -> Result<SentWrite<T::Error>, Error<T::Error>> {
         if command.response_len() != 0 {
             return Err(Error::InvalidValue);
         }

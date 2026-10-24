@@ -516,8 +516,8 @@ pub mod layout {
         NoCompDirectory,
         /// Static gaps do not prove freedom from runtime or DMA accesses.
         RuntimeOwnershipUnproven,
-        /// Some COMP streams have no proven loader destination, so overlay
-        /// ranges may be incomplete or empty without proving absence.
+        /// COMP streams exist but no loader destination was proven, so the empty
+        /// overlay ranges do not prove the image has no overlays.
         OverlayDestinationsUnresolved,
     }
     impl crate::CodedError for LayoutLimitation {
@@ -660,7 +660,10 @@ pub mod layout {
                 context: "COMP runtime destination",
                 candidates: 2,
             })?;
-        if destinations.len() < streams.len() {
+        // Loader discovery proves only the overlays it recognizes; genuine images
+        // carry more streams than proven destinations. Report only the case where
+        // streams exist but no destination was proven.
+        if destinations.is_empty() && !streams.is_empty() {
             out.limitations
                 .push(LayoutLimitation::OverlayDestinationsUnresolved);
         }

@@ -56,3 +56,18 @@ fn marker_and_bounds_are_checked() {
     tiny[COMP_OFFSET..].copy_from_slice(b"COMP");
     assert_eq!(comp_pairs(&tiny), None);
 }
+
+#[cfg(feature = "image")]
+#[test]
+fn comp_streams_huge_end_offset_is_invalid_without_panic() {
+    let mut image = vec![0u8; 0x3000];
+    image[COMP_OFFSET..COMP_OFFSET + 4].copy_from_slice(b"COMP");
+    image[COMP_OFFSET + 4..COMP_OFFSET + 8].copy_from_slice(&0x2000u32.to_be_bytes());
+    image[COMP_OFFSET + 8..COMP_OFFSET + 12].copy_from_slice(&0xFFFF_FFFEu32.to_be_bytes());
+    image[COMP_OFFSET + 12..COMP_OFFSET + 16].copy_from_slice(&u32::MAX.to_be_bytes());
+    let result = crate::comp_streams::read(&image, usize::MAX, &mut || true);
+    assert!(matches!(
+        result,
+        Err(crate::comp_streams::StreamError::Invalid)
+    ));
+}

@@ -55,10 +55,16 @@ pub(crate) fn read(
             }
             let offset = (start - base) as usize;
             let end_offset = (end - base) as usize;
-            let Some(prefix) = image.get(offset..offset + SIZE_PREFIX) else {
+            let (Some(data_start), Some(data_end)) = (
+                offset.checked_add(SIZE_PREFIX),
+                end_offset.checked_add(SIZE_PREFIX),
+            ) else {
                 break;
             };
-            let Some(compressed) = image.get(offset + SIZE_PREFIX..end_offset + SIZE_PREFIX) else {
+            let Some(prefix) = image.get(offset..data_start) else {
+                break;
+            };
+            let Some(compressed) = image.get(data_start..data_end) else {
                 break;
             };
             if compressed.first() != Some(&0x78) {

@@ -54,6 +54,8 @@ mod comp_runtime;
 mod comp_streams;
 
 mod error_codes;
+/// Common lifecycle observations for generic firmware applications.
+pub mod operation;
 pub use error_codes::CodedError;
 
 #[cfg(feature = "firmware-info")]

@@ -314,7 +314,7 @@ fn target_identity<T: Transport, H: ExecutionRuntime<T::Error>>(
     runtime.observed_identity(pass, &id);
     let info = target.info();
     if id.device_type() != 5
-        || id.serial() != serial
+        || (!serial.is_empty() && id.serial() != serial)
         || id.platform() != info.hardware_version
         || id.kernel_tag() != info.kernel_version
         || id.normal_tag() != info.kernel_version

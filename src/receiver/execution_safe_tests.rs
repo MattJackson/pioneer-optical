@@ -594,6 +594,19 @@ fn branding_difference_cannot_hide_wrong_or_unreadable_normal() {
 #[test]
 fn serial_change_after_transfer_is_terminal() {
     let (plan, state) = setup(false);
+    let mut borrowed = state.borrow_mut();
+    let State {
+        installed_id,
+        target_id,
+        ..
+    } = &mut *borrowed;
+    for identity in [installed_id, target_id] {
+        let old = identity.as_ref().unwrap();
+        let mut vendor = *old.vendor_bytes();
+        vendor[..8].copy_from_slice(b"ORIGINAL");
+        *identity = Some(Identity::parse(old.inquiry_bytes(), &vendor).unwrap());
+    }
+    drop(borrowed);
     state.borrow_mut().wrong_target = Some(5);
     assert_eq!(
         run(&plan, &state, ExecutionMode::Flash)
@@ -611,4 +624,18 @@ fn envelope_comparison_separates_naming_from_exact_contents() {
     assert_eq!(result.bytes, crate::envelope::ByteComparison::Equal);
     assert!(result.name_changed && result.revision_changed);
     assert!(!result.component_changed && !result.hardware_changed && !result.destination_changed);
+}
+
+#[test]
+fn recovery_loader_may_reveal_its_serial_only_after_normal_starts() {
+    let (plan, state) = setup(false);
+    state.borrow_mut().loader = true;
+    let observed = state.borrow().target_id.clone().unwrap();
+    let mut vendor = *observed.vendor_bytes();
+    vendor[..8].copy_from_slice(b"ORIGINAL");
+    state.borrow_mut().target_id =
+        Some(Identity::parse(observed.inquiry_bytes(), &vendor).unwrap());
+    let result = run(&plan, &state, ExecutionMode::Recovery).unwrap();
+    assert!(result.kernel_verified && result.normal_verified);
+    assert_eq!(result.identity.serial(), "ORIGINAL");
 }

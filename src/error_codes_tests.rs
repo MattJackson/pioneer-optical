@@ -61,6 +61,10 @@ fn envelope_and_receiver_codes_preserve_nested_errors_and_parameters() {
         panic!("nested typed cause lost");
     }
     assert_eq!(
+        envelope::UpdateError::Abi { missing: vec![1] }.code(),
+        "pioneer.update.abi_mismatch"
+    );
+    assert_eq!(
         envelope::Error::KernelBodySize { got: 3 }.code(),
         "pioneer.envelope.kernel_body_size"
     );
@@ -124,11 +128,11 @@ fn envelope_error_catalogue_has_stable_codes_and_actionable_text() {
         ),
         (Error::AbiMismatch, "pioneer.envelope.abi_mismatch"),
         (
-            Error::KernelUndecodable,
+            Error::KernelUndecodable { source: None },
             "pioneer.envelope.kernel_undecodable",
         ),
         (
-            Error::NormalUndecodable,
+            Error::NormalUndecodable { source: None },
             "pioneer.envelope.normal_undecodable",
         ),
         (
@@ -230,4 +234,49 @@ fn flash_code_is_independent_of_pass_and_retains_pass_for_presentation() {
             matches!(error, FlashError::ReadbackMismatch { pass: p, address: 0x400020 } if p == pass)
         );
     }
+}
+
+#[cfg(feature = "image")]
+#[test]
+fn kernel_handoff_startup_and_protocol_codes() {
+    use crate::image::KernelHandoffError as K;
+    assert_eq!(
+        K::UnknownInstalled.code(),
+        "pioneer.kernel_handoff.unknown_installed"
+    );
+    assert_eq!(
+        K::UnknownTarget.code(),
+        "pioneer.kernel_handoff.unknown_target"
+    );
+    assert_eq!(
+        K::Mismatch {
+            installed: 1,
+            target: 2
+        }
+        .code(),
+        "pioneer.kernel_handoff.mismatch"
+    );
+    assert_eq!(
+        crate::startup::Ambiguous.code(),
+        "pioneer.startup.ambiguous"
+    );
+}
+
+#[test]
+fn protocol_incomplete_code() {
+    assert_eq!(
+        crate::protocol::Incomplete.code(),
+        "pioneer.protocol.incomplete"
+    );
+}
+
+#[cfg(all(feature = "envelope", feature = "drive"))]
+#[test]
+fn plan_error_code_and_display() {
+    use crate::receiver::transport::PlanError;
+    assert_eq!(
+        PlanError::KernelLayout.code(),
+        "pioneer.transport.kernel_layout"
+    );
+    assert!(!PlanError::KernelLayout.to_string().is_empty());
 }

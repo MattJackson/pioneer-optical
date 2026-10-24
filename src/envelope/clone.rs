@@ -12,7 +12,7 @@
 //! establish that a drive accepts it.
 
 use super::builder::{encode_kernel_envelope, kernel_layout_from_image, KernelBuild};
-use super::{be32_sum, decode_envelope, jump_seed, Error, Result, A, C, MASK};
+use super::{be32_sum, decode_envelope, jump_seed, Envelope, Error, Result, A, C, MASK};
 use crate::image::KERNEL_LEN;
 use std::ops::Range;
 
@@ -53,8 +53,11 @@ pub fn clone_kernel(
     to: &KernelIdentity<'_>,
     build: &KernelBuild<'_>,
 ) -> Result<Vec<u8>> {
-    let decoded = decode_envelope(source).ok_or(Error::KernelUndecodable)?;
-    let header = decoded.header().ok_or(Error::KernelUndecodable)?;
+    let decoded =
+        Envelope::load(source).map_err(|e| Error::KernelUndecodable { source: Some(e) })?;
+    let header = decoded
+        .header()
+        .ok_or(Error::KernelUndecodable { source: None })?;
     let image = clone_kernel_image(&decoded.image, &header.id, to)?;
     let envelope = encode_kernel_envelope(&image, to.drive_name, build)?;
     match decode_envelope(&envelope) {
@@ -116,7 +119,8 @@ pub fn clone_kernel_image(
 }
 
 /// The build's fill seed: LCG state before offset 0. `Some(0)` marks a Kernel
-/// produced by [`clone_kernel`]. `None` when no fill stream is found.
+/// produced by [`clone_kernel`]. `None` when no fill stream is found within
+/// the last `KERNEL_LEN` bytes of the image.
 pub fn kernel_fill_seed(image: &[u8]) -> Option<u32> {
     lock_fill(image).map(|(seed, _)| seed)
 }
@@ -132,7 +136,8 @@ pub fn kernel_fill_seed(image: &[u8]) -> Option<u32> {
 /// the smaller legacy little-endian DVR layout are all handled: the identity
 /// block and checksum are only masked where a SAT identity actually sits, so a
 /// legacy Kernel (whose identity is the header, not the body) compares as raw
-/// bytes minus its drive name. `None` when the image is too small to be a
+/// bytes minus its drive name. The fill stream is only searched for within the
+/// last `KERNEL_LEN` bytes. `None` when the image is too small to be a
 /// Kernel body.
 pub fn kernel_content_mask(image: &[u8], drive_name: &str) -> Option<Vec<bool>> {
     if image.len() < IDENTITY.end {
@@ -228,6 +233,8 @@ fn fill_stream(seed: u32, len: usize) -> Vec<u8> {
 /// expected fill bytes.
 fn lock_fill(image: &[u8]) -> Option<(u32, Vec<u8>)> {
     let mut anchor = image.len().checked_sub(FILL_PROBE)?;
+    // Positional fill only exists within the last KERNEL_LEN bytes.
+    let floor = image.len().saturating_sub(KERNEL_LEN);
     loop {
         let probe = &image[anchor..anchor + FILL_PROBE];
         for low in 0..=0xffffu32 {
@@ -242,7 +249,7 @@ fn lock_fill(image: &[u8]) -> Option<(u32, Vec<u8>)> {
                 return Some((seed, fill_stream(seed, image.len())));
             }
         }
-        anchor = anchor.checked_sub(0x100)?;
+        anchor = anchor.checked_sub(0x100).filter(|a| *a >= floor)?;
     }
 }
 

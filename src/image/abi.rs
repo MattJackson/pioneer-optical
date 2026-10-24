@@ -127,10 +127,9 @@ fn provided_entries(k: &[u8]) -> Vec<u32> {
                 let d = i16::from_be_bytes([k[a + 2], k[a + 3]]) as isize;
                 (a as isize + 4 + d).try_into().ok()
             }
-            0x55 => {
-                let d = k[a + 1] as i8 as isize;
-                (a as isize + 2 + d).try_into().ok()
-            }
+            0x55 => k
+                .get(a + 1)
+                .and_then(|&d| (a as isize + 2 + d as i8 as isize).try_into().ok()),
             _ => None,
         };
         if let Some(t) = t {

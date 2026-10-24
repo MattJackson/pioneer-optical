@@ -1,5 +1,7 @@
 //! Discover temporary logging support from executable firmware, without model tables.
 
+use alloc::{collections::BTreeMap, vec::Vec};
+
 const SET_PERSISTENT: u8 = 0x10;
 const GET_MASK: u8 = 0x11;
 const SET_RAM: u8 = 0x12;
@@ -71,6 +73,7 @@ fn is(b: &[u8], at: usize, value: &[u8]) -> bool {
 /// direct dispatch-table binding and the CDB arrival mask test. No hash/model list.
 pub fn discover(image: &[u8]) -> Option<LoggingLayout> {
     let mut found = None;
+    let mut scans = Scans::default();
     for p in HANDLER_PROLOGUE.len()..image.len().saturating_sub(3 * COMPARE_BRANCH_LEN) {
         if !is(image, p, &[0xa9, SET_PERSISTENT, 0x58, 0x70])
             || !is(image, p + COMPARE_BRANCH_LEN, &[0xa9, GET_MASK, 0x58, 0x70])
@@ -83,7 +86,7 @@ pub fn discover(image: &[u8]) -> Option<LoggingLayout> {
         {
             continue;
         }
-        let Some(candidate) = candidate(image, p) else {
+        let Some(candidate) = candidate(image, p, &mut scans) else {
             continue;
         };
         if found.is_some() {
@@ -94,7 +97,16 @@ pub fn discover(image: &[u8]) -> Option<LoggingLayout> {
     found
 }
 
-fn candidate(b: &[u8], p: usize) -> Option<LoggingLayout> {
+/// Whole-image scans shared by every dispatcher candidate, built at most once.
+#[derive(Default)]
+struct Scans {
+    /// Static dispatch-entry shapes as (callback, group).
+    entries: Option<Vec<(u32, u8)>>,
+    /// Whether the CDB arrival gate for a mask address is present.
+    gates: BTreeMap<u32, bool>,
+}
+
+fn candidate(b: &[u8], p: usize, scans: &mut Scans) -> Option<LoggingLayout> {
     let persistent = branch(b, p)?;
     let getter = branch(b, p + COMPARE_BRANCH_LEN)?;
     let temporary = branch(b, p + 2 * COMPARE_BRANCH_LEN)?;
@@ -123,30 +135,45 @@ fn candidate(b: &[u8], p: usize) -> Option<LoggingLayout> {
     }
     // The supplied-value branch clears r1l and jumps directly to the setter;
     // its zero flag bypasses every persistent-settings call in that setter.
-    let mut table = None;
-    for entry in b.windows(DISPATCH_ENTRY_LEN) {
-        if entry[0] >= 0x80
-            && entry[1..DISPATCH_CALLBACK_OFFSET] == [0, 0, 0, 0, 0, 0xff, 0xff]
-            && u32::from_be_bytes(
-                entry[DISPATCH_CALLBACK_OFFSET..DISPATCH_ENTRY_LEN]
+    let entries = scans.entries.get_or_insert_with(|| {
+        #[cfg(test)]
+        tests::IMAGE_SCANS.with(|c| c.set(c.get() + 1));
+        b.windows(DISPATCH_ENTRY_LEN)
+            .filter(|entry| {
+                entry[0] >= 0x80
+                    && entry[1..DISPATCH_CALLBACK_OFFSET] == [0, 0, 0, 0, 0, 0xff, 0xff]
+            })
+            .filter_map(|entry| {
+                let callback = entry[DISPATCH_CALLBACK_OFFSET..DISPATCH_ENTRY_LEN]
                     .try_into()
-                    .ok()?,
-            ) == (p - HANDLER_PROLOGUE.len()) as u32
-        {
+                    .ok()?;
+                Some((u32::from_be_bytes(callback), entry[0]))
+            })
+            .collect()
+    });
+    let handler = (p - HANDLER_PROLOGUE.len()) as u32;
+    let mut table = None;
+    for &(callback, group) in entries.iter() {
+        if callback == handler {
             if table.is_some() {
                 return None;
             }
-            table = Some(entry[0]);
+            table = Some(group);
         }
     }
     // Arrival path: read this mask, AND 0x40000, then conditional log emission.
-    let mut gate = [0u8; 20];
-    gate[..4].copy_from_slice(MASK_LOAD);
-    gate[4..8].copy_from_slice(&address.to_be_bytes());
-    gate[8..10].copy_from_slice(&[0x7a, 0x60]); // and.l #immediate,er0
-    gate[10..14].copy_from_slice(&CDB_ARRIVAL_BIT.to_be_bytes());
-    gate[14..].copy_from_slice(ARRIVAL_TEST);
-    if !b.windows(gate.len()).any(|w| w == gate) {
+    let present = *scans.gates.entry(address).or_insert_with(|| {
+        let mut gate = [0u8; 20];
+        gate[..4].copy_from_slice(MASK_LOAD);
+        gate[4..8].copy_from_slice(&address.to_be_bytes());
+        gate[8..10].copy_from_slice(&[0x7a, 0x60]); // and.l #immediate,er0
+        gate[10..14].copy_from_slice(&CDB_ARRIVAL_BIT.to_be_bytes());
+        gate[14..].copy_from_slice(ARRIVAL_TEST);
+        #[cfg(test)]
+        tests::IMAGE_SCANS.with(|c| c.set(c.get() + 1));
+        b.windows(gate.len()).any(|w| w == gate)
+    });
+    if !present {
         return None;
     }
     Some(LoggingLayout {

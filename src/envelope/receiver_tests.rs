@@ -1,13 +1,12 @@
 use super::*;
 
 #[test]
+#[ignore = "set PIONEER_SCALED_KERNEL_FIXTURE and PIONEER_SCALED_NORMAL_FIXTURE to decoded scaled-key OEM files"]
 fn scaled_key_receiver_round_trip_when_configured() {
-    let (Ok(kernel_path), Ok(normal_path)) = (
-        std::env::var("PIONEER_SCALED_KERNEL_FIXTURE"),
-        std::env::var("PIONEER_SCALED_NORMAL_FIXTURE"),
-    ) else {
-        return;
-    };
+    let kernel_path =
+        std::env::var("PIONEER_SCALED_KERNEL_FIXTURE").expect("PIONEER_SCALED_KERNEL_FIXTURE");
+    let normal_path =
+        std::env::var("PIONEER_SCALED_NORMAL_FIXTURE").expect("PIONEER_SCALED_NORMAL_FIXTURE");
     let kernel_bytes = std::fs::read(kernel_path).unwrap();
     let normal_bytes = std::fs::read(normal_path).unwrap();
     let kernel = decode_envelope(&kernel_bytes).unwrap();
@@ -118,10 +117,9 @@ fn policy_rejects_missing_ambiguous_unaligned_and_repeated_offsets() {
 }
 
 #[test]
+#[ignore = "set PIONEER_CODEC_KAT_DIR to the local codec known-answer directory"]
 fn local_supplied_normal_matches_live_when_configured() {
-    let Ok(dir) = std::env::var("PIONEER_CODEC_KAT_DIR") else {
-        return;
-    };
+    let dir = std::env::var("PIONEER_CODEC_KAT_DIR").expect("PIONEER_CODEC_KAT_DIR");
     let read = |name| std::fs::read(std::path::Path::new(&dir).join(name)).unwrap();
     let kernel_bytes = read("kernel.enc");
     let normal_bytes = read("normal.enc");

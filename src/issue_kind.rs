@@ -20,6 +20,7 @@ pub(super) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         | "pioneer.transfer.finish"
         | "pioneer.transfer.ready_timeout" => IssueKind::Update,
         "pioneer.execute.identity_read"
+        | "pioneer.protocol.incomplete"
         | "pioneer.device.transport"
         | "pioneer.device.not_reported"
         | "pioneer.flash.descriptor_read"
@@ -33,6 +34,9 @@ pub(super) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         | "pioneer.flash.descriptor_changed"
         | "pioneer.flash.descriptor_mismatch" => IssueKind::ReceiverMismatch,
         "pioneer.device.unsupported"
+        | "pioneer.kernel_handoff.unknown_installed"
+        | "pioneer.kernel_handoff.unknown_target"
+        | "pioneer.transport.kernel_layout"
         | "pioneer.settings.codec.unsupported"
         | "pioneer.normal_layout.unsupported"
         | "pioneer.envelope.unknown_rotation"
@@ -50,6 +54,9 @@ pub(super) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         | "pioneer.flash.unsupported_transport"
         | "pioneer.drive.unknown_class" => IssueKind::UnsupportedFirmware,
         "pioneer.device.malformed"
+        | "pioneer.startup.ambiguous"
+        | "pioneer.kernel_handoff.mismatch"
+        | "pioneer.update.abi_mismatch"
         | "pioneer.device.invalid_value"
         | "pioneer.device.region_locked"
         | "pioneer.settings.codec.malformed"

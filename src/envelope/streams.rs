@@ -3,11 +3,18 @@ use super::{sha, uniform_ranges, CompStream, CompStreamInfo};
 pub(crate) use crate::comp_streams::StreamError;
 use std::io::Write;
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static RICH_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) fn read(
     image: &[u8],
     total_limit: usize,
     proceed: &mut dyn FnMut() -> bool,
 ) -> Result<Option<(u32, Vec<CompStream>)>, StreamError> {
+    #[cfg(test)]
+    RICH_READS.with(|count| count.set(count.get() + 1));
     let Some((base, streams)) = crate::comp_streams::read(image, total_limit, proceed)? else {
         return Ok(None);
     };

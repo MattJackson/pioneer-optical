@@ -5,8 +5,8 @@
 
 use super::signature::{verify_normal_signature, SignatureCheck, SigningKey};
 use super::{
-    be32_sum_zero, build_header, decode_envelope, decode_envelope_with_kernel, kernel_xor_branches,
-    make_key, transform, transform_with_policy, HeaderInfo, HeaderOpaque, Layout,
+    be32_sum_zero, build_header, kernel_xor_branches, make_key, transform, transform_with_policy,
+    Envelope, HeaderInfo, HeaderOpaque, Layout,
 };
 use super::{Error, Result};
 use crate::ComponentKind;
@@ -285,7 +285,9 @@ pub fn normal_rotation_from_kernel(kernel: &[u8]) -> Option<NormalRotation> {
                 r1_is_count |= w[1] & 7 == 1;
             }
             // MOV.W Rs,R1 or MOV.B RsL,R1L.
-            [0x0d, sd, ..] if sd & 0x0f == 1 => r1_is_count = counts & 1 << (sd >> 4) != 0,
+            [0x0d, sd, ..] if sd & 0x0f == 1 => {
+                r1_is_count = sd >> 4 < 8 && counts & 1 << (sd >> 4) != 0
+            }
             [0x0c, sd, ..] if sd & 0x0f == 9 => {
                 r1_is_count = sd >> 4 >= 8 && counts & 1 << ((sd >> 4) - 8) != 0
             }
@@ -636,7 +638,7 @@ pub fn encode_kernel_envelope_with_header(
     let layout = kernel_layout_from_image(kernel_image).ok_or(Error::AmbiguousKernelLayout)?;
     let mut enc = supplied_header(header, ComponentKind::Kernel)?;
     enc.extend(kernel_body(kernel_image, layout, &key)?);
-    let decoded = decode_envelope(&enc).ok_or(Error::KernelUndecodable)?;
+    let decoded = Envelope::load(&enc).map_err(|e| Error::KernelUndecodable { source: Some(e) })?;
     if decoded.image != kernel_image || decoded.info.layout != layout {
         return Err(Error::RoundTripMismatch);
     }
@@ -808,8 +810,10 @@ pub fn encode_normal_for_kernel(
     // Decode through the real receiver-aware path with this Kernel.
     let id = super::header_info(header).ok_or(Error::InvalidHeader)?.id;
     let kernel_enc = encode_kernel_envelope(kernel, &id, &KernelBuild::from_seed(0))?;
-    let k = decode_envelope(&kernel_enc).ok_or(Error::KernelUndecodable)?;
-    let n = decode_envelope_with_kernel(&enc, &k).ok_or(Error::NormalUndecodable)?;
+    let k =
+        Envelope::load(&kernel_enc).map_err(|e| Error::KernelUndecodable { source: Some(e) })?;
+    let n = Envelope::load_with_kernel(&enc, &k)
+        .map_err(|e| Error::NormalUndecodable { source: Some(e) })?;
     let rotation = normal_rotation_from_kernel(kernel).ok_or(Error::UnknownRotation)?;
     if k.info.layout != layout
         || !normal_layout_matches(n.info.layout, scaled, rotation, &n.key)
@@ -826,16 +830,24 @@ pub fn encode_encrypted_pair(
     input: &BuildInputs<'_>,
     signature: NormalSignature<'_>,
 ) -> Result<EncryptedPair, Error> {
-    let kernel = input.kernel_image;
-    let normal = input.normal_image;
     if let (Some(required), Some(provided)) = (
-        crate::image::required_abi(normal),
-        crate::image::provided_abi(kernel),
+        crate::image::required_abi(input.normal_image),
+        crate::image::provided_abi(input.kernel_image),
     ) {
         if !required.is_satisfied_by(&provided) {
             return Err(Error::AbiMismatch);
         }
     }
+    encode_encrypted_pair_unchecked(input, signature)
+}
+
+/// `encode_encrypted_pair` without the Normal/Kernel ABI gate.
+fn encode_encrypted_pair_unchecked(
+    input: &BuildInputs<'_>,
+    signature: NormalSignature<'_>,
+) -> Result<EncryptedPair, Error> {
+    let kernel = input.kernel_image;
+    let normal = input.normal_image;
     let scaled = scaled_normal_geometry_from_kernel(kernel);
     if kernel.len() != crate::image::KERNEL_LEN
         || normal.len() < 0x2000
@@ -954,9 +966,10 @@ fn validate_pair_inner(
     {
         return Err(Error::InvalidSignedEnvelope);
     }
-    let kernel = decode_envelope(&pair.kernel).ok_or(Error::KernelUndecodable)?;
-    let normal =
-        decode_envelope_with_kernel(&pair.normal, &kernel).ok_or(Error::NormalUndecodable)?;
+    let kernel =
+        Envelope::load(&pair.kernel).map_err(|e| Error::KernelUndecodable { source: Some(e) })?;
+    let normal = Envelope::load_with_kernel(&pair.normal, &kernel)
+        .map_err(|e| Error::NormalUndecodable { source: Some(e) })?;
     let expected_kernel_layout =
         kernel_layout_from_image(kernel_image).ok_or(Error::AmbiguousKernelLayout)?;
     if kernel.info.layout != expected_kernel_layout

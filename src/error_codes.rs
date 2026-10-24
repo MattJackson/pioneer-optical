@@ -89,8 +89,8 @@ impl CodedError for crate::envelope::Error {
             Self::KernelBodySize { .. } => "pioneer.envelope.kernel_body_size",
             Self::UnknownMarker { .. } => "pioneer.envelope.unknown_marker",
             Self::AbiMismatch => "pioneer.envelope.abi_mismatch",
-            Self::KernelUndecodable => "pioneer.envelope.kernel_undecodable",
-            Self::NormalUndecodable => "pioneer.envelope.normal_undecodable",
+            Self::KernelUndecodable { .. } => "pioneer.envelope.kernel_undecodable",
+            Self::NormalUndecodable { .. } => "pioneer.envelope.normal_undecodable",
             Self::RoundTripMismatch => "pioneer.envelope.round_trip_mismatch",
             Self::NotSignableNormal => "pioneer.envelope.not_signable_normal",
             Self::NotAscii => "pioneer.envelope.not_ascii",
@@ -134,6 +134,7 @@ impl CodedError for crate::envelope::UpdateError {
             Self::UnrecoveredTail { .. } => "pioneer.update.unrecovered_tail",
             Self::Representation { .. } => "pioneer.update.representation",
             Self::Authentication => "pioneer.update.authentication",
+            Self::Abi { .. } => "pioneer.update.abi_mismatch",
         }
     }
 }
@@ -239,6 +240,39 @@ impl CodedError for crate::ident::IdentError {
             Self::IncompleteIdentity => "pioneer.identity.incomplete_identity",
             Self::NotFound => "pioneer.identity.not_found",
             Self::Ambiguous => "pioneer.identity.ambiguous",
+        }
+    }
+}
+
+#[cfg(feature = "image")]
+impl CodedError for crate::image::KernelHandoffError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::UnknownInstalled => "pioneer.kernel_handoff.unknown_installed",
+            Self::UnknownTarget => "pioneer.kernel_handoff.unknown_target",
+            Self::Mismatch { .. } => "pioneer.kernel_handoff.mismatch",
+        }
+    }
+}
+
+#[cfg(feature = "image")]
+impl CodedError for crate::startup::Ambiguous {
+    fn code(&self) -> &'static str {
+        "pioneer.startup.ambiguous"
+    }
+}
+
+impl CodedError for crate::protocol::Incomplete {
+    fn code(&self) -> &'static str {
+        "pioneer.protocol.incomplete"
+    }
+}
+
+#[cfg(all(feature = "envelope", feature = "drive"))]
+impl CodedError for crate::receiver::transport::PlanError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::KernelLayout => "pioneer.transport.kernel_layout",
         }
     }
 }

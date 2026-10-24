@@ -1,11 +1,13 @@
 use super::*;
+use crate::envelope::{decode_envelope, decode_envelope_with_kernel};
 
 #[test]
+#[ignore = "set PIONEER_SCALED_KERNEL_FIXTURE and PIONEER_SCALED_NORMAL_FIXTURE to decoded scaled-key OEM files"]
 fn scaled_receiver_geometry_matches_oem_when_configured() {
-    let Ok(path) = std::env::var("PIONEER_SCALED_KERNEL_FIXTURE") else {
-        return;
-    };
-    let normal_path = std::env::var("PIONEER_SCALED_NORMAL_FIXTURE").unwrap();
+    let path =
+        std::env::var("PIONEER_SCALED_KERNEL_FIXTURE").expect("PIONEER_SCALED_KERNEL_FIXTURE");
+    let normal_path =
+        std::env::var("PIONEER_SCALED_NORMAL_FIXTURE").expect("PIONEER_SCALED_NORMAL_FIXTURE");
     let kernel = decode_envelope(&std::fs::read(path).unwrap()).unwrap();
     let normal_bytes = std::fs::read(normal_path).unwrap();
     let normal = decode_envelope_with_kernel(&normal_bytes, &kernel).unwrap();
@@ -66,10 +68,9 @@ fn scaled_receiver_geometry_matches_oem_when_configured() {
 }
 
 #[test]
+#[ignore = "set PIONEER_LIVE_DUMP_FIXTURE to a live UD04 flash dump"]
 fn live_ud04_images_make_independent_encrypted_pair_when_configured() {
-    let Ok(path) = std::env::var("PIONEER_LIVE_DUMP_FIXTURE") else {
-        return;
-    };
+    let path = std::env::var("PIONEER_LIVE_DUMP_FIXTURE").expect("PIONEER_LIVE_DUMP_FIXTURE");
     let dump = std::fs::read(path).unwrap();
     assert_eq!(dump.len(), 0x600000);
     let kernel = &dump[0x400000..0x410000];
@@ -898,6 +899,24 @@ fn abi_check_rejects_only_unsatisfied_requirements() {
     // Unsatisfied: 0x400102 is inside a 6-byte instruction.
     let bad = call(0x40_0102);
     assert_eq!(pair_err(&base_inputs(&kernel, &bad)), Error::AbiMismatch);
+    // Update::load applies the same gate to a pair that bypassed the encoder.
+    let pair = encode_encrypted_pair_unchecked(
+        &base_inputs(&kernel, &bad),
+        NormalSignature::Sign(&a_signer()),
+    )
+    .unwrap();
+    assert_eq!(
+        crate::envelope::Update::load(&pair.kernel, &pair.normal).unwrap_err(),
+        crate::envelope::UpdateError::Abi {
+            missing: vec![0x40_0102]
+        }
+    );
+    let good = encode_encrypted_pair(
+        &base_inputs(&kernel, &ok),
+        NormalSignature::Sign(&a_signer()),
+    )
+    .unwrap();
+    crate::envelope::Update::load(&good.kernel, &good.normal).unwrap();
 }
 
 #[test]
@@ -1025,6 +1044,10 @@ fn rotation_is_read_from_the_count_shift_after_the_xor() {
     let mut other = front_kernel();
     other[0x100 + 20 + 4..0x100 + 20 + 6].copy_from_slice(&[0x0d, 0x21]);
     assert_eq!(normal_rotation_from_kernel(&other), None);
+    // A move from an E register is not a move of the masked key.
+    let mut ereg = front_kernel();
+    ereg[0x100 + 20 + 4..0x100 + 20 + 6].copy_from_slice(&[0x0d, 0xb1]);
+    assert_eq!(normal_rotation_from_kernel(&ereg), None);
     // No XOR-skip branch: nothing to anchor the decode loop.
     assert_eq!(normal_rotation_from_kernel(&[0u8; 0x100]), None);
 }

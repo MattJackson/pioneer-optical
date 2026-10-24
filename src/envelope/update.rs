@@ -85,6 +85,11 @@ pub enum UpdateError {
     },
     /// The prepared Normal does not satisfy its target Kernel's authentication.
     Authentication,
+    /// The Normal calls Kernel entry points the Kernel does not provide.
+    Abi {
+        /// Required Kernel entry-point addresses the Kernel lacks.
+        missing: Vec<u32>,
+    },
 }
 
 impl core::fmt::Display for UpdateError {
@@ -123,6 +128,16 @@ impl core::fmt::Display for UpdateError {
             ),
             Self::Authentication => {
                 f.write_str("prepared Normal authentication does not satisfy the target Kernel")
+            }
+            Self::Abi { missing } => {
+                write!(
+                    f,
+                    "Normal requires Kernel entry points the Kernel does not provide:"
+                )?;
+                for address in missing {
+                    write!(f, " {address:#08x}")?;
+                }
+                Ok(())
             }
         }
     }
@@ -199,6 +214,13 @@ impl Update {
                 offset: tail.start,
                 length: tail.len(),
             });
+        }
+        if let (Some(required), Some(provided)) = (normal.required_abi(), kernel.provided_abi()) {
+            if !required.is_satisfied_by(&provided) {
+                return Err(UpdateError::Abi {
+                    missing: required.missing_from(&provided),
+                });
+            }
         }
         for (envelope, bytes) in [(&kernel, kernel_bytes), (&normal, normal_bytes)] {
             let component = envelope.info().kind;

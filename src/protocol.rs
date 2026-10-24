@@ -11,6 +11,13 @@ pub enum State {
 /// Response framing failed before a protocol signature could be evaluated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Incomplete;
+impl core::fmt::Display for Incomplete {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("incomplete Pioneer protocol identity response")
+    }
+}
+#[cfg(feature = "std")]
+impl std::error::Error for Incomplete {}
 /// A structured F1 identity, independent of advertised vendor/model.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Evidence {

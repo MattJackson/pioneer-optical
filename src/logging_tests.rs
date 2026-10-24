@@ -1,5 +1,10 @@
 use super::*;
 use alloc::vec::Vec;
+use core::cell::Cell;
+
+std::thread_local! {
+    pub(super) static IMAGE_SCANS: Cell<usize> = const { Cell::new(0) };
+}
 
 fn firmware() -> Vec<u8> {
     let mut b = vec![0; 0x2000];
@@ -152,4 +157,32 @@ fn ambiguous_dispatch_binding_is_not_a_capability() {
     let entry = image[0x400..0x40c].to_vec();
     image[0x600..0x60c].copy_from_slice(&entry);
     assert!(discover(&image).is_none());
+}
+
+#[test]
+fn many_dispatcher_candidates_share_the_image_scans() {
+    let mut image = firmware();
+    // A second dispatcher sharing setter, mask and table, with no table entry.
+    let p = 0x1008;
+    image[0x1000..0x1008].copy_from_slice(&[1, 0x20, 0x6d, 0xf4, 0x79, 0x37, 0, 8]);
+    for (delta, target) in [(0, 0x192), (6, 0x17e), (12, 0x16e)] {
+        image[p + delta..p + delta + 4].copy_from_slice(&[
+            0xa9,
+            0x10 + (delta / 6) as u8,
+            0x58,
+            0x70,
+        ]);
+        let rel = (target as isize - (p + delta + 6) as isize) as i16;
+        image[p + delta + 4..p + delta + 6].copy_from_slice(&rel.to_be_bytes());
+    }
+    IMAGE_SCANS.with(|c| c.set(0));
+    assert_eq!(
+        discover(&image),
+        Some(LoggingLayout {
+            mask_address: 0x337c,
+            group: 0x93,
+            bit: 0x40000
+        })
+    );
+    assert!(IMAGE_SCANS.with(Cell::get) <= 2);
 }

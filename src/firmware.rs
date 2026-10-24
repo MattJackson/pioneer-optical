@@ -57,6 +57,14 @@ pub mod abi {
             .get(at..at.checked_add(n).context("code range overflow")?)
             .context("code target outside image")
     }
+    /// A stack slot whose four bytes all have representable addresses.
+    fn stack_slot(sp: i32, displacement: i32) -> Result<i32> {
+        let at = sp
+            .checked_add(displacement)
+            .context("stack displacement overflow")?;
+        at.checked_add(3).context("stack displacement overflow")?;
+        Ok(at)
+    }
     struct State {
         er: [Value; 8],
         stack: BTreeMap<i32, Byte>,
@@ -118,6 +126,7 @@ pub mod abi {
                 h8_asm::Mode::Advanced,
             )
             .map_err(|_| Error::Instruction { address: pc })?;
+            let keeps_flags = matches!(decoded.insn.mnemonic, "CMP" | "BEQ" | "STM");
             let [first, second, third] = decoded.insn.operands;
             ensure!(third == O::None, "unsupported third ABI operand");
             match (decoded.insn.mnemonic, decoded.insn.size, first, second) {
@@ -153,7 +162,7 @@ pub mod abi {
                         value,
                         ..
                     }),
-                ) => state.store(state.sp + value, state.er[r as usize]),
+                ) => state.store(stack_slot(state.sp, value)?, state.er[r as usize]),
                 (
                     "MOV",
                     Some(S::Long),
@@ -163,7 +172,7 @@ pub mod abi {
                         ..
                     }),
                     O::Register(R::Long(r)),
-                ) => state.er[r as usize] = state.load(state.sp + value),
+                ) => state.er[r as usize] = state.load(stack_slot(state.sp, value)?),
                 ("SUB", Some(S::Word), O::Immediate { value, .. }, O::Register(R::Word(7))) => {
                     ensure!(
                         value > 0 && value < 4096 && state.sp >= -32,
@@ -223,7 +232,9 @@ pub mod abi {
                         ..
                     }),
                 ) => {
-                    state.stack.insert(state.sp + value, state.get_byte(r));
+                    state
+                        .stack
+                        .insert(stack_slot(state.sp, value)?, state.get_byte(r));
                 }
                 (
                     "MOV",
@@ -238,7 +249,7 @@ pub mod abi {
                     let value = if base_reg == 7 {
                         *state
                             .stack
-                            .get(&(state.sp + value))
+                            .get(&stack_slot(state.sp, value)?)
                             .unwrap_or(&Byte::Unknown)
                     } else {
                         ensure!(
@@ -293,6 +304,9 @@ pub mod abi {
                 }
                 _ => return Err(Error::Instruction { address: pc }),
             }
+            if !keeps_flags {
+                compare = None;
+            }
             pc = pc
                 .checked_add(decoded.len as u32)
                 .context("instruction address overflow")?;
@@ -335,10 +349,12 @@ pub mod abi {
             p[18..28] == [0x0a, 0xe2, 0x0f, 0xa0, 0x7a, 0x22, 0, 0x40, 0, 0],
             "helper end-bound calculation differs"
         );
-        let branch = helper + save as u32 + 28;
+        let branch = helper
+            .checked_add(save as u32 + 28)
+            .context("helper address overflow")?;
         let b = offset(image, base, branch, 4)?;
         let error = if b[..2] == [0x43, 8] {
-            branch + 2
+            branch.checked_add(2).context("helper address overflow")?
         } else {
             ensure!(b[..2] == [0x58, 0x20], "unsupported end-bound branch");
             (branch as i64 + 4 + i16::from_be_bytes([b[2], b[3]]) as i64)
@@ -357,7 +373,7 @@ pub mod abi {
         let failure = if e[4] == 0x5a {
             u32be(&e[4..8]) & 0xffffff
         } else {
-            error + 4
+            error.checked_add(4).context("helper address overflow")?
         };
         let tail = offset(image, base, failure, 2 + 4 + restore.len() + 2)?;
         ensure!(
@@ -500,12 +516,18 @@ pub mod layout {
         NoCompDirectory,
         /// Static gaps do not prove freedom from runtime or DMA accesses.
         RuntimeOwnershipUnproven,
+        /// Some COMP streams have no proven loader destination, so overlay
+        /// ranges may be incomplete or empty without proving absence.
+        OverlayDestinationsUnresolved,
     }
     impl crate::CodedError for LayoutLimitation {
         fn code(&self) -> &'static str {
             match self {
                 Self::NoCompDirectory => "pioneer.layout.no_comp_directory",
                 Self::RuntimeOwnershipUnproven => "pioneer.layout.runtime_ownership_unproven",
+                Self::OverlayDestinationsUnresolved => {
+                    "pioneer.layout.overlay_destinations_unresolved"
+                }
             }
         }
     }
@@ -600,7 +622,7 @@ pub mod layout {
     /// Recognize layout evidence in a decoded body. This does not prove free RAM.
     pub fn inspect(image: &[u8]) -> Result<Layout> {
         let mut out = Layout {
-            is_uhd: crate::image::is_uhd(image),
+            is_uhd: false,
             image_base: None,
             overlay_ranges: vec![],
             buffer_tables: vec![],
@@ -614,21 +636,35 @@ pub mod layout {
             crate::comp_streams::read(image, crate::comp::MAX_TOTAL_EXPANDED, &mut || true)
                 .map_err(Error::from)?
         else {
+            out.is_uhd = crate::image::uhd_regions(&[image]);
             out.limitations.push(LayoutLimitation::NoCompDirectory);
             return Ok(out);
         };
         out.image_base = Some(base);
+        let mut spans: Vec<_> = streams
+            .iter()
+            .map(|s| (s.image_offset, s.compressed_size))
+            .collect();
+        spans.sort_unstable();
+        if let Some(mut regions) = crate::image::stored_regions(image, &spans) {
+            regions.extend(streams.iter().map(|s| s.expanded.as_slice()));
+            out.is_uhd = crate::image::uhd_regions(&regions);
+        }
         let sizes: Vec<_> = streams
             .iter()
             .enumerate()
             .map(|(i, s)| (i, s.expanded.len()))
             .collect();
-        for destination in
+        let destinations =
             crate::comp_runtime::discover(image, base, &sizes).map_err(|_| Error::Ambiguous {
                 context: "COMP runtime destination",
                 candidates: 2,
-            })?
-        {
+            })?;
+        if destinations.len() < streams.len() {
+            out.limitations
+                .push(LayoutLimitation::OverlayDestinationsUnresolved);
+        }
+        for destination in destinations {
             out.overlay_ranges.push(Range::new(
                 destination.address,
                 streams[destination.stream].expanded.len().try_into()?,
@@ -698,7 +734,7 @@ pub mod layout {
                 let dest = be32(&w[14..]);
                 if source >= base
                     && stop > source
-                    && stop <= base + image.len() as u32
+                    && u64::from(stop) <= u64::from(base) + image.len() as u64
                     && (0xa00000..0xa10000).contains(&dest)
                     && dest.checked_add(stop - source) == Some(last)
                 {
@@ -709,11 +745,7 @@ pub mod layout {
                 .buffer_tables
                 .iter()
                 .flat_map(|t| &t.entries)
-                .filter_map(|e| {
-                    e.controller_start
-                        .zip(e.length)
-                        .map(|(start, _)| 0xa00000 + start)
-                })
+                .filter_map(|e| e.controller_start.map(|start| 0xa00000 + start))
                 .min();
             if let Some(end) = first_buffer {
                 let start = (last + 2 + 31) & !31;

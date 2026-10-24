@@ -69,6 +69,17 @@ pub enum PlanError {
     KernelLayout,
 }
 
+impl core::fmt::Display for PlanError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::KernelLayout => f.write_str(
+                "the kernel wire image is not the expected front-key layout for the two-region transport",
+            ),
+        }
+    }
+}
+impl std::error::Error for PlanError {}
+
 /// Build the ordered receive plan into `storage`, returning the filled view.
 ///
 /// `storage` must hold at least three segments. The kernel, when present, is

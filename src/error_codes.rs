@@ -228,6 +228,39 @@ impl CodedError for crate::ident::IdentError {
     }
 }
 
+#[cfg(feature = "image")]
+impl CodedError for crate::image::KernelHandoffError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::UnknownInstalled => "pioneer.kernel_handoff.unknown_installed",
+            Self::UnknownTarget => "pioneer.kernel_handoff.unknown_target",
+            Self::Mismatch { .. } => "pioneer.kernel_handoff.mismatch",
+        }
+    }
+}
+
+#[cfg(feature = "image")]
+impl CodedError for crate::startup::Ambiguous {
+    fn code(&self) -> &'static str {
+        "pioneer.startup.ambiguous"
+    }
+}
+
+impl CodedError for crate::protocol::Incomplete {
+    fn code(&self) -> &'static str {
+        "pioneer.protocol.incomplete"
+    }
+}
+
+#[cfg(feature = "envelope")]
+impl CodedError for crate::receiver::transport::PlanError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::KernelLayout => "pioneer.transport.kernel_layout",
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "error_codes_tests.rs"]
 mod tests;

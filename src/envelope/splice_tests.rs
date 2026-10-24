@@ -260,10 +260,10 @@ fn find_splices_accepts_a_boundary_exactly_one_window_in() {
 
 // Env-gated OEM fixture: e.g. PIONEER_SPLICED_NORMAL_FIXTURE=S8510191.103.enc
 #[test]
+#[ignore = "set PIONEER_SPLICED_NORMAL_FIXTURE to an OEM Normal envelope"]
 fn spliced_normal_fixture_when_configured() {
-    let Ok(path) = std::env::var("PIONEER_SPLICED_NORMAL_FIXTURE") else {
-        return;
-    };
+    let path =
+        std::env::var("PIONEER_SPLICED_NORMAL_FIXTURE").expect("PIONEER_SPLICED_NORMAL_FIXTURE");
     let data = std::fs::read(path).unwrap();
     let decoded = decode_envelope(&data).unwrap();
     assert_eq!(decoded.spliced_blocks().len(), 3);

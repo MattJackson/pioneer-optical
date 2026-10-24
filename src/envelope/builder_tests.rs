@@ -1,11 +1,12 @@
 use super::*;
 
 #[test]
+#[ignore = "set PIONEER_SCALED_KERNEL_FIXTURE and PIONEER_SCALED_NORMAL_FIXTURE to decoded scaled-key OEM files"]
 fn scaled_receiver_geometry_matches_oem_when_configured() {
-    let Ok(path) = std::env::var("PIONEER_SCALED_KERNEL_FIXTURE") else {
-        return;
-    };
-    let normal_path = std::env::var("PIONEER_SCALED_NORMAL_FIXTURE").unwrap();
+    let path =
+        std::env::var("PIONEER_SCALED_KERNEL_FIXTURE").expect("PIONEER_SCALED_KERNEL_FIXTURE");
+    let normal_path =
+        std::env::var("PIONEER_SCALED_NORMAL_FIXTURE").expect("PIONEER_SCALED_NORMAL_FIXTURE");
     let kernel = decode_envelope(&std::fs::read(path).unwrap()).unwrap();
     let normal_bytes = std::fs::read(normal_path).unwrap();
     let normal = decode_envelope_with_kernel(&normal_bytes, &kernel).unwrap();
@@ -66,10 +67,9 @@ fn scaled_receiver_geometry_matches_oem_when_configured() {
 }
 
 #[test]
+#[ignore = "set PIONEER_LIVE_DUMP_FIXTURE to a live UD04 flash dump"]
 fn live_ud04_images_make_independent_encrypted_pair_when_configured() {
-    let Ok(path) = std::env::var("PIONEER_LIVE_DUMP_FIXTURE") else {
-        return;
-    };
+    let path = std::env::var("PIONEER_LIVE_DUMP_FIXTURE").expect("PIONEER_LIVE_DUMP_FIXTURE");
     let dump = std::fs::read(path).unwrap();
     assert_eq!(dump.len(), 0x600000);
     let kernel = &dump[0x400000..0x410000];

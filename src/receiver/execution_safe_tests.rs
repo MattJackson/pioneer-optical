@@ -210,8 +210,12 @@ struct Clock {
     deny: Option<FlashPass>,
     checks: usize,
     deny_check: Option<usize>,
+    operation_progress: Vec<crate::operation::Progress>,
 }
 impl UpdateRuntime for Clock {
+    fn operation_progress(&mut self, progress: crate::operation::Progress) {
+        self.operation_progress.push(progress);
+    }
     fn elapsed(&self) -> Duration {
         self.elapsed
     }
@@ -247,16 +251,36 @@ fn run(
 fn complete_flash_owns_migration_both_passes_and_exact_component_verification() {
     for restore in [false, true] {
         let (plan, state) = setup(restore);
+        let mut clock = Clock::default();
         let result = plan
             .flash(
                 FlashTransport {
                     reads: &mut Port(state.clone()),
                     writes: &mut Port(state.clone()),
                 },
-                &mut Clock::default(),
+                &mut clock,
             )
             .unwrap();
         assert!(result.kernel_verified && result.normal_verified);
+        use crate::operation::{Component, Phase};
+        for phase in [Phase::Writing, Phase::Restarting, Phase::Verifying] {
+            assert!(clock.operation_progress.iter().any(|p| p.phase == phase));
+        }
+        for component in [Component::Kernel, Component::Normal] {
+            assert!(clock
+                .operation_progress
+                .iter()
+                .any(|p| p.phase == Phase::Verifying
+                    && p.component == component
+                    && p.done == p.total
+                    && p.total.is_some()));
+        }
+        let waiting = clock
+            .operation_progress
+            .iter()
+            .find(|p| p.phase == Phase::Restarting)
+            .unwrap();
+        assert_eq!((waiting.done, waiting.total), (None, None));
         assert_eq!(result.completed_passes, if restore { 2 } else { 1 });
         assert_eq!(state.borrow().parameter_writes, [0xffff]);
         assert_eq!(state.borrow().finishes, result.completed_passes);

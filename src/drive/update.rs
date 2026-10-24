@@ -84,6 +84,8 @@ pub struct UpdateOptions {
 
 /// Host timing and progress services, independent of a UI or operating system.
 pub trait UpdateRuntime {
+    /// Structured progress mirrored by the other optical protocol libraries.
+    fn operation_progress(&mut self, _progress: crate::operation::Progress) {}
     /// A validated single-pass transfer is about to enter update mode.
     fn starting(&mut self, _kernel_bytes: usize, _normal_bytes: usize) {}
     /// Monotonic elapsed time from a fixed origin; must advance during sleeps.
@@ -287,6 +289,10 @@ pub fn execute_plan_with_entry<T: Transport, R: UpdateRuntime>(
     let kernel_bytes = role_total(plan, Role::Kernel);
     let normal_bytes = role_total(plan, Role::Normal);
     runtime.starting(kernel_bytes, normal_bytes);
+    runtime.operation_progress(crate::operation::Progress::waiting(
+        crate::operation::Phase::Preparing,
+        crate::operation::Component::Firmware,
+    ));
     let mut session = if already_updating {
         super::Session {
             t: transport,
@@ -342,12 +348,25 @@ pub fn execute_plan_with_entry<T: Transport, R: UpdateRuntime>(
             written += chunk.len();
             done += chunk.len();
             runtime.progress(segment.role, done, component_total);
+            runtime.operation_progress(crate::operation::Progress::bytes(
+                crate::operation::Phase::Writing,
+                match segment.role {
+                    Role::Kernel => crate::operation::Component::Kernel,
+                    Role::Normal => crate::operation::Component::Normal,
+                },
+                done,
+                component_total,
+            ));
         }
         if Some(index) == last_kernel {
             runtime.sleep(KERNEL_SETTLE);
         }
     }
     session.finish().map_err(UpdateError::Finish)?;
+    runtime.operation_progress(crate::operation::Progress::waiting(
+        crate::operation::Phase::Restarting,
+        crate::operation::Component::Firmware,
+    ));
     runtime.sleep(FINISH_SETTLE);
     let start = runtime.elapsed();
     loop {

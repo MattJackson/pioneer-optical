@@ -337,8 +337,20 @@ fn verify_kernel<T: Transport, H: ExecutionRuntime<T::Error>>(
     pass: FlashPass,
     runtime: &mut H,
 ) -> Result<(), ExecutionError<T::Error>> {
+    runtime.operation_progress(crate::operation::Progress::bytes(
+        crate::operation::Phase::Verifying,
+        crate::operation::Component::Kernel,
+        0,
+        expected.len(),
+    ));
     match execution::verify(t, expected, pass) {
         Ok(()) => {
+            runtime.operation_progress(crate::operation::Progress::bytes(
+                crate::operation::Phase::Verifying,
+                crate::operation::Component::Kernel,
+                expected.len(),
+                expected.len(),
+            ));
             runtime.verified(pass, crate::Role::Kernel, true);
             Ok(())
         }
@@ -394,6 +406,12 @@ fn verify_normal_at<T: Transport, H: ExecutionRuntime<T::Error>>(
     let mut buffer = [0; 0x8000];
     let mut complete = true;
     for (index, chunk) in expected.chunks(buffer.len()).enumerate() {
+        runtime.operation_progress(crate::operation::Progress::bytes(
+            crate::operation::Phase::Verifying,
+            crate::operation::Component::Normal,
+            index * buffer.len(),
+            expected.len(),
+        ));
         let address = base + (index * buffer.len()) as u32;
         let actual = &mut buffer[..chunk.len()];
         match drive::read_memory(t, address, actual) {
@@ -428,6 +446,12 @@ fn verify_normal_at<T: Transport, H: ExecutionRuntime<T::Error>>(
             }
         }
     }
+    runtime.operation_progress(crate::operation::Progress::bytes(
+        crate::operation::Phase::Verifying,
+        crate::operation::Component::Normal,
+        expected.len(),
+        expected.len(),
+    ));
     Ok(complete)
 }
 fn plan<'a, E>(

@@ -4,7 +4,14 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.0] - Unreleased
+
+- Expose protocol-neutral operation phases, component labels, measured byte progress
+  and waiting states, matching the sister optical package's host contract.
+- Report writing, restart and component verification through the shared progress
+  callback without changing update command ordering or byte comparisons.
+- Add structured error categories alongside stable diagnostic codes. Preparation
+  wrappers preserve the underlying cause's category for localized host guidance.
 
 ### Breaking
 

@@ -1,5 +1,9 @@
 //! Stable, language-independent identifiers for typed library errors.
 
+#[path = "issue_kind.rs"]
+mod issue_kind;
+use issue_kind::kind_for_code;
+
 /// Machine-readable error identity for diagnostics and translation catalogs.
 ///
 /// Codes are stable across compatible releases and never contain runtime values.
@@ -8,6 +12,10 @@
 /// cause, which may have its own code. Unknown future codes should use a generic
 /// application message while retaining diagnostic details.
 pub trait CodedError {
+    /// Protocol-neutral host guidance category; never derives from diagnostic prose.
+    fn kind(&self) -> crate::operation::IssueKind {
+        kind_for_code(self.code())
+    }
     /// Stable namespaced code, independent of English diagnostic wording.
     fn code(&self) -> &'static str;
 }
@@ -150,6 +158,13 @@ impl CodedError for crate::receiver::Error {
 
 #[cfg(feature = "envelope")]
 impl CodedError for crate::receiver::PreparationError {
+    fn kind(&self) -> crate::operation::IssueKind {
+        match self {
+            Self::Target(error) => error.kind(),
+            Self::Compatibility(error) => error.kind(),
+            _ => kind_for_code(self.code()),
+        }
+    }
     fn code(&self) -> &'static str {
         match self {
             Self::AmbiguousStartup => "pioneer.preparation.ambiguous_startup",

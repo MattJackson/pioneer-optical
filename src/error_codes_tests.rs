@@ -124,11 +124,11 @@ fn envelope_error_catalogue_has_stable_codes_and_actionable_text() {
         ),
         (Error::AbiMismatch, "pioneer.envelope.abi_mismatch"),
         (
-            Error::KernelUndecodable,
+            Error::KernelUndecodable { source: None },
             "pioneer.envelope.kernel_undecodable",
         ),
         (
-            Error::NormalUndecodable,
+            Error::NormalUndecodable { source: None },
             "pioneer.envelope.normal_undecodable",
         ),
         (

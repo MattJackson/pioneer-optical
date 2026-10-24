@@ -1,4 +1,5 @@
 use super::*;
+use crate::envelope::{decode_envelope, decode_envelope_with_kernel};
 
 #[test]
 #[ignore = "set PIONEER_SCALED_KERNEL_FIXTURE and PIONEER_SCALED_NORMAL_FIXTURE to decoded scaled-key OEM files"]
@@ -1025,6 +1026,10 @@ fn rotation_is_read_from_the_count_shift_after_the_xor() {
     let mut other = front_kernel();
     other[0x100 + 20 + 4..0x100 + 20 + 6].copy_from_slice(&[0x0d, 0x21]);
     assert_eq!(normal_rotation_from_kernel(&other), None);
+    // A move from an E register is not a move of the masked key.
+    let mut ereg = front_kernel();
+    ereg[0x100 + 20 + 4..0x100 + 20 + 6].copy_from_slice(&[0x0d, 0xb1]);
+    assert_eq!(normal_rotation_from_kernel(&ereg), None);
     // No XOR-skip branch: nothing to anchor the decode loop.
     assert_eq!(normal_rotation_from_kernel(&[0u8; 0x100]), None);
 }

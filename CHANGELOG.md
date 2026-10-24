@@ -13,6 +13,13 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 - Add structured error categories alongside stable diagnostic codes. Preparation
   wrappers preserve the underlying cause's category for localized host guidance.
 
+## [1.0.4] - 2026-10-23
+
+- During explicit receiver Recovery, treat only TEST UNIT READY sense `02/30/00`
+  as a prompt to continue into the existing target-identity and exact Kernel/Normal
+  verification. The sense response alone never verifies an update; normal Flash
+  behavior and all other readiness failures and timeouts remain unchanged.
+
 ## [1.0.3] - 2026-10-23
 
 - Add `protocol::Evidence::parse` for structured F1 identity recognition independent

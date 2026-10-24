@@ -543,6 +543,7 @@ impl PreparedUpdate {
         })?;
         let (updating, _) =
             check_receiver(io.reads, installed, &self.control, mode, FlashPass::Initial)?;
+        let recovery_mode = mode == ExecutionMode::Recovery;
         if !updating {
             if let Some(setting) = self.startup_setting {
                 return crate::startup::migration::execute(
@@ -557,13 +558,14 @@ impl PreparedUpdate {
                             },
                             runtime,
                             false,
+                            recovery_mode,
                         )
                     },
                 )
                 .map_err(|source| ExecutionError::Startup(Box::new(source)));
             }
         }
-        self.execute_passes(io, runtime, updating)
+        self.execute_passes(io, runtime, updating, recovery_mode)
     }
 
     fn execute_passes<R, W, H>(
@@ -571,6 +573,7 @@ impl PreparedUpdate {
         io: FlashTransport<'_, R, W>,
         runtime: &mut H,
         updating: bool,
+        recovery_mode: bool,
     ) -> Result<FlashOutcome, ExecutionError<W::Error>>
     where
         W: Transport,
@@ -608,18 +611,32 @@ impl PreparedUpdate {
             self.initial_receive.expect("checked receive layout"),
             &mut storage,
         )?;
-        drive::execute_plan_with_entry(
-            io.writes,
-            runtime,
-            &self.control,
-            transfer,
-            UpdateOptions {
-                class: class(self.initial_class)?,
-                recover: updating,
-            },
-            updating,
-        )
-        .map_err(|source| {
+        let initial = if recovery_mode {
+            drive::execute_plan_with_entry_for_recovery(
+                io.writes,
+                runtime,
+                &self.control,
+                transfer,
+                UpdateOptions {
+                    class: class(self.initial_class)?,
+                    recover: updating,
+                },
+                updating,
+            )
+        } else {
+            drive::execute_plan_with_entry(
+                io.writes,
+                runtime,
+                &self.control,
+                transfer,
+                UpdateOptions {
+                    class: class(self.initial_class)?,
+                    recover: updating,
+                },
+                updating,
+            )
+        };
+        initial.map_err(|source| {
             ExecutionError::Flash(FlashError::Update {
                 pass: FlashPass::Initial,
                 source,
@@ -671,17 +688,31 @@ impl PreparedUpdate {
                 transport::detect(self.first_kernel_image()),
                 &mut storage,
             )?;
-            drive::execute_plan(
-                io.writes,
-                runtime,
-                &control,
-                transfer,
-                UpdateOptions {
-                    class: class(self.target_class)?,
-                    recover: false,
-                },
-            )
-            .map_err(|source| ExecutionError::Flash(FlashError::Update { pass, source }))?;
+            let restoration = if recovery_mode {
+                drive::execute_plan_for_recovery(
+                    io.writes,
+                    runtime,
+                    &control,
+                    transfer,
+                    UpdateOptions {
+                        class: class(self.target_class)?,
+                        recover: false,
+                    },
+                )
+            } else {
+                drive::execute_plan(
+                    io.writes,
+                    runtime,
+                    &control,
+                    transfer,
+                    UpdateOptions {
+                        class: class(self.target_class)?,
+                        recover: false,
+                    },
+                )
+            };
+            restoration
+                .map_err(|source| ExecutionError::Flash(FlashError::Update { pass, source }))?;
             verify_kernel(io.reads, self.final_kernel_image(), pass, runtime)?;
             observed = target_identity(
                 io.reads,

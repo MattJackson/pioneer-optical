@@ -381,10 +381,9 @@ fn rebuild_template_free(pair: &Pair, signer: &SigningKey) -> Outcome {
 }
 
 #[test]
+#[ignore = "set PIONEER_HOARD_ROOT to the hoard directory"]
 fn every_hoard_pair_rebuilds_byte_exact_when_configured() {
-    let Ok(root) = std::env::var("PIONEER_HOARD_ROOT") else {
-        return;
-    };
+    let root = std::env::var("PIONEER_HOARD_ROOT").expect("PIONEER_HOARD_ROOT");
     let pairs = hoard_pairs(&PathBuf::from(root));
     let signer = SigningKey::from_bytes([7; 20]).unwrap();
     let (mut exact, mut modulo) = (0, 0);
@@ -442,6 +441,8 @@ fn every_hoard_pair_rebuilds_byte_exact_when_configured() {
     }
     if std::env::var_os("PIONEER_HOARD_ALLOW_FAILURES").is_none() {
         assert_eq!(failed, 0, "hoard pairs failed to rebuild");
+        let rebuilt = exact + modulo + header_exact.values().map(Vec::len).sum::<usize>();
+        assert!(rebuilt > 0, "no hoard pair was in scope");
     }
 }
 
@@ -449,10 +450,9 @@ fn every_hoard_pair_rebuilds_byte_exact_when_configured() {
 /// receiver-policy round trip: a body encoded with a Kernel's rules decodes
 /// back to that body with its decode. Gated by `PIONEER_HOARD_ROOT`.
 #[test]
+#[ignore = "set PIONEER_HOARD_ROOT to the hoard directory"]
 fn hoard_round_trip_properties_when_configured() {
-    let Ok(root) = std::env::var("PIONEER_HOARD_ROOT") else {
-        return;
-    };
+    let root = std::env::var("PIONEER_HOARD_ROOT").expect("PIONEER_HOARD_ROOT");
     let pairs = hoard_pairs(&PathBuf::from(root));
     let signer = SigningKey::from_bytes([9; 20]).unwrap();
     let mut checked = 0;
@@ -531,13 +531,10 @@ fn hoard_round_trip_properties_when_configured() {
 /// BDR-207M 1.60 Kernel's transport, decodes with the 207M Kernel's rules to
 /// the identical PR1ML body with a zero BE32 checksum. Gated by the two paths.
 #[test]
+#[ignore = "set PIONEER_PR1ML_130_TAR and PIONEER_207M_160_TAR to the firmware tarballs"]
 fn pr1ml_body_reencoded_for_207m_receiver_when_configured() {
-    let (Ok(pr1ml_path), Ok(k207_path)) = (
-        std::env::var("PIONEER_PR1ML_130_TAR"),
-        std::env::var("PIONEER_207M_160_TAR"),
-    ) else {
-        return;
-    };
+    let pr1ml_path = std::env::var("PIONEER_PR1ML_130_TAR").expect("PIONEER_PR1ML_130_TAR");
+    let k207_path = std::env::var("PIONEER_207M_160_TAR").expect("PIONEER_207M_160_TAR");
     let pr1ml = tar_members(&std::fs::read(pr1ml_path).unwrap());
     let k207m = tar_members(&std::fs::read(k207_path).unwrap());
     // Pick components by decoded role, not by filename: the 207M Kernel and

@@ -81,10 +81,10 @@ fn newer_startup_and_service_epilogue() {
 }
 
 #[test]
+#[ignore = "set PIONEER_DECODED_KERNEL_CORPUS to a directory of decoded Kernel .bin files"]
 fn decoded_corpus_signatures_when_configured() {
-    let Ok(root) = std::env::var("PIONEER_DECODED_KERNEL_CORPUS") else {
-        return;
-    };
+    let root =
+        std::env::var("PIONEER_DECODED_KERNEL_CORPUS").expect("PIONEER_DECODED_KERNEL_CORPUS");
     let (mut known, mut unknown) = (0, 0);
     for path in std::fs::read_dir(root).unwrap() {
         let path = path.unwrap().path();

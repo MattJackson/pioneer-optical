@@ -1,4 +1,5 @@
 use super::*;
+use crate::image::h8::{ilen, valid};
 use alloc::vec;
 
 /// `0A 01` (INC.B R1H): a valid, non-terminating 2-byte filler instruction.
@@ -202,4 +203,10 @@ fn required_abi_includes_compressed_code_and_does_not_scan_failed_comp() {
     assert_eq!(required_abi(&packed), required_abi(&normal));
     packed[0x1204] = 0;
     assert!(required_abi(&packed).is_none());
+}
+
+#[test]
+fn provided_entries_short_branch_at_slice_end_does_not_panic() {
+    assert_eq!(provided_entries(&[0x55]), vec![KERNEL_BASE]);
+    let _ = provided_entries(&[0x00, 0x00, 0x55]);
 }

@@ -313,20 +313,31 @@ impl Envelope {
                             cursor..start,
                             None,
                             Cow::Borrowed(&self.image[cursor..start]),
+                            None,
                         );
                     }
                     cursor = start + 4 + stream.info.compressed_size;
-                    result.push_region(start..cursor, Some(index), Cow::Owned(stream.expanded));
+                    // `expanded_sha256` is the same lowercase-hex SHA-256 of these bytes.
+                    let digest = stream.info.expanded_sha256;
+                    result.push_region(
+                        start..cursor,
+                        Some(index),
+                        Cow::Owned(stream.expanded),
+                        Some(digest),
+                    );
                 }
             } else {
                 result.diagnostics.push(Diagnostic { code: "pioneer.analysis.overlapping_streams", message: "COMP storage overlaps; retaining the original body without interpreting streams.".into() });
             }
         }
         if cursor < self.image.len() {
+            // A region spanning the whole image has the identity digest.
+            let digest = (cursor == 0).then(|| result.identity.sha256.clone());
             result.push_region(
                 cursor..self.image.len(),
                 None,
                 Cow::Borrowed(&self.image[cursor..]),
+                digest,
             );
         }
         for region in &mut result.regions {
@@ -365,7 +376,13 @@ impl Envelope {
     }
 }
 impl<'a> FirmwareAnalysis<'a> {
-    fn push_region(&mut self, stored: Range<usize>, stream: Option<usize>, bytes: Cow<'a, [u8]>) {
+    fn push_region(
+        &mut self,
+        stored: Range<usize>,
+        stream: Option<usize>,
+        bytes: Cow<'a, [u8]>,
+        sha256: Option<String>,
+    ) {
         self.regions.push(Region {
             id: self.regions.len(),
             name: stream.map_or_else(
@@ -377,7 +394,7 @@ impl<'a> FirmwareAnalysis<'a> {
             address_source: None,
             metadata: Vec::new(),
             stream,
-            sha256: hash(&bytes),
+            sha256: sha256.unwrap_or_else(|| hash(&bytes)),
             size: bytes.len(),
             tables: tables::inspect(&bytes),
             references: Vec::new(),

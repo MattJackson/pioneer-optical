@@ -1,6 +1,8 @@
 use super::*;
 use crate::envelope::builder::KernelKeySource;
+use crate::envelope::DecodeError;
 use crate::envelope::Layout;
+use crate::CodedError;
 
 const NAME: &str = "PIONEER BD-RW   BDR-205";
 const PROGRAM: Range<usize> = 0x2000..0x3000;
@@ -228,16 +230,17 @@ fn clone_kernel_envelope_round_trips_with_the_requested_key() {
     );
     assert_eq!(
         clone_kernel(b"not an envelope", &id52(), &build).unwrap_err(),
-        Error::KernelUndecodable
+        Error::KernelUndecodable {
+            source: Some(DecodeError::InvalidHeader)
+        }
     );
 }
 
 /// `PIONEER_KERNEL_CLONE_FIXTURE` names an OEM Kernel envelope.
 #[test]
+#[ignore = "set PIONEER_KERNEL_CLONE_FIXTURE to an OEM Kernel envelope"]
 fn oem_kernel_clones_to_same_content_when_configured() {
-    let Ok(path) = std::env::var("PIONEER_KERNEL_CLONE_FIXTURE") else {
-        return;
-    };
+    let path = std::env::var("PIONEER_KERNEL_CLONE_FIXTURE").expect("PIONEER_KERNEL_CLONE_FIXTURE");
     let source = std::fs::read(path).unwrap();
     let decoded = decode_envelope(&source).unwrap();
     let header = decoded.header().unwrap();
@@ -252,4 +255,24 @@ fn oem_kernel_clones_to_same_content_when_configured() {
     let image = decode_envelope(&clone).unwrap().image;
     assert_eq!(kernel_fill_seed(&image), Some(0));
     assert!(content_eq(&decoded.image, &header.id, &image, &header.id));
+}
+
+#[test]
+fn undecodable_kernel_preserves_the_decode_cause() {
+    let build = KernelBuild::from_seed(0x123456);
+    let err = clone_kernel(b"not an envelope", &id52(), &build).unwrap_err();
+    assert_eq!(
+        CodedError::code(&err),
+        "pioneer.envelope.kernel_undecodable"
+    );
+    assert!(std::error::Error::source(&err).is_some());
+}
+
+#[test]
+fn fill_lock_is_bounded_to_the_kernel_window() {
+    let seed = 0x1234;
+    let mut img = vec![0u8; 0x200000];
+    let fill = fill_stream(seed, img.len());
+    img[..0x1000].copy_from_slice(&fill[..0x1000]);
+    assert_eq!(kernel_fill_seed(&img), None);
 }

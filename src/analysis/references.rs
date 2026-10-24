@@ -1,6 +1,6 @@
 //! Single-image H8 direct-reference facts. No pairwise correspondence decisions.
 use super::{FirmwareAnalysis, Region};
-use crate::image::h8::{ilen, valid};
+use crate::image::h8::{decode, ilen};
 use serde::Serialize;
 use std::ops::Range;
 
@@ -18,9 +18,10 @@ pub struct Reference {
 
 const SYNC_RUN: usize = 128;
 
-fn boundaries(region: &Region<'_>, component: &str) -> Vec<bool> {
+// Instruction length at each synchronized start, 0 elsewhere.
+fn boundaries(region: &Region<'_>, component: &str) -> Vec<u8> {
     let bytes = region.bytes();
-    let mut starts = vec![false; bytes.len()];
+    let mut starts = vec![0u8; bytes.len()];
     let mut i = if component == "Normal" && region.stored.start == 0 {
         crate::comp::COMP_OFFSET + 0x100
     } else {
@@ -29,20 +30,21 @@ fn boundaries(region: &Region<'_>, component: &str) -> Vec<bool> {
     let mut run = 0;
     let mut pending = Vec::new();
     while i + 2 <= bytes.len() {
-        let n = ilen(bytes, i);
-        let good = (valid(bytes, i) || matches!(bytes[i], 0x5a | 0x5e))
+        let (v, n) = decode(bytes, i);
+        let good = (v || matches!(bytes[i], 0x5a | 0x5e))
             && i + n <= bytes.len()
             && bytes[i..i + n].iter().any(|&v| v != 0 && v != 0xff);
         if good {
             run += 1;
-            pending.push(i);
+            pending.push((i, n));
         } else {
             run = 0;
             pending.clear();
         }
         if good && run >= SYNC_RUN {
-            for offset in pending.drain(..) {
-                starts[offset] = true;
+            for (offset, n) in pending.drain(..) {
+                // 0xFF is a sentinel for "recompute"; H8S instructions are at most 10 bytes.
+                starts[offset] = u8::try_from(n).unwrap_or(u8::MAX);
             }
         }
         i += n;
@@ -106,13 +108,19 @@ pub(super) fn identify(analysis: &mut FirmwareAnalysis<'_>) {
             let Some(base) = region.address else { continue };
             let starts = boundaries(region, &analysis.identity.component);
             let mut references = Vec::new();
-            for (offset, start) in starts.into_iter().enumerate() {
-                if !start {
+            for (offset, n) in starts.into_iter().enumerate() {
+                if n == 0 {
                     continue;
                 }
                 if let Some((operand, destination)) = target(region.bytes(), offset, base) {
                     references.push(Reference {
-                        instruction: offset..offset + ilen(region.bytes(), offset),
+                        instruction: offset
+                            ..offset
+                                + if n == u8::MAX {
+                                    ilen(region.bytes(), offset)
+                                } else {
+                                    usize::from(n)
+                                },
                         operand,
                         target: destination,
                     });

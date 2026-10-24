@@ -90,9 +90,9 @@ fn direct_reference_facts_are_extracted_from_one_image() {
     assert_eq!(reference.instruction, 260..264);
     assert_eq!(reference.operand, 261..264);
     assert_eq!(reference.target, 0x400180);
-    region.bytes = Cow::Borrowed(&bytes[..8]);
-    region.size = 8;
-    region.stored = 0..8;
+    region.bytes = Cow::Borrowed(&bytes[..262]);
+    region.size = 262;
+    region.stored = 0..262;
     analysis.regions = vec![region];
     references::identify(&mut analysis);
     assert!(analysis.regions[0].references.is_empty());

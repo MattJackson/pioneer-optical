@@ -8,12 +8,14 @@ use std::collections::VecDeque;
 struct Mock {
     reads: VecDeque<Result<Vec<u8>, ()>>,
     calls: Vec<(Vec<u8>, Vec<u8>)>,
+    fail_writes: bool,
 }
 impl Mock {
     fn new(reads: Vec<Vec<u8>>) -> Self {
         Self {
             reads: reads.into_iter().map(Ok).collect(),
             calls: Vec::new(),
+            fail_writes: false,
         }
     }
 }
@@ -30,10 +32,16 @@ impl Transport for Mock {
             }
             Data::Out(b) => {
                 self.calls.push((cdb.to_vec(), b.to_vec()));
+                if self.fail_writes {
+                    return Err(());
+                }
                 Ok(b.len())
             }
             Data::None => {
                 self.calls.push((cdb.to_vec(), vec![]));
+                if self.fail_writes {
+                    return Err(());
+                }
                 Ok(0)
             }
         }
@@ -563,7 +571,10 @@ fn partial_oversized_and_failed_writes_are_never_retried_or_verified() {
                 outcome,
                 Ok(WriteOutcome::Unverified(Error::Malformed))
             )),
-            Err(_) => assert!(matches!(outcome, Err(Error::Transport { .. }))),
+            Err(_) => assert!(matches!(
+                outcome,
+                Ok(WriteOutcome::Unverified(Error::Transport { .. }))
+            )),
         }
         assert_eq!(t.inner.calls.len(), 2);
     }
@@ -646,4 +657,43 @@ fn unchanged_realtime_still_honors_saved_policy_restrictions() {
         Err(Error::InvalidValue)
     ));
     assert_eq!(transport.calls.len(), 1);
+}
+
+#[test]
+fn a_failed_sent_write_is_unverified_not_a_pre_write_error() {
+    let mut t = Mock::new(vec![status()]);
+    t.fail_writes = true;
+    assert!(matches!(
+        Device::new(&mut t).set(QuietDrive, QuietMode::Performance, Persistence::Volatile),
+        Ok(WriteOutcome::Unverified(Error::Transport { .. }))
+    ));
+    let mut t = Mock::new(vec![vec![0, 6, 0, 0, 0x64, 0xfe, 1, 0]]);
+    t.fail_writes = true;
+    assert!(matches!(
+        Device::new(&mut t).set(DvdRegion, Region::new(2).unwrap(), Persistent),
+        Ok(WriteOutcome::Unverified(Error::Transport { .. }))
+    ));
+    let mut t = Mock::new(vec![]);
+    t.reads.push_back(Err(()));
+    assert!(matches!(
+        Device::new(&mut t).set(QuietDrive, QuietMode::Performance, Persistence::Volatile),
+        Err(Error::Transport { .. })
+    ));
+}
+#[test]
+fn undocumented_saved_quiet_byte_contradicts_the_request() {
+    let mut after = status();
+    after[2] = 2;
+    after[3] = 7;
+    let mut t = Mock::new(vec![status(), after.clone()]);
+    assert!(matches!(
+        Device::new(&mut t).set(QuietDrive, QuietMode::Quiet, Persistence::Saved),
+        Ok(WriteOutcome::Mismatch(_))
+    ));
+    after[3] = 255;
+    let mut t = Mock::new(vec![status(), after]);
+    assert!(matches!(
+        Device::new(&mut t).set(QuietDrive, QuietMode::Quiet, Persistence::Saved),
+        Ok(WriteOutcome::Verified(_))
+    ));
 }

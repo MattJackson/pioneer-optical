@@ -1,7 +1,7 @@
 //! Typed failures from automatic envelope recognition.
 
 /// Why an envelope could not be loaded. No variant implies drive compatibility.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum DecodeError {
     /// The literal header is absent, truncated or lacks a component kind.

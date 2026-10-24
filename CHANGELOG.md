@@ -4,6 +4,53 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - Unreleased
+
+- Faster ABI, reference and analysis passes: each H8 instruction is decoded once
+  and region digests reuse hashes already computed for the same bytes. Results are
+  byte-identical across the local OEM corpus (`Update::load` about 22% faster,
+  `required_abi` about 37% faster).
+
+- Expose protocol-neutral operation phases, component labels, measured byte progress
+  and waiting states, matching the sister optical package's host contract.
+- Report writing, restart and component verification through the shared progress
+  callback without changing update command ordering or byte comparisons.
+- Add structured error categories alongside stable diagnostic codes. Preparation
+  wrappers preserve the underlying cause's category for localized host guidance.
+
+### Breaking
+
+- `envelope::builder::Error::KernelUndecodable` and `NormalUndecodable` are now
+  struct variants carrying `source: Option<DecodeError>`; `DecodeError` derives
+  `Hash`. `firmware::LayoutLimitation` gains `OverlayDestinationsUnresolved`.
+- `envelope::UpdateError` gains `Abi { missing }`
+  (`pioneer.update.abi_mismatch`): `Update::load` now refuses a Kernel/Normal
+  pair whose Normal requires Kernel entry points the Kernel does not provide,
+  matching the builder's existing check. Every genuine pair in the local OEM
+  corpus still loads.
+- Device setting writes report a transport failure of the sent command as
+  `WriteOutcome::Unverified` instead of `Err`, so hosts can tell a possibly
+  applied write from a pre-send refusal. An undocumented saved quiet byte is a
+  mismatch, not verified.
+
+### Fixed
+
+- No panic or wrapped arithmetic on crafted firmware: Kernel E-register moves in
+  rotation analysis, stack displacements and address sums in callback analysis,
+  layout global-copy bounds, truncated `BSR` operands, and COMP offsets on 32-bit
+  targets.
+- Callback tracing no longer follows a stale compare across flag-setting
+  instructions; a known OEM buffer with an unspecified length bounds structural
+  gaps; inspection reports COMP streams whose overlay destinations are unproven.
+- Resized-Normal repacking refuses an unparseable COMP directory; spliced Normals
+  whose Kernel exceptions fall inside COMP streams decode with their splices.
+- Bounded work on hostile input: live-dump carving, Kernel fill-seed search,
+  startup-surface and logging scans; one COMP decode per inspection.
+- `CodedError` for `KernelHandoffError`, `PlanError`, `startup::Ambiguous` and
+  `protocol::Incomplete`; decode errors keep their typed cause.
+- Corpus tests that need external firmware are reported as ignored when it is not
+  configured, instead of passing without running.
+
 ## [1.0.4] - 2026-10-23
 
 - During explicit receiver Recovery, treat only TEST UNIT READY sense `02/30/00`

@@ -30,6 +30,10 @@ pub enum Error<E> {
     /// Region changes are exhausted or the drive is permanently locked.
     RegionLocked,
 }
+/// Outcome of a mutating command that was sent: `Err` means the drive may have
+/// received it (transport failure or short response), unlike a pre-send refusal.
+pub(super) type SentWrite<E> = Result<(), Error<E>>;
+
 impl<E: core::fmt::Debug> core::fmt::Display for Error<E> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -81,7 +85,7 @@ pub enum WriteOutcome<S, E> {
     Verified(S),
     /// Write accepted, but returned state differs.
     Mismatch(S),
-    /// Write accepted; verification could not complete.
+    /// A write command was sent; its effect or verification is unknown.
     Unverified(Error<E>),
     /// The requested state was already active; no command was sent.
     Unchanged(S),
@@ -156,7 +160,7 @@ impl<'a, T: Transport> Device<'a, T> {
     pub(super) fn write_setting(
         &mut self,
         command: &settings::Command,
-    ) -> Result<bool, Error<T::Error>> {
+    ) -> Result<SentWrite<T::Error>, Error<T::Error>> {
         if command.response_len() != 0 {
             return Err(Error::InvalidValue);
         }
@@ -165,8 +169,11 @@ impl<'a, T: Transport> Device<'a, T> {
         } else {
             Data::Out(command.payload())
         };
-        let n = self.exec(command.cdb(), data)?;
-        Ok(n == command.payload().len())
+        Ok(match self.exec(command.cdb(), data) {
+            Ok(n) if n == command.payload().len() => Ok(()),
+            Ok(_) => Err(Error::Malformed),
+            Err(e) => Err(e),
+        })
     }
 
     pub(super) fn read(&mut self, cdb: &[u8], b: &mut [u8]) -> Result<usize, Error<T::Error>> {

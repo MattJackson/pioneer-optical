@@ -23,11 +23,18 @@ pub(crate) enum StreamError {
     Cancelled,
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) fn read(
     image: &[u8],
     total_limit: usize,
     proceed: &mut dyn FnMut() -> bool,
 ) -> Result<Option<(u32, Vec<Stream>)>, StreamError> {
+    #[cfg(test)]
+    READS.with(|reads| reads.set(reads.get() + 1));
     let off = crate::comp::COMP_OFFSET;
     if image.get(off..off + 4) != Some(b"COMP") {
         return Ok(None);
@@ -55,10 +62,16 @@ pub(crate) fn read(
             }
             let offset = (start - base) as usize;
             let end_offset = (end - base) as usize;
-            let Some(prefix) = image.get(offset..offset + SIZE_PREFIX) else {
+            let (Some(data_start), Some(data_end)) = (
+                offset.checked_add(SIZE_PREFIX),
+                end_offset.checked_add(SIZE_PREFIX),
+            ) else {
                 break;
             };
-            let Some(compressed) = image.get(offset + SIZE_PREFIX..end_offset + SIZE_PREFIX) else {
+            let Some(prefix) = image.get(offset..data_start) else {
+                break;
+            };
+            let Some(compressed) = image.get(data_start..data_end) else {
                 break;
             };
             if compressed.first() != Some(&0x78) {

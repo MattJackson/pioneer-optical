@@ -203,3 +203,122 @@ fn free_ranges_match_an_independent_byte_occupancy_map() {
     let top = Range::new(u32::MAX - 1, 1).unwrap();
     assert!(free_ranges(&[top], &[], 4).unwrap().is_empty());
 }
+
+fn zlib(data: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(data).unwrap();
+    encoder.finish().unwrap()
+}
+
+/// Three COMP streams at base 0x410000 behind the runtime loader fixture.
+fn three_stream_image(len: usize) -> Vec<u8> {
+    let fixture = crate::comp_runtime::fixture();
+    let mut image = vec![0xff; len];
+    image[..fixture.len()].copy_from_slice(&fixture);
+    image[0x1000..0x1004].copy_from_slice(b"COMP");
+    for index in 0..3 {
+        let offset = 0x2000 + index * 0x100;
+        let compressed = zlib(&[index as u8; 32]);
+        image[offset..offset + 4].copy_from_slice(&32u32.to_be_bytes());
+        image[offset + 4..offset + 4 + compressed.len()].copy_from_slice(&compressed);
+        let entry = 0x1004 + index * 8;
+        let start = 0x410000 + offset as u32;
+        image[entry..entry + 4].copy_from_slice(&start.to_be_bytes());
+        image[entry + 4..entry + 8]
+            .copy_from_slice(&(start + compressed.len() as u32).to_be_bytes());
+    }
+    image
+}
+
+#[test]
+fn global_copy_bound_does_not_overflow_for_high_comp_base() {
+    let mut image = vec![0xff; 0x3000];
+    image[0x1000..0x1004].copy_from_slice(b"COMP");
+    let compressed = zlib(&[0x11; 32]);
+    image[0x1100..0x1104].copy_from_slice(&32u32.to_be_bytes());
+    image[0x1104..0x1104 + compressed.len()].copy_from_slice(&compressed);
+    let start = 0xFFFF_F100u32;
+    image[0x1004..0x1008].copy_from_slice(&start.to_be_bytes());
+    image[0x1008..0x100c].copy_from_slice(&(start + compressed.len() as u32).to_be_bytes());
+    image[0x2000..0x200a]
+        .copy_from_slice(&[0x79, 1, 0xa5, 0xa5, 0x6b, 0xa1, 0x00, 0xa0, 0x00, 0x10]);
+    image[0x2100..0x2112].copy_from_slice(&[
+        0x7a, 0, 0xff, 0xff, 0xe0, 0x00, 0x7a, 1, 0xff, 0xff, 0xe0, 0x10, 0x7a, 2, 0x00, 0xa0,
+        0x00, 0x00,
+    ]);
+    let layout = inspect(&image).unwrap();
+    assert_eq!(layout.image_base, Some(0xFFFF_E000));
+    assert_eq!(layout.global_copy_end, Some(0xa00010));
+}
+
+#[test]
+fn unspecified_buffer_length_still_bounds_the_structural_gap() {
+    let mut image = three_stream_image(0x2a00);
+    let mut table = Vec::new();
+    table.extend([1, 0, 0, 0, 0, 0, 0x10, 0, 0xff, 0xff, 0xff, 0xff]);
+    table.extend([2, 0, 0, 0, 0, 0, 0x80, 0, 0, 0, 1, 0]);
+    table.extend([0xff, 0]);
+    table.extend([0xff; 10]);
+    image[0x2400..0x2400 + table.len()].copy_from_slice(&table);
+    image[0x2380..0x2382].copy_from_slice(&[0x7a, 0]);
+    image[0x2382..0x2386].copy_from_slice(&(0x410000u32 + 0x2400).to_be_bytes());
+    image[0x2300..0x230a]
+        .copy_from_slice(&[0x79, 1, 0xa5, 0xa5, 0x6b, 0xa1, 0x00, 0xa0, 0x04, 0x00]);
+    let mut copy = vec![0x7a, 0];
+    copy.extend(0x412500u32.to_be_bytes());
+    copy.extend([0x7a, 1]);
+    copy.extend(0x412900u32.to_be_bytes());
+    copy.extend([0x7a, 2, 0, 0xa0, 0, 0]);
+    image[0x2340..0x2340 + copy.len()].copy_from_slice(&copy);
+    let layout = inspect(&image).unwrap();
+    assert_eq!(layout.global_copy_end, Some(0xa00400));
+    assert_eq!(
+        layout.structural_gaps,
+        vec![Range::from_bounds(0xa00420, 0xa01000).unwrap()]
+    );
+}
+
+#[test]
+fn inspection_decodes_comp_streams_once_and_matches_is_uhd() {
+    const SIG0: [u8; 24] = [
+        0x5E, 0x40, 0x83, 0xB8, 0x7A, 0x00, 0x41, 0x00, 0x03, 0x89, 0x01, 0x00, 0x6F, 0xE0, 0x00,
+        0xC4, 0x01, 0x00, 0x69, 0xE3, 0x5E, 0x40, 0x87, 0xD0,
+    ];
+    let plain = three_stream_image(0x2300);
+    let mut stored = plain.clone();
+    stored[0x1800..0x1818].copy_from_slice(&SIG0);
+    let mut non_comp = vec![0; 0x100];
+    non_comp[0x20..0x38].copy_from_slice(&SIG0);
+    for (image, uhd) in [(plain, false), (stored, true), (non_comp, true)] {
+        crate::comp_streams::READS.with(|reads| reads.set(0));
+        let layout = inspect(&image).unwrap();
+        assert!(crate::comp_streams::READS.with(|reads| reads.get()) <= 1);
+        assert_eq!(layout.is_uhd, uhd);
+        assert_eq!(layout.is_uhd, crate::image::is_uhd(&image));
+    }
+    crate::comp_streams::READS.with(|reads| reads.set(0));
+    inspect(&three_stream_image(0x2300)).unwrap();
+    assert_eq!(crate::comp_streams::READS.with(|reads| reads.get()), 1);
+}
+
+#[test]
+fn unlocated_overlay_destinations_are_reported_not_read_as_absence() {
+    let image = three_stream_image(0x2300);
+    let layout = inspect(&image).unwrap();
+    assert_eq!(layout.overlay_ranges.len(), 3);
+    assert!(!layout
+        .limitations
+        .contains(&LayoutLimitation::OverlayDestinationsUnresolved));
+    let mut unknown = image.clone();
+    unknown[0xc4] ^= 1;
+    let layout = inspect(&unknown).unwrap();
+    assert!(layout.overlay_ranges.is_empty());
+    assert!(layout
+        .limitations
+        .contains(&LayoutLimitation::OverlayDestinationsUnresolved));
+    assert_eq!(
+        LayoutLimitation::OverlayDestinationsUnresolved.code(),
+        "pioneer.layout.overlay_destinations_unresolved"
+    );
+}

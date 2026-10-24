@@ -1,5 +1,6 @@
 //! Error type for envelope construction, validation and signing.
 
+use super::DecodeError;
 use core::fmt;
 
 /// Why an envelope could not be built, validated or signed.
@@ -63,9 +64,15 @@ pub enum Error {
     /// The Normal requires Kernel entry points the Kernel does not provide.
     AbiMismatch,
     /// The Kernel envelope cannot be decoded.
-    KernelUndecodable,
+    KernelUndecodable {
+        /// Why decoding failed, when a decode error is available.
+        source: Option<DecodeError>,
+    },
     /// The Normal envelope cannot be decoded with the Kernel's receiver rules.
-    NormalUndecodable,
+    NormalUndecodable {
+        /// Why decoding failed, when a decode error is available.
+        source: Option<DecodeError>,
+    },
     /// Decoding the built envelopes does not reproduce the input images.
     RoundTripMismatch,
     /// The input is not a Normal envelope that can be signed.
@@ -126,8 +133,8 @@ impl fmt::Display for Error {
                 return write!(f, "unrecognized generation marker {marker:#04x}");
             }
             Error::AbiMismatch => "Normal requires Kernel entry points the Kernel does not provide",
-            Error::KernelUndecodable => "Kernel envelope cannot be decoded",
-            Error::NormalUndecodable => "Normal envelope cannot be receiver-decoded",
+            Error::KernelUndecodable { .. } => "Kernel envelope cannot be decoded",
+            Error::NormalUndecodable { .. } => "Normal envelope cannot be receiver-decoded",
             Error::RoundTripMismatch => "envelope round trip differs from the input images",
             Error::NotSignableNormal => "invalid Normal envelope",
             Error::NotAscii => "firmware identity is not ASCII",
@@ -142,7 +149,16 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::KernelUndecodable { source } | Error::NormalUndecodable { source } => source
+                .as_ref()
+                .map(|e| e as &(dyn std::error::Error + 'static)),
+            _ => None,
+        }
+    }
+}
 
 /// Result alias for envelope construction and signing.
 pub type Result<T, E = Error> = core::result::Result<T, E>;

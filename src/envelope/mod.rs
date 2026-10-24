@@ -347,12 +347,22 @@ pub struct LiveMainImage {
 
 /// Find a complete update-style main image within a mapped live-drive dump.
 /// The COMP addresses must resolve at the same absolute offsets as the dump.
+/// Carved images never overlap, and all carved COMP streams share one
+/// expansion budget, so work and copies stay bounded by the dump size.
 pub fn carve_live_main(dump: &[u8]) -> Vec<LiveMainImage> {
     let mut found = Vec::new();
     if dump.len() < 0x2000 {
         return found;
     }
+    let mut next = 0usize;
+    let mut budget = crate::comp::MAX_TOTAL_EXPANDED;
     for offset in (0..=dump.len() - 0x2000).step_by(0x10000) {
+        if budget == 0 {
+            break;
+        }
+        if offset < next {
+            continue;
+        }
         let Some(header) = dump.get(offset..offset + 24) else {
             continue;
         };
@@ -366,12 +376,15 @@ pub fn carve_live_main(dump: &[u8]) -> Vec<LiveMainImage> {
         let Some(image) = dump.get(offset..offset.saturating_add(size)) else {
             continue;
         };
-        let Some((base, streams)) = comp_streams(image) else {
+        let Some((base, streams)) = streams::read(image, budget, &mut || true).ok().flatten()
+        else {
             continue;
         };
         if base as usize != offset {
             continue;
         }
+        budget = budget.saturating_sub(streams.iter().map(|s| s.info.expanded_size).sum());
+        next = offset + size;
         found.push(LiveMainImage {
             offset,
             image: image.to_vec(),
@@ -389,6 +402,13 @@ pub fn comp_streams(image: &[u8]) -> Option<(u32, Vec<CompStream>)> {
         .flatten()
 }
 
+// Lean structural parse for internal checks that discard the stream report.
+fn comp_layout(image: &[u8]) -> Option<(u32, Vec<crate::comp_streams::Stream>)> {
+    crate::comp_streams::read(image, crate::comp::MAX_TOTAL_EXPANDED, &mut || true)
+        .ok()
+        .flatten()
+}
+
 mod streams;
 #[cfg(feature = "analysis")]
 pub(crate) use streams::{read as inspect_streams, StreamError};
@@ -397,7 +417,7 @@ pub(crate) use streams::{read as inspect_streams, StreamError};
 /// their addresses. This does not update the unknown word at image offset
 /// 0x10 or establish drive acceptance; treat edited images as unverified.
 pub fn rebuild_last_comp(image: &[u8], expanded: &[u8]) -> Option<Vec<u8>> {
-    let (base, streams) = comp_streams(image)?;
+    let (base, streams) = comp_layout(image)?;
     let last = streams.last()?;
     if expanded.is_empty() || expanded.len() > crate::comp::MAX_EXPANDED {
         return None;
@@ -406,10 +426,9 @@ pub fn rebuild_last_comp(image: &[u8], expanded: &[u8]) -> Option<Vec<u8>> {
         return Some(image.to_vec());
     }
     let compressed_end = last
-        .info
         .image_offset
         .checked_add(4)?
-        .checked_add(last.info.compressed_size)?;
+        .checked_add(last.compressed_size)?;
     if image
         .get(compressed_end..)?
         .iter()
@@ -420,10 +439,10 @@ pub fn rebuild_last_comp(image: &[u8], expanded: &[u8]) -> Option<Vec<u8>> {
     let dir_end_offset = COMP_OFFSET + 4 + (streams.len() * 2 - 1) * 4;
     // The last stream must follow the directory, or the rebuilt image would
     // not contain the directory word being rewritten.
-    if last.info.image_offset < dir_end_offset + 4 {
+    if last.image_offset < dir_end_offset + 4 {
         return None;
     }
-    let old_end = last.info.address_end.to_be_bytes();
+    let old_end = last.address_end.to_be_bytes();
     for offset in 0..image.len().saturating_sub(3) {
         if image[offset..offset + 4] == old_end && offset != dir_end_offset {
             return None;
@@ -433,22 +452,21 @@ pub fn rebuild_last_comp(image: &[u8], expanded: &[u8]) -> Option<Vec<u8>> {
     encoder.write_all(expanded).ok()?;
     let compressed = encoder.finish().ok()?;
     let end_address = base
-        .checked_add(u32::try_from(last.info.image_offset).ok()?)?
+        .checked_add(u32::try_from(last.image_offset).ok()?)?
         .checked_add(u32::try_from(compressed.len()).ok()?)?;
     let used = last
-        .info
         .image_offset
         .checked_add(4)?
         .checked_add(compressed.len())?;
     let new_size = used.checked_add(0xff)? & !0xff;
     let declared = u32::try_from(new_size).ok()?;
-    let mut rebuilt = image[..last.info.image_offset].to_vec();
+    let mut rebuilt = image[..last.image_offset].to_vec();
     rebuilt.extend_from_slice(&u32::try_from(expanded.len()).ok()?.to_be_bytes());
     rebuilt.extend_from_slice(&compressed);
     rebuilt.resize(new_size, 0xff);
     rebuilt[20..24].copy_from_slice(&declared.to_be_bytes());
     rebuilt[dir_end_offset..dir_end_offset + 4].copy_from_slice(&end_address.to_be_bytes());
-    let (rebuilt_base, rebuilt_streams) = comp_streams(&rebuilt)?;
+    let (rebuilt_base, rebuilt_streams) = comp_layout(&rebuilt)?;
     if rebuilt_base != base
         || rebuilt_streams.len() != streams.len()
         || rebuilt_streams.last()?.expanded != expanded
@@ -456,8 +474,8 @@ pub fn rebuild_last_comp(image: &[u8], expanded: &[u8]) -> Option<Vec<u8>> {
             .iter()
             .zip(&streams[..streams.len() - 1])
             .any(|(new, old)| {
-                new.info.address_start != old.info.address_start
-                    || new.info.address_end != old.info.address_end
+                new.address_start != old.address_start
+                    || new.address_end != old.address_end
                     || new.expanded != old.expanded
             })
     {
@@ -860,19 +878,20 @@ fn spliced_normal(
     payload_off: usize,
     key: &[u8],
     reverse: bool,
+    exceptions: &[u32],
 ) -> Option<(Vec<u8>, Vec<SplicedBlock>)> {
     let splices = find_splices(cipher, payload_off, key, reverse);
     if splices.is_empty() {
         return None;
     }
-    let kept = decode_spliced(cipher, key, reverse, &[], &splices)?;
+    let kept = decode_spliced(cipher, key, reverse, exceptions, &splices)?;
     let image = splice_tail(&kept, cipher.len())?;
     let declared = u32::from_be_bytes(image.get(20..24)?.try_into().ok()?) as usize;
     if !image.starts_with(b"PIONEER ") || declared != image.len() {
         return None;
     }
     if image.get(COMP_OFFSET..COMP_OFFSET + 4) == Some(b"COMP".as_slice())
-        && comp_streams(&image).is_none()
+        && comp_layout(&image).is_none()
         && !comp_valid_except_truncated_last(&image, kept.len())
     {
         return None;
@@ -898,7 +917,7 @@ fn comp_valid_except_truncated_last(image: &[u8], kept_len: usize) -> bool {
     let mut trimmed = image.to_vec();
     let last = 0x1004 + (count - 2) * 4;
     trimmed[last..last + 8].fill(0xff);
-    let Some((base, _)) = comp_streams(&trimmed) else {
+    let Some((base, _)) = comp_layout(&trimmed) else {
         return false;
     };
     let end = u32::from_be_bytes(directory[(count - 1) * 4..count * 4].try_into().unwrap());
@@ -1118,6 +1137,7 @@ fn decode_selected(
                 payload_off,
                 &key,
                 layout == Layout::NormalReverse,
+                &[],
             )
         })
         .flatten()
@@ -1347,8 +1367,9 @@ impl DecodedEnvelope {
         {
             return None;
         }
-        if let Some((original_base, _)) = comp_streams(&self.image) {
-            let (new_base, _) = comp_streams(image)?;
+        if self.image.get(COMP_OFFSET..COMP_OFFSET + 4) == Some(b"COMP".as_slice()) {
+            let (original_base, _) = comp_layout(&self.image)?;
+            let (new_base, _) = comp_layout(image)?;
             if new_base != original_base {
                 return None;
             }
@@ -1599,6 +1620,20 @@ fn apply_kernel_policy(
     })?;
     let payload =
         &data[decoded.info.payload_offset..decoded.info.payload_offset + decoded.info.payload_size];
+    // Splice detection ran without receiver exceptions; retry with them when
+    // the framing only validates once the skipped words are honored.
+    if decoded.splices.is_empty() && decoded.info.layout.is_keyed_normal() {
+        if let Some((image, splices)) = spliced_normal(
+            payload,
+            decoded.info.payload_offset,
+            &decoded.key,
+            decoded.info.layout == Layout::NormalReverse,
+            &policy.offsets,
+        ) {
+            decoded.image = image;
+            decoded.splices = splices;
+        }
+    }
     decoded.image = if decoded.splices.is_empty() {
         transform_with_policy(
             payload,
@@ -1662,7 +1697,7 @@ impl DecodedEnvelope {
             .len()
             .saturating_sub(SPLICE_LEN * self.splices.len());
         let verified = self.image.get(COMP_OFFSET..COMP_OFFSET + 4) == Some(b"COMP".as_slice())
-            && comp_streams(&self.image).is_some();
+            && comp_layout(&self.image).is_some();
         (!verified).then_some(kept_len..self.image.len())
     }
 }

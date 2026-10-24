@@ -196,3 +196,51 @@ fn rejects_wrong_stack_slot_error_thunk_and_unbalanced_return() {
         }
     }
 }
+#[test]
+fn stack_displacement_overflow_is_an_error_not_a_panic() {
+    let mut image = vec![0; 0x1000];
+    image[0x100..0x10a]
+        .copy_from_slice(&[0x01, 0x00, 0x78, 0x00, 0x6b, 0xa0, 0x7f, 0xff, 0xff, 0xff]);
+    assert!(memory_call(&image, BASE, MAIN, 0x93, false).is_err());
+    let mut image = vec![0; 0x1000];
+    let code = [
+        0x01, 0x00, 0x6d, 0xf0, 0x01, 0x00, 0x78, 0x70, 0x6b, 0x20, 0x80, 0, 0, 0,
+    ];
+    image[0x100..0x100 + code.len()].copy_from_slice(&code);
+    assert!(memory_call(&image, BASE, MAIN, 0x93, false).is_err());
+}
+#[test]
+fn controller_error_addresses_that_overflow_u32_are_errors() {
+    let base = 0xFFFF_FE00u32;
+    let helper = 0xFFFF_FFE0u32;
+    let mut image = vec![0; 0x300];
+    let code = [
+        1, 0, 0x6d, 0xf3, 1, 0x20, 0x6d, 0xf4, 0x0f, 0xa3, 0x0c, 0x93, 0x0f, 0x85, 0x0f, 0xa1, 1,
+        0, 0x6f, 0x76, 0, 0x14, 0x0a, 0xe2, 0x0f, 0xa0, 0x7a, 0x22, 0, 0x40, 0, 0,
+    ];
+    image[0x1e0..0x1e0 + code.len()].copy_from_slice(&code);
+    assert!(matches!(
+        controller_error(&image, base, helper),
+        Err(Error::OutOfRange { .. })
+    ));
+}
+#[test]
+fn a_stale_selector_comparison_does_not_survive_a_flag_changing_instruction() {
+    let original = handler(Some(6), None, None, false, true);
+    assert_eq!(
+        memory_call(&original, BASE, MAIN, 0x93, false).unwrap(),
+        HELPER
+    );
+    let at = original
+        .windows(4)
+        .position(|b| b == [0xa1, 0x93, 0x47, 2])
+        .unwrap()
+        + 2;
+    let mut image = original.clone();
+    image.splice(at..at, [0xf8, 0x05]);
+    image.truncate(original.len());
+    assert!(matches!(
+        memory_call(&image, BASE, MAIN, 0x93, false),
+        Err(Error::Unsupported { .. })
+    ));
+}

@@ -126,12 +126,11 @@ fn rebuild_last_comp_preserves_earlier_bytes_and_reparses() {
 }
 
 #[test]
+#[ignore = "requires local hoard/ UD04 1.11EU corpus"]
 fn rebuild_last_comp_on_local_ud04_corpus_if_present() {
     let path =
         std::path::Path::new("hoard/models/BDR-UD04/firmware/1.11EU/BDR-UD04_FW111EU.fw.bin");
-    let Ok(envelope) = std::fs::read(path) else {
-        return;
-    };
+    let envelope = std::fs::read(path).expect("local hoard/ UD04 1.11EU corpus");
     let decoded = decode_envelope(&envelope).unwrap();
     let (_, streams) = comp_streams(&decoded.image).unwrap();
     let original_last = &streams.last().unwrap().expanded;

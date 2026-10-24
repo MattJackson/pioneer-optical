@@ -234,10 +234,9 @@ fn clone_kernel_envelope_round_trips_with_the_requested_key() {
 
 /// `PIONEER_KERNEL_CLONE_FIXTURE` names an OEM Kernel envelope.
 #[test]
+#[ignore = "set PIONEER_KERNEL_CLONE_FIXTURE to an OEM Kernel envelope"]
 fn oem_kernel_clones_to_same_content_when_configured() {
-    let Ok(path) = std::env::var("PIONEER_KERNEL_CLONE_FIXTURE") else {
-        return;
-    };
+    let path = std::env::var("PIONEER_KERNEL_CLONE_FIXTURE").expect("PIONEER_KERNEL_CLONE_FIXTURE");
     let source = std::fs::read(path).unwrap();
     let decoded = decode_envelope(&source).unwrap();
     let header = decoded.header().unwrap();

@@ -254,12 +254,11 @@ fn errors_have_distinct_stable_codes() {
 }
 
 #[test]
+#[ignore = "set PIONEER_NORMAL_LAYOUT_CORPUS to a layout manifest TSV"]
 fn configured_corpus_layouts_and_complete_pairs() {
     // Private corpus stays outside the crate. TSV: expected(ok/unsupported),
     // decoded Kernel path, optional decoded Normal path. No model lookup.
-    let Ok(path) = std::env::var("PIONEER_NORMAL_LAYOUT_CORPUS") else {
-        return;
-    };
+    let path = std::env::var("PIONEER_NORMAL_LAYOUT_CORPUS").expect("PIONEER_NORMAL_LAYOUT_CORPUS");
     let manifest = std::fs::read_to_string(path).unwrap();
     let mut count = 0;
     for line in manifest.lines() {

@@ -82,13 +82,17 @@ impl Writable for QuietDrive {
             .settings_codec
             .quiet_write(value, policy)
             .map_err(super::codec_error)?;
-        if !d.write_setting(&command)? {
-            return Ok(WriteOutcome::Unverified(Error::Malformed));
+        if let Err(e) = d.write_setting(&command)? {
+            return Ok(WriteOutcome::Unverified(e));
         }
         Ok(verify(d.get(*self), |s| {
             s.current == Observed::Known(value)
                 && (policy != Persistence::Saved
-                    || !matches!(s.saved, Observed::Known(saved) if saved != value))
+                    || match s.saved {
+                        Observed::Known(saved) => saved == value,
+                        Observed::NotReported => true,
+                        _ => false,
+                    })
         }))
     }
 }
@@ -140,8 +144,8 @@ impl Writable for PureRead {
             .settings_codec
             .pure_read_write(value, policy)
             .map_err(super::codec_error)?;
-        if !d.write_setting(&command)? {
-            return Ok(WriteOutcome::Unverified(Error::Malformed));
+        if let Err(e) = d.write_setting(&command)? {
+            return Ok(WriteOutcome::Unverified(e));
         }
         Ok(verify(d.get(*self), |s| {
             s.supported().is_some_and(|s| {
@@ -189,7 +193,10 @@ impl Writable for DvdRegion {
             return Err(Error::RegionLocked);
         }
         let data = [0, 6, 0, 0, mask, 0, 0, 0];
-        let n = d.exec(&[0xa3, 0, 0, 0, 0, 0, 0, 0, 0, 8, 6, 0], Data::Out(&data))?;
+        let n = match d.exec(&[0xa3, 0, 0, 0, 0, 0, 0, 0, 0, 8, 6, 0], Data::Out(&data)) {
+            Ok(n) => n,
+            Err(e) => return Ok(WriteOutcome::Unverified(e)),
+        };
         if n != data.len() {
             return Ok(WriteOutcome::Unverified(Error::Malformed));
         }

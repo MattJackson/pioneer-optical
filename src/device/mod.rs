@@ -81,7 +81,7 @@ pub enum WriteOutcome<S, E> {
     Verified(S),
     /// Write accepted, but returned state differs.
     Mismatch(S),
-    /// Write accepted; verification could not complete.
+    /// A write command was sent; its effect or verification is unknown.
     Unverified(Error<E>),
     /// The requested state was already active; no command was sent.
     Unchanged(S),
@@ -153,10 +153,11 @@ impl<'a, T: Transport> Device<'a, T> {
             .map(|s| s.with_controls(self.settings_codec))
             .map_err(codec_error)
     }
+    #[allow(clippy::type_complexity)]
     pub(super) fn write_setting(
         &mut self,
         command: &settings::Command,
-    ) -> Result<bool, Error<T::Error>> {
+    ) -> Result<Result<(), Error<T::Error>>, Error<T::Error>> {
         if command.response_len() != 0 {
             return Err(Error::InvalidValue);
         }
@@ -165,8 +166,11 @@ impl<'a, T: Transport> Device<'a, T> {
         } else {
             Data::Out(command.payload())
         };
-        let n = self.exec(command.cdb(), data)?;
-        Ok(n == command.payload().len())
+        Ok(match self.exec(command.cdb(), data) {
+            Ok(n) if n == command.payload().len() => Ok(()),
+            Ok(_) => Err(Error::Malformed),
+            Err(e) => Err(e),
+        })
     }
 
     pub(super) fn read(&mut self, cdb: &[u8], b: &mut [u8]) -> Result<usize, Error<T::Error>> {

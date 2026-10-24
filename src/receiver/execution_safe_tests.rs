@@ -155,6 +155,8 @@ impl Transport for Port {
                             Some(1) => inquiry[35] = b'9',
                             Some(2) => vendor[32] = b'X',
                             Some(3) => vendor[16] = b'X',
+                            Some(4) => inquiry[8..16].copy_from_slice(b"Slimtype"),
+                            Some(5) => vendor[0] = b'X',
                             _ => {}
                         }
                     }
@@ -280,7 +282,7 @@ fn ordinary_flash_cannot_use_the_recovery_loader_waiver() {
 }
 #[test]
 fn wrong_target_identity_is_fatal_even_when_readback_unavailable() {
-    for wrong in 0..4 {
+    for wrong in 2..4 {
         let (plan, state) = setup(false);
         state.borrow_mut().wrong_target = Some(wrong);
         state.borrow_mut().unreadable_normal = true;
@@ -400,7 +402,7 @@ fn normal_only_also_migrates_and_verifies_exact_target() {
     assert!(result.normal_verified);
     assert_eq!(state.borrow().parameter_writes, [0xffff]);
     let (_, state) = setup(false);
-    state.borrow_mut().wrong_target = Some(1);
+    state.borrow_mut().wrong_target = Some(2);
     assert_eq!(
         plan.execute(
             FlashTransport {
@@ -529,7 +531,7 @@ fn oem_vendor_is_bound_to_firmware_instead_of_a_pioneer_brand_literal() {
 }
 
 #[test]
-fn longer_oem_revision_compares_the_exact_four_byte_inquiry_projection() {
+fn envelope_revision_is_not_a_runtime_identity_requirement() {
     let firmware = branded_fixture("PIONEER", "0.05e");
     let (plan, state) = setup_updates(firmware.clone(), firmware.clone());
     let result = run(&plan, &state, ExecutionMode::Flash).unwrap();
@@ -542,6 +544,70 @@ fn longer_oem_revision_compares_the_exact_four_byte_inquiry_projection() {
     inquiry[32..36].copy_from_slice(b"0.06");
     state.borrow_mut().target_id =
         Some(Identity::parse(&inquiry, observed.vendor_bytes()).unwrap());
+    assert!(
+        run(&plan, &state, ExecutionMode::Flash)
+            .unwrap()
+            .normal_verified
+    );
+}
+
+#[test]
+fn envelope_non_ascii_suffix_does_not_override_exact_readback() {
+    let firmware = branded_fixture("PIONEER", "0.05é");
+    let (plan, state) = setup_updates(firmware.clone(), firmware);
+    assert!(
+        run(&plan, &state, ExecutionMode::Flash)
+            .unwrap()
+            .normal_verified
+    );
+}
+
+#[test]
+fn branding_differences_are_success_when_bytes_match_including_restoration() {
+    for restore in [false, true] {
+        for wrong in [0, 1, 4] {
+            let (plan, state) = setup(restore);
+            state.borrow_mut().wrong_target = Some(wrong);
+            let outcome = run(&plan, &state, ExecutionMode::Flash).unwrap();
+            assert!(outcome.kernel_verified && outcome.normal_verified);
+            assert_eq!(outcome.completed_passes, if restore { 2 } else { 1 });
+        }
+    }
+}
+#[test]
+fn branding_difference_cannot_hide_wrong_or_unreadable_normal() {
+    let (plan, state) = setup(false);
+    state.borrow_mut().wrong_target = Some(1);
+    state.borrow_mut().corrupt_normal = true;
+    assert_eq!(
+        run(&plan, &state, ExecutionMode::Flash)
+            .unwrap_err()
+            .phase(),
+        "Normal readback"
+    );
+    let (plan, state) = setup(false);
+    state.borrow_mut().wrong_target = Some(1);
+    state.borrow_mut().unreadable_normal = true;
+    let outcome = run(&plan, &state, ExecutionMode::Flash).unwrap();
+    assert!(!outcome.normal_verified);
+}
+#[test]
+fn serial_change_after_transfer_is_terminal() {
+    let (plan, state) = setup(false);
+    let mut borrowed = state.borrow_mut();
+    let State {
+        installed_id,
+        target_id,
+        ..
+    } = &mut *borrowed;
+    for identity in [installed_id, target_id] {
+        let old = identity.as_ref().unwrap();
+        let mut vendor = *old.vendor_bytes();
+        vendor[..8].copy_from_slice(b"ORIGINAL");
+        *identity = Some(Identity::parse(old.inquiry_bytes(), &vendor).unwrap());
+    }
+    drop(borrowed);
+    state.borrow_mut().wrong_target = Some(5);
     assert_eq!(
         run(&plan, &state, ExecutionMode::Flash)
             .unwrap_err()
@@ -551,13 +617,25 @@ fn longer_oem_revision_compares_the_exact_four_byte_inquiry_projection() {
 }
 
 #[test]
-fn malformed_non_ascii_revision_never_matches_inquiry_projection() {
-    let firmware = branded_fixture("PIONEER", "0.05é");
-    let (plan, state) = setup_updates(firmware.clone(), firmware);
-    assert_eq!(
-        run(&plan, &state, ExecutionMode::Flash)
-            .unwrap_err()
-            .phase(),
-        "target startup"
-    );
+fn envelope_comparison_separates_naming_from_exact_contents() {
+    let a = branded_fixture("PIONEER", "1.00");
+    let b = branded_fixture("ASUS", "HLE2");
+    let result = a.normal().compare(b.normal());
+    assert_eq!(result.bytes, crate::envelope::ByteComparison::Equal);
+    assert!(result.name_changed && result.revision_changed);
+    assert!(!result.component_changed && !result.hardware_changed && !result.destination_changed);
+}
+
+#[test]
+fn recovery_loader_may_reveal_its_serial_only_after_normal_starts() {
+    let (plan, state) = setup(false);
+    state.borrow_mut().loader = true;
+    let observed = state.borrow().target_id.clone().unwrap();
+    let mut vendor = *observed.vendor_bytes();
+    vendor[..8].copy_from_slice(b"ORIGINAL");
+    state.borrow_mut().target_id =
+        Some(Identity::parse(observed.inquiry_bytes(), &vendor).unwrap());
+    let result = run(&plan, &state, ExecutionMode::Recovery).unwrap();
+    assert!(result.kernel_verified && result.normal_verified);
+    assert_eq!(result.identity.serial(), "ORIGINAL");
 }

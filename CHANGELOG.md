@@ -4,6 +4,23 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.3] - 2026-10-23
+
+- Add `protocol::Evidence::parse` for structured F1 identity recognition independent
+  of vendor/model names, with explicit Normal/loader evidence. Existing `Identity`
+  decoding remains compatible; protocol evidence does not grant update support.
+
+- Verify installed firmware by exact decoded Kernel/Normal readback and Normal
+  runtime evidence, independently of envelope vendor, model and revision labels.
+  Preserve receiver/platform/tag checks and physical serial continuity, including
+  the mandatory pristine-Kernel restoration pass.
+- Add typed `Envelope::compare` results separating exact content from naming,
+  revision, role, hardware and destination differences. Both Kernel and Normal
+  readback reuse the same exact byte comparator; no fields or padding are masked.
+- Expose verification and observed-identity callbacks so applications retain
+  component results when a subsequent step fails. Readiness alone and incomplete
+  readback still do not establish full update success.
+
 ## [1.0.2] - 2026-10-23
 
 - Track FE9F with hardware/interface initialization settings and recognize

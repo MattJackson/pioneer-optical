@@ -372,7 +372,9 @@ pub(super) fn verify<T: Transport>(
         let actual = &mut buffer[..chunk.len()];
         exact(transport, address, actual)
             .map_err(|source| FlashError::Readback { pass, source })?;
-        if let Some(offset) = actual.iter().zip(chunk).position(|(a, b)| a != b) {
+        if let crate::envelope::ByteComparison::Different { offset, .. } =
+            crate::envelope::compare_bytes(chunk, actual)
+        {
             return Err(FlashError::ReadbackMismatch {
                 pass,
                 address: address + offset as u32,

@@ -54,12 +54,17 @@ fn image_with(end2_delta: isize) -> Vec<u8> {
 // Encrypt as the OEM envelope does, then splice blocks at three of the four
 // 64 KiB file boundaries and keep the declared file length.
 pub(super) fn envelope(image: &[u8], at: &[usize]) -> Vec<u8> {
+    envelope_with(image, at, &[])
+}
+
+// As `envelope`, with receiver XOR-skip offsets applied to the ciphertext.
+fn envelope_with(image: &[u8], at: &[usize], exceptions: &[u32]) -> Vec<u8> {
     let banner = b"********  Copyright(c) 2000 Pioneer Corporation  ********\r\nID : PIONEER BD-RW   BDR-TEST\r\nRevision Level : 1.00\r\nFile Type : Normal\r\n";
     let mut out = vec![0u8; 0x200];
     out[..banner.len()].copy_from_slice(banner);
     let key = make_key(0x9272c0, 0x10000);
     out.extend_from_slice(&key);
-    let cipher = transform(image, &key, true).unwrap();
+    let cipher = transform_with_policy(image, &key, true, false, exceptions).unwrap();
     let mut payload = Vec::new();
     for (i, word) in cipher.chunks_exact(4).enumerate() {
         if at.contains(&(i * 4)) {
@@ -177,7 +182,7 @@ fn spliced_normal_validation_is_exact() {
     let key = splice_key();
     let run = |image: &[u8]| {
         let env = envelope(image, &SPLICES);
-        spliced_normal(&env[PAYLOAD..], PAYLOAD, &key, false)
+        spliced_normal(&env[PAYLOAD..], PAYLOAD, &key, false, &[])
     };
     let good = image();
     let (decoded, splices) = run(&good).unwrap();
@@ -271,4 +276,42 @@ fn spliced_normal_fixture_when_configured() {
     if decoded.unrecovered_tail().is_none() {
         assert!(comp_streams(&decoded.image).is_some());
     }
+}
+
+#[test]
+fn internal_structural_checks_use_the_lean_comp_parser() {
+    let img = image();
+    let env = envelope(&img, &SPLICES);
+    let d = decode_envelope(&env).unwrap();
+    streams::RICH_READS.with(|count| count.set(0));
+    let _ = d.unrecovered_tail();
+    let _ = rebuild_last_comp(&img, &[1, 2, 3]);
+    let _ = d.repack_resized_normal(&img);
+    let _ = spliced_normal(&env[PAYLOAD..], PAYLOAD, &splice_key(), false, &[]);
+    assert_eq!(streams::RICH_READS.with(|count| count.get()), 0);
+}
+
+#[test]
+fn kernel_xor_skip_inside_a_comp_stream_keeps_splices() {
+    use super::builder::{encode_kernel_envelope, KernelBuild};
+    use super::synthetic_roundtrip_tests::front_kernel_with;
+    let img = image();
+    let (_, s) = comp_streams(&img).unwrap();
+    let o = [
+        ((s[0].info.image_offset + 8) & !3) as u32,
+        ((s[1].info.image_offset + 8) & !3) as u32,
+    ];
+    let env = envelope_with(&img, &SPLICES, &o);
+    let k = decode_envelope(
+        &encode_kernel_envelope(
+            &front_kernel_with(o),
+            "PIONEER BDR-TEST",
+            &KernelBuild::from_seed(0x123456),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let d = DecodedEnvelope::load_with_kernel(&env, &k).unwrap();
+    assert_eq!(d.spliced_blocks().len(), 3);
+    assert_eq!(d.image, img);
 }

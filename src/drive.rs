@@ -24,6 +24,8 @@ pub use update::{
     execute_plan, execute_plan_with_entry, execute_update, validate_plan, Plan, Segment,
     UpdateError, UpdateOptions, UpdateRuntime, UpdateTransfer,
 };
+#[cfg(feature = "envelope")]
+pub(crate) use update::{execute_plan_for_recovery, execute_plan_with_entry_for_recovery};
 
 /// The control buffer carried by [`cdb::enter_update`] and [`cdb::finish`].
 pub type Control = [u8; CONTROL_LEN as usize];

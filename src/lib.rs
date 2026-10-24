@@ -78,6 +78,7 @@ pub mod image;
 pub mod logging;
 /// Factory production data from the parameters read.
 pub mod production;
+pub mod protocol;
 #[cfg(feature = "envelope")]
 pub mod receiver;
 pub mod rpc;

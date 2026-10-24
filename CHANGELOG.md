@@ -6,6 +6,10 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 
 ## [1.0.3] - 2026-10-23
 
+- Add `protocol::Evidence::parse` for structured F1 identity recognition independent
+  of vendor/model names, with explicit Normal/loader evidence. Existing `Identity`
+  decoding remains compatible; protocol evidence does not grant update support.
+
 - Verify installed firmware by exact decoded Kernel/Normal readback and Normal
   runtime evidence, independently of envelope vendor, model and revision labels.
   Preserve receiver/platform/tag checks and physical serial continuity, including

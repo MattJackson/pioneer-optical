@@ -1,4 +1,5 @@
 use super::*;
+use crate::image::h8::{ilen, valid};
 use alloc::vec;
 
 /// `0A 01` (INC.B R1H): a valid, non-terminating 2-byte filler instruction.

@@ -59,7 +59,7 @@ impl core::fmt::Display for Abi {
     }
 }
 
-use super::h8::{ilen, valid};
+use super::h8::decode;
 
 /// Kernel-range absolute target of a `JSR/JMP @aa:24` at `i`, if it is one.
 fn abs24_target(c: &[u8], i: usize) -> Option<u32> {
@@ -76,7 +76,7 @@ fn required_entries_from(body: &[u8], start: usize) -> Vec<u32> {
     let mut out = Vec::new();
     let (mut i, mut run) = (start, 0u32);
     while i + 4 <= body.len() {
-        let v = valid(body, i);
+        let (v, n) = decode(body, i);
         if v && run >= SYNC_RUN {
             if let Some(t) = abs24_target(body, i) {
                 if (KERNEL_BASE..=KERNEL_END).contains(&t) && t & 1 == 0 {
@@ -85,7 +85,7 @@ fn required_entries_from(body: &[u8], start: usize) -> Vec<u32> {
             }
         }
         run = if v { run + 1 } else { 0 };
-        i += ilen(body, i);
+        i += n;
     }
     out
 }
@@ -95,15 +95,18 @@ fn required_entries_from(body: &[u8], start: usize) -> Vec<u32> {
 fn provided_entries(k: &[u8]) -> Vec<u32> {
     // Instruction starts by linear sweep from offset 0.
     let mut starts = Vec::new();
+    let mut valids = Vec::new();
     let mut i = 0usize;
     while i < k.len() {
+        let (v, n) = decode(k, i);
         starts.push(i);
-        i += ilen(k, i);
+        valids.push(v);
+        i += n;
     }
     let mut out: Vec<u32> = Vec::new();
     let mut add = |off: usize| out.push(KERNEL_BASE + off as u32);
     add(0);
-    for w in starts.windows(2) {
+    for (w, &p_valid) in starts.windows(2).zip(&valids) {
         let (p, a) = (w[0], w[1]);
         let (b0, b1) = (k[p], k.get(p + 1).copied().unwrap_or(0));
         let word_term = matches!(
@@ -112,8 +115,7 @@ fn provided_entries(k: &[u8]) -> Vec<u32> {
         );
         // after RTS/RTE/padding, JMP forms, or an unconditional BRA
         if word_term
-            || (valid(k, p)
-                && (matches!(b0, 0x5A | 0x59 | 0x5B | 0x40) || (b0 == 0x58 && b1 == 0x00)))
+            || (p_valid && (matches!(b0, 0x5A | 0x59 | 0x5B | 0x40) || (b0 == 0x58 && b1 == 0x00)))
         {
             add(a);
         }

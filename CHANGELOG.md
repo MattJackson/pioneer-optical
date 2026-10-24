@@ -6,6 +6,11 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 
 ## [1.1.0] - Unreleased
 
+- Faster ABI, reference and analysis passes: each H8 instruction is decoded once
+  and region digests reuse hashes already computed for the same bytes. Results are
+  byte-identical across the local OEM corpus (`Update::load` about 22% faster,
+  `required_abi` about 37% faster).
+
 - Expose protocol-neutral operation phases, component labels, measured byte progress
   and waiting states, matching the sister optical package's host contract.
 - Report writing, restart and component verification through the shared progress

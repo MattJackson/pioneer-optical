@@ -9,7 +9,19 @@ pub(crate) fn ilen(bytes: &[u8], offset: usize) -> usize {
         .map_or(2, |decoded| decoded.len)
 }
 
+/// `(valid(bytes, offset), ilen(bytes, offset))` from a single decode.
+pub(crate) fn decode(bytes: &[u8], offset: usize) -> (bool, usize) {
+    match bytes
+        .get(offset..)
+        .map(|code| decode_insn(code, Target::H8S2000, Mode::Advanced))
+    {
+        Some(Ok(decoded)) => (true, decoded.len),
+        _ => (false, 2),
+    }
+}
+
 /// Whether a complete, defined H8S instruction starts at this offset.
+#[cfg(test)]
 pub(crate) fn valid(bytes: &[u8], offset: usize) -> bool {
     bytes
         .get(offset..)

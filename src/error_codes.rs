@@ -253,7 +253,7 @@ impl CodedError for crate::protocol::Incomplete {
     }
 }
 
-#[cfg(feature = "envelope")]
+#[cfg(all(feature = "envelope", feature = "drive"))]
 impl CodedError for crate::receiver::transport::PlanError {
     fn code(&self) -> &'static str {
         match self {

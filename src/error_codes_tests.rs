@@ -270,7 +270,7 @@ fn protocol_incomplete_code() {
     );
 }
 
-#[cfg(feature = "envelope")]
+#[cfg(all(feature = "envelope", feature = "drive"))]
 #[test]
 fn plan_error_code_and_display() {
     use crate::receiver::transport::PlanError;

@@ -244,7 +244,22 @@ pub fn execute_plan<T: Transport, R: UpdateRuntime>(
     plan: Plan<'_>,
     options: UpdateOptions,
 ) -> Result<(), UpdateError<T::Error>> {
-    execute_plan_with_entry(transport, runtime, control, plan, options, false)
+    execute_plan_inner(transport, runtime, control, plan, options, false, false)
+}
+
+/// Execute one plan from the receiver-owned Recovery path. An unsupported
+/// inserted medium may defer readiness to the caller's mandatory identity and
+/// exact component readback checks; the sense response itself is never proof of
+/// a successful update.
+#[cfg(feature = "envelope")]
+pub(crate) fn execute_plan_for_recovery<T: Transport, R: UpdateRuntime>(
+    transport: &mut T,
+    runtime: &mut R,
+    control: &Control,
+    plan: Plan<'_>,
+    options: UpdateOptions,
+) -> Result<(), UpdateError<T::Error>> {
+    execute_plan_inner(transport, runtime, control, plan, options, false, true)
 }
 
 /// Check every transfer span and actual command length before any device mutation.
@@ -282,6 +297,47 @@ pub fn execute_plan_with_entry<T: Transport, R: UpdateRuntime>(
     plan: Plan<'_>,
     options: UpdateOptions,
     already_updating: bool,
+) -> Result<(), UpdateError<T::Error>> {
+    execute_plan_inner(
+        transport,
+        runtime,
+        control,
+        plan,
+        options,
+        already_updating,
+        false,
+    )
+}
+
+/// Recovery-path counterpart to [`execute_plan_with_entry`].
+#[cfg(feature = "envelope")]
+pub(crate) fn execute_plan_with_entry_for_recovery<T: Transport, R: UpdateRuntime>(
+    transport: &mut T,
+    runtime: &mut R,
+    control: &Control,
+    plan: Plan<'_>,
+    options: UpdateOptions,
+    already_updating: bool,
+) -> Result<(), UpdateError<T::Error>> {
+    execute_plan_inner(
+        transport,
+        runtime,
+        control,
+        plan,
+        options,
+        already_updating,
+        true,
+    )
+}
+
+fn execute_plan_inner<T: Transport, R: UpdateRuntime>(
+    transport: &mut T,
+    runtime: &mut R,
+    control: &Control,
+    plan: Plan<'_>,
+    options: UpdateOptions,
+    already_updating: bool,
+    allow_readback_after_unsupported_medium: bool,
 ) -> Result<(), UpdateError<T::Error>> {
     validate_plan(plan)?;
     let kernel_bytes = role_total(plan, Role::Kernel);
@@ -364,6 +420,12 @@ pub fn execute_plan_with_entry<T: Transport, R: UpdateRuntime>(
         match super::exec(transport, &cdb::test_unit_ready(), Data::In(&mut [])) {
             Ok(_) => return Ok(()),
             Err(_) if matches!(transport.sense(), Some((2, 0x3a, _))) => return Ok(()),
+            Err(_)
+                if allow_readback_after_unsupported_medium
+                    && matches!(transport.sense(), Some((2, 0x30, 0))) =>
+            {
+                return Ok(())
+            }
             Err(error) => {
                 let elapsed = runtime.elapsed().saturating_sub(start);
                 runtime.poll_failed(elapsed, &error);

@@ -58,6 +58,9 @@ struct State {
     wrong_target: Option<usize>,
     unreadable_normal: bool,
     corrupt_normal: bool,
+    unsupported_medium: Option<(u8, u8, u8)>,
+    last_sense: Option<(u8, u8, u8)>,
+    readback_reads: usize,
 }
 fn id(envelope: &Envelope) -> Identity {
     let info = envelope.info();
@@ -135,6 +138,16 @@ impl Transport for Port {
                 Ok(bytes.len())
             }
             Data::In(bytes) => {
+                if command == cdb::test_unit_ready()
+                    && s.unsupported_medium.is_some()
+                    && s.finishes > 0
+                {
+                    s.last_sense = s.unsupported_medium;
+                    return Err("unsupported medium");
+                }
+                if command[0] == 0x3c && s.finishes > 0 {
+                    s.readback_reads += 1;
+                }
                 if command == cdb::read_parameter_word(0x9f).unwrap() {
                     bytes.copy_from_slice(&s.parameter.to_be_bytes());
                 } else if command[0] == 0x12 || command == cdb::vendor_identity() {
@@ -201,7 +214,7 @@ impl Transport for Port {
         }
     }
     fn sense(&self) -> Option<(u8, u8, u8)> {
-        None
+        self.0.borrow().last_sense
     }
 }
 #[derive(Default)]
@@ -272,6 +285,92 @@ fn recovery_resumes_loader_and_still_verifies_both_components() {
     assert!(result.normal_verified && result.kernel_verified);
     assert_eq!(result.completed_passes, 2);
 }
+
+#[test]
+fn recovery_unsupported_medium_advances_to_existing_exact_readbacks() {
+    let (plan, state) = setup(true);
+    state.borrow_mut().unsupported_medium = Some((2, 0x30, 0));
+    let result = run(&plan, &state, ExecutionMode::Recovery).unwrap();
+    assert!(result.kernel_verified && result.normal_verified);
+    assert_eq!(result.completed_passes, 2);
+    assert!(state.borrow().readback_reads > 0);
+}
+
+#[test]
+fn unsupported_medium_does_not_hide_recovery_mismatches() {
+    let (plan, state) = setup(false);
+    {
+        let mut state = state.borrow_mut();
+        state.unsupported_medium = Some((2, 0x30, 0));
+        state.corrupt_normal = true;
+    }
+    let error = run(&plan, &state, ExecutionMode::Recovery).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            ExecutionError::Startup(source)
+                if matches!(source.as_ref(), crate::startup::migration::Error::Flash {
+                    source: ExecutionError::NormalMismatch { .. }, ..
+                })
+        ),
+        "got {error:?}"
+    );
+
+    let (plan, state) = setup(false);
+    {
+        let mut state = state.borrow_mut();
+        state.unsupported_medium = Some((2, 0x30, 0));
+        state.wrong_target = Some(2);
+    }
+    let error = run(&plan, &state, ExecutionMode::Recovery).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            ExecutionError::Startup(source)
+                if matches!(source.as_ref(), crate::startup::migration::Error::Flash {
+                    source: ExecutionError::IdentityMismatch { target: true, .. }, ..
+                })
+        ),
+        "got {error:?}"
+    );
+}
+
+#[test]
+fn flash_still_times_out_on_unsupported_medium_before_readback() {
+    let (plan, state) = setup(false);
+    state.borrow_mut().unsupported_medium = Some((2, 0x30, 0));
+    let error = run(&plan, &state, ExecutionMode::Flash).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            ExecutionError::Startup(source)
+                if matches!(source.as_ref(), crate::startup::migration::Error::Flash {
+                    source: ExecutionError::Flash(FlashError::Update { .. }), ..
+                })
+        ),
+        "got {error:?}"
+    );
+    assert_eq!(state.borrow().readback_reads, 0);
+}
+
+#[test]
+fn recovery_does_not_advance_on_other_medium_sense_codes() {
+    let (plan, state) = setup(false);
+    state.borrow_mut().unsupported_medium = Some((2, 0x30, 1));
+    let error = run(&plan, &state, ExecutionMode::Recovery).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            ExecutionError::Startup(source)
+                if matches!(source.as_ref(), crate::startup::migration::Error::Flash {
+                    source: ExecutionError::Flash(FlashError::Update { .. }), ..
+                })
+        ),
+        "got {error:?}"
+    );
+    assert_eq!(state.borrow().readback_reads, 0);
+}
+
 #[test]
 fn ordinary_flash_cannot_use_the_recovery_loader_waiver() {
     let (plan, state) = setup(false);
@@ -309,6 +408,20 @@ fn target_identity_with_unreadable_normal_is_qualified_not_fully_verified() {
     let result = run(&plan, &state, ExecutionMode::Flash).unwrap();
     assert!(result.kernel_verified);
     assert!(!result.normal_verified);
+}
+
+#[test]
+fn recovery_unsupported_medium_without_normal_readback_is_not_fully_verified() {
+    let (plan, state) = setup(false);
+    {
+        let mut state = state.borrow_mut();
+        state.unsupported_medium = Some((2, 0x30, 0));
+        state.unreadable_normal = true;
+    }
+    let outcome = run(&plan, &state, ExecutionMode::Recovery).unwrap();
+    assert!(outcome.kernel_verified);
+    assert!(!outcome.normal_verified);
+    assert_eq!(outcome.completed_passes, 1);
 }
 
 #[test]

@@ -126,6 +126,7 @@ impl CodedError for crate::envelope::UpdateError {
             Self::UnrecoveredTail { .. } => "pioneer.update.unrecovered_tail",
             Self::Representation { .. } => "pioneer.update.representation",
             Self::Authentication => "pioneer.update.authentication",
+            Self::Abi { .. } => "pioneer.update.abi_mismatch",
         }
     }
 }

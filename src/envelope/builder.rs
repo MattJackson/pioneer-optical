@@ -830,16 +830,24 @@ pub fn encode_encrypted_pair(
     input: &BuildInputs<'_>,
     signature: NormalSignature<'_>,
 ) -> Result<EncryptedPair, Error> {
-    let kernel = input.kernel_image;
-    let normal = input.normal_image;
     if let (Some(required), Some(provided)) = (
-        crate::image::required_abi(normal),
-        crate::image::provided_abi(kernel),
+        crate::image::required_abi(input.normal_image),
+        crate::image::provided_abi(input.kernel_image),
     ) {
         if !required.is_satisfied_by(&provided) {
             return Err(Error::AbiMismatch);
         }
     }
+    encode_encrypted_pair_unchecked(input, signature)
+}
+
+/// `encode_encrypted_pair` without the Normal/Kernel ABI gate.
+fn encode_encrypted_pair_unchecked(
+    input: &BuildInputs<'_>,
+    signature: NormalSignature<'_>,
+) -> Result<EncryptedPair, Error> {
+    let kernel = input.kernel_image;
+    let normal = input.normal_image;
     let scaled = scaled_normal_geometry_from_kernel(kernel);
     if kernel.len() != crate::image::KERNEL_LEN
         || normal.len() < 0x2000

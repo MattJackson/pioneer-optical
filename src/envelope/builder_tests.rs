@@ -899,6 +899,24 @@ fn abi_check_rejects_only_unsatisfied_requirements() {
     // Unsatisfied: 0x400102 is inside a 6-byte instruction.
     let bad = call(0x40_0102);
     assert_eq!(pair_err(&base_inputs(&kernel, &bad)), Error::AbiMismatch);
+    // Update::load applies the same gate to a pair that bypassed the encoder.
+    let pair = encode_encrypted_pair_unchecked(
+        &base_inputs(&kernel, &bad),
+        NormalSignature::Sign(&a_signer()),
+    )
+    .unwrap();
+    assert_eq!(
+        crate::envelope::Update::load(&pair.kernel, &pair.normal).unwrap_err(),
+        crate::envelope::UpdateError::Abi {
+            missing: vec![0x40_0102]
+        }
+    );
+    let good = encode_encrypted_pair(
+        &base_inputs(&kernel, &ok),
+        NormalSignature::Sign(&a_signer()),
+    )
+    .unwrap();
+    crate::envelope::Update::load(&good.kernel, &good.normal).unwrap();
 }
 
 #[test]

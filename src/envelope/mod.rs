@@ -25,6 +25,8 @@ pub use clone::{
     clone_kernel, clone_kernel_image, kernel_content_mask, kernel_equality, kernel_fill_seed,
     kernel_image_equality, KernelIdentity,
 };
+mod comparison;
+pub use comparison::{compare_bytes, ByteComparison, EnvelopeComparison};
 mod codecs;
 mod decode_error;
 pub use decode_error::DecodeError;

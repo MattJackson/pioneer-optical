@@ -2,6 +2,8 @@
 //! Recognition is read-only: writer/default semantics and live receiver binding
 //! remain required before a caller may authorize a settings migration.
 
+use alloc::{collections::BTreeMap, vec::Vec};
+
 const BASE: usize = 0x410000;
 const GETTER_PREFIX: &[u8] = &[
     1, 0x10, 0x6d, 0xf4, 0x79, 0x37, 0, 8, 0x0d, 0x0d, 0x19, 0x55, 0x1a, 0x91, 1, 0, 0x69, 0xf1, 1,
@@ -36,28 +38,22 @@ fn direct_call(bytes: &[u8]) -> Option<usize> {
         .flatten()
 }
 
-fn write_branch(bytes: &[u8], start: usize, access: usize) -> bool {
+fn write_branch_target(bytes: &[u8], start: usize) -> Option<usize> {
     use h8_asm::{isa::decode_insn, Mode, Target};
-    let Some(entry) = bytes.get(start..start + 4) else {
-        return false;
-    };
+    let entry = bytes.get(start..start + 4)?;
     if entry != [0xf1, 2, 0x40, 6] {
-        return false;
+        return None;
     }
     let mut at = start + 10;
     let mut write = false;
     for _ in 0..8 {
-        let Some(tail) = bytes.get(at..) else {
-            return false;
-        };
+        let tail = bytes.get(at..)?;
         let Ok(insn) = decode_insn(tail, Target::H8S2000, Mode::Advanced) else {
-            return false;
+            return None;
         };
-        let Some(op) = tail.get(..insn.len) else {
-            return false;
-        };
+        let op = tail.get(..insn.len)?;
         if op.len() == 4 && op[0] == 0x5e {
-            return write && direct_call(op) == Some(access);
+            return if write { direct_call(op) } else { None };
         }
         if op == [0xf9, 1] && !write {
             write = true;
@@ -71,11 +67,11 @@ fn write_branch(bytes: &[u8], start: usize, access: usize) -> bool {
                 && op[3] != 0xf1
             || op.len() == 2 && op[0] == 0x0f && op[1] & 0xf != 1)
         {
-            return false;
+            return None;
         }
         at += insn.len;
     }
-    false
+    None
 }
 
 /// Recognize the direct R0 native word surface in decoded Normal firmware.
@@ -86,12 +82,29 @@ pub fn discover(bytes: &[u8]) -> Option<NativeWordAccess> {
         0x6f, 0xf0, 0, 4, 0x1a, 0x91, 0x0c, 0xe9, 0x10, 0x71, 0x0f, 0x95, 1, 0, 0x6f, 0x73, 0,
         0x1c, 0x0a, 0xa3, 0x7a, 4,
     ];
+    #[cfg(test)]
+    tests::SELECTOR_SCANS.with(|c| c.set(c.get() + 1));
+    let mut writers: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (selector, op) in bytes.windows(6).enumerate().step_by(2) {
+        if !(0xa0..=0xaf).contains(&op[0]) || op[1..4] != [0xa0, 0x58, 0x70] {
+            continue;
+        }
+        let dest = selector as isize + 6 + i16::from_be_bytes([op[4], op[5]]) as isize;
+        if dest < 0 {
+            continue;
+        }
+        if let Some(access) = write_branch_target(bytes, dest as usize) {
+            writers.entry(access).or_default().push(selector);
+        }
+    }
     let mut result = None;
     for access in (0..bytes.len().saturating_sub(0x156)).step_by(2) {
         if bytes.get(access..access + PREFIX.len()) != Some(PREFIX) {
             continue;
         }
-        let table = offset(bytes.get(access + 0x28..access + 0x2c)?)?;
+        let Some(table) = bytes.get(access + 0x28..access + 0x2c).and_then(offset) else {
+            continue;
+        };
         if bytes.get(table + 8..table + 12) != Some(&[0x80, 2, 8, 0][..]) {
             continue;
         }
@@ -99,7 +112,9 @@ pub fn discover(bytes: &[u8]) -> Option<NativeWordAccess> {
             continue;
         }
         let p = access + 0x136;
-        let w = bytes.get(p..p + 32)?;
+        let Some(w) = bytes.get(p..p + 32) else {
+            continue;
+        };
         if w[..7] != [0x0c, 0x66, 0x46, 8, 0x0d, 0x30, 0x5e]
             || w[10..12] != [0x40, 0x2e]
             || w[18..21] != [0x0d, 0xb1, 0x5e]
@@ -107,8 +122,9 @@ pub fn discover(bytes: &[u8]) -> Option<NativeWordAccess> {
         {
             continue;
         }
-        let getter = direct_call(&w[6..10])?;
-        let setter = direct_call(&w[28..32])?;
+        let (Some(getter), Some(setter)) = (direct_call(&w[6..10]), direct_call(&w[28..32])) else {
+            continue;
+        };
         if getter >= bytes.len() || setter >= bytes.len() {
             continue;
         }
@@ -117,21 +133,25 @@ pub fn discover(bytes: &[u8]) -> Option<NativeWordAccess> {
         {
             continue;
         }
-        let lookup = direct_call(bytes.get(getter + 0x24..getter + 0x28)?)?;
+        let Some(lookup) = bytes
+            .get(getter + 0x24..getter + 0x28)
+            .and_then(direct_call)
+        else {
+            continue;
+        };
         if lookup >= bytes.len()
-            || direct_call(bytes.get(setter + 0x42..setter + 0x46)?) != Some(lookup)
-            || direct_call(bytes.get(setter + 0x60..setter + 0x64)?) != Some(lookup)
+            || bytes
+                .get(setter + 0x42..setter + 0x46)
+                .and_then(direct_call)
+                != Some(lookup)
+            || bytes
+                .get(setter + 0x60..setter + 0x64)
+                .and_then(direct_call)
+                != Some(lookup)
         {
             continue;
         }
-        for (selector, op) in bytes.windows(6).enumerate().step_by(2) {
-            if !(0xa0..=0xaf).contains(&op[0]) || op[1..4] != [0xa0, 0x58, 0x70] {
-                continue;
-            }
-            let dest = selector as isize + 6 + i16::from_be_bytes([op[4], op[5]]) as isize;
-            if dest < 0 || !write_branch(bytes, dest as usize, access) {
-                continue;
-            }
+        for &selector in writers.get(&access).into_iter().flatten() {
             let candidate = NativeWordAccess {
                 selector: (BASE + selector) as u32,
                 access: (BASE + access) as u32,
@@ -149,6 +169,11 @@ pub fn discover(bytes: &[u8]) -> Option<NativeWordAccess> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::cell::Cell;
+
+    std::thread_local! {
+        pub(super) static SELECTOR_SCANS: Cell<usize> = const { Cell::new(0) };
+    }
 
     fn fixture() -> Vec<u8> {
         let mut b = vec![0; 0xa00];
@@ -209,5 +234,33 @@ mod tests {
         let mut b = fixture();
         b[0x460..0x466].copy_from_slice(&[0xa1, 0xa0, 0x58, 0x70, 0, 0x9a]);
         assert_eq!(discover(&b), None);
+    }
+
+    #[test]
+    fn decoy_candidate_with_bad_operand_does_not_hide_the_binding() {
+        let mut b = fixture();
+        let prefix = fixture()[0x100..0x128].to_vec();
+        b[0..40].copy_from_slice(&prefix[..40]);
+        assert_eq!(
+            discover(&b),
+            Some(NativeWordAccess {
+                selector: 0x410480,
+                access: 0x410100,
+                getter: 0x410900,
+                setter: 0x410600,
+            })
+        );
+    }
+
+    #[test]
+    fn many_access_candidates_scan_selectors_once() {
+        let mut b = fixture();
+        let block = fixture();
+        b[0x700..0x72c].copy_from_slice(&block[0x100..0x12c]);
+        b[0x748..0x74e].copy_from_slice(&block[0x148..0x14e]);
+        b[0x836..0x856].copy_from_slice(&block[0x236..0x256]);
+        SELECTOR_SCANS.with(|c| c.set(0));
+        assert_eq!(discover(&b).map(|r| r.access), Some(0x410100));
+        assert_eq!(SELECTOR_SCANS.with(Cell::get), 1);
     }
 }

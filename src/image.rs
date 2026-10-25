@@ -36,9 +36,9 @@ pub const KERNEL_LEN: usize = 0x1_0000;
 
 /// Front-end servo/RF ASIC register block (low 16 bits of `0xFFExxx`).
 const ASIC_REGS: [u16; 7] = [0xE436, 0xE43A, 0xE43B, 0xE45B, 0xE463, 0xE46A, 0xE46B];
-/// Hardware/interface initialization registers. Exact electrical roles are not
-/// established; FE8F/FE9D/FE9F occur in ATA/ATAPI host-interface bring-up.
-const PIN_REGS: [u16; 5] = [0xFE8F, 0xFE94, 0xFE9D, 0xFE9F, 0xFEC0];
+/// Remaining hardware/interface initialization evidence.
+/// Excluded host configuration is retained separately for settings admission.
+const PIN_REGS: [u16; 2] = [0xFE94, 0xFEC0];
 /// PCB-revision marker registers.
 const BOARD_REGS: [u16; 3] = [0xFFC5, 0xEDCC, 0xEDCD];
 
@@ -46,8 +46,8 @@ const BOARD_REGS: [u16; 3] = [0xFFC5, 0xEDCC, 0xEDCD];
 const SERVO_ROW: [u8; 10] = [0x7f, 0x97, 0x7f, 0x51, 0x7f, 0x51, 0x7f, 0x51, 0x7f, 0x51];
 /// Number of distinct servo rows that form the version-stable base.
 const SERVO_BASE: usize = 7;
-/// Version 3 normalizes decoded regions and servo base-row order.
-pub const FAMILY_SCHEME: &str = "pioneer.hardware.v3";
+/// Version 4 separates host configuration from hardware evidence.
+pub const FAMILY_SCHEME: &str = "pioneer.hardware.v4";
 
 /// Full servo coefficient row width.
 const SERVO_ROW_LEN: usize = 40;
@@ -59,8 +59,8 @@ const SIG0: [u8; 24] = [
 ];
 
 /// A hardware-family fingerprint derived from the image's hardware setup.
-/// Matching families identify hardware intended to accept complete firmware
-/// packages in either direction. The receiver implementation must handle any
+/// Matching families establish platform evidence; required settings migrations
+/// must be independently supported before a package can be prepared. The receiver implementation must handle any
 /// protocol or generation differences. Invalid packages and unimplemented
 /// transfer paths must be reported separately from hardware incompatibility.
 ///
@@ -343,7 +343,7 @@ pub struct FamilyFingerprint {
     pub asic: String,
     /// Canonical board marker writes and bit operations.
     pub board: String,
-    /// Canonical hardware/interface setup values, including FE9F.
+    /// Canonical remaining hardware/interface setup values.
     /// The legacy field name does not imply verified physical pin assignments.
     pub pins: String,
     /// Servo coefficient hash, or `"none"` when no anchor rows were found.

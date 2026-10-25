@@ -354,3 +354,31 @@ fn normal_only_retains_typed_target_errors_and_rejects_kernel_tag_mismatch() {
         Err(PreparationError::Target(UpdateError::Header { .. }))
     ));
 }
+
+#[test]
+fn hardware_override_never_waives_required_settings() {
+    let installed = update(false, 1, 0x12, true);
+    let mut receiver = Receiver::from_installed(&installed).unwrap();
+    // The captured receiver is in the scope of an identified unresolved issue;
+    // target fixture does not supply the required evidence for that issue.
+    receiver.settings_contract = crate::settings::update::Contract::test_unresolved_scope();
+    for result in [
+        receiver.prepare(installed.clone()),
+        receiver.prepare_without_family_check(installed.clone()),
+    ] {
+        assert!(matches!(
+            result,
+            Err(PreparationError::Settings(
+                crate::settings::update::Error::Unresolved
+            ))
+        ));
+    }
+    assert!(matches!(
+        receiver.prepare_normal(installed.normal_transfer()),
+        Err(PreparationError::Settings(_))
+    ));
+    assert!(matches!(
+        receiver.prepare_normal_without_family_check(installed.normal_transfer()),
+        Err(PreparationError::Settings(_))
+    ));
+}

@@ -161,7 +161,8 @@ pub struct EnvelopeInfo {
 pub struct HeaderInfo {
     /// Full `ID` field, e.g. `PIONEER BDR-UD04`.
     pub id: String,
-    /// Last token of `id`.
+    /// Legacy final ID token used by envelope reconstruction. For a display drive
+    /// model with separate OEM context, use [`HeaderInfo::product_identity`].
     pub model: String,
     /// `Revision Level` field.
     pub revision: String,
@@ -177,6 +178,14 @@ pub struct HeaderInfo {
     pub kernel_version2: String,
     /// `None` when the `File Type` field is absent or unrecognized.
     pub kind: Option<ComponentKind>,
+}
+
+impl HeaderInfo {
+    /// Structured display identity, preserving an OEM product suffix separately.
+    /// This does not change the legacy envelope model tag or compatibility rules.
+    pub fn product_identity(&self) -> Option<crate::ProductIdentity<'_>> {
+        crate::ProductIdentity::from_id(&self.id, &self.revision)
+    }
 }
 
 impl Default for HeaderOpaque {

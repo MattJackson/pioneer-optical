@@ -10,6 +10,8 @@ use crate::image::{kernel_marker_policy, KernelMarkerPolicy};
 pub enum PreparationError {
     /// More than one startup comparison prevents selecting a target value.
     AmbiguousStartup,
+    /// Required configuration is unresolved or has no validated conversion.
+    Settings(crate::settings::update::Error),
     /// Target requires a setting but the installed write surface is unknown.
     UnknownStartupAccess,
     /// Installed updater cannot hand control to the replacement Kernel.
@@ -39,6 +41,7 @@ pub enum PreparationError {
 impl core::fmt::Display for PreparationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Settings(error) => error.fmt(f),
             Self::AmbiguousStartup => f.write_str("target startup checks are ambiguous; no startup setting can be selected"),
             Self::UnknownStartupAccess => f.write_str("startup-setting migration is required but the installed firmware's parameter write command is unrecognized; no firmware was written"),
             Self::KernelHandoff(error) => write!(f, "Kernel replacement: {error}"),
@@ -68,6 +71,7 @@ impl core::fmt::Display for PreparationError {
 impl std::error::Error for PreparationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Settings(error) => Some(error),
             Self::KernelHandoff(error) => Some(error),
             Self::Target(error) => Some(error),
             Self::Compatibility(error) | Self::RestorationEntry(error) => Some(error),
@@ -86,7 +90,7 @@ pub struct PreparedNormal {
     pub(super) control: Control,
     pub(super) normal: Envelope,
     transfer: Vec<u8>,
-    pub(super) startup_setting: Option<crate::startup::Setting>,
+    pub(super) settings: crate::settings::update::Plan,
     pub(super) installed_kernel: Option<Envelope>,
     #[cfg(feature = "drive")]
     pub(super) initial_class: Option<crate::DriveClass>,
@@ -102,7 +106,11 @@ impl PreparedNormal {
 
     /// Target-derived startup migration to verify on the live drive before transfer.
     pub fn startup_setting(&self) -> Option<crate::startup::Setting> {
-        self.startup_setting
+        self.settings.startup_setting()
+    }
+    /// Typed settings prepared alongside the OEM firmware.
+    pub fn settings(&self) -> &crate::settings::update::Plan {
+        &self.settings
     }
     /// Normal bytes validated under the installed Kernel's authentication rules.
     pub fn normal_transfer(&self) -> &[u8] {
@@ -132,7 +140,7 @@ pub struct PreparedUpdate {
     pub(super) target_class: Option<crate::DriveClass>,
     pub(super) target: Update,
     restoration: Option<Restoration>,
-    pub(super) startup_setting: Option<crate::startup::Setting>,
+    pub(super) settings: crate::settings::update::Plan,
     pub(super) installed_kernel: Option<Envelope>,
     #[cfg(feature = "drive")]
     pub(super) initial_class: Option<crate::DriveClass>,
@@ -155,7 +163,11 @@ impl PreparedUpdate {
 
     /// Target-derived startup migration, shared by both prepared passes.
     pub fn startup_setting(&self) -> Option<crate::startup::Setting> {
-        self.startup_setting
+        self.settings.startup_setting()
+    }
+    /// Typed settings prepared alongside the OEM firmware.
+    pub fn settings(&self) -> &crate::settings::update::Plan {
+        &self.settings
     }
     /// Kernel transfer bytes for the first update pass.
     pub fn kernel_transfer(&self) -> &[u8] {
@@ -192,6 +204,12 @@ impl PreparedUpdate {
 }
 
 impl Receiver {
+    /// Independent required-settings gate; hardware overrides never waive it.
+    pub fn check_settings(&self, normal: &[u8]) -> Result<(), PreparationError> {
+        self.settings_contract
+            .check(&crate::settings::update::Contract::discover(normal))
+            .map_err(PreparationError::Settings)
+    }
     fn startup_setting_for(
         &self,
         normal: &[u8],
@@ -202,10 +220,7 @@ impl Receiver {
     }
     /// Prepare a Normal-only update using captured installed Kernel evidence.
     pub fn prepare_normal(&self, target: &[u8]) -> Result<PreparedNormal, PreparationError> {
-        let prepared = self.prepare_normal_without_family_check(target)?;
-        self.check_family(&prepared.normal)
-            .map_err(PreparationError::Compatibility)?;
-        Ok(prepared)
+        self.prepare_normal_inner(target, true)
     }
 
     /// Prepare Normal-only with a deliberate caller override of family comparison.
@@ -216,12 +231,28 @@ impl Receiver {
         &self,
         target: &[u8],
     ) -> Result<PreparedNormal, PreparationError> {
+        self.prepare_normal_inner(target, false)
+    }
+
+    fn prepare_normal_inner(
+        &self,
+        target: &[u8],
+        check_family: bool,
+    ) -> Result<PreparedNormal, PreparationError> {
         let kernel = self
             .installed_kernel
             .as_ref()
             .ok_or(PreparationError::MissingInstalledKernel)?;
         let mut prepared = self.codec.prepare_normal(kernel, target, self.control())?;
-        prepared.startup_setting = self.startup_setting_for(&prepared.normal.image)?;
+        if check_family {
+            self.check_family(&prepared.normal)
+                .map_err(PreparationError::Compatibility)?;
+        }
+        self.check_settings(&prepared.normal.image)?;
+        prepared.settings = crate::settings::update::Plan::target(
+            self.startup_setting_for(&prepared.normal.image)?,
+            false,
+        );
         prepared.installed_kernel = Some(kernel.clone());
         #[cfg(feature = "drive")]
         {
@@ -258,7 +289,11 @@ impl Receiver {
             .kernel_policy
             .ok_or(PreparationError::UnknownInstalledKernel)?;
         let mut prepared = self.codec.prepare(policy, target, self.control())?;
-        prepared.startup_setting = self.startup_setting_for(&prepared.target.normal().image)?;
+        self.check_settings(&prepared.target.normal().image)?;
+        prepared.settings = crate::settings::update::Plan::target(
+            self.startup_setting_for(&prepared.target.normal().image)?,
+            prepared.restoration.is_some(),
+        );
         let installed = self
             .installed_kernel
             .as_ref()
@@ -328,7 +363,7 @@ pub(super) fn prepare_normal_oem(
         control: _control,
         normal,
         transfer,
-        startup_setting: None,
+        settings: crate::settings::update::Plan::default(),
         installed_kernel: None,
         #[cfg(feature = "drive")]
         initial_class: None,
@@ -376,7 +411,7 @@ pub(super) fn prepare_oem(
         target_class: None,
         target,
         restoration,
-        startup_setting: None,
+        settings: crate::settings::update::Plan::default(),
         installed_kernel: None,
         #[cfg(feature = "drive")]
         initial_class: None,

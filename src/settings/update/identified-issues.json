@@ -1,0 +1,27 @@
+{
+  "format": "pioneer-settings-issues-v1",
+  "issues": [
+    {
+      "id": "ud02-mechanism-convention",
+      "hardware_scheme": "pioneer.hardware.v4",
+      "hardware_family": "83a4abb2a9b5480e",
+      "reason": "UD02 and UD03/UD04-related firmware use different mechanism conventions; no production adaptation or native reverse migration is validated.",
+      "unknown_within_scope": "unresolved",
+      "requirements": [
+        {
+          "source_phase": false,
+          "target_phase": true,
+          "status": "unresolved",
+          "conversion": null
+        },
+        {
+          "source_phase": true,
+          "target_phase": false,
+          "status": "unresolved",
+          "conversion": null
+        }
+      ],
+      "evidence": "Nine-target offline movement conversion audit; all 18 newly equal directed image pairs remain operationally unresolved. A converted UD02 round trip is not native UD04 to UD02."
+    }
+  ]
+}

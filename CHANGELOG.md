@@ -4,6 +4,15 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-10-24
+
+- Separate hardware-family evidence from firmware settings requirements. Known
+  UD02 mechanism transitions remain unresolved and cannot be prepared.
+- Expose typed prepared settings while preserving startup word selection and
+  existing single-word migration behavior.
+- Validate complete settings plans before mutation and retain stage-aware
+  verification and rollback for multi-word plans.
+
 ## [1.1.0] - Unreleased
 
 - Faster ABI, reference and analysis passes: each H8 instruction is decoded once

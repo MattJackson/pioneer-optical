@@ -8,6 +8,8 @@ use crate::drive::{self, Data, Transport};
 pub enum Rollback<E> {
     /// The original word was restored and read back.
     Restored,
+    /// Reverse-order restoration outcomes for a multi-setting attempt.
+    Settings(alloc::vec::Vec<(u16, Rollback<E>)>),
     /// No change was necessary.
     Unchanged,
     /// Firmware transfer was attempted: retaining the target value is safer
@@ -24,6 +26,8 @@ pub enum Error<E, F> {
     Preflight(F),
     /// The parameter index is outside the A0 0x800-byte response.
     InvalidParameter(u16),
+    /// The complete settings plan contains duplicate or conflicting writes.
+    ConflictingParameters,
     /// Initial read failed; no parameter or firmware write was attempted.
     Read(drive::Error<E>),
     /// Parameter change or verification failed; flash was never invoked.
@@ -52,6 +56,7 @@ impl<E, F> crate::CodedError for Error<E, F> {
     fn code(&self) -> &'static str {
         match self {
             Self::Preflight(_) => "pioneer.startup.preflight_refused",
+            Self::ConflictingParameters => "pioneer.settings.conflicting_parameters",
             Self::InvalidParameter(_) => "pioneer.startup.parameter_out_of_range",
             Self::Read(_) => "pioneer.startup.parameter_read_failed",
             Self::Change { .. } => "pioneer.startup.parameter_change_failed",
@@ -67,6 +72,11 @@ impl<E, F> crate::CodedError for Error<E, F> {
 impl<E: core::fmt::Debug> core::fmt::Display for Rollback<E> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Settings(results) => {
+                f.write_str("settings restoration:")?;
+                for (parameter, result) in results { write!(f, " word {parameter:#x}: {result};")?; }
+                Ok(())
+            },
             Self::Restored=>f.write_str("the original startup setting was restored and verified"),
             Self::Unchanged=>f.write_str("the startup setting was unchanged"),
             Self::UnsafeAfterFirmwareWrite=>f.write_str("update commands were attempted; the target startup setting was retained because the installed firmware state is uncertain. Do not automatically repeat the flash"),
@@ -79,6 +89,7 @@ impl<E: core::fmt::Debug, F: core::fmt::Display> core::fmt::Display for Error<E,
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Preflight(source)=>write!(f,"update preflight refused before changing startup settings or firmware: {source}"),
+            Self::ConflictingParameters => f.write_str("conflicting settings plan; no command was sent"),
             Self::InvalidParameter(p)=>write!(f,"startup parameter {p:#x} is outside the supported parameter surface; no command was sent"),
             Self::Read(e)=>write!(f,"A0 startup parameter read failed; no firmware was written. The drive may not implement this command in its current mode: {e}"),
             Self::Change{source,rollback,..}=>write!(f,"A0 startup parameter write or verification failed; no firmware was written: {source}; {rollback}"),
@@ -94,7 +105,7 @@ impl<E: core::fmt::Debug + 'static, F: std::error::Error + 'static> std::error::
         match self {
             Self::Preflight(source) | Self::Flash { source, .. } => Some(source),
             Self::Read(source) | Self::Change { source, .. } => Some(source),
-            Self::InvalidParameter(_) => None,
+            Self::InvalidParameter(_) | Self::ConflictingParameters => None,
         }
     }
 }
@@ -207,6 +218,85 @@ where
             } else {
                 rollback(io.inner, parameter, original, changed)
             };
+            Err(Error::Flash {
+                original,
+                target,
+                source,
+                rollback,
+            })
+        }
+    }
+}
+
+/// Execute a complete collection of bounded parameter settings around one flash.
+/// All originals are read before the first mutation. A one-setting plan uses
+/// the existing executor unchanged. A0 writes never count as firmware entry;
+/// the first attempted update command forbids rollback for the entire plan.
+pub fn execute_many<T, F, R, X>(
+    t: &mut T,
+    settings: &[(u16, u16)],
+    flash: F,
+) -> Result<R, Error<T::Error, X>>
+where
+    T: Transport,
+    F: FnOnce(&mut FlashTransport<'_, T>) -> Result<R, X>,
+{
+    for (i, (parameter, _)) in settings.iter().enumerate() {
+        if *parameter >= 0x400 {
+            return Err(Error::InvalidParameter(*parameter));
+        }
+        if settings[..i].iter().any(|(p, _)| p == parameter) {
+            return Err(Error::ConflictingParameters);
+        }
+    }
+    if let [(parameter, target)] = settings {
+        return execute(t, *parameter, *target, flash);
+    }
+    let mut originals = alloc::vec::Vec::new();
+    for &(parameter, target) in settings {
+        let original = read(t, parameter).map_err(Error::Read)?;
+        originals.push((parameter, original, target));
+    }
+    fn restore<T: Transport>(t: &mut T, values: &[(u16, u16, u16)]) -> Rollback<T::Error> {
+        Rollback::Settings(
+            values
+                .iter()
+                .rev()
+                .map(|&(p, old, new)| (p, rollback(t, p, old, old != new)))
+                .collect(),
+        )
+    }
+    for (index, &(parameter, original, target)) in originals.iter().enumerate() {
+        if original != target {
+            if let Err(source) = write_verified(t, parameter, target) {
+                let rollback = restore(t, &originals[..=index]);
+                return Err(Error::Change {
+                    original,
+                    source,
+                    rollback,
+                });
+            }
+        }
+    }
+    let mut io = FlashTransport {
+        inner: t,
+        attempted: false,
+    };
+    match flash(&mut io) {
+        Ok(result) => Ok(result),
+        Err(source) => {
+            let rollback = if io.attempted {
+                Rollback::UnsafeAfterFirmwareWrite
+            } else {
+                restore(io.inner, &originals)
+            };
+            // Retain legacy mutation reporting: any changed word makes these
+            // unequal. Attempt-local originals are used only for safe restoration.
+            let (_, original, target) = originals
+                .iter()
+                .copied()
+                .find(|(_, old, new)| old != new)
+                .unwrap_or((0, 0, 0));
             Err(Error::Flash {
                 original,
                 target,
@@ -399,5 +489,131 @@ mod tests {
         ));
         assert_eq!(t.writes, [0xfe24]);
         assert_eq!(t.firmware_attempts, 1);
+    }
+}
+
+#[cfg(test)]
+mod collection_tests {
+    use super::*;
+    use alloc::{vec, vec::Vec};
+    struct Mock {
+        words: [u16; 2],
+        log: Vec<(u8, usize, u16)>,
+        fail_read: Option<usize>,
+        fail_write: Option<usize>,
+    }
+    impl Transport for Mock {
+        type Error = &'static str;
+        fn exec(&mut self, c: &[u8], data: Data<'_>) -> Result<usize, Self::Error> {
+            if c[2] != 0xa0 {
+                self.log.push((0x3b, 99, 0));
+                return Err("entry uncertain");
+            }
+            let offset = (usize::from(c[3]) << 16) | (usize::from(c[4]) << 8) | usize::from(c[5]);
+            let index = offset / 2 - 0x9f;
+            match data {
+                Data::In(b) => {
+                    self.log.push((0x3c, index, self.words[index]));
+                    if self.fail_read == Some(index) {
+                        return Err("read failed");
+                    }
+                    b.copy_from_slice(&self.words[index].to_be_bytes());
+                    Ok(2)
+                }
+                Data::Out(b) => {
+                    let v = u16::from_be_bytes(b.try_into().unwrap());
+                    self.log.push((0x3b, index, v));
+                    if self.fail_write == Some(index) {
+                        self.fail_write = None;
+                        return Err("write uncertain");
+                    }
+                    self.words[index] = v;
+                    Ok(2)
+                }
+                _ => unreachable!(),
+            }
+        }
+        fn sense(&self) -> Option<(u8, u8, u8)> {
+            None
+        }
+    }
+    fn mock() -> Mock {
+        Mock {
+            words: [1, 2],
+            log: vec![],
+            fail_read: None,
+            fail_write: None,
+        }
+    }
+    #[test]
+    fn validates_whole_plan_before_commands() {
+        for plan in [vec![(0x9f, 3), (0x9f, 4)], vec![(0x9f, 3), (0x400, 4)]] {
+            let mut m = mock();
+            assert!(execute_many(&mut m, &plan, |_| Ok::<_, &str>(())).is_err());
+            assert!(m.log.is_empty());
+        }
+    }
+    #[test]
+    fn reads_all_originals_before_first_write_and_verifies_each() {
+        let mut m = mock();
+        execute_many(&mut m, &[(0x9f, 3), (0xa0, 4)], |_| Ok::<_, &str>(())).unwrap();
+        assert_eq!(
+            m.log,
+            vec![
+                (0x3c, 0, 1),
+                (0x3c, 1, 2),
+                (0x3b, 0, 3),
+                (0x3c, 0, 3),
+                (0x3b, 1, 4),
+                (0x3c, 1, 4)
+            ]
+        );
+    }
+    #[test]
+    fn late_initial_read_failure_sends_no_writes() {
+        let mut m = mock();
+        m.fail_read = Some(1);
+        assert!(execute_many(&mut m, &[(0x9f, 3), (0xa0, 4)], |_| Ok::<_, &str>(())).is_err());
+        assert!(m.log.iter().all(|e| e.0 == 0x3c));
+    }
+    #[test]
+    fn partial_change_rolls_back_in_reverse_order_without_flash() {
+        let mut m = mock();
+        m.fail_write = Some(1);
+        assert!(
+            execute_many(&mut m, &[(0x9f, 3), (0xa0, 4)], |_| -> Result<(), &str> {
+                panic!("must not flash")
+            })
+            .is_err()
+        );
+        assert_eq!(m.words, [1, 2]);
+        let writes: Vec<_> = m.log.iter().filter(|e| e.0 == 0x3b).copied().collect();
+        assert_eq!(
+            writes,
+            vec![(0x3b, 0, 3), (0x3b, 1, 4), (0x3b, 1, 2), (0x3b, 0, 1)]
+        );
+    }
+    #[test]
+    fn callback_preflight_failure_restores_all_changed_words() {
+        let mut m = mock();
+        assert!(execute_many(&mut m, &[(0x9f, 3), (0xa0, 4)], |_| Err::<(), _>("policy")).is_err());
+        assert_eq!(m.words, [1, 2]);
+    }
+    #[test]
+    fn uncertain_firmware_entry_forbids_any_rollback() {
+        let mut m = mock();
+        let err = execute_many(&mut m, &[(0x9f, 3), (0xa0, 4)], |t| {
+            t.exec(&[0x3b, 0, 0xfe], Data::None)
+        })
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Flash {
+                rollback: Rollback::UnsafeAfterFirmwareWrite,
+                ..
+            }
+        ));
+        assert_eq!(m.words, [3, 4]);
+        assert_eq!(m.log.last(), Some(&(0x3b, 99, 0)));
     }
 }

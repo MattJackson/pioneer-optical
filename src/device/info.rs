@@ -30,6 +30,10 @@ impl Inquiry {
     pub fn product(&self) -> &str {
         crate::field(&self.raw[16..32])
     }
+    /// Structured vendor, drive model, product context and revision.
+    pub fn product_identity(&self) -> crate::ProductIdentity<'_> {
+        crate::ProductIdentity::from_fields(self.vendor(), self.product(), self.revision())
+    }
     /// Firmware revision.
     pub fn revision(&self) -> &str {
         crate::field(&self.raw[32..36])

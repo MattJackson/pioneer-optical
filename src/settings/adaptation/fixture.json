@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "id": "test.ud02-to-ud03",
+  "hardware_scheme": "pioneer.hardware.v4",
+  "hardware_family": "1111111111111111",
+  "source_normal_sha256": [
+    "bfbd30e993f8fa17fb740dc84d232dc6205b893e0ec93414b9387a78374a8f7e"
+  ],
+  "original_product_codes": [
+    "BDR-UD02TBD"
+  ],
+  "mode": "adapt",
+  "target_normal_sha256": "c1914041aaa9dffbde9e4284ca179c074d7507514c2fcf41d59c5de7578ff1e1",
+  "input_length": 32,
+  "required_parameters": [
+    {
+      "parameter": 655,
+      "value": 1
+    }
+  ],
+  "replacements": [
+    {
+      "offset": 0,
+      "expected_hex": "0102",
+      "replacement_hex": "0506"
+    }
+  ],
+  "checksum_offset": 28,
+  "output_sha256": "21bff6eafe268a872613eeac07d73e750ead7c98af237a91bf7f138c0df4afa5",
+  "resolves_issue": "ud02-mechanism-convention",
+  "target_model": "TEST-UD03"
+}

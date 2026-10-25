@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0] - 2026-10-25
+
+- Add compiled-in, hash-bound settings adaptation preparation with an empty production registry. No firmware transitions are newly enabled.
+- Guard factory hardware identity independently of running firmware; re-read original identity and required parameter values before any settings or firmware write.
+- Rebuild, authenticate and validate adapted Normal transfers through existing receiver checks. Stock-return profiles retain pristine OEM bytes and never imply native reverse compatibility.
+- Exercise image guards, one-profile preparation, original-hardware rejection and unchanged empty-registry behavior with synthetic test-only JSON.
+
 ## 1.2.2
 
 - Expose matching allocation-free `ProductIdentity` APIs for vendor, drive model, product suffix, raw product and revision. OEM context such as `PP-100` no longer needs to be mistaken for the drive model by host display code.

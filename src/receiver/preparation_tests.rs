@@ -88,6 +88,66 @@ pub(in crate::receiver) fn update(gated: bool, marker: u8, family: u8, entry: bo
     Update::load(&pair.kernel, &pair.normal).unwrap()
 }
 
+fn factory_parameters(code: &str) -> [u8; crate::production::PARAMETERS_LEN] {
+    let mut bytes = [0xff; crate::production::PARAMETERS_LEN];
+    bytes[0x84..0x88].copy_from_slice(b"kw01");
+    bytes[0x90..0x9f].fill(b' ');
+    bytes[0x90..0x90 + code.len()].copy_from_slice(code.as_bytes());
+    bytes
+}
+
+#[test]
+fn adding_one_test_profile_changes_only_the_matching_prepared_image() {
+    let installed = update(false, 1, 0x12, true);
+    let target = update(false, 0, 0x12, true);
+    let target_normal = target.normal().image.clone();
+    let mut expected = target_normal.clone();
+    expected[0x600..0x602].copy_from_slice(&[1, 2]);
+    fix_sum(&mut expected);
+    let profile = serde_json::json!({
+        "schema_version": 1, "id": "test.single-image",
+        "hardware_scheme": crate::image::FAMILY_SCHEME,
+        "hardware_family": installed.family().unwrap().to_string(),
+        "source_normal_sha256": [crate::settings::adaptation::digest(&installed.normal().image)],
+        "original_product_codes": ["BDR-UD02TBD"], "mode": "adapt",
+        "resolves_issue": "ud02-mechanism-convention",
+        "target_normal_sha256": crate::settings::adaptation::digest(&target_normal),
+        "target_model": target.normal().info().model,
+        "input_length": target_normal.len(), "required_parameters": [],
+        "replacements": [{ "offset": 0x600, "expected_hex": "0000", "replacement_hex": "0102" }],
+        "checksum_offset": target_normal.len() - 4,
+        "output_sha256": crate::settings::adaptation::digest(&expected),
+    })
+    .to_string();
+    let receiver = Receiver::from_installed(&installed).unwrap();
+    let baseline = receiver.prepare(target.clone()).unwrap();
+    assert_eq!(baseline.target.normal().image, target_normal);
+    assert_eq!(baseline.settings().adaptation_id(), None);
+
+    let mut receiver = receiver.with_original_parameters(&factory_parameters("BDR-UD02TBD"));
+    receiver.adaptation_profiles = Some(vec![profile]);
+    let prepared = receiver.prepare(target.clone()).unwrap();
+    assert_eq!(prepared.target.normal().image, expected);
+    assert_eq!(
+        prepared.settings().adaptation_id(),
+        Some("test.single-image")
+    );
+    assert_eq!(prepared.final_kernel_image(), target.kernel().image);
+    let normal = target.normal().repack(&target_normal).unwrap();
+    let prepared = receiver.prepare_normal(&normal).unwrap();
+    assert_eq!(prepared.normal_image(), expected);
+
+    // Identical running firmware and hardware family cannot authorize native
+    // UD04 hardware to use a route restricted to originally UD02 mechanisms.
+    let receiver = receiver.with_original_parameters(&factory_parameters("BDR-UD04"));
+    assert!(matches!(
+        receiver.prepare(target),
+        Err(PreparationError::Adaptation(
+            crate::settings::adaptation::Error::OriginalMismatch
+        ))
+    ));
+}
+
 #[test]
 fn prepares_patch_and_pristine_restore_before_any_io() {
     let installed = update(true, 1, 0x12, true);

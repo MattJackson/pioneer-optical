@@ -12,6 +12,8 @@ pub enum PreparationError {
     AmbiguousStartup,
     /// Required configuration is unresolved or has no validated conversion.
     Settings(crate::settings::update::Error),
+    /// A compiled-in settings adaptation failed its exact firmware guards.
+    Adaptation(crate::settings::adaptation::Error),
     /// Target requires a setting but the installed write surface is unknown.
     UnknownStartupAccess,
     /// Installed updater cannot hand control to the replacement Kernel.
@@ -42,6 +44,7 @@ impl core::fmt::Display for PreparationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Settings(error) => error.fmt(f),
+            Self::Adaptation(error) => error.fmt(f),
             Self::AmbiguousStartup => f.write_str("target startup checks are ambiguous; no startup setting can be selected"),
             Self::UnknownStartupAccess => f.write_str("startup-setting migration is required but the installed firmware's parameter write command is unrecognized; no firmware was written"),
             Self::KernelHandoff(error) => write!(f, "Kernel replacement: {error}"),
@@ -72,6 +75,7 @@ impl std::error::Error for PreparationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Settings(error) => Some(error),
+            Self::Adaptation(error) => Some(error),
             Self::KernelHandoff(error) => Some(error),
             Self::Target(error) => Some(error),
             Self::Compatibility(error) | Self::RestorationEntry(error) => Some(error),
@@ -204,6 +208,92 @@ impl PreparedUpdate {
 }
 
 impl Receiver {
+    /// Bind factory hardware evidence from the selected drive's current A0 response.
+    /// Execution reads the response again before any mutation; firmware labels
+    /// and a host history file cannot substitute for this evidence.
+    pub fn with_original_parameters(mut self, parameters: &[u8]) -> Self {
+        self.settings_contract.bind_original(parameters);
+        self
+    }
+
+    fn adapt_normal(
+        &self,
+        normal: &Envelope,
+    ) -> Result<Option<crate::settings::adaptation::Adapted>, PreparationError> {
+        #[cfg(test)]
+        let result = if let Some(profiles) = &self.adaptation_profiles {
+            crate::settings::adaptation::prepare_documents(
+                profiles,
+                &self.settings_contract,
+                &normal.image,
+                &normal.info().model,
+            )
+        } else {
+            crate::settings::adaptation::prepare(
+                &self.settings_contract,
+                &normal.image,
+                &normal.info().model,
+            )
+        };
+        #[cfg(not(test))]
+        let result = crate::settings::adaptation::prepare(
+            &self.settings_contract,
+            &normal.image,
+            &normal.info().model,
+        );
+        let adapted = result.map_err(PreparationError::Adaptation)?;
+        // A stock-return profile authorizes only its exact OEM image and
+        // original factory mechanism; native reverse routes are not inferred.
+        if let Some(a) = &adapted {
+            self.settings_contract
+                .check_resolving(
+                    &crate::settings::update::Contract::discover(&a.image),
+                    Some(&a.resolves_issue),
+                )
+                .map_err(PreparationError::Settings)?;
+        } else {
+            self.check_settings(&normal.image)?;
+        }
+        Ok(adapted)
+    }
+
+    fn encode_adapted(
+        &self,
+        normal: &Envelope,
+        adapted: &crate::settings::adaptation::Adapted,
+        kernel: &Envelope,
+    ) -> Result<Vec<u8>, PreparationError> {
+        use crate::envelope::{
+            builder::{
+                normal_authentication_from_kernel, normal_authentication_valid,
+                NormalAuthentication,
+            },
+            signature::SigningKey,
+        };
+        let failure =
+            || PreparationError::Adaptation(crate::settings::adaptation::Error::Representation);
+        let mut bytes = normal.repack(&adapted.image).ok_or_else(failure)?;
+        if !adapted.stock_return() {
+            let signer = SigningKey::random().map_err(|_| failure())?;
+            match normal_authentication_from_kernel(&kernel.image) {
+                Some(NormalAuthentication::KeyAndCiphertext) => signer.sign_normal(&mut bytes),
+                Some(NormalAuthentication::CiphertextOnly) => {
+                    signer.sign_normal_ciphertext_only(&mut bytes)
+                }
+                _ => return Err(failure()),
+            }
+            .map_err(|_| failure())?;
+        }
+        if !normal_authentication_valid(&bytes, &kernel.image) {
+            return Err(failure());
+        }
+        let decoded = Envelope::load_with_kernel(&bytes, kernel).map_err(|_| failure())?;
+        if decoded.image != adapted.image {
+            return Err(failure());
+        }
+        Ok(bytes)
+    }
+
     /// Independent required-settings gate; hardware overrides never waive it.
     pub fn check_settings(&self, normal: &[u8]) -> Result<(), PreparationError> {
         self.settings_contract
@@ -248,11 +338,20 @@ impl Receiver {
             self.check_family(&prepared.normal)
                 .map_err(PreparationError::Compatibility)?;
         }
-        self.check_settings(&prepared.normal.image)?;
+        let adaptation = self.adapt_normal(&prepared.normal)?;
+        if let Some(adapted) = &adaptation {
+            let bytes = self.encode_adapted(&prepared.normal, adapted, kernel)?;
+            prepared = self.codec.prepare_normal(kernel, &bytes, self.control())?;
+            if check_family {
+                self.check_family(&prepared.normal)
+                    .map_err(PreparationError::Compatibility)?;
+            }
+        }
         prepared.settings = crate::settings::update::Plan::target(
             self.startup_setting_for(&prepared.normal.image)?,
             false,
-        );
+        )
+        .with_adaptation(adaptation);
         prepared.installed_kernel = Some(kernel.clone());
         #[cfg(feature = "drive")]
         {
@@ -289,11 +388,28 @@ impl Receiver {
             .kernel_policy
             .ok_or(PreparationError::UnknownInstalledKernel)?;
         let mut prepared = self.codec.prepare(policy, target, self.control())?;
-        self.check_settings(&prepared.target.normal().image)?;
+        let adaptation = self.adapt_normal(prepared.target.normal())?;
+        if let Some(adapted) = &adaptation {
+            let normal =
+                self.encode_adapted(prepared.target.normal(), adapted, prepared.target.kernel())?;
+            let kernel = prepared
+                .target
+                .kernel()
+                .repack(&prepared.target.kernel().image)
+                .ok_or(PreparationError::InstalledKernelRepresentation)?;
+            let update = Update::load(&kernel, &normal).map_err(PreparationError::Target)?;
+            if update.family() != prepared.target.family() {
+                return Err(PreparationError::Adaptation(
+                    crate::settings::adaptation::Error::Guard,
+                ));
+            }
+            prepared = self.codec.prepare(policy, update, self.control())?;
+        }
         prepared.settings = crate::settings::update::Plan::target(
             self.startup_setting_for(&prepared.target.normal().image)?,
             prepared.restoration.is_some(),
-        );
+        )
+        .with_adaptation(adaptation);
         let installed = self
             .installed_kernel
             .as_ref()

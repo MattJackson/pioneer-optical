@@ -99,6 +99,8 @@ pub struct Receiver {
     policy: ReceiverControl,
     family: Option<Family>,
     settings_contract: crate::settings::update::Contract,
+    #[cfg(test)]
+    adaptation_profiles: Option<Vec<String>>,
     kernel_policy: Option<crate::image::KernelMarkerPolicy>,
     installed_kernel: Option<Envelope>,
     codec: &'static dyn ReceiverCodec,
@@ -198,6 +200,8 @@ impl Receiver {
             policy,
             family: family(image),
             settings_contract: crate::settings::update::Contract::discover(image),
+            #[cfg(test)]
+            adaptation_profiles: None,
             kernel_policy: None,
             installed_kernel: None,
             codec,

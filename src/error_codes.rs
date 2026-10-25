@@ -168,6 +168,7 @@ impl CodedError for crate::receiver::PreparationError {
     fn code(&self) -> &'static str {
         match self {
             Self::Settings(error) => error.code(),
+            Self::Adaptation(error) => error.code(),
             Self::AmbiguousStartup => "pioneer.preparation.ambiguous_startup",
             Self::UnknownStartupAccess => "pioneer.preparation.unknown_startup_access",
             Self::Target(..) => "pioneer.preparation.target",

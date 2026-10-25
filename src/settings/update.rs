@@ -80,6 +80,7 @@ impl Setting {
 #[derive(Clone, Debug, Default)]
 pub struct Plan {
     entries: Vec<Setting>,
+    adaptation: Option<super::adaptation::Applied>,
 }
 impl Plan {
     pub(crate) fn target(startup: Option<crate::startup::Setting>, restore: bool) -> Self {
@@ -100,7 +101,27 @@ impl Plan {
                 effect: Effect::TemporaryKernelMarker,
             });
         }
-        Self { entries }
+        Self {
+            entries,
+            adaptation: None,
+        }
+    }
+    pub(crate) fn with_adaptation(
+        mut self,
+        adaptation: Option<super::adaptation::Adapted>,
+    ) -> Self {
+        self.adaptation = adaptation.map(Into::into);
+        self
+    }
+    /// Compiled-in adaptation selected for this exact source and target.
+    pub fn adaptation_id(&self) -> Option<&str> {
+        self.adaptation.as_ref().map(|a| a.id.as_str())
+    }
+    /// Read-only live prerequisites checked before any settings or firmware write.
+    pub fn requirements(&self) -> &[super::adaptation::Requirement] {
+        self.adaptation
+            .as_ref()
+            .map_or(&[], |a| a.requirements.as_slice())
     }
     /// Settings in deterministic execution/reporting order.
     pub fn entries(&self) -> &[Setting] {
@@ -145,7 +166,15 @@ impl Plan {
                 Effect::TemporaryKernelMarker => None,
             })
             .collect();
-        crate::startup::migration::execute_many(io, &words, flash)
+        crate::startup::migration::execute_many_checked(
+            io,
+            &words,
+            self.requirements(),
+            self.adaptation
+                .as_ref()
+                .map(|a| a.original_product_code.as_str()),
+            flash,
+        )
     }
 }
 
@@ -153,7 +182,9 @@ impl Plan {
 /// None is explicit unsupported/ambiguous evidence, never an invented default.
 #[derive(Clone, Debug)]
 pub struct Contract {
-    hardware_family: Option<alloc::string::String>,
+    pub(super) hardware_family: Option<alloc::string::String>,
+    pub(super) normal_sha256: alloc::string::String,
+    pub(super) original_product_code: Option<alloc::string::String>,
     phase: Option<bool>,
 }
 impl Contract {
@@ -161,6 +192,8 @@ impl Contract {
     pub(crate) fn test_unresolved_scope() -> Self {
         Self {
             hardware_family: Some("83a4abb2a9b5480e".into()),
+            normal_sha256: alloc::string::String::new(),
+            original_product_code: None,
             phase: None,
         }
     }
@@ -168,11 +201,25 @@ impl Contract {
     pub fn discover(normal: &[u8]) -> Self {
         Self {
             hardware_family: crate::image::family(normal).map(|f| f.to_string()),
+            normal_sha256: super::adaptation::digest(normal),
+            original_product_code: None,
             phase: phase(normal),
         }
     }
+    /// Bind read-only factory evidence separately from the running firmware.
+    pub(crate) fn bind_original(&mut self, parameters: &[u8]) {
+        self.original_product_code =
+            crate::production::parse(parameters).map(|p| p.product_code.into());
+    }
     /// Compare required configuration. No movement conversion is registered.
     pub fn check(&self, target: &Self) -> Result<(), Error> {
+        self.check_resolving(target, None)
+    }
+    pub(crate) fn check_resolving(
+        &self,
+        target: &Self,
+        resolved_issue: Option<&str>,
+    ) -> Result<(), Error> {
         // No issue means no *additional* refusal. Hardware, image integrity,
         // receiver checks and existing startup policies remain independent.
         let registry = issues().as_ref().map_err(|_| Error::Unresolved)?;
@@ -196,7 +243,9 @@ impl Contract {
                     // Directional unresolved requirements have no implicit inverse,
                     // transitive rule or conversion. Future resolution must bind
                     // validated firmware/configuration selectors and an executor.
-                    return Err(Error::Unresolved);
+                    if resolved_issue != Some(issue.id.as_str()) {
+                        return Err(Error::Unresolved);
+                    }
                 }
             }
         }
@@ -367,6 +416,8 @@ mod tests {
     fn scoped(phase: Option<bool>) -> Contract {
         Contract {
             hardware_family: Some("83a4abb2a9b5480e".into()),
+            normal_sha256: alloc::string::String::new(),
+            original_product_code: None,
             phase,
         }
     }
@@ -391,6 +442,8 @@ mod tests {
         );
         let a = Contract {
             hardware_family: Some("other-platform".into()),
+            normal_sha256: alloc::string::String::new(),
+            original_product_code: None,
             phase: None,
         };
         assert_eq!(a.check(&a), Ok(()));

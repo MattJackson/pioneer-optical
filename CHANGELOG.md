@@ -4,6 +4,12 @@ All notable changes to `pioneer-optical` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/) and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] - 2026-10-24
+
+- Classify known settings refusals as unsupported firmware and conflicting
+  parameter plans as invalid input, preserving explicit host guidance.
+- Check settings error declarations in the host-category regression.
+
 ## [1.2.0] - 2026-10-24
 
 - Separate hardware-family evidence from firmware settings requirements. Known

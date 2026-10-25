@@ -38,6 +38,8 @@ pub(super) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         | "pioneer.kernel_handoff.unknown_target"
         | "pioneer.transport.kernel_layout"
         | "pioneer.settings.codec.unsupported"
+        | "pioneer.settings.compatibility_unresolved"
+        | "pioneer.settings.conversion_unavailable"
         | "pioneer.normal_layout.unsupported"
         | "pioneer.envelope.unknown_rotation"
         | "pioneer.envelope.unknown_authentication"
@@ -59,6 +61,7 @@ pub(super) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         | "pioneer.update.abi_mismatch"
         | "pioneer.device.invalid_value"
         | "pioneer.device.region_locked"
+        | "pioneer.settings.conflicting_parameters"
         | "pioneer.settings.codec.malformed"
         | "pioneer.settings.codec.invalid_request"
         | "pioneer.normal_layout.not_kernel"
@@ -145,6 +148,8 @@ mod tests {
         for source in [
             include_str!("error_codes.rs"),
             include_str!("receiver/execution_safe.rs"),
+            include_str!("settings/update.rs"),
+            include_str!("startup/migration.rs"),
         ] {
             for code in source.split('"').filter(|s| {
                 s.starts_with("pioneer.")

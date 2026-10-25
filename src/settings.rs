@@ -156,3 +156,7 @@ impl PureReadMode {
 /// Firmware-bound settings included in a prepared OEM update.
 #[cfg(feature = "envelope")]
 pub mod update;
+
+/// Guarded compiled-in firmware settings adaptations.
+#[cfg(feature = "envelope")]
+pub mod adaptation;

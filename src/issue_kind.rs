@@ -33,12 +33,17 @@ pub(super) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         | "pioneer.drive.locked"
         | "pioneer.drive.short"
         | "pioneer.identity.not_found" => IssueKind::Connection,
-        "pioneer.execute.identity_mismatch"
+        "pioneer.settings.prerequisite_mismatch"
+        | "pioneer.execute.identity_mismatch"
         | "pioneer.receiver.installed_pair_mismatch"
         | "pioneer.receiver.descriptor_mismatch"
         | "pioneer.flash.descriptor_changed"
         | "pioneer.flash.descriptor_mismatch" => IssueKind::ReceiverMismatch,
-        "pioneer.device.unsupported"
+        "pioneer.settings.adaptation_registry_invalid"
+        | "pioneer.settings.adaptation_guard_failed" => IssueKind::Unexpected,
+        "pioneer.settings.adaptation_representation_failed"
+        | "pioneer.settings.original_hardware_required"
+        | "pioneer.device.unsupported"
         | "pioneer.kernel_handoff.unknown_installed"
         | "pioneer.kernel_handoff.unknown_target"
         | "pioneer.transport.kernel_layout"
@@ -142,7 +147,9 @@ pub(super) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         | "pioneer.identity.no_model"
         | "pioneer.identity.incomplete_identity"
         | "pioneer.identity.ambiguous" => IssueKind::InvalidFirmware,
-        "pioneer.receiver.family_mismatch" => IssueKind::HardwareMismatch,
+        "pioneer.settings.original_hardware_mismatch" | "pioneer.receiver.family_mismatch" => {
+            IssueKind::HardwareMismatch
+        }
         _ => IssueKind::Unexpected,
     }
 }
@@ -171,12 +178,24 @@ mod tests {
             include_str!("error_codes.rs"),
             include_str!("receiver/execution_safe.rs"),
             include_str!("startup/migration.rs"),
+            include_str!("settings/adaptation.rs"),
         ] {
             for code in source.split('"').filter(|s| {
                 s.starts_with("pioneer.")
                     && s.bytes()
                         .all(|b| b.is_ascii_lowercase() || b == b'.' || b == b'_')
             }) {
+                if matches!(
+                    code,
+                    "pioneer.settings.adaptation_registry_invalid"
+                        | "pioneer.settings.adaptation_guard_failed"
+                ) {
+                    assert_eq!(
+                        super::kind_for_code(code),
+                        crate::operation::IssueKind::Unexpected
+                    );
+                    continue;
+                }
                 assert_ne!(
                     super::kind_for_code(code),
                     crate::operation::IssueKind::Unexpected,

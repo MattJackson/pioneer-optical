@@ -544,7 +544,14 @@ impl PreparedUpdate {
         let (updating, _) =
             check_receiver(io.reads, installed, &self.control, mode, FlashPass::Initial)?;
         let recovery_mode = mode == ExecutionMode::Recovery;
-        if !updating && !self.settings.entries().is_empty() {
+        if updating && self.settings.adaptation_id().is_some() {
+            return Err(ExecutionError::Plan(
+                "mechanism conversion requires live original-hardware checks in normal runtime",
+            ));
+        }
+        if !updating
+            && (!self.settings.entries().is_empty() || self.settings.adaptation_id().is_some())
+        {
             return self
                 .settings
                 .execute(io.writes, |writes| {
@@ -800,7 +807,7 @@ impl PreparedNormal {
             ExecutionMode::Flash,
             FlashPass::Initial,
         )?;
-        if !self.settings.entries().is_empty() {
+        if !self.settings.entries().is_empty() || self.settings.adaptation_id().is_some() {
             return self
                 .settings
                 .execute(io.writes, |writes| {

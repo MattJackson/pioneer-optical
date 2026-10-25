@@ -61,6 +61,9 @@ pub use error_codes::CodedError;
 #[cfg(feature = "firmware-info")]
 pub mod firmware;
 
+mod product_identity;
+pub use product_identity::ProductIdentity;
+
 pub mod cdb;
 /// Typed live device information and settings over a caller-owned transport.
 #[cfg(feature = "drive")]
@@ -238,6 +241,10 @@ impl Identity {
     /// Product identification, e.g. `BD-RW   BDR-UD04`.
     pub fn product(&self) -> &str {
         field(&self.inquiry[16..32])
+    }
+    /// Structured vendor, drive model, product context and revision.
+    pub fn product_identity(&self) -> ProductIdentity<'_> {
+        ProductIdentity::from_fields(self.vendor(), self.product(), self.revision())
     }
     /// Firmware revision, e.g. `1.14`.
     pub fn revision(&self) -> &str {

@@ -465,30 +465,22 @@ fn stored_code_regions_preserve_image_alignment() {
 }
 
 #[test]
-fn interface_fe9f_distinguishes_known_zero_missing_and_other_values() {
+fn excluded_interface_registers_do_not_change_hardware_family() {
     let setup = [0xf8, 0x0d, 0x6a, 0x88, 0xe4, 0x36];
-    let with = |write: &[u8]| {
-        let mut body = setup.to_vec();
-        body.extend_from_slice(write);
-        body
-    };
-    let immediate = with(&[0xf8, 0, 0x6a, 0x88, 0xfe, 0x9f]);
-    let subtract = with(&[0x18, 0x88, 0x6a, 0x88, 0xfe, 0x9f]);
-    let xor = with(&[0x15, 0x88, 0x6a, 0x88, 0xfe, 0x9f]);
-    assert_eq!(family(&immediate), family(&subtract));
-    assert_eq!(family(&immediate), family(&xor));
-    assert_ne!(family(&immediate), family(&setup));
-    assert_ne!(
-        family(&immediate),
-        family(&with(&[0xf8, 0x18, 0x6a, 0x88, 0xfe, 0x9f]))
-    );
-    assert!(family_fingerprint(&subtract)
-        .unwrap()
-        .pins
-        .contains("fe9f=0"));
-    let unknown = with(&[0x18, 0x98, 0x6a, 0x88, 0xfe, 0x9f]);
-    assert!(family_fingerprint(&unknown)
-        .unwrap()
-        .pins
-        .contains("fe9f=-"));
+    let expected = family(&setup);
+    assert!(expected.is_some());
+    for register in [0xfe8fu16, 0xfe9d, 0xfe9f] {
+        for value in [0, 0x18, 0x70, 0x93, 0xa0, 0xff] {
+            let mut body = setup.to_vec();
+            body.extend([
+                0xf8,
+                value,
+                0x6a,
+                0x88,
+                (register >> 8) as u8,
+                register as u8,
+            ]);
+            assert_eq!(family(&body), expected);
+        }
+    }
 }

@@ -544,26 +544,21 @@ impl PreparedUpdate {
         let (updating, _) =
             check_receiver(io.reads, installed, &self.control, mode, FlashPass::Initial)?;
         let recovery_mode = mode == ExecutionMode::Recovery;
-        if !updating {
-            if let Some(setting) = self.startup_setting {
-                return crate::startup::migration::execute(
-                    io.writes,
-                    setting.parameter,
-                    setting.value,
-                    |writes| {
-                        self.execute_passes(
-                            FlashTransport {
-                                reads: io.reads,
-                                writes,
-                            },
-                            runtime,
-                            false,
-                            recovery_mode,
-                        )
-                    },
-                )
+        if !updating && !self.settings.entries().is_empty() {
+            return self
+                .settings
+                .execute(io.writes, |writes| {
+                    self.execute_passes(
+                        FlashTransport {
+                            reads: io.reads,
+                            writes,
+                        },
+                        runtime,
+                        false,
+                        recovery_mode,
+                    )
+                })
                 .map_err(|source| ExecutionError::Startup(Box::new(source)));
-            }
         }
         self.execute_passes(io, runtime, updating, recovery_mode)
     }
@@ -805,12 +800,10 @@ impl PreparedNormal {
             ExecutionMode::Flash,
             FlashPass::Initial,
         )?;
-        if let Some(setting) = self.startup_setting {
-            return crate::startup::migration::execute(
-                io.writes,
-                setting.parameter,
-                setting.value,
-                |writes| {
+        if !self.settings.entries().is_empty() {
+            return self
+                .settings
+                .execute(io.writes, |writes| {
                     self.execute_normal(
                         FlashTransport {
                             reads: io.reads,
@@ -818,9 +811,8 @@ impl PreparedNormal {
                         },
                         runtime,
                     )
-                },
-            )
-            .map_err(|source| ExecutionError::Startup(Box::new(source)));
+                })
+                .map_err(|source| ExecutionError::Startup(Box::new(source)));
         }
         self.execute_normal(io, runtime)
     }

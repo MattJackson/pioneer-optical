@@ -152,3 +152,7 @@ impl PureReadMode {
     /// Defined protocol modes, not a per-drive support declaration.
     pub const ALL: [Self; 3] = [Self::Standard, Self::Master, Self::Perfect];
 }
+
+/// Firmware-bound settings included in a prepared OEM update.
+#[cfg(feature = "envelope")]
+pub mod update;

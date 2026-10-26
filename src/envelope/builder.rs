@@ -419,6 +419,14 @@ pub struct BuildInputs<'a> {
     pub normal_key_seed: u32,
 }
 
+pub(super) fn valid_kernel_body(image: &[u8]) -> bool {
+    image.len() == crate::image::KERNEL_LEN
+        && be32_sum_zero(image)
+        && image
+            .get(0x1000..0x1008)
+            .is_some_and(crate::protocol::valid_hardware_field)
+}
+
 fn text(bytes: &[u8]) -> Result<&str, Error> {
     if !bytes.is_ascii() {
         return Err(Error::NotAscii);
@@ -529,20 +537,13 @@ pub fn encode_kernel_envelope(
     envelope_id: &str,
     build: &KernelBuild<'_>,
 ) -> Result<Vec<u8>, Error> {
-    if kernel_image.len() != crate::image::KERNEL_LEN
-        || !be32_sum_zero(kernel_image)
-        || !kernel_image
-            .get(0x1000..0x1008)
-            .is_some_and(|v| v.starts_with(b"SAT ") || v.starts_with(b"REC "))
-    {
+    if !valid_kernel_body(kernel_image) {
         return Err(Error::KernelStructure);
     }
     let hardware = text(&kernel_image[0x1000..0x1008])?;
     let kernel_tag = text(&kernel_image[0x1008..0x1010])?;
     let kernel_version2 = text(&kernel_image[0x1010..0x1014])?;
-    if !(hardware.starts_with("SAT ") || hardware.starts_with("REC "))
-        || hardware.len() != 8
-        || kernel_tag.is_empty()
+    if kernel_tag.is_empty()
         || kernel_version2.is_empty()
         || envelope_id.split_whitespace().next().is_none()
         || !envelope_id.is_ascii()
@@ -627,12 +628,7 @@ pub fn encode_kernel_envelope_with_header(
     header: &[u8],
     key: KernelKeySource<'_>,
 ) -> Result<Vec<u8>, Error> {
-    if kernel_image.len() != crate::image::KERNEL_LEN
-        || !be32_sum_zero(kernel_image)
-        || !kernel_image
-            .get(0x1000..0x1008)
-            .is_some_and(|v| v.starts_with(b"SAT ") || v.starts_with(b"REC "))
-    {
+    if !valid_kernel_body(kernel_image) {
         return Err(Error::KernelStructure);
     }
     let layout = kernel_layout_from_image(kernel_image).ok_or(Error::AmbiguousKernelLayout)?;
@@ -849,14 +845,10 @@ fn encode_encrypted_pair_unchecked(
     let kernel = input.kernel_image;
     let normal = input.normal_image;
     let scaled = scaled_normal_geometry_from_kernel(kernel);
-    if kernel.len() != crate::image::KERNEL_LEN
+    if !valid_kernel_body(kernel)
         || normal.len() < 0x2000
         || normal.len() % 0x100 != 0
-        || !be32_sum_zero(kernel)
         || !be32_sum_zero(normal)
-        || !kernel
-            .get(0x1000..0x1008)
-            .is_some_and(|v| v.starts_with(b"SAT ") || v.starts_with(b"REC "))
         || !normal.get(..16).is_some_and(|v| v.starts_with(b"PIONEER "))
         || match scaled {
             Some(geometry) => geometry.image_len != normal.len(),
@@ -869,9 +861,7 @@ fn encode_encrypted_pair_unchecked(
     let kernel_tag = text(&kernel[0x1008..0x1010])?;
     let kernel_version2 = text(&kernel[0x1010..0x1014])?;
     let id = input.envelope_id;
-    if !(hardware.starts_with("SAT ") || hardware.starts_with("REC "))
-        || hardware.len() != 8
-        || kernel_tag.is_empty()
+    if kernel_tag.is_empty()
         || kernel_version2.is_empty()
         || id.split_whitespace().next().is_none()
         || !id.is_ascii()

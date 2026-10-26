@@ -1724,3 +1724,31 @@ fn rec_kernel_capture_round_trips_without_oem_seed() {
         encode_kernel_envelope(&kernel, "PIONEER BDR-TEST", &KernelBuild::from_seed(0)).is_err()
     );
 }
+
+#[test]
+fn capture_codec_is_selected_from_receiver_code_without_a_platform_allowlist() {
+    for hardware in [
+        b"SAT 8A10",
+        b"REC 8C00",
+        b"NEW 1234",
+        b"SCSI0001",
+        b"ATA 0009",
+    ] {
+        let mut kernel = front_kernel();
+        kernel[0x1000..0x1008].copy_from_slice(hardware);
+        be32_fix(&mut kernel, 0xff00);
+        let bytes = encode_kernel_envelope(&kernel, "PIONEER BDR-TEST", &KernelBuild::from_seed(0))
+            .unwrap();
+        let decoded = decode_envelope(&bytes).unwrap();
+        assert_eq!(decoded.image, kernel);
+        assert_eq!(decoded.info().layout, Layout::KernelFront);
+        // Altering the actual dispatcher prevents choosing an encoding, even
+        // though the exact same printable identity is still present.
+        kernel[0x40] = 0;
+        be32_fix(&mut kernel, 0xff00);
+        assert!(
+            encode_kernel_envelope(&kernel, "PIONEER BDR-TEST", &KernelBuild::from_seed(0))
+                .is_err()
+        );
+    }
+}

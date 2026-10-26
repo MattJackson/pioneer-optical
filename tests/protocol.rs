@@ -58,3 +58,27 @@ fn unknown_platform_is_evidence_without_writer_permission() {
     let e = Evidence::parse(&inquiry(), &v).unwrap().unwrap();
     assert_eq!(e.identity().platform(), "NEW 1234");
 }
+
+#[test]
+fn shared_response_preserves_metadata_and_matches_without_platform_allowlist() {
+    use pioneer_optical::protocol::Response;
+    for hardware in [
+        b"SAT 8591",
+        b"REC 8C00",
+        b"NEW 1234",
+        b"SCSI0001",
+        b"ATA 0009",
+    ] {
+        let mut v = vendor();
+        v[16..24].copy_from_slice(hardware);
+        let parsed = Response::parse(&inquiry(), &v).unwrap();
+        let identity = parsed.identity().clone();
+        assert_eq!(parsed.into_evidence().unwrap().identity(), &identity);
+        assert_eq!(identity.platform().as_bytes(), hardware);
+    }
+    let mut v = vendor();
+    v[24..32].fill(b' ');
+    let parsed = Response::parse(&inquiry(), &v).unwrap();
+    assert_eq!(parsed.identity().platform(), "SAT 8591");
+    assert!(parsed.into_evidence().is_none());
+}

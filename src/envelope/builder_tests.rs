@@ -643,9 +643,9 @@ fn encode_kernel_envelope_rejects_bad_identity_and_image() {
     assert!(
         encode_kernel_envelope(&bad_sum, "PIONEER BDR-TEST", &KernelBuild::from_seed(1)).is_err()
     );
-    // Missing SAT identity (checksum re-fixed so only SAT differs).
+    // Malformed hardware field (checksum re-fixed so only the field differs).
     let mut no_sat = k.clone();
-    no_sat[0x1000] = b'X';
+    no_sat[0x1000] = b'!';
     be32_fix(&mut no_sat, 0xff00);
     assert!(
         encode_kernel_envelope(&no_sat, "PIONEER BDR-TEST", &KernelBuild::from_seed(1)).is_err()
@@ -765,16 +765,16 @@ fn encode_kernel_envelope_exact_errors_per_guard() {
     let k = front_kernel();
     let structure = Error::KernelStructure;
     let incomplete = Error::KernelIncomplete;
-    // First guard: length, checksum, SAT identity.
+    // First guard: length, checksum, hardware-field framing.
     assert_eq!(kernel_err(&k[..0xfffc], ID, "1.00", "00/00/00"), structure);
     let mut bad_sum = k.clone();
     bad_sum[0x3000] ^= 1;
     assert_eq!(kernel_err(&bad_sum, ID, "1.00", "00/00/00"), structure);
-    let no_sat = front_kernel_field(|k| k[0x1000] = b'X');
+    let no_sat = front_kernel_field(|k| k[0x1000] = b'!');
     assert_eq!(kernel_err(&no_sat, ID, "1.00", "00/00/00"), structure);
     // Second guard: each condition alone.
     let hw7 = front_kernel_field(|k| k[0x1000..0x1008].copy_from_slice(b"SAT 8A1 "));
-    assert_eq!(kernel_err(&hw7, ID, "1.00", "00/00/00"), incomplete);
+    assert_eq!(kernel_err(&hw7, ID, "1.00", "00/00/00"), structure);
     let tag0 = front_kernel_field(|k| k[0x1008..0x1010].copy_from_slice(b"        "));
     assert_eq!(kernel_err(&tag0, ID, "1.00", "00/00/00"), incomplete);
     let v20 = front_kernel_field(|k| k[0x1010..0x1014].copy_from_slice(b"    "));
@@ -824,7 +824,7 @@ fn encode_pair_exact_errors_per_guard() {
     let mut bad_n = n.clone();
     bad_n[0x44] ^= 1;
     assert_eq!(pair_err(&base_inputs(&kernel, &bad_n)), structure);
-    let no_sat = front_kernel_field(|k| k[0x1000] = b'X');
+    let no_sat = front_kernel_field(|k| k[0x1000] = b'!');
     assert_eq!(pair_err(&base_inputs(&no_sat, &n)), structure);
     let mut no_pioneer = n.clone();
     no_pioneer[0] = b'X';
@@ -836,7 +836,7 @@ fn encode_pair_exact_errors_per_guard() {
     assert_eq!(pair_err(&base_inputs(&kernel, &declared)), structure);
     // Identity guard, each condition alone.
     let hw7 = front_kernel_field(|k| k[0x1000..0x1008].copy_from_slice(b"SAT 8A1 "));
-    assert_eq!(pair_err(&base_inputs(&hw7, &n)), incomplete);
+    assert_eq!(pair_err(&base_inputs(&hw7, &n)), structure);
     let tag0 = front_kernel_field(|k| k[0x1008..0x1010].copy_from_slice(b"        "));
     assert_eq!(pair_err(&base_inputs(&tag0, &n)), incomplete);
     let v20 = front_kernel_field(|k| k[0x1010..0x1014].copy_from_slice(b"    "));

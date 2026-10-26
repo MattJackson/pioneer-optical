@@ -533,14 +533,14 @@ pub fn encode_kernel_envelope(
         || !be32_sum_zero(kernel_image)
         || !kernel_image
             .get(0x1000..0x1008)
-            .is_some_and(|v| v.starts_with(b"SAT "))
+            .is_some_and(|v| v.starts_with(b"SAT ") || v.starts_with(b"REC "))
     {
         return Err(Error::KernelStructure);
     }
     let hardware = text(&kernel_image[0x1000..0x1008])?;
     let kernel_tag = text(&kernel_image[0x1008..0x1010])?;
     let kernel_version2 = text(&kernel_image[0x1010..0x1014])?;
-    if !hardware.starts_with("SAT ")
+    if !(hardware.starts_with("SAT ") || hardware.starts_with("REC "))
         || hardware.len() != 8
         || kernel_tag.is_empty()
         || kernel_version2.is_empty()
@@ -631,7 +631,7 @@ pub fn encode_kernel_envelope_with_header(
         || !be32_sum_zero(kernel_image)
         || !kernel_image
             .get(0x1000..0x1008)
-            .is_some_and(|v| v.starts_with(b"SAT "))
+            .is_some_and(|v| v.starts_with(b"SAT ") || v.starts_with(b"REC "))
     {
         return Err(Error::KernelStructure);
     }
@@ -856,7 +856,7 @@ fn encode_encrypted_pair_unchecked(
         || !be32_sum_zero(normal)
         || !kernel
             .get(0x1000..0x1008)
-            .is_some_and(|v| v.starts_with(b"SAT "))
+            .is_some_and(|v| v.starts_with(b"SAT ") || v.starts_with(b"REC "))
         || !normal.get(..16).is_some_and(|v| v.starts_with(b"PIONEER "))
         || match scaled {
             Some(geometry) => geometry.image_len != normal.len(),
@@ -869,7 +869,7 @@ fn encode_encrypted_pair_unchecked(
     let kernel_tag = text(&kernel[0x1008..0x1010])?;
     let kernel_version2 = text(&kernel[0x1010..0x1014])?;
     let id = input.envelope_id;
-    if !hardware.starts_with("SAT ")
+    if !(hardware.starts_with("SAT ") || hardware.starts_with("REC "))
         || hardware.len() != 8
         || kernel_tag.is_empty()
         || kernel_version2.is_empty()

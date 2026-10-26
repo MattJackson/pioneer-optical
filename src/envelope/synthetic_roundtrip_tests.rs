@@ -1706,3 +1706,21 @@ fn non_uhd_layout_inspection_derives_comp_base_without_claiming_free_ram() {
         assert!(layout.global_canaries.is_empty());
     }
 }
+
+#[test]
+fn rec_kernel_capture_round_trips_without_oem_seed() {
+    let mut kernel = front_kernel();
+    kernel[0x1000..0x1008].copy_from_slice(b"REC 8C00");
+    be32_fix(&mut kernel, 0xff00);
+    let encoded =
+        encode_kernel_envelope(&kernel, "PIONEER BDR-TEST", &KernelBuild::from_seed(0)).unwrap();
+    let decoded = decode_envelope(&encoded).unwrap();
+    assert_eq!(decoded.image, kernel);
+    assert_eq!(decoded.info().hardware_version, "REC 8C00");
+    // A recognizable identity alone must not choose an encoding dialect.
+    kernel[0x40] = 0;
+    be32_fix(&mut kernel, 0xff00);
+    assert!(
+        encode_kernel_envelope(&kernel, "PIONEER BDR-TEST", &KernelBuild::from_seed(0)).is_err()
+    );
+}

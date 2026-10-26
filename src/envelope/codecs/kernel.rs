@@ -30,7 +30,10 @@ impl EnvelopeCodec for Front {
         }
         let key = &data[HEADER..FRONT_BODY];
         let sample = transform(&data[FRONT_BODY..FRONT_BODY + ID_SAMPLE_END], key, false)?;
-        contains(&sample[KEY..], b"SAT ").then(|| {
+        (contains(&sample[KEY..], b"SAT ")
+            || (header.hardware_version.starts_with("REC ")
+                && sample.get(KEY..KEY + 8) == Some(header.hardware_version.as_bytes())))
+        .then(|| {
             (
                 self.layout(),
                 FRONT_BODY,
@@ -61,7 +64,10 @@ impl EnvelopeCodec for Derived {
         let seed = jump_seed(state, data.len() - HEADER - SEED_SAMPLE + KEY, true);
         let key = make_key(seed, KEY);
         let sample = transform(&data[HEADER..HEADER + ID_SAMPLE_END], &key, false)?;
-        contains(&sample[KEY..], b"SAT ").then(|| {
+        (contains(&sample[KEY..], b"SAT ")
+            || (header.hardware_version.starts_with("REC ")
+                && sample.get(KEY..KEY + 8) == Some(header.hardware_version.as_bytes())))
+        .then(|| {
             (
                 self.layout(),
                 HEADER,

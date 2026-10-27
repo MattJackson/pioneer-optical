@@ -5,6 +5,7 @@
 - Recover OEM-branded Normal descriptors from their native Kernel comparison instead of requiring a PIONEER brand prefix. Paired codec selection and envelope reconstruction retain exact descriptor, geometry and checksum checks.
 - Preserve fixed-width INQUIRY spacing when recovering an embedded envelope identity.
 - Retain native XOR-exclusion comparisons that a four-byte loop cannot reach rather than rejecting the whole receiver policy.
+- Bind entry control to native policy and the exact live OEM descriptor without a brand whitelist. Recognize the existing ungated finalizer with its alternate ER5/ER4 register allocation.
 - Add captured SXLT ID75 layout and paired encoding regressions, including mismatched descriptor and identity rejection.
 
 ## [1.3.0] - 2026-10-25

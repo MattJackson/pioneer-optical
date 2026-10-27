@@ -155,3 +155,18 @@ fn earlier_inline_checksum_variants_are_marker_independent() {
         }
     }
 }
+
+#[test]
+fn captured_oem_finalizer_uses_the_ungated_er5_register_allocation() {
+    let kernel = include_bytes!("../../tests/fixtures/normal-layout/sxlt-id75-kernel.bin");
+    assert_eq!(
+        kernel_marker_policy(kernel),
+        Some(KernelMarkerPolicy::NoMarkerCheck)
+    );
+    let mut inconsistent = kernel.to_vec();
+    inconsistent[0x4c60 + 0x11] = 0xc1;
+    assert_eq!(kernel_marker_policy(&inconsistent), None);
+    let mut ambiguous = kernel.to_vec();
+    ambiguous[0x8000..0x8064].copy_from_slice(&kernel[0x4c60..0x4cc4]);
+    assert_eq!(kernel_marker_policy(&ambiguous), None);
+}

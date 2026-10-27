@@ -303,3 +303,20 @@ fn envelope_api_uses_decoded_kernel_and_rejects_other_components() {
     envelope.info.kind = crate::ComponentKind::Normal;
     assert_eq!(envelope.normal_layout(), Err(NormalLayoutError::NotKernel));
 }
+
+#[test]
+fn native_descriptor_comparison_supports_non_pioneer_branding() {
+    let kernel = include_bytes!("../../tests/fixtures/normal-layout/sxlt-id75-kernel.bin");
+    let header = include_bytes!("../../tests/fixtures/normal-layout/sxlt-id75-normal-header.bin");
+    let layout = NormalLayout::from_kernel(kernel, KERNEL_BASE).unwrap();
+    assert_eq!(layout.header_region().address(), 0x410000);
+    let region = layout.resolve(header).unwrap();
+    assert_eq!(region.address(), 0x410000);
+    assert_eq!(region.length(), 0x1b7b00);
+    let mut wrong_descriptor = *header;
+    wrong_descriptor[0] ^= 1;
+    assert_eq!(
+        layout.resolve(&wrong_descriptor),
+        Err(NormalLayoutError::DescriptorMismatch)
+    );
+}

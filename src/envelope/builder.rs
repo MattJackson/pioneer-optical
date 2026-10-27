@@ -779,7 +779,7 @@ pub fn encode_normal_for_kernel(
         || normal.len() % 0x100 != 0
         || !be32_sum_zero(kernel)
         || !be32_sum_zero(normal)
-        || !normal.starts_with(b"PIONEER ")
+        || !supported_normal_descriptor(kernel, normal)
         || match scaled {
             Some(geometry) => geometry.image_len != normal.len(),
             None => u32::from_be_bytes(normal[20..24].try_into().unwrap()) as usize != normal.len(),
@@ -791,10 +791,7 @@ pub fn encode_normal_for_kernel(
     let [(_, exceptions)] = branches.as_slice() else {
         return Err(Error::XorPolicyNotUnique);
     };
-    if exceptions
-        .iter()
-        .any(|off| *off as usize >= normal.len() || off % 4 != 0)
-    {
+    if exceptions.iter().any(|off| *off as usize >= normal.len()) {
         return Err(Error::XorExceptionOutOfRange);
     }
     let layout = kernel_layout_from_image(kernel).ok_or(Error::AmbiguousKernelLayout)?;
@@ -849,7 +846,7 @@ fn encode_encrypted_pair_unchecked(
         || normal.len() < 0x2000
         || normal.len() % 0x100 != 0
         || !be32_sum_zero(normal)
-        || !normal.get(..16).is_some_and(|v| v.starts_with(b"PIONEER "))
+        || !supported_normal_descriptor(kernel, normal)
         || match scaled {
             Some(geometry) => geometry.image_len != normal.len(),
             None => u32::from_be_bytes(normal[20..24].try_into().unwrap()) as usize != normal.len(),
@@ -884,10 +881,7 @@ fn encode_encrypted_pair_unchecked(
     let [(_, exceptions)] = branches.as_slice() else {
         return Err(Error::XorPolicyNotUnique);
     };
-    if exceptions
-        .iter()
-        .any(|off| *off as usize >= normal.len() || off % 4 != 0)
-    {
+    if exceptions.iter().any(|off| *off as usize >= normal.len()) {
         return Err(Error::XorExceptionOutOfRange);
     }
     kernel_layout_from_image(kernel).ok_or(Error::AmbiguousKernelLayout)?;
@@ -1000,3 +994,11 @@ fn normal_layout_matches(
 #[cfg(test)]
 #[path = "builder_tests.rs"]
 mod tests;
+
+// Existing PIONEER framing remains compatible. Other descriptors require a
+// byte-exact native comparison and geometry contract from the supplied Kernel.
+fn supported_normal_descriptor(kernel: &[u8], normal: &[u8]) -> bool {
+    normal.starts_with(b"PIONEER ")
+        || super::NormalLayout::from_kernel(kernel, crate::image::KERNEL_BASE)
+            .is_ok_and(|layout| layout.validate(normal).is_ok())
+}

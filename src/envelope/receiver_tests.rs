@@ -77,7 +77,7 @@ fn exact_branch_recognizer_rejects_different_targets_and_non_xor() {
     assert!(kernel_xor_branches(&b[..15]).is_empty());
 }
 #[test]
-fn policy_rejects_missing_ambiguous_unaligned_and_repeated_offsets() {
+fn policy_rejects_missing_ambiguous_and_repeated_offsets() {
     let mut kernel = DecodedEnvelope {
         image: branch([0x16900, 0x77300]),
         info: EnvelopeInfo {
@@ -109,7 +109,17 @@ fn policy_rejects_missing_ambiguous_unaligned_and_repeated_offsets() {
     kernel.image.extend(branch([0x16900, 0x77300]));
     assert!(KernelXorPolicy::from_kernel(&kernel).is_none());
     kernel.image = branch([0x16901, 0x77300]);
-    assert!(KernelXorPolicy::from_kernel(&kernel).is_none());
+    // A native comparison need not be reachable by the four-byte loop.
+    assert_eq!(
+        KernelXorPolicy::from_kernel(&kernel).unwrap().offsets,
+        [0x16901, 0x77300]
+    );
+    let data = vec![0x5a; 64];
+    let key = vec![0xa5; 16];
+    assert_eq!(
+        transform_with_policy(&data, &key, false, false, &[1]),
+        transform_with_policy(&data, &key, false, false, &[])
+    );
     kernel.image = branch([0x16900, 0x16900]);
     assert!(KernelXorPolicy::from_kernel(&kernel).is_none());
     kernel.image = vec![0; 64];

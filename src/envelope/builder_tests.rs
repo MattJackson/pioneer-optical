@@ -860,16 +860,16 @@ fn encode_pair_exact_errors_per_guard() {
         i.normal_date = date;
         assert_eq!(pair_err(&i), Error::InvalidDate, "{date:?}");
     }
-    // Exception guard: out of range, and in range but misaligned.
+    // Out-of-range exclusions remain refused. An unaligned comparison is
+    // harmless: the native word loop never reaches it, matching the encoder.
     let far = front_kernel_with([0x100, 0x4000]);
     assert_eq!(
         pair_err(&base_inputs(&far, &n)),
         Error::XorExceptionOutOfRange
     );
     let odd = front_kernel_with([0x100, 0x202]);
-    assert_eq!(
-        pair_err(&base_inputs(&odd, &n)),
-        Error::XorExceptionOutOfRange
+    assert!(
+        encode_encrypted_pair(&base_inputs(&odd, &n), NormalSignature::Sign(&a_signer())).is_ok()
     );
 }
 
@@ -1292,4 +1292,29 @@ fn normal_for_kernel_follows_the_receiving_kernels_rules() {
         bodies.push(enc[0x10200..].to_vec());
     }
     assert_ne!(bodies[0], bodies[1]);
+}
+
+#[test]
+fn non_pioneer_normal_roundtrips_only_with_matching_native_kernel_descriptor() {
+    let kernel = include_bytes!("../../tests/fixtures/normal-layout/sxlt-id75-kernel.bin");
+    let header = include_bytes!("../../tests/fixtures/normal-layout/sxlt-id75-normal-header.bin");
+    let mut normal = normal_image(0x1b7b00);
+    normal[..header.len()].copy_from_slice(header);
+    let fix_at = normal.len() - 4;
+    be32_fix(&mut normal, fix_at);
+    let mut input = base_inputs(kernel, &normal);
+    input.envelope_id = "SXLT BDE-PR1EP PP100";
+    let signer = a_signer();
+    let pair = encode_encrypted_pair(&input, NormalSignature::Sign(&signer)).unwrap();
+    let decoded_kernel = super::super::decode_envelope(&pair.kernel).unwrap();
+    let decoded_normal =
+        super::super::decode_envelope_with_kernel(&pair.normal, &decoded_kernel).unwrap();
+    assert_eq!(decoded_kernel.image, kernel.as_slice());
+    assert_eq!(decoded_normal.image, normal);
+    assert!(normal_authentication_valid(&pair.normal, kernel));
+    normal[0] ^= 1;
+    be32_fix(&mut normal, fix_at);
+    let mut wrong = base_inputs(kernel, &normal);
+    wrong.envelope_id = "SXLT BDE-PR1EP PP100";
+    assert!(encode_encrypted_pair(&wrong, NormalSignature::Sign(&signer)).is_err());
 }

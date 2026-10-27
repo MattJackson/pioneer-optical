@@ -166,14 +166,26 @@ pub fn embedded_envelope_id(
         format!("{vendor} {media}")
     };
     for image in images {
-        let mut found: Option<String> = None;
+        // Some OEMs embed the actual fixed-width INQUIRY fields, including
+        // vendor padding and spaces inside the product. Match those bytes as
+        // well as the historical envelope spelling; never infer a new model.
+        let fixed = format!("{vendor:<8}{product:<16}");
+        let fixed = fixed.trim_end();
+        let mut found = (vendor.len() <= 8
+            && product.len() <= 16
+            && fixed.len() <= MAX_ID_LEN
+            && image_contains_identity(image, fixed))
+        .then(|| fixed.to_string());
         for spaces in 1..=8 {
             let candidate = format!("{prefix}{}{model}", " ".repeat(spaces));
             if candidate.len() > MAX_ID_LEN {
                 continue;
             }
             if image_contains_identity(image, &candidate) {
-                if found.is_some() {
+                if found
+                    .as_ref()
+                    .is_some_and(|previous| previous != &candidate)
+                {
                     return Err(IdentError::Ambiguous);
                 }
                 found = Some(candidate);

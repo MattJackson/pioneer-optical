@@ -25,7 +25,6 @@ type Control = [u8; cdb::CONTROL_LEN as usize];
 /// Bytes compared by the resident Normal's update-entry handler.
 pub const DESCRIPTOR_LEN: usize = 16;
 const KEY_END: usize = DESCRIPTOR_LEN + 4;
-const DESCRIPTOR_PREFIX: &[u8] = b"PIONEER ";
 
 /// Why receiver requirements could not be established.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -181,7 +180,9 @@ impl Receiver {
             .get(..DESCRIPTOR_LEN)
             .and_then(|bytes| bytes.try_into().ok())
             .ok_or(Error::InvalidDescriptor)?;
-        if !descriptor.starts_with(DESCRIPTOR_PREFIX)
+        // The descriptor is opaque OEM branding, not a permission token.
+        // Native receiver policy and the exact live descriptor still gate entry.
+        if !descriptor.iter().any(u8::is_ascii_graphic)
             || !descriptor
                 .iter()
                 .all(|b| *b == 0 || b.is_ascii_graphic() || *b == b' ')

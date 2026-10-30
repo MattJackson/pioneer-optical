@@ -13,7 +13,7 @@ fn header(kind: &str, hardware: &str, destination: &str) -> Vec<u8> {
 #[test]
 fn zero_key_kernel_uses_structural_codec_independent_of_identity() {
     let mut image = vec![0; KERNEL_BODY_LEN];
-    image[0x1000..0x1004].copy_from_slice(b"SAT ");
+    image[0x1000..0x1008].copy_from_slice(b"NEW 1234");
     for hardware in ["SAT 8A10", "SAT 8F00", "SAT FFFF"] {
         for destination in ["BACKUP", "GENERAL"] {
             let mut bytes = header("Kernel", hardware, destination);
@@ -44,7 +44,7 @@ fn zero_key_normal_does_not_bypass_receiver_policy_for_backup_identity() {
         // A valid front-key envelope without a proven receiver XOR policy.
         let mut kernel_bytes = header("Kernel", hardware, "BACKUP");
         kernel_bytes.resize(0x11200, 0);
-        kernel_bytes[0x2200..0x2204].copy_from_slice(b"SAT ");
+        kernel_bytes[0x2200..0x2208].copy_from_slice(b"NEW 1234");
         let kernel = decode_envelope(&kernel_bytes).unwrap();
         assert!(decode_envelope_with_kernel(&bytes, &kernel).is_none());
     }

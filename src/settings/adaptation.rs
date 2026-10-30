@@ -1,11 +1,14 @@
 //! Compiled-in, exact-image settings adaptations. No runtime profile loading.
 //!
-//! The production registry is deliberately empty. Adding a reviewed profile
-//! requires adding its `include_str!` here and shipping a new crate release.
+//! Only the tested UD02/UD04 route and return to its original stock firmware
+//! are registered. Sister firmware and native reverse conversions stay absent.
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-const PROFILES: &[&str] = &[];
+const PROFILES: &[&str] = &[
+    include_str!("adaptation/profiles/ud02-ud04-1.14.json"),
+    include_str!("adaptation/profiles/ud02-stock-return-1.00.json"),
+];
 
 /// A reviewed adaptation could not be prepared; no device I/O has occurred.
 #[derive(Clone, Debug, PartialEq, Eq)]

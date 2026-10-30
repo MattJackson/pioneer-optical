@@ -20,7 +20,7 @@ pub enum Error {
     MissingModel,
     /// A header field is too long or holds non-printable bytes.
     HeaderFieldsDoNotFit,
-    /// The Kernel image does not have the expected H8/SAT structure.
+    /// The Kernel image does not have the expected H8 structure.
     KernelStructure,
     /// The Kernel image or drive identity is missing required fields.
     KernelIncomplete,
@@ -32,7 +32,7 @@ pub enum Error {
     RawKeyNotAllowed,
     /// Encoding the Kernel image failed.
     KernelEncode,
-    /// The Normal and Kernel images do not have the expected H8/SAT structure.
+    /// The Normal and Kernel images do not have the expected H8 structure.
     ImageStructure,
     /// The Normal image or drive identity is missing required fields.
     ImageIncomplete,
@@ -105,7 +105,7 @@ impl fmt::Display for Error {
             Error::InvalidFilename => "invalid embedded filename",
             Error::MissingModel => "envelope ID has no model",
             Error::HeaderFieldsDoNotFit => "Pioneer header fields do not fit",
-            Error::KernelStructure => "Kernel image does not satisfy Pioneer H8/SAT structure",
+            Error::KernelStructure => "Kernel image does not satisfy Pioneer H8 structure",
             Error::KernelIncomplete => "Kernel image or drive identity is incomplete",
             Error::AmbiguousKernelLayout => {
                 "Kernel receiver dispatcher does not identify a unique envelope layout"
@@ -113,7 +113,7 @@ impl fmt::Display for Error {
             Error::RawKeyLength => "raw Kernel key must be exactly 0x1000 bytes",
             Error::RawKeyNotAllowed => "derived-key Kernel requires an LCG seed, not raw key bytes",
             Error::KernelEncode => "Kernel encode failed",
-            Error::ImageStructure => "images do not satisfy Pioneer H8/SAT image structure",
+            Error::ImageStructure => "images do not satisfy Pioneer H8 image structure",
             Error::ImageIncomplete => "image or drive identity is incomplete",
             Error::InvalidDate => "Normal build date is invalid",
             Error::XorPolicyNotUnique => "Kernel XOR exception policy is not unique",

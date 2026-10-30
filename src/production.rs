@@ -1,7 +1,8 @@
 //! Factory production data from the read-only A0 parameters response.
 //!
 //! The record layout was observed identically on BDR-UD04, BDR-S11, BDR-S12
-//! and BDR-XD06 hardware. Anything outside that layout parses as `None`.
+//! and BDR-XD06 hardware. Older captures omit the tag but retain a complete
+//! product code and factory test record; those require both structural checks.
 
 /// Buffer id of the parameters read.
 pub const PARAMETERS_ID: u8 = 0xA0;
@@ -46,9 +47,7 @@ pub struct Production<'a> {
 /// Decode the parameters response; `None` when the production record is absent.
 pub fn parse(b: &[u8]) -> Option<Production<'_>> {
     let tag = b.get(TAG..TAG + 4)?;
-    if &tag[..3] != b"kw0" || !tag[3].is_ascii_digit() {
-        return None;
-    }
+    let tagged = &tag[..3] == b"kw0" && tag[3].is_ascii_digit();
     let code = b.get(PRODUCT..PRODUCT + PRODUCT_LEN)?;
     if !code.iter().all(|c| (0x20..0x7f).contains(c)) {
         return None;
@@ -57,9 +56,30 @@ pub fn parse(b: &[u8]) -> Option<Production<'_>> {
     if product_code.is_empty() {
         return None;
     }
+    let manufactured = b.get(FACTORY..FACTORY + FACTORY_LEN).and_then(factory_date);
+    if !tagged {
+        let legacy_product = product_code
+            .split_once('-')
+            .is_some_and(|(prefix, suffix)| {
+                matches!(prefix, "BDR" | "BDC" | "DVR" | "DVD" | "CDR")
+                    && !suffix.is_empty()
+                    && suffix.bytes().all(|c| {
+                        c.is_ascii_uppercase()
+                            || c.is_ascii_digit()
+                            || matches!(c, b'+' | b'.' | b'_' | b'-')
+                    })
+            });
+        if b.len() != PARAMETERS_LEN
+            || tag != [0xff; 4]
+            || !legacy_product
+            || manufactured.is_none()
+        {
+            return None;
+        }
+    }
     Some(Production {
         product_code,
-        manufactured: b.get(FACTORY..FACTORY + FACTORY_LEN).and_then(factory_date),
+        manufactured,
     })
 }
 

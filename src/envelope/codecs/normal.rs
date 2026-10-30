@@ -7,7 +7,12 @@ const KEY: usize = 0x10000;
 const PREFIX: usize = 64;
 const WORD: usize = 4;
 
-fn keyed(data: &[u8], header: &HeaderInfo, codec: &dyn EnvelopeCodec) -> Vec<SelectedLayout> {
+fn keyed(
+    data: &[u8],
+    header: &HeaderInfo,
+    codec: &dyn EnvelopeCodec,
+    native: Option<&super::super::NormalLayout>,
+) -> Vec<SelectedLayout> {
     if header.kind != Some(ComponentKind::Normal) {
         return Vec::new();
     }
@@ -22,7 +27,9 @@ fn keyed(data: &[u8], header: &HeaderInfo, codec: &dyn EnvelopeCodec) -> Vec<Sel
         else {
             continue;
         };
-        if sample.starts_with(b"PIONEER ") {
+        if sample.starts_with(b"PIONEER ")
+            || native.is_some_and(|layout| layout.resolve(&sample).is_ok())
+        {
             let end = data.len() & !(WORD - 1);
             found.push((
                 codec.layout(),
@@ -48,10 +55,19 @@ impl EnvelopeCodec for Keyed {
         Layout::Normal
     }
     fn detect(&self, data: &[u8], header: &HeaderInfo) -> Option<SelectedLayout> {
-        keyed(data, header, self).into_iter().next()
+        keyed(data, header, self, None).into_iter().next()
     }
     fn candidates(&self, data: &[u8], header: &HeaderInfo) -> Vec<SelectedLayout> {
-        keyed(data, header, self)
+        keyed(data, header, self, None)
+    }
+    fn candidates_with_kernel(
+        &self,
+        data: &[u8],
+        header: &HeaderInfo,
+        kernel: &super::super::Envelope,
+    ) -> Vec<SelectedLayout> {
+        let native = kernel.normal_layout().ok();
+        keyed(data, header, self, native.as_ref())
     }
 }
 pub(super) struct Reverse;
@@ -69,10 +85,19 @@ impl EnvelopeCodec for Reverse {
         true
     }
     fn detect(&self, data: &[u8], header: &HeaderInfo) -> Option<SelectedLayout> {
-        keyed(data, header, self).into_iter().next()
+        keyed(data, header, self, None).into_iter().next()
     }
     fn candidates(&self, data: &[u8], header: &HeaderInfo) -> Vec<SelectedLayout> {
-        keyed(data, header, self)
+        keyed(data, header, self, None)
+    }
+    fn candidates_with_kernel(
+        &self,
+        data: &[u8],
+        header: &HeaderInfo,
+        kernel: &super::super::Envelope,
+    ) -> Vec<SelectedLayout> {
+        let native = kernel.normal_layout().ok();
+        keyed(data, header, self, native.as_ref())
     }
 }
 pub(super) struct Scaled;

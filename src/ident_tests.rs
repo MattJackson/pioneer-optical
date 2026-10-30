@@ -266,3 +266,13 @@ fn embedded_id_rejects_incomplete_inputs() {
         Err(IdentError::NotFound)
     );
 }
+
+#[test]
+fn fixed_width_inquiry_identity_preserves_internal_oem_spacing() {
+    let kernel = include_bytes!("../tests/fixtures/normal-layout/sxlt-id75-kernel.bin");
+    assert_eq!(
+        super::embedded_envelope_id("SXLT", "BDE-PR1EP  PP100", &[kernel]).unwrap(),
+        "SXLT    BDE-PR1EP  PP100"
+    );
+    assert!(super::embedded_envelope_id("SXLT", "BDE-PR1EP  PP101", &[kernel]).is_err());
+}

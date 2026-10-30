@@ -26,6 +26,7 @@ pub(super) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         "pioneer.execute.identity_read"
         | "pioneer.startup.parameter_read_failed"
         | "pioneer.protocol.incomplete"
+        | "pioneer.drive.invalid_protocol"
         | "pioneer.device.transport"
         | "pioneer.device.not_reported"
         | "pioneer.flash.descriptor_read"

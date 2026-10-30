@@ -1571,7 +1571,8 @@ pub fn kernel_xor_branches(image: &[u8]) -> Vec<(usize, [u32; 2])> {
 pub struct KernelXorPolicy {
     /// Kernel image offset of the branch.
     pub instruction_offset: usize,
-    /// The two payload offsets whose words skip the XOR.
+    /// Native byte-offset comparisons that skip XOR. A word loop never
+    /// reaches an unaligned value; retaining it records the exact native policy.
     pub offsets: [u32; 2],
 }
 impl KernelXorPolicy {
@@ -1590,7 +1591,7 @@ impl KernelXorPolicy {
         let [(instruction_offset, offsets)] = branches.as_slice() else {
             return None;
         };
-        if offsets[0] == offsets[1] || offsets.iter().any(|v| v % 4 != 0) {
+        if offsets[0] == offsets[1] {
             return None;
         }
         Some(Self {

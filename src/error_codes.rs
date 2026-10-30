@@ -214,6 +214,7 @@ impl<E> CodedError for crate::drive::Error<E> {
             Self::ReadbackMismatch { .. } => "pioneer.drive.readback_mismatch",
             Self::Oversize(..) => "pioneer.drive.oversize",
             Self::Challenge => "pioneer.drive.challenge",
+            Self::InvalidProtocol => "pioneer.drive.invalid_protocol",
             Self::UnknownClass => "pioneer.drive.unknown_class",
         }
     }

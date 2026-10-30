@@ -83,6 +83,8 @@ pub enum Error<E> {
     Oversize(usize),
     /// The DVR challenge has no solution.
     Challenge,
+    /// Complete CDB responses did not establish this protocol.
+    InvalidProtocol,
     /// The identity matches no [`DriveClass`].
     UnknownClass,
 }
@@ -104,6 +106,9 @@ impl<E: core::fmt::Debug> core::fmt::Display for Error<E> {
             ),
             Self::Oversize(n) => write!(f, "{n:#x} exceeds the 24-bit CDB field"),
             Self::Challenge => f.write_str("DVR challenge has no solution"),
+            Self::InvalidProtocol => {
+                f.write_str("CDB responses did not establish the Pioneer protocol")
+            }
             Self::UnknownClass => f.write_str("drive identity matches no known class"),
         }
     }
@@ -160,6 +165,11 @@ fn field<E>(n: usize) -> Result<u32, Error<E>> {
 /// Read the drive's [`Identity`] (INQUIRY and vendor identity). Changes no
 /// drive state.
 pub fn identify<T: Transport>(t: &mut T) -> Result<Identity, Error<T::Error>> {
+    Ok(probe(t)?.into_identity())
+}
+
+/// Read the shared CDB response contract, preserving nonmatching metadata.
+pub fn probe<T: Transport>(t: &mut T) -> Result<crate::protocol::Response, Error<T::Error>> {
     let mut inquiry = [0; INQUIRY_LEN];
     read(
         t,
@@ -169,10 +179,19 @@ pub fn identify<T: Transport>(t: &mut T) -> Result<Identity, Error<T::Error>> {
     )?;
     let mut vendor = [0; IDENTITY_LEN];
     let n = read(t, &cdb::vendor_identity(), &mut vendor, crate::IDENTITY_MIN)?;
-    Identity::parse(&inquiry, &vendor[..n]).ok_or(Error::Short {
+    crate::protocol::Response::parse(&inquiry, &vendor[..n]).map_err(|_| Error::Short {
         expected: crate::IDENTITY_MIN,
         actual: n,
     })
+}
+
+/// Require the same CDB evidence used by discovery before capture. This does
+/// not authorize a write or assert that the subsequent firmware read succeeds.
+pub fn identify_protocol<T: Transport>(t: &mut T) -> Result<Identity, Error<T::Error>> {
+    probe(t)?
+        .into_evidence()
+        .map(|e| e.identity().clone())
+        .ok_or(Error::InvalidProtocol)
 }
 
 /// Enable extended read, then read `buf.len()` bytes of drive memory at `off`.

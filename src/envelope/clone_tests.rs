@@ -72,11 +72,15 @@ fn erased_padding_kernels_compare_without_a_fill_stream() {
     assert_eq!(kernel_image_equality(&a, NAME, &b, NAME), Some(true));
     b[PROGRAM.start] ^= 1;
     assert_eq!(kernel_image_equality(&a, NAME, &b, NAME), Some(false));
-    // Without the SAT identity block nothing outside the drive name is masked.
+    // A different platform label is still metadata, not program content.
     let mut c = a.clone();
     c[HARDWARE].copy_from_slice(b"ATA 0007");
     let mut d = c.clone();
     d[KERNEL_TAG][..4].copy_from_slice(b"ID56");
+    assert_eq!(kernel_image_equality(&c, NAME, &d, NAME), Some(true));
+    // Malformed identity bytes do not get a guessed metadata mask.
+    c[HARDWARE].copy_from_slice(b"bad 0007");
+    d[HARDWARE].copy_from_slice(b"bad 0007");
     assert_eq!(kernel_image_equality(&c, NAME, &d, NAME), Some(false));
 }
 
@@ -174,7 +178,7 @@ fn clone_rejects_inputs_it_cannot_explain() {
     };
     assert_eq!(err(&source, NAME, &long_tag), Error::KernelIncomplete);
     let bad_hw = KernelIdentity {
-        hardware: "ATA 1014",
+        hardware: "bad 1014",
         ..general()
     };
     assert_eq!(err(&source, NAME, &bad_hw), Error::KernelIncomplete);

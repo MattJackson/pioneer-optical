@@ -11,7 +11,6 @@ const ADDRESS_END: u32 = 0x100_0000;
 const MIN_IMAGE_LEN: u32 = 0x2000;
 const MAX_IMAGE_LEN: u32 = 0x80_0000;
 const IMAGE_ALIGNMENT: u32 = 0x100;
-const DESCRIPTOR_PREFIX: &[u8] = b"PIONEER ";
 
 /// Failure to establish or validate a captured Kernel's companion Normal.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -340,7 +339,9 @@ fn descriptor_at(
         .get(reference..reference.checked_add(DESCRIPTOR_LEN)?)?
         .try_into()
         .ok()?;
-    if !descriptor.starts_with(DESCRIPTOR_PREFIX)
+    // The native comparison establishes the descriptor's role and exact bytes.
+    // Branding is data: OEM variants need not begin with "PIONEER ".
+    if !descriptor.iter().any(u8::is_ascii_graphic)
         || !descriptor
             .iter()
             .all(|b| b.is_ascii_graphic() || *b == b' ')

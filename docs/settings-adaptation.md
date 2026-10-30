@@ -1,12 +1,20 @@
 # Embedded settings adaptations
 
-The `settings::adaptation` production registry is empty in 1.3.0. Existing
-settings refusals and supported transitions are unchanged. Tests use synthetic
-JSON under `cfg(test)`; there are no enabled UD02 conversions.
+The production registry contains the tested original UD02 mechanism to UD04
+1.14 adaptation and its return to pristine UD02 1.00 firmware. Other target
+versions and native UD04-to-UD02 conversions are not enabled.
 
-Reviewed profiles will be compiled with `include_str!` in `PROFILES`. The crate
-never loads a runtime JSON file, accepts host-supplied patches or authorizes a
-conversion from a model name alone. A crate/app release is required to add one.
+Both directions require the live original product code `BDR-UD02TBD` and
+parameter word `0x028f = 1`. Forward preparation accepts only the original UD02
+Normal (`84fab289...`) or the tested adapted UD04 Normal (`ca090322...`) as its
+source and the exact OEM UD04 Normal (`87e8152f...`) as target. Return accepts
+only that adapted source and the original UD02 target. Full hashes and exact
+byte guards are compiled in `adaptation/profiles/`.
+
+Profiles are compiled with `include_str!`; the crate never loads runtime JSON,
+accepts host-supplied patches or authorizes a conversion from a model name alone.
+A crate/app release is required to add another profile. The previous 1.3.0
+registry was empty; synthetic test documents remain restricted to `cfg(test)`.
 
 ## Exact binding
 
@@ -29,9 +37,10 @@ it does not authorize a native UD03/UD04 mechanism to receive UD02 firmware.
 `Receiver::with_original_parameters` binds a recognized factory production record
 from the selected drive's A0 response. Running model/revision, family equality
 and historical host state do not replace it. Missing, malformed or different
-factory evidence blocks a matching route. The current production parser accepts
-recognized tagged records; the historically untagged UD02 capture remains
-unrecognized until its own codec is validated. Do not enable its profiles early.
+factory evidence blocks a matching route. The production parser accepts recognized tagged records. A legacy erased tag
+requires the complete A0 response, a structured Pioneer product code and a
+well-formed factory test/date record. A printable product string alone is
+insufficient; running firmware identity remains separate from factory evidence.
 
 The settings executor re-reads factory identity and each prerequisite before
 any parameter change or update-entry command. Read failures and mismatches
@@ -61,3 +70,18 @@ requires the selected drive's evidence and checks it again.
   wrong expected bytes and wrong output hashes fail before any device I/O.
 - Empty prerequisites preserve the old settings command sequence.
 - Unmet prerequisites produce no parameter writes or firmware transfers.
+
+## Validation and limits
+
+The UD04 prepared Normal hash `ca090322...` reproduces the existing owner-tested
+UHD configuration recorded on 2026-10-24. Held-image tests check all byte guards,
+original-hardware rejection, unknown-image rejection, issue resolution, envelope
+authentication, receiver preparation and pristine stock return. The source
+capture has an unsigned-backup signature sentinel; test preparation signs its
+transfer without changing decoded firmware, matching the host's existing flow.
+These new tests are offline validation, not new physical flash/media trials.
+
+Exact-image profiles resolve their named settings issue after the independent
+hardware-family check. Adaptation can replace the old phase grammar itself, so
+requiring that original grammar after preparing a known output would reject the
+validated result. Unmatched images, issues and hardware retain existing refusals.

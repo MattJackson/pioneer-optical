@@ -58,6 +58,35 @@ fn a_bad_factory_string_keeps_the_product_code() {
 }
 
 #[test]
+fn erased_legacy_tag_requires_complete_product_and_factory_evidence() {
+    let b = response(&[0xff; 4], b"BDR-UD02TBD", UD04_FACTORY);
+    assert_eq!(parse(&b).unwrap().product_code, "BDR-UD02TBD");
+    assert_eq!(parse(&b[..PARAMETERS_LEN - 1]), None);
+    assert_eq!(
+        parse(&response(b"kw0x", b"BDR-UD02TBD", UD04_FACTORY)),
+        None
+    );
+    assert_eq!(
+        parse(&response(&[0xff; 4], b"BDR-UD02TBD", &[0xff; FACTORY_LEN])),
+        None
+    );
+    for product in [
+        b"UNKNOWN".as_slice(),
+        b"BDR-",
+        b"BDR-lowercase",
+        b"BDR-UD02 TBD",
+    ] {
+        assert_eq!(parse(&response(&[0xff; 4], product, UD04_FACTORY)), None);
+    }
+    let mut bad_date = UD04_FACTORY.to_vec();
+    bad_date[FACTORY_DATE + 2..FACTORY_DATE + 4].copy_from_slice(b"13");
+    assert_eq!(
+        parse(&response(&[0xff; 4], b"BDR-UD02TBD", &bad_date)),
+        None
+    );
+}
+
+#[test]
 fn origin_follows_the_serial_suffix() {
     assert_eq!(origin("QHDL433450WL"), Some("China"));
     assert_eq!(origin("NFDL004706JP    "), Some("Japan"));

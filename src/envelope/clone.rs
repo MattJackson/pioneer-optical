@@ -73,10 +73,7 @@ pub fn clone_kernel_image(
     source_drive_name: &str,
     to: &KernelIdentity<'_>,
 ) -> Result<Vec<u8>> {
-    if source.len() != KERNEL_LEN
-        || be32_sum(source) != 0
-        || !source.get(HARDWARE).is_some_and(|v| v.starts_with(b"SAT "))
-    {
+    if !super::builder::valid_kernel_body(source) {
         return Err(Error::KernelStructure);
     }
     let from_name = drive_name_field(source_drive_name)?;
@@ -84,7 +81,7 @@ pub fn clone_kernel_image(
     let hardware = field::<8>(to.hardware)?;
     let kernel_tag = field::<8>(to.kernel_tag)?;
     let version2 = field::<4>(to.kernel_version2)?;
-    if !to.hardware.starts_with("SAT ") || to.hardware.len() != 8 {
+    if !crate::protocol::valid_hardware_field(to.hardware.as_bytes()) {
         return Err(Error::KernelIncomplete);
     }
     let fill = fill_runs(source).ok_or(Error::KernelFillNotFound)?;
@@ -147,7 +144,7 @@ pub fn kernel_content_mask(image: &[u8], drive_name: &str) -> Option<Vec<bool>> 
         Some((_, fill)) => image.iter().zip(&fill).map(|(a, b)| a == b).collect(),
         None => vec![false; image.len()],
     };
-    if image.len() == KERNEL_LEN && image[HARDWARE].starts_with(b"SAT ") {
+    if image.len() == KERNEL_LEN && crate::protocol::valid_hardware_field(&image[HARDWARE]) {
         mask[IDENTITY].fill(true);
         mask[CHECKSUM].fill(true);
     }

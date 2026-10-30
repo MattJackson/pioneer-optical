@@ -1,5 +1,5 @@
 use super::super::{
-    contains, jump_seed, legacy_le_kernel, make_key, recover_seed, transform, HeaderInfo, Layout,
+    jump_seed, legacy_le_kernel, make_key, recover_seed, transform, HeaderInfo, Layout,
     SelectedLayout,
 };
 use super::EnvelopeCodec;
@@ -30,7 +30,7 @@ impl EnvelopeCodec for Front {
         }
         let key = &data[HEADER..FRONT_BODY];
         let sample = transform(&data[FRONT_BODY..FRONT_BODY + ID_SAMPLE_END], key, false)?;
-        contains(&sample[KEY..], b"SAT ").then(|| {
+        crate::protocol::valid_hardware_field(&sample[KEY..KEY + 8]).then(|| {
             (
                 self.layout(),
                 FRONT_BODY,
@@ -61,7 +61,7 @@ impl EnvelopeCodec for Derived {
         let seed = jump_seed(state, data.len() - HEADER - SEED_SAMPLE + KEY, true);
         let key = make_key(seed, KEY);
         let sample = transform(&data[HEADER..HEADER + ID_SAMPLE_END], &key, false)?;
-        contains(&sample[KEY..], b"SAT ").then(|| {
+        crate::protocol::valid_hardware_field(&sample[KEY..KEY + 8]).then(|| {
             (
                 self.layout(),
                 HEADER,

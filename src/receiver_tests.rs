@@ -91,3 +91,21 @@ fn family_gate_preserves_both_ids_and_distinguishes_missing_evidence() {
     assert!(error.contains(&a.to_string()));
     assert!(error.contains(&b.to_string()));
 }
+
+#[test]
+fn oem_branding_does_not_replace_native_control_or_live_descriptor_checks() {
+    let mut body = image();
+    body[..16].copy_from_slice(b"SXLT     BDR-211");
+    let receiver = Receiver::from_image(&body).unwrap();
+    let control = receiver.entry_control(&body[..16]).unwrap();
+    assert_eq!(&control[..16], &body[..16]);
+    assert_eq!(&control[16..20], &[1, 2, 3, 4]);
+    assert_eq!(
+        receiver.entry_control(b"PIONEER SAMPLE  ").unwrap_err(),
+        Error::DescriptorMismatch
+    );
+    assert_eq!(
+        Receiver::from_image(&body[..16]).unwrap_err(),
+        Error::Unsupported
+    );
+}

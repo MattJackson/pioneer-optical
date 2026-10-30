@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## [1.3.1] - Unreleased
+
+- Enable the exact owner-tested original UD02 mechanism to UD04 1.14 settings adaptation and pristine return to UD02 1.00. Require hash-bound source/target images, live factory product evidence and unchanged parameter 0x028f = 1; other versions and native reverse conversions remain unsupported.
+- Recognize complete legacy factory records with erased tags only when product-code and factory-test structure both validate.
+- Allow a prepared exact-image adaptation to resolve its named phase-setting issue while retaining independent hardware-family and live execution checks.
 
 - Recover OEM-branded Normal descriptors from their native Kernel comparison instead of requiring a PIONEER brand prefix. Paired codec selection and envelope reconstruction retain exact descriptor, geometry and checksum checks.
 - Preserve fixed-width INQUIRY spacing when recovering an embedded envelope identity.

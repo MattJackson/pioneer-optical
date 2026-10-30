@@ -21,13 +21,81 @@ fn registry(v: &serde_json::Value) -> Result<Registry, Error> {
 }
 
 #[test]
-fn no_production_profiles_means_no_image_or_route_changes() {
-    assert!(!has_profiles());
+fn production_profiles_do_not_change_unrelated_images_or_routes() {
+    assert!(has_profiles());
     for code in [None, Some("BDR-UD02TBD"), Some("BDR-UD04")] {
         assert!(prepare(&source(code), &target(), "TEST-UD03")
             .unwrap()
             .is_none());
     }
+}
+
+#[test]
+fn production_routes_are_valid_unique_and_only_for_original_ud02_hardware() {
+    let registry = Registry::parse(PROFILES).unwrap();
+    assert_eq!(registry.0.len(), 2);
+    for p in &registry.0 {
+        assert_eq!(p.original_product_codes, ["BDR-UD02TBD"]);
+        assert_eq!(
+            p.required_parameters,
+            [Requirement {
+                parameter: 0x28f,
+                value: 1
+            }]
+        );
+    }
+}
+
+#[test]
+fn held_ud02_ud04_images_reproduce_the_tested_output_and_pristine_return() {
+    let Ok(original) = std::env::var("PIONEER_UD02_NORMAL") else {
+        return;
+    };
+    let ud02 = std::fs::read(original).unwrap();
+    let ud04 = std::fs::read(std::env::var("PIONEER_UD04_NORMAL").unwrap()).unwrap();
+    let mut from = super::super::update::Contract::discover(&ud02);
+    assert_eq!(
+        digest(&ud02),
+        "84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750"
+    );
+    assert_eq!(
+        digest(&ud04),
+        "87e8152f1de1d3be53eb4ad9144c1bb0c45a9be6f78713a0b7487a637f989bf1"
+    );
+    assert_eq!(
+        prepare(&from, &ud04, "BDR-UD04").unwrap_err(),
+        Error::OriginalRequired
+    );
+    from.original_product_code = Some("BDR-UD04".into());
+    assert_eq!(
+        prepare(&from, &ud04, "BDR-UD04").unwrap_err(),
+        Error::OriginalMismatch
+    );
+    from.original_product_code = Some("BDR-UD02TBD".into());
+    let adapted = prepare(&from, &ud04, "BDR-UD04").unwrap().unwrap();
+    assert_eq!(
+        digest(&adapted.image),
+        "ca09032288c62b8b26bb983431af11b52aaeec8da9bd0e80afcccdf3b07f0815"
+    );
+    from.check_resolving(
+        &super::super::update::Contract::discover(&adapted.image),
+        Some(&adapted.resolves_issue),
+    )
+    .unwrap();
+    let mut back = super::super::update::Contract::discover(&adapted.image);
+    back.original_product_code = Some("BDR-UD02TBD".into());
+    let returned = prepare(&back, &ud02, "BDR-UD02D").unwrap().unwrap();
+    assert!(returned.stock_return());
+    assert_eq!(returned.image, ud02);
+    back.original_product_code = Some("BDR-UD04".into());
+    assert_eq!(
+        prepare(&back, &ud02, "BDR-UD02D").unwrap_err(),
+        Error::OriginalMismatch
+    );
+    let mut changed = ud04.clone();
+    changed[0x1000] ^= 1;
+    assert!(prepare(&from, &changed, "BDR-UD04").unwrap().is_none());
+    assert!(prepare(&from, &ud04, "BDR-UD03").unwrap().is_none());
 }
 
 #[test]

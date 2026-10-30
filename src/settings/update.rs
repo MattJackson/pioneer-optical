@@ -211,7 +211,7 @@ impl Contract {
         self.original_product_code =
             crate::production::parse(parameters).map(|p| p.product_code.into());
     }
-    /// Compare required configuration. No movement conversion is registered.
+    /// Compare required configuration without granting an adaptation.
     pub fn check(&self, target: &Self) -> Result<(), Error> {
         self.check_resolving(target, None)
     }
@@ -231,6 +231,12 @@ impl Contract {
             }
             if self.hardware_family != target.hardware_family {
                 return Err(Error::Unresolved);
+            }
+            // A prepared, hash-bound adaptation can change the phase grammar
+            // itself. Its exact profile resolves only this identified issue;
+            // unrelated issues and the independent family check still apply.
+            if resolved_issue == Some(issue.id.as_str()) {
+                continue;
             }
             let (Some(source_phase), Some(target_phase)) = (self.phase, target.phase) else {
                 // Ambiguity blocks inside this identified issue's scope only.
@@ -365,6 +371,24 @@ fn phase_at(mut b: &[u8]) -> Option<(u8, u8, u8)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn prepared_profile_resolves_only_its_issue_and_never_family_mismatch() {
+        let source = Contract::test_unresolved_scope();
+        let mut target = source.clone();
+        assert_eq!(source.check(&target), Err(Error::Unresolved));
+        assert_eq!(
+            source.check_resolving(&target, Some("other-issue")),
+            Err(Error::Unresolved)
+        );
+        assert!(source
+            .check_resolving(&target, Some("ud02-mechanism-convention"))
+            .is_ok());
+        target.hardware_family = Some("1111111111111111".into());
+        assert_eq!(
+            source.check_resolving(&target, Some("ud02-mechanism-convention")),
+            Err(Error::Unresolved)
+        );
+    }
     fn helper(word: u8, control: u8, output: u8) -> Vec<u8> {
         let mut b = alloc::vec![1, 0, 0x6d, 0xf3, 0x1a, 0xb3, 0x0c, 0x8b, 0x10, 0x73, 0x0a, 0x93];
         let load: &[u8] = if word == 0 {

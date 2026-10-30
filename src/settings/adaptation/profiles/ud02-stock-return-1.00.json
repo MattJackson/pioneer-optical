@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "pioneer.ud02-stock-return-1.00",
+  "hardware_scheme": "pioneer.hardware.v4",
+  "hardware_family": "83a4abb2a9b5480e",
+  "source_normal_sha256": [
+    "ca09032288c62b8b26bb983431af11b52aaeec8da9bd0e80afcccdf3b07f0815"
+  ],
+  "original_product_codes": [
+    "BDR-UD02TBD"
+  ],
+  "mode": "stock_return",
+  "resolves_issue": "ud02-mechanism-convention",
+  "target_normal_sha256": "84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750",
+  "target_model": "BDR-UD02D",
+  "input_length": 1821184,
+  "required_parameters": [
+    {
+      "parameter": 655,
+      "value": 1
+    }
+  ],
+  "replacements": [],
+  "checksum_offset": 16,
+  "output_sha256": "84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750"
+}

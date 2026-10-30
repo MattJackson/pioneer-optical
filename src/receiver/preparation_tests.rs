@@ -97,6 +97,82 @@ fn factory_parameters(code: &str) -> [u8; crate::production::PARAMETERS_LEN] {
 }
 
 #[test]
+fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
+    let Ok(root) = std::env::var("PIONEER_SETTINGS_HOARD") else {
+        return;
+    };
+    let root = std::path::Path::new(&root);
+    let read = |path: &str| std::fs::read(root.join(path)).unwrap();
+    let source_kernel = read("dump/pioneer/sat/8410/ID84/1.00/kernel/7e1104a2843825aea6d03bde6359d94254f3cea192e576450f3f94c4afcee824.enc");
+    let mut source_normal = read("dump/pioneer/sat/8410/ID84/1.00/normal/a37a4f222e2fa7e225f6451b30eb2e459f1933ab38c81a4d7967c10d77bc1373.enc");
+    let kernel = Envelope::load(&source_kernel).unwrap();
+    let captured = Envelope::load_with_kernel(&source_normal, &kernel).unwrap();
+    // The original capture has the unsigned-backup sentinel. Model the host's
+    // normal preparation: sign its transfer without changing decoded firmware.
+    assert!(
+        source_normal[crate::envelope::builder::NORMAL_SIGNATURE_RANGE]
+            .iter()
+            .all(|b| *b == 0)
+    );
+    let signer = SigningKey::random().unwrap();
+    use crate::envelope::builder::{normal_authentication_from_kernel, NormalAuthentication};
+    match normal_authentication_from_kernel(&kernel.image).unwrap() {
+        NormalAuthentication::KeyAndCiphertext => signer.sign_normal(&mut source_normal).unwrap(),
+        NormalAuthentication::CiphertextOnly => signer
+            .sign_normal_ciphertext_only(&mut source_normal)
+            .unwrap(),
+        other => panic!("unexpected source authentication {other:?}"),
+    }
+    let installed = Update::load(&source_kernel, &source_normal).unwrap();
+    assert_eq!(installed.normal().image, captured.image);
+    let target = Update::load(
+        &read("oem/pioneer/sat/8A10/GENERAL/1.00/kernel/36996326ae5eaa369ef34a8434514ca137b31a3f144af0955c2d12f4a8b2ea83.enc"),
+        &read("oem/pioneer/sat/8A10/GENERAL/1.14/normal/8e02ed7244d8de7564f6e0606ba803f8614a6e2b87b5e24f7ee344cdcea71141.enc"),
+    ).unwrap();
+    let receiver = Receiver::from_installed(&installed).unwrap();
+    assert!(matches!(
+        receiver.prepare(target.clone()),
+        Err(PreparationError::Adaptation(
+            crate::settings::adaptation::Error::OriginalRequired
+        ))
+    ));
+    let mut parameters = factory_parameters("BDR-UD02TBD");
+    parameters[0x84..0x88].fill(0xff);
+    parameters[0xc0..0xc0 + 90].fill(b'0');
+    parameters[0xc0 + 76..0xc0 + 82].copy_from_slice(b"130525");
+    let prepared = receiver
+        .with_original_parameters(&parameters)
+        .prepare(target)
+        .unwrap();
+    assert_eq!(
+        prepared.settings().adaptation_id(),
+        Some("pioneer.ud02-to-ud04-1.14")
+    );
+    assert_eq!(
+        prepared.settings().requirements(),
+        &[crate::settings::adaptation::Requirement {
+            parameter: 0x28f,
+            value: 1
+        }]
+    );
+    assert_eq!(
+        crate::settings::adaptation::digest(&prepared.target.normal().image),
+        "ca09032288c62b8b26bb983431af11b52aaeec8da9bd0e80afcccdf3b07f0815"
+    );
+    let back = Receiver::from_installed(&prepared.target)
+        .unwrap()
+        .with_original_parameters(&parameters)
+        .prepare(installed.clone())
+        .unwrap();
+    assert_eq!(
+        back.settings().adaptation_id(),
+        Some("pioneer.ud02-stock-return-1.00")
+    );
+    assert_eq!(back.target.normal().image, installed.normal().image);
+    assert_eq!(back.target.kernel().image, installed.kernel().image);
+}
+
+#[test]
 fn adding_one_test_profile_changes_only_the_matching_prepared_image() {
     let installed = update(false, 1, 0x12, true);
     let target = update(false, 0, 0x12, true);

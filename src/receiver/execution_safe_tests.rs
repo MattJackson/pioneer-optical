@@ -870,3 +870,53 @@ fn handoff_bridge_failure_stops_and_retains_completed_stages() {
     assert_eq!(state.borrow().finishes, 1);
     assert_eq!(state.borrow().entries, 1);
 }
+
+#[test]
+fn later_stage_settings_roll_back_locally_without_erasing_earlier_completion() {
+    let (mut plan, state) = setup_handoff_bridge(false);
+    plan.stages[1].settings = crate::settings::update::Plan::target(
+        Some(crate::startup::Setting {
+            parameter: 0x9f,
+            value: 0xfe34,
+            explicit: true,
+        }),
+        false,
+    );
+    let initial = state.borrow().clone();
+    let result = run(&plan, &state, ExecutionMode::Flash).unwrap();
+    assert_eq!(result.completed_passes, 2);
+    assert_eq!(state.borrow().parameter_writes, [0xffff, 0xfe34]);
+
+    let state = Rc::new(RefCell::new(initial));
+    let error = plan
+        .execute(
+            FlashTransport {
+                reads: &mut Port(state.clone()),
+                writes: &mut Port(state.clone()),
+            },
+            &mut Clock {
+                deny_check: Some(4),
+                ..Clock::default()
+            },
+            ExecutionMode::Flash,
+        )
+        .unwrap_err();
+    assert_eq!(error.completed_stages(), 1);
+    assert!(error.firmware_write_started());
+    assert_eq!(state.borrow().entries, 1);
+    assert_eq!(state.borrow().finishes, 1);
+    assert_eq!(state.borrow().parameter_writes, [0xffff, 0xfe34, 0xffff]);
+    let ExecutionError::AfterStage { source, .. } = error else {
+        panic!("lost completed bridge")
+    };
+    let ExecutionError::Startup(source) = *source else {
+        panic!("lost stage settings failure")
+    };
+    assert!(matches!(
+        *source,
+        crate::startup::migration::Error::Flash {
+            rollback: crate::startup::migration::Rollback::Restored,
+            ..
+        }
+    ));
+}

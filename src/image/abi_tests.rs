@@ -214,7 +214,7 @@ fn provided_entries_short_branch_at_slice_end_does_not_panic() {
 #[test]
 fn recognized_startup_remains_provided_after_programmer_handoff_changes() {
     let mut body = fill(KERNEL_LEN);
-    super::super::handoff_fixture(&mut body);
+    super::super::handoff::tests::fixture(&mut body);
     let entry = 0x400020;
     assert!(provided_abi(&body).unwrap().entries().contains(&entry));
     body[0x2107] = 0x2a;

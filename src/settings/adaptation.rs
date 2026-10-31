@@ -1,6 +1,6 @@
 //! Compiled-in, exact-image settings adaptations. No runtime profile loading.
 //!
-//! Only the tested UD02/UD04 route and return to its original stock firmware
+//! Only the certified UD02/UD04 route and return to its original stock firmware
 //! are registered. Sister firmware and native reverse conversions stay absent.
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -15,9 +15,9 @@ const PROFILES: &[&str] = &[
 pub enum Error {
     /// The embedded registry is malformed or selects multiple profiles.
     Registry,
-    /// A matching route requires live original-hardware evidence.
+    /// Legacy error retained for API compatibility; certified profiles no longer use SKU gating.
     OriginalRequired,
-    /// Factory evidence does not match the mechanism permitted by this route.
+    /// Legacy factory-SKU mismatch retained for API compatibility.
     OriginalMismatch,
     /// A required original byte, length, range or output digest did not agree.
     Guard,
@@ -66,7 +66,6 @@ struct Profile {
     hardware_scheme: String,
     hardware_family: String,
     source_normal_sha256: Vec<String>,
-    original_product_codes: Vec<String>,
     mode: Mode,
     resolves_issue: String,
     target_normal_sha256: String,
@@ -97,7 +96,6 @@ pub(crate) struct Adapted {
     pub id: String,
     pub image: Vec<u8>,
     pub requirements: Vec<Requirement>,
-    pub original_product_code: String,
     stock_return: bool,
     pub resolves_issue: String,
 }
@@ -106,14 +104,12 @@ pub(crate) struct Adapted {
 pub(crate) struct Applied {
     pub id: String,
     pub requirements: Vec<Requirement>,
-    pub original_product_code: String,
 }
 impl From<Adapted> for Applied {
     fn from(a: Adapted) -> Self {
         Self {
             id: a.id,
             requirements: a.requirements,
-            original_product_code: a.original_product_code,
         }
     }
 }
@@ -157,12 +153,6 @@ impl Registry {
                 || p.source_normal_sha256.is_empty()
                 || !is_digest(&p.target_normal_sha256)
                 || !is_digest(&p.output_sha256)
-                || p.original_product_codes.is_empty()
-                || p.original_product_codes.iter().any(|code| {
-                    code.is_empty()
-                        || code.len() > 15
-                        || !code.bytes().all(|b| (0x21..0x7f).contains(&b))
-                })
                 || (p.mode == Mode::Adapt && p.target_normal_sha256 == p.output_sha256)
                 || (p.mode == Mode::StockReturn
                     && (p.target_normal_sha256 != p.output_sha256 || !p.replacements.is_empty()))
@@ -237,13 +227,6 @@ impl Registry {
             [p] => *p,
             _ => return Err(Error::Registry),
         };
-        let original = source
-            .original_product_code
-            .as_ref()
-            .ok_or(Error::OriginalRequired)?;
-        if !p.original_product_codes.contains(original) {
-            return Err(Error::OriginalMismatch);
-        }
         if target.len() != p.input_length {
             return Err(Error::Guard);
         }
@@ -252,7 +235,6 @@ impl Registry {
                 id: p.id.clone(),
                 image: target.to_vec(),
                 requirements: p.required_parameters.clone(),
-                original_product_code: original.clone(),
                 stock_return: true,
                 resolves_issue: p.resolves_issue.clone(),
             }));
@@ -281,7 +263,6 @@ impl Registry {
             id: p.id.clone(),
             image,
             requirements: p.required_parameters.clone(),
-            original_product_code: original.clone(),
             stock_return: false,
             resolves_issue: p.resolves_issue.clone(),
         }))

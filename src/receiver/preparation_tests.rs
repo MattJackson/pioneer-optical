@@ -276,8 +276,14 @@ fn first_kernel_transport_is_selected_from_installed_loader() {
         .prepare(target)
         .unwrap();
     assert_eq!(
-        prepared.initial_receive,
-        Some(crate::receiver::transport::KernelReceive::FrontKeyTwoRegion)
+        crate::receiver::transport::detect(
+            &prepared.stages[0]
+                .receiver
+                .installed_kernel()
+                .unwrap()
+                .image
+        ),
+        crate::receiver::transport::KernelReceive::FrontKeyTwoRegion
     );
 }
 
@@ -517,4 +523,116 @@ fn hardware_override_never_waives_required_settings() {
         receiver.prepare_normal_without_family_check(installed.normal_transfer()),
         Err(PreparationError::Settings(_))
     ));
+}
+
+#[test]
+fn handoff_bridge_preserves_source_normal_and_finishes_with_exact_target() {
+    let source = update(false, 1, 0x12, true);
+    let original_target = update(false, 1, 0x12, true);
+    let mut kernel = original_target.kernel().image.clone();
+    kernel.copy_within(0x20..0x30, 0x2a);
+    kernel[0x20..0x2a].fill(0);
+    kernel[0x2107] = 0x2a;
+    fix_sum(&mut kernel);
+    let target = Update::load(
+        &original_target.kernel().repack(&kernel).unwrap(),
+        &original_target
+            .normal()
+            .repack(&original_target.normal().image)
+            .unwrap(),
+    )
+    .unwrap();
+    let prepared = Receiver::from_installed(&source)
+        .unwrap()
+        .prepare(target.clone())
+        .unwrap();
+    assert_eq!(prepared.stages().len(), 2);
+    let bridge = &prepared.stages()[0];
+    assert_eq!(bridge.bridge(), Some(BridgeKind::KernelHandoff));
+    assert_eq!(bridge.normal_image(), source.normal().image);
+    let patched = bridge.kernel_image().unwrap();
+    assert_eq!(crate::image::kernel_startup_entry(patched), Some(0x400020));
+    assert_eq!(crate::image::kernel_handoff_entry(patched), Some(0x40002a));
+    // The only allowed edits are the programmer's restart operand and checksum.
+    for (at, (before, after)) in source.kernel().image.iter().zip(patched).enumerate() {
+        if before != after {
+            assert!(
+                (0x2105..0x2108).contains(&at)
+                    || (crate::envelope::KERNEL_CHECKSUM_WORD_OFFSET
+                        ..crate::envelope::KERNEL_CHECKSUM_WORD_OFFSET + 4)
+                        .contains(&at)
+            );
+        }
+    }
+    let final_stage = &prepared.stages()[1];
+    assert_eq!(final_stage.bridge(), None);
+    assert_eq!(
+        final_stage.kernel_transfer().unwrap(),
+        target.kernel_transfer()
+    );
+    assert_eq!(final_stage.normal_transfer(), target.normal_transfer());
+    assert_eq!(final_stage.kernel_image().unwrap(), target.kernel().image);
+}
+
+#[test]
+fn intermediate_marker_must_be_accepted_by_its_receiver() {
+    let source = update(true, 0, 0x12, true);
+    let receiver = Receiver::from_installed(&source).unwrap();
+    // A handoff bridge retains the source marker. A source that rejects that
+    // marker cannot install its own bridge, even though its final target could
+    // otherwise be accepted. Stage admission must catch this before any I/O.
+    let error = PreparedStage::pair(
+        receiver,
+        &source,
+        crate::settings::update::Plan::default(),
+        Some(BridgeKind::KernelHandoff),
+    )
+    .unwrap_err();
+    assert_eq!(error, PreparationError::RejectedMarker);
+}
+
+#[test]
+fn handoff_bridge_signs_unsigned_capture_without_accepting_invalid_signatures() {
+    let source = update(false, 1, 0x12, true);
+    let original_target = update(false, 1, 0x12, true);
+    let mut kernel = original_target.kernel().image.clone();
+    kernel.copy_within(0x20..0x30, 0x2a);
+    kernel[0x20..0x2a].fill(0);
+    kernel[0x2107] = 0x2a;
+    fix_sum(&mut kernel);
+    let target = Update::load(
+        &original_target.kernel().repack(&kernel).unwrap(),
+        &original_target
+            .normal()
+            .repack(&original_target.normal().image)
+            .unwrap(),
+    )
+    .unwrap();
+    for invalid in [false, true] {
+        let mut bytes = source.normal().repack(&source.normal().image).unwrap();
+        bytes[0x170..0x1c0].fill(0);
+        if invalid {
+            bytes[0x170] = 1;
+        }
+        let normal = Envelope::load_with_kernel(&bytes, source.kernel()).unwrap();
+        let receiver = Receiver::detect_with_kernel(&normal, source.kernel()).unwrap();
+        let result = receiver.prepare(target.clone());
+        if invalid {
+            assert!(matches!(
+                result,
+                Err(PreparationError::Target(UpdateError::Authentication))
+            ));
+        } else {
+            let prepared = result.unwrap();
+            let stage = &prepared.stages()[0];
+            assert_eq!(stage.normal_image(), source.normal().image);
+            assert!(stage.normal_transfer()[0x170..0x1c0]
+                .iter()
+                .any(|byte| *byte != 0));
+            assert!(crate::envelope::builder::normal_authentication_valid(
+                stage.normal_transfer(),
+                stage.kernel_image().unwrap()
+            ));
+        }
+    }
 }

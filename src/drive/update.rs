@@ -249,21 +249,6 @@ pub fn execute_plan<T: Transport, R: UpdateRuntime>(
     execute_plan_inner(transport, runtime, control, plan, options, false, false)
 }
 
-/// Execute one plan from the receiver-owned Recovery path. An unsupported
-/// inserted medium may defer readiness to the caller's mandatory identity and
-/// exact component readback checks; the sense response itself is never proof of
-/// a successful update.
-#[cfg(feature = "envelope")]
-pub(crate) fn execute_plan_for_recovery<T: Transport, R: UpdateRuntime>(
-    transport: &mut T,
-    runtime: &mut R,
-    control: &Control,
-    plan: Plan<'_>,
-    options: UpdateOptions,
-) -> Result<(), UpdateError<T::Error>> {
-    execute_plan_inner(transport, runtime, control, plan, options, false, true)
-}
-
 /// Check every transfer span and actual command length before any device mutation.
 pub fn validate_plan<E>(plan: Plan<'_>) -> Result<(), UpdateError<E>> {
     if plan.segments.is_empty() {

@@ -1,7 +1,7 @@
 //! Execute receiver plans with descriptor binding and Kernel verification.
 use super::transport;
-use super::{Control, PreparedNormal, PreparedUpdate, DESCRIPTOR_LEN};
-use crate::drive::{self, Segment, Transport, UpdateOptions, UpdateRuntime, UpdateTransfer};
+use super::{Control, PreparedNormal, PreparedStage, PreparedUpdate, DESCRIPTOR_LEN};
+use crate::drive::{self, Segment, Transport, UpdateOptions, UpdateRuntime};
 
 const DESCRIPTOR_ADDRESS: u32 = 0x0041_0000;
 const READ_CHUNK: usize = 0x8000;
@@ -13,6 +13,25 @@ pub enum FlashPass {
     Initial,
     /// Required transfer restoring the unmodified target Kernel.
     Restoration,
+    /// A bridge transition identified by its zero-based stage index.
+    Continuation(usize),
+}
+impl FlashPass {
+    pub(super) fn at(index: usize, previous: Option<super::BridgeKind>) -> Self {
+        match index {
+            0 => Self::Initial,
+            1 if previous == Some(super::BridgeKind::ReceiverMarker) => Self::Restoration,
+            n => Self::Continuation(n),
+        }
+    }
+    /// Number of earlier stages already completed.
+    pub fn completed_stages(self) -> usize {
+        match self {
+            Self::Initial => 0,
+            Self::Restoration => 1,
+            Self::Continuation(n) => n,
+        }
+    }
 }
 
 /// Host policy and progress for a prepared flash.
@@ -131,12 +150,8 @@ impl<E: core::fmt::Debug + 'static> std::error::Error for FlashError<E> {
 }
 
 impl PreparedUpdate {
-    /// Apply an independently verified native parameter migration around the
-    /// actual prepared flash, including both passes and their readbacks.
-    ///
-    /// The caller must prove the installed Normal's A0 write contract and
-    /// derive `parameter`/`target` from target firmware semantics, not a model
-    /// list or detector miss. No value is persisted outside this attempt.
+    /// Low-level transfer with an independently established parameter migration.
+    /// Complete application operations must use `execute` for all stage settings.
     pub fn transfer_with_parameter_unchecked<R, W, H>(
         &self,
         io: FlashTransport<'_, R, W>,
@@ -149,16 +164,18 @@ impl PreparedUpdate {
         R: Transport<Error = W::Error>,
         H: FlashRuntime<W::Error>,
     {
+        let stages = self.stages();
         runtime.prepare_pass(FlashPass::Initial).map_err(|source| {
             crate::startup::migration::Error::Preflight(FlashError::Preflight {
                 pass: FlashPass::Initial,
                 source,
             })
         })?;
-        bind(io.reads, &self.control, FlashPass::Initial)
+        bind(io.reads, &stages[0].receiver.control(), FlashPass::Initial)
             .map_err(crate::startup::migration::Error::Preflight)?;
         crate::startup::migration::execute(io.writes, parameter, target, |writes| {
-            self.transfer_unchecked(
+            transfer_stages(
+                stages,
                 FlashTransport {
                     reads: io.reads,
                     writes,
@@ -167,18 +184,8 @@ impl PreparedUpdate {
             )
         })
     }
-
-    /// Low-level transfer primitive: execute both prepared passes and Kernel readbacks.
-    ///
-    /// This omits required startup migration and target startup/Normal verification.
-    /// Application callers must use [`Self::execute`] instead.
-    ///
-    /// First capture a backup, enforce tray/consent policy, establish the entry
-    /// dialect and exclude other device users. Both adapters must address the
-    /// drive from which receiver evidence was captured. A failed step stops
-    /// immediately; no automatic recovery writes or rollback are attempted.
-    /// If `startup_setting()` is present, use `transfer_with_parameter_unchecked` with that
-    /// setting instead; this low-level entry point does not migrate settings.
+    /// Transfer prepared stages with mandatory Kernel verification only.
+    /// This omits startup settings and Normal/runtime checks; use `execute`.
     pub fn transfer_unchecked<R, W, H>(
         &self,
         io: FlashTransport<'_, R, W>,
@@ -189,72 +196,12 @@ impl PreparedUpdate {
         R: Transport<Error = W::Error>,
         H: FlashRuntime<W::Error>,
     {
-        let options =
-            runtime
-                .prepare_pass(FlashPass::Initial)
-                .map_err(|source| FlashError::Preflight {
-                    pass: FlashPass::Initial,
-                    source,
-                })?;
-        bind(io.reads, &self.control, FlashPass::Initial)?;
-        // The resident loader receives the first Kernel. The incoming Kernel
-        // cannot decide how its own bytes must be segmented on the wire.
-        let receive = self
-            .initial_receive
-            .expect("prepared installed receiver transport");
-        let mut storage = [Segment::PLACEHOLDER; 3];
-        let plan = transport::plan(
-            Some(self.kernel_transfer()),
-            self.normal_transfer(),
-            receive,
-            &mut storage,
-        )
-        .map_err(|_| FlashError::UnsupportedTransport {
-            pass: FlashPass::Initial,
-        })?;
-        drive::execute_plan(io.writes, runtime, &self.control, plan, options).map_err(
-            |source| FlashError::Update {
-                pass: FlashPass::Initial,
-                source,
-            },
-        )?;
-        verify(io.reads, self.first_kernel_image(), FlashPass::Initial)?;
-        if let Some(kernel) = self.restoration_kernel_transfer() {
-            let receiver = self
-                .restoration_receiver()
-                .expect("prepared restoration receiver");
-            let options = runtime
-                .prepare_pass(FlashPass::Restoration)
-                .map_err(|source| FlashError::Preflight {
-                    pass: FlashPass::Restoration,
-                    source,
-                })?;
-            let control = receiver.control();
-            bind(io.reads, &control, FlashPass::Restoration)?;
-            // The temporary Kernel installed by the first pass receives the
-            // pristine OEM Kernel in the restoration pass.
-            let receive = transport::detect(self.first_kernel_image());
-            let mut storage = [Segment::PLACEHOLDER; 3];
-            let plan = transport::plan(Some(kernel), self.normal_transfer(), receive, &mut storage)
-                .map_err(|_| FlashError::UnsupportedTransport {
-                    pass: FlashPass::Restoration,
-                })?;
-            drive::execute_plan(io.writes, runtime, &control, plan, options).map_err(|source| {
-                FlashError::Update {
-                    pass: FlashPass::Restoration,
-                    source,
-                }
-            })?;
-            verify(io.reads, self.final_kernel_image(), FlashPass::Restoration)?;
-        }
-        Ok(())
+        transfer_stages(self.stages(), io, runtime)
     }
 }
 impl PreparedNormal {
-    /// Apply an independently verified native parameter migration before a
-    /// Normal-only transfer. The caller must establish the current A0 contract
-    /// and target semantics, just as for `PreparedUpdate::transfer_with_parameter_unchecked`.
-    /// No Kernel is written and no old value is retained after this attempt.
+    /// Low-level transfer with an independently established parameter migration.
+    /// Complete application operations must use `execute` for all stage settings.
     pub fn transfer_with_parameter_unchecked<R, W, H>(
         &self,
         io: FlashTransport<'_, R, W>,
@@ -267,16 +214,18 @@ impl PreparedNormal {
         R: Transport<Error = W::Error>,
         H: FlashRuntime<W::Error>,
     {
+        let stages = std::slice::from_ref(self.stage());
         runtime.prepare_pass(FlashPass::Initial).map_err(|source| {
             crate::startup::migration::Error::Preflight(FlashError::Preflight {
                 pass: FlashPass::Initial,
                 source,
             })
         })?;
-        bind(io.reads, &self.control, FlashPass::Initial)
+        bind(io.reads, &stages[0].receiver.control(), FlashPass::Initial)
             .map_err(crate::startup::migration::Error::Preflight)?;
         crate::startup::migration::execute(io.writes, parameter, target, |writes| {
-            self.transfer_unchecked(
+            transfer_stages(
+                stages,
                 FlashTransport {
                     reads: io.reads,
                     writes,
@@ -285,15 +234,8 @@ impl PreparedNormal {
             )
         })
     }
-
-    /// Low-level Normal transfer primitive after descriptor binding.
-    ///
-    /// This omits required startup migration and target completion verification.
-    /// Application callers must use [`Self::execute`] instead.
-    ///
-    /// First capture a backup, enforce tray/consent policy, establish the entry
-    /// dialect and exclude other device users. No Kernel is written.
-    /// Use `transfer_with_parameter_unchecked` when `startup_setting()` is present.
+    /// Transfer prepared stages with mandatory Kernel verification only.
+    /// This omits startup settings and Normal/runtime checks; use `execute`.
     pub fn transfer_unchecked<R, W, H>(
         &self,
         io: FlashTransport<'_, R, W>,
@@ -304,29 +246,45 @@ impl PreparedNormal {
         R: Transport<Error = W::Error>,
         H: FlashRuntime<W::Error>,
     {
-        let options =
-            runtime
-                .prepare_pass(FlashPass::Initial)
-                .map_err(|source| FlashError::Preflight {
-                    pass: FlashPass::Initial,
-                    source,
-                })?;
-        bind(io.reads, &self.control, FlashPass::Initial)?;
-        drive::execute_update(
-            io.writes,
-            runtime,
-            &self.control,
-            UpdateTransfer {
-                kernel: None,
-                normal: self.normal_transfer(),
-            },
-            options,
-        )
-        .map_err(|source| FlashError::Update {
-            pass: FlashPass::Initial,
-            source,
-        })
+        transfer_stages(std::slice::from_ref(self.stage()), io, runtime)
     }
+}
+fn transfer_stages<R, W, H>(
+    stages: &[PreparedStage],
+    io: FlashTransport<'_, R, W>,
+    runtime: &mut H,
+) -> Result<(), FlashError<W::Error>>
+where
+    W: Transport,
+    R: Transport<Error = W::Error>,
+    H: FlashRuntime<W::Error>,
+{
+    for (index, stage) in stages.iter().enumerate() {
+        let pass = FlashPass::at(index, index.checked_sub(1).and_then(|i| stages[i].bridge()));
+        let options = runtime
+            .prepare_pass(pass)
+            .map_err(|source| FlashError::Preflight { pass, source })?;
+        let control = stage.receiver.control();
+        bind(io.reads, &control, pass)?;
+        let installed = stage
+            .receiver
+            .installed_kernel()
+            .expect("prepared installed Kernel");
+        let mut storage = [Segment::PLACEHOLDER; 3];
+        let plan = transport::plan(
+            stage.kernel_transfer(),
+            stage.normal_transfer(),
+            transport::detect(&installed.image),
+            &mut storage,
+        )
+        .map_err(|_| FlashError::UnsupportedTransport { pass })?;
+        drive::execute_plan(io.writes, runtime, &control, plan, options)
+            .map_err(|source| FlashError::Update { pass, source })?;
+        if let Some(kernel) = stage.kernel_image() {
+            verify(io.reads, kernel, pass)?;
+        }
+    }
+    Ok(())
 }
 fn exact<T: Transport>(
     transport: &mut T,

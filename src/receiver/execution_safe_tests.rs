@@ -38,12 +38,13 @@ fn fixture(gated: bool, marker: u8) -> Update {
     checksum(&mut kernel);
     Update::load(&original.kernel().repack(&kernel).unwrap(), &normal_wire).unwrap()
 }
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct State {
     installed_id: Option<Identity>,
     target_id: Option<Identity>,
     descriptor: Vec<u8>,
     normal: Vec<u8>,
+    stage_normals: Vec<Vec<u8>>,
     kernels: Vec<Vec<u8>>,
     parameter: u16,
     parameter_writes: Vec<u16>,
@@ -91,14 +92,11 @@ fn setup_updates(installed: Update, target: Update) -> (PreparedUpdate, Rc<RefCe
     layout
         .validate(&target.normal().image)
         .expect("fixture Normal body");
-    let kernels = if plan.restoration_receiver().is_some() {
-        vec![
-            plan.first_kernel_image().to_vec(),
-            plan.final_kernel_image().to_vec(),
-        ]
-    } else {
-        vec![plan.final_kernel_image().to_vec()]
-    };
+    let kernels = plan
+        .stages()
+        .iter()
+        .map(|stage| stage.kernel_image().unwrap().to_vec())
+        .collect();
     let state = Rc::new(RefCell::new(State {
         installed_id: Some(id(installed.normal())),
         target_id: Some(id(target.normal())),
@@ -133,6 +131,10 @@ impl Transport for Port {
                     s.loader = true;
                 } else if command == cdb::finish() {
                     s.finishes += 1;
+                    if let Some(normal) = s.stage_normals.get(s.finishes - 1).cloned() {
+                        s.descriptor = normal[..16].to_vec();
+                        s.normal = normal;
+                    }
                     s.loader = s.stay_loader;
                 }
                 Ok(bytes.len())
@@ -775,4 +777,96 @@ fn recovery_loader_may_reveal_its_serial_only_after_normal_starts() {
     let result = run(&plan, &state, ExecutionMode::Recovery).unwrap();
     assert!(result.kernel_verified && result.normal_verified);
     assert_eq!(result.identity.serial(), "ORIGINAL");
+}
+
+fn setup_handoff_bridge(marker: bool) -> (PreparedUpdate, Rc<RefCell<State>>) {
+    let source = fixture(marker, 1);
+    let original = fixture(false, if marker { 0 } else { 1 });
+    let mut kernel = original.kernel().image.clone();
+    kernel.copy_within(0x20..0x30, 0x2a);
+    kernel[0x20..0x2a].fill(0);
+    kernel[0x2107] = 0x2a;
+    checksum(&mut kernel);
+    let mut normal = original.normal().image.clone();
+    normal[0x700] ^= 1; // Distinguish source and destination readback.
+    checksum(&mut normal);
+    let mut normal_wire = original.normal().repack(&normal).unwrap();
+    let mut key = [0; 20];
+    key[19] = 5;
+    crate::envelope::signature::SigningKey::from_bytes(key)
+        .unwrap()
+        .sign_normal(&mut normal_wire)
+        .unwrap();
+    let target = Update::load(&original.kernel().repack(&kernel).unwrap(), &normal_wire).unwrap();
+    let (plan, state) = setup_updates(source, target);
+    state.borrow_mut().stage_normals = plan
+        .stages()
+        .iter()
+        .map(|stage| stage.normal_image().to_vec())
+        .collect();
+    (plan, state)
+}
+
+#[test]
+fn handoff_and_marker_bridges_execute_with_each_stages_own_normal() {
+    for marker in [false, true] {
+        let (plan, state) = setup_handoff_bridge(marker);
+        assert_eq!(plan.stages().len(), if marker { 3 } else { 2 });
+        assert_ne!(
+            plan.stages()[0].normal_image(),
+            plan.stages()[1].normal_image()
+        );
+        let result = run(&plan, &state, ExecutionMode::Flash).unwrap();
+        assert_eq!(result.completed_passes, plan.stages().len());
+        assert!(result.kernel_verified && result.normal_verified);
+        assert_eq!(state.borrow().finishes, plan.stages().len());
+    }
+}
+
+#[test]
+fn handoff_bridge_failure_stops_and_retains_completed_stages() {
+    let (plan, state) = setup_handoff_bridge(true);
+    let initial = state.borrow().clone();
+    run(&plan, &state, ExecutionMode::Flash).unwrap();
+    let writes = state.borrow().writes;
+    for fail in 1..=writes {
+        let mut next = initial.clone();
+        next.fail_write = Some(fail);
+        let state = Rc::new(RefCell::new(next));
+        let error = run(&plan, &state, ExecutionMode::Flash).unwrap_err();
+        if fail == 1 {
+            // Before entering UPDATE, the settings transaction may restore its
+            // original word. This is the established safe rollback boundary.
+            assert_eq!(state.borrow().entries, 0);
+            assert_eq!(state.borrow().parameter, initial.parameter);
+        } else {
+            assert_eq!(
+                state.borrow().writes,
+                fail,
+                "a failing firmware write must not retry or advance"
+            );
+        }
+        assert_eq!(error.completed_stages(), state.borrow().finishes);
+        if state.borrow().finishes > 0 {
+            assert!(error.write_started() && error.firmware_write_started());
+        }
+    }
+    let state = Rc::new(RefCell::new(initial));
+    let error = plan
+        .execute(
+            FlashTransport {
+                reads: &mut Port(state.clone()),
+                writes: &mut Port(state.clone()),
+            },
+            &mut Clock {
+                deny: Some(FlashPass::Continuation(1)),
+                ..Clock::default()
+            },
+            ExecutionMode::Flash,
+        )
+        .unwrap_err();
+    assert_eq!(error.completed_stages(), 1);
+    assert!(error.firmware_write_started());
+    assert_eq!(state.borrow().finishes, 1);
+    assert_eq!(state.borrow().entries, 1);
 }

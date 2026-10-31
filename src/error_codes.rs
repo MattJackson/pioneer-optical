@@ -179,6 +179,7 @@ impl CodedError for crate::receiver::PreparationError {
             }
             Self::Compatibility(..) => "pioneer.preparation.compatibility",
             Self::UnknownInstalledKernel => "pioneer.preparation.unknown_installed_kernel",
+            Self::RejectedMarker => "pioneer.preparation.rejected_marker",
             Self::UnsupportedRestoration => "pioneer.preparation.unsupported_restoration",
             Self::RestorationEntry(..) => "pioneer.preparation.restoration_entry",
             Self::PatchedRepresentation => "pioneer.preparation.patched_representation",

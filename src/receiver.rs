@@ -8,11 +8,14 @@ use crate::image::{family, receiver_control, Family, ReceiverControl};
 use crate::{cdb, ComponentKind};
 
 mod preparation;
-pub use preparation::{PreparationError, PreparedNormal, PreparedUpdate};
+pub use preparation::PreparationError;
+mod stages;
+pub use stages::{BridgeKind, PreparedNormal, PreparedStage, PreparedUpdate};
 #[cfg(feature = "drive")]
 mod execution;
 #[cfg(feature = "drive")]
 mod execution_safe;
+mod handoff_bridge;
 #[cfg(feature = "drive")]
 pub use execution_safe::{ExecutionError, ExecutionMode, ExecutionRuntime, FlashOutcome};
 #[cfg(feature = "drive")]
@@ -92,7 +95,7 @@ impl std::error::Error for Error {}
 /// the installed Kernel's code. With the `drive` feature, execute the prepared
 /// operation to apply migrations, sequence transfers and verify completion.
 /// Callers own backup, consent and exclusive access; preparation performs no I/O.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Receiver {
     descriptor: [u8; DESCRIPTOR_LEN],
     policy: ReceiverControl,
@@ -102,23 +105,12 @@ pub struct Receiver {
     adaptation_profiles: Option<Vec<String>>,
     kernel_policy: Option<crate::image::KernelMarkerPolicy>,
     installed_kernel: Option<Envelope>,
+    installed_normal: Option<Envelope>,
     codec: &'static dyn ReceiverCodec,
 }
 
 trait ReceiverCodec: core::fmt::Debug + Sync {
     fn detect(&self, image: &[u8]) -> Option<ReceiverControl>;
-    fn prepare_normal(
-        &self,
-        kernel: &Envelope,
-        target: &[u8],
-        control: Control,
-    ) -> Result<PreparedNormal, PreparationError>;
-    fn prepare(
-        &self,
-        policy: crate::image::KernelMarkerPolicy,
-        target: crate::envelope::Update,
-        control: Control,
-    ) -> Result<PreparedUpdate, PreparationError>;
     fn control(
         &self,
         descriptor: &[u8; DESCRIPTOR_LEN],
@@ -131,22 +123,6 @@ struct Oem;
 impl ReceiverCodec for Oem {
     fn detect(&self, image: &[u8]) -> Option<ReceiverControl> {
         receiver_control(image)
-    }
-    fn prepare_normal(
-        &self,
-        kernel: &Envelope,
-        target: &[u8],
-        control: Control,
-    ) -> Result<PreparedNormal, PreparationError> {
-        preparation::prepare_normal_oem(kernel, target, control)
-    }
-    fn prepare(
-        &self,
-        policy: crate::image::KernelMarkerPolicy,
-        target: crate::envelope::Update,
-        control: Control,
-    ) -> Result<PreparedUpdate, PreparationError> {
-        preparation::prepare_oem(policy, target, control)
     }
     fn control(
         &self,
@@ -172,7 +148,9 @@ impl Receiver {
                 actual: normal.info().kind,
             });
         }
-        Self::from_image(&normal.image)
+        let mut receiver = Self::from_image(&normal.image)?;
+        receiver.installed_normal = Some(normal.clone());
+        Ok(receiver)
     }
 
     fn from_image(image: &[u8]) -> Result<Self, Error> {
@@ -205,6 +183,7 @@ impl Receiver {
             adaptation_profiles: None,
             kernel_policy: None,
             installed_kernel: None,
+            installed_normal: None,
             codec,
         })
     }

@@ -210,3 +210,18 @@ fn provided_entries_short_branch_at_slice_end_does_not_panic() {
     assert_eq!(provided_entries(&[0x55]), vec![KERNEL_BASE]);
     let _ = provided_entries(&[0x00, 0x00, 0x55]);
 }
+
+#[test]
+fn recognized_startup_remains_provided_after_programmer_handoff_changes() {
+    let mut body = fill(KERNEL_LEN);
+    super::super::handoff_fixture(&mut body);
+    let entry = 0x400020;
+    assert!(provided_abi(&body).unwrap().entries().contains(&entry));
+    body[0x2107] = 0x2a;
+    assert_eq!(super::super::kernel_handoff_entry(&body), Some(0x40002a));
+    assert_eq!(super::super::kernel_startup_entry(&body), Some(entry));
+    assert!(provided_abi(&body).unwrap().entries().contains(&entry));
+    body[0x20] ^= 1;
+    assert_eq!(super::super::kernel_startup_entry(&body), None);
+    assert!(!provided_abi(&body).unwrap().entries().contains(&entry));
+}

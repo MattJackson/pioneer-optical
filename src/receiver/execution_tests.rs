@@ -175,7 +175,9 @@ fn plan(restore: bool) -> PreparedUpdate {
 }
 fn state(plan: &PreparedUpdate) -> Rc<RefCell<State>> {
     Rc::new(RefCell::new(State {
-        descriptor: plan.control[..DESCRIPTOR_LEN].try_into().unwrap(),
+        descriptor: plan.stages[0].receiver.control()[..DESCRIPTOR_LEN]
+            .try_into()
+            .unwrap(),
         ..State::default()
     }))
 }
@@ -482,7 +484,9 @@ fn normal_only_binds_receiver_and_never_writes_or_reads_kernel() {
         .prepare_normal(installed.normal_transfer())
         .unwrap();
     let state = Rc::new(RefCell::new(State {
-        descriptor: plan.control[..DESCRIPTOR_LEN].try_into().unwrap(),
+        descriptor: plan.stage.receiver.control()[..DESCRIPTOR_LEN]
+            .try_into()
+            .unwrap(),
         ..State::default()
     }));
     let mut reads = Port {
@@ -523,7 +527,9 @@ fn normal_only_parameter_migration_obeys_the_same_rollback_boundary() {
     for scenario in 0..5 {
         let state = Rc::new(RefCell::new(State {
             parameter: 0xfe24,
-            descriptor: plan.control[..DESCRIPTOR_LEN].try_into().unwrap(),
+            descriptor: plan.stage.receiver.control()[..DESCRIPTOR_LEN]
+                .try_into()
+                .unwrap(),
             change_descriptor_at: match scenario {
                 1 => Some(4),
                 4 => Some(2),

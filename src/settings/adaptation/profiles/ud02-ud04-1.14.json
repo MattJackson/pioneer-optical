@@ -7,10 +7,6 @@
     "84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750",
     "ca09032288c62b8b26bb983431af11b52aaeec8da9bd0e80afcccdf3b07f0815"
   ],
-  "original_product_codes": [
-    "BDR-UD02TBD",
-    "BDR-UD02FAN"
-  ],
   "mode": "adapt",
   "resolves_issue": "ud02-mechanism-convention",
   "target_normal_sha256": "87e8152f1de1d3be53eb4ad9144c1bb0c45a9be6f78713a0b7487a637f989bf1",

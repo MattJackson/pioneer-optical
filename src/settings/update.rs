@@ -170,9 +170,7 @@ impl Plan {
             io,
             &words,
             self.requirements(),
-            self.adaptation
-                .as_ref()
-                .map(|a| a.original_product_code.as_str()),
+            None,
             flash,
         )
     }
@@ -184,7 +182,6 @@ impl Plan {
 pub struct Contract {
     pub(super) hardware_family: Option<alloc::string::String>,
     pub(super) normal_sha256: alloc::string::String,
-    pub(super) original_product_code: Option<alloc::string::String>,
     phase: Option<bool>,
 }
 impl Contract {
@@ -193,7 +190,6 @@ impl Contract {
         Self {
             hardware_family: Some("83a4abb2a9b5480e".into()),
             normal_sha256: alloc::string::String::new(),
-            original_product_code: None,
             phase: None,
         }
     }
@@ -202,14 +198,8 @@ impl Contract {
         Self {
             hardware_family: crate::image::family(normal).map(|f| f.to_string()),
             normal_sha256: super::adaptation::digest(normal),
-            original_product_code: None,
             phase: phase(normal),
         }
-    }
-    /// Bind read-only factory evidence separately from the running firmware.
-    pub(crate) fn bind_original(&mut self, parameters: &[u8]) {
-        self.original_product_code =
-            crate::production::parse(parameters).map(|p| p.product_code.into());
     }
     /// Compare required configuration without granting an adaptation.
     pub fn check(&self, target: &Self) -> Result<(), Error> {
@@ -441,7 +431,6 @@ mod tests {
         Contract {
             hardware_family: Some("83a4abb2a9b5480e".into()),
             normal_sha256: alloc::string::String::new(),
-            original_product_code: None,
             phase,
         }
     }
@@ -467,7 +456,6 @@ mod tests {
         let a = Contract {
             hardware_family: Some("other-platform".into()),
             normal_sha256: alloc::string::String::new(),
-            original_product_code: None,
             phase: None,
         };
         assert_eq!(a.check(&a), Ok(()));

@@ -208,11 +208,9 @@ impl PreparedUpdate {
 }
 
 impl Receiver {
-    /// Bind factory hardware evidence from the selected drive's current A0 response.
-    /// Execution reads the response again before any mutation; firmware labels
-    /// and a host history file cannot substitute for this evidence.
-    pub fn with_original_parameters(mut self, parameters: &[u8]) -> Self {
-        self.settings_contract.bind_original(parameters);
+    /// Retained for source compatibility. Certified conversions are selected
+    /// by the firmware pair; live setting prerequisites are checked at execution.
+    pub fn with_original_parameters(self, _parameters: &[u8]) -> Self {
         self
     }
 

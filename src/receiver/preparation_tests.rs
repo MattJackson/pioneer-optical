@@ -130,12 +130,7 @@ fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
         &read("oem/pioneer/sat/8A10/GENERAL/1.14/normal/8e02ed7244d8de7564f6e0606ba803f8614a6e2b87b5e24f7ee344cdcea71141.enc"),
     ).unwrap();
     let receiver = Receiver::from_installed(&installed).unwrap();
-    assert!(matches!(
-        receiver.prepare(target.clone()),
-        Err(PreparationError::Adaptation(
-            crate::settings::adaptation::Error::OriginalRequired
-        ))
-    ));
+    assert!(receiver.prepare(target.clone()).is_ok());
     let mut parameters = factory_parameters("BDR-UD02TBD");
     parameters[0x84..0x88].fill(0xff);
     parameters[0xc0..0xc0 + 90].fill(b'0');
@@ -185,7 +180,7 @@ fn adding_one_test_profile_changes_only_the_matching_prepared_image() {
         "hardware_scheme": crate::image::FAMILY_SCHEME,
         "hardware_family": installed.family().unwrap().to_string(),
         "source_normal_sha256": [crate::settings::adaptation::digest(&installed.normal().image)],
-        "original_product_codes": ["BDR-UD02TBD"], "mode": "adapt",
+        "mode": "adapt",
         "resolves_issue": "ud02-mechanism-convention",
         "target_normal_sha256": crate::settings::adaptation::digest(&target_normal),
         "target_model": target.normal().info().model,
@@ -213,15 +208,12 @@ fn adding_one_test_profile_changes_only_the_matching_prepared_image() {
     let prepared = receiver.prepare_normal(&normal).unwrap();
     assert_eq!(prepared.normal_image(), expected);
 
-    // Identical running firmware and hardware family cannot authorize native
-    // UD04 hardware to use a route restricted to originally UD02 mechanisms.
+    // Factory metadata is not an extra eligibility gate for a certified pair.
     let receiver = receiver.with_original_parameters(&factory_parameters("BDR-UD04"));
-    assert!(matches!(
-        receiver.prepare(target),
-        Err(PreparationError::Adaptation(
-            crate::settings::adaptation::Error::OriginalMismatch
-        ))
-    ));
+    assert_eq!(
+        receiver.prepare(target).unwrap().target.normal().image,
+        expected
+    );
 }
 
 #[test]

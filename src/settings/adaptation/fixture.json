@@ -6,9 +6,6 @@
   "source_normal_sha256": [
     "bfbd30e993f8fa17fb740dc84d232dc6205b893e0ec93414b9387a78374a8f7e"
   ],
-  "original_product_codes": [
-    "BDR-UD02TBD"
-  ],
   "mode": "adapt",
   "target_normal_sha256": "c1914041aaa9dffbde9e4284ca179c074d7507514c2fcf41d59c5de7578ff1e1",
   "input_length": 32,

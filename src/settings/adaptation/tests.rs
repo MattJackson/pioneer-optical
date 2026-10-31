@@ -1,10 +1,9 @@
 use super::*;
 const FIXTURE: &str = include_str!("fixture.json");
 
-fn source(code: Option<&str>) -> super::super::update::Contract {
+fn source() -> super::super::update::Contract {
     let mut contract = super::super::update::Contract::discover(b"fixture-ud02");
     contract.hardware_family = Some("1111111111111111".into());
-    contract.original_product_code = code.map(str::to_owned);
     contract
 }
 fn target() -> Vec<u8> {
@@ -23,19 +22,16 @@ fn registry(v: &serde_json::Value) -> Result<Registry, Error> {
 #[test]
 fn production_profiles_do_not_change_unrelated_images_or_routes() {
     assert!(has_profiles());
-    for code in [None, Some("BDR-UD02TBD"), Some("BDR-UD04")] {
-        assert!(prepare(&source(code), &target(), "TEST-UD03")
-            .unwrap()
-            .is_none());
-    }
+    assert!(prepare(&source(), &target(), "TEST-UD03")
+        .unwrap()
+        .is_none());
 }
 
 #[test]
-fn production_routes_are_valid_unique_and_only_for_original_ud02_hardware() {
+fn production_routes_are_valid_unique_and_bound_to_exact_firmware_pairs() {
     let registry = Registry::parse(PROFILES).unwrap();
     assert_eq!(registry.0.len(), 2);
     for p in &registry.0 {
-        assert_eq!(p.original_product_codes, ["BDR-UD02TBD", "BDR-UD02FAN"]);
         assert_eq!(
             p.required_parameters,
             [Requirement {
@@ -53,7 +49,7 @@ fn held_ud02_ud04_images_reproduce_the_tested_output_and_pristine_return() {
     };
     let ud02 = std::fs::read(original).unwrap();
     let ud04 = std::fs::read(std::env::var("PIONEER_UD04_NORMAL").unwrap()).unwrap();
-    let mut from = super::super::update::Contract::discover(&ud02);
+    let from = super::super::update::Contract::discover(&ud02);
     assert_eq!(
         digest(&ud02),
         "84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750"
@@ -62,16 +58,6 @@ fn held_ud02_ud04_images_reproduce_the_tested_output_and_pristine_return() {
         digest(&ud04),
         "87e8152f1de1d3be53eb4ad9144c1bb0c45a9be6f78713a0b7487a637f989bf1"
     );
-    assert_eq!(
-        prepare(&from, &ud04, "BDR-UD04").unwrap_err(),
-        Error::OriginalRequired
-    );
-    from.original_product_code = Some("BDR-UD04".into());
-    assert_eq!(
-        prepare(&from, &ud04, "BDR-UD04").unwrap_err(),
-        Error::OriginalMismatch
-    );
-    from.original_product_code = Some("BDR-UD02TBD".into());
     let adapted = prepare(&from, &ud04, "BDR-UD04").unwrap().unwrap();
     assert_eq!(
         digest(&adapted.image),
@@ -82,26 +68,13 @@ fn held_ud02_ud04_images_reproduce_the_tested_output_and_pristine_return() {
         Some(&adapted.resolves_issue),
     )
     .unwrap();
-    let mut back = super::super::update::Contract::discover(&adapted.image);
-    back.original_product_code = Some("BDR-UD02TBD".into());
+    let back = super::super::update::Contract::discover(&adapted.image);
     let returned = prepare(&back, &ud02, "BDR-UD02D").unwrap().unwrap();
     assert!(returned.stock_return());
     assert_eq!(returned.image, ud02);
-    back.original_product_code = Some("BDR-UD04".into());
-    assert_eq!(
-        prepare(&back, &ud02, "BDR-UD02D").unwrap_err(),
-        Error::OriginalMismatch
-    );
-    for code in ["BDR-UD02TBD", "BDR-UD02FAN"] {
-        from.original_product_code = Some(code.into());
-        let converted = prepare(&from, &ud04, "BDR-UD04").unwrap().unwrap();
-        assert_eq!(converted.image, adapted.image);
-        back.original_product_code = Some(code.into());
-        assert_eq!(
-            prepare(&back, &ud02, "BDR-UD02D").unwrap().unwrap().image,
-            ud02
-        );
-    }
+    // Native UHD firmware is not a certified source for the stock-return route.
+    let native = super::super::update::Contract::discover(&ud04);
+    assert!(prepare(&native, &ud02, "BDR-UD02D").unwrap().is_none());
     let mut changed = ud04.clone();
     changed[0x1000] ^= 1;
     assert!(prepare(&from, &changed, "BDR-UD04").unwrap().is_none());
@@ -111,7 +84,7 @@ fn held_ud02_ud04_images_reproduce_the_tested_output_and_pristine_return() {
 #[test]
 fn one_compiled_test_json_matches_exactly_one_direction_and_image() {
     let registry = Registry::parse(&[FIXTURE]).unwrap();
-    let from = source(Some("BDR-UD02TBD"));
+    let from = source();
     let before = target();
     let adapted = registry
         .prepare(&from, &before, "TEST-UD03")
@@ -153,49 +126,27 @@ fn one_compiled_test_json_matches_exactly_one_direction_and_image() {
 }
 
 #[test]
-fn running_firmware_cannot_substitute_for_original_hardware() {
+fn certified_pair_requires_no_factory_sku_record() {
     let registry = Registry::parse(&[FIXTURE]).unwrap();
-    assert_eq!(
-        registry
-            .prepare(&source(None), &target(), "TEST-UD03")
-            .unwrap_err(),
-        Error::OriginalRequired
-    );
-    assert_eq!(
-        registry
-            .prepare(&source(Some("BDR-UD04")), &target(), "TEST-UD03")
-            .unwrap_err(),
-        Error::OriginalMismatch
-    );
+    assert!(registry
+        .prepare(&source(), &target(), "TEST-UD03")
+        .unwrap()
+        .is_some());
 }
 
 #[test]
-fn stock_ud02_return_is_pristine_and_requires_original_ud02() {
+fn stock_return_is_pristine_for_the_certified_source_pair() {
     let mut v = value();
     v["mode"] = "stock_return".into();
     v["replacements"] = serde_json::json!([]);
     v["output_sha256"] = v["target_normal_sha256"].clone();
     let registry = registry(&v).unwrap();
     let returned = registry
-        .prepare(&source(Some("BDR-UD02TBD")), &target(), "TEST-UD03")
+        .prepare(&source(), &target(), "TEST-UD03")
         .unwrap()
         .unwrap();
     assert!(returned.stock_return());
     assert_eq!(returned.image, target());
-    for code in ["BDR-UD03FAL", "BDR-UD04"] {
-        assert_eq!(
-            registry
-                .prepare(&source(Some(code)), &target(), "TEST-UD03")
-                .unwrap_err(),
-            Error::OriginalMismatch
-        );
-    }
-    assert_eq!(
-        registry
-            .prepare(&source(None), &target(), "TEST-UD03")
-            .unwrap_err(),
-        Error::OriginalRequired
-    );
 }
 
 #[test]
@@ -214,7 +165,7 @@ fn malformed_conflicting_or_overlapping_profiles_are_rejected_before_use() {
             5 => v["schema_version"] = 2.into(),
             6 => v["required_parameters"][0]["parameter"] = 1024.into(),
             7 => v["unexpected"] = true.into(),
-            _ => v["original_product_codes"] = serde_json::json!([]),
+            _ => v["source_normal_sha256"] = serde_json::json!([]),
         }
         assert!(
             matches!(registry(&v), Err(Error::Registry)),
@@ -240,7 +191,7 @@ fn wrong_expected_bytes_or_output_digest_abort_without_mutating_input() {
         assert_eq!(
             registry(&v)
                 .unwrap()
-                .prepare(&source(Some("BDR-UD02TBD")), &input, "TEST-UD03")
+                .prepare(&source(), &input, "TEST-UD03")
                 .unwrap_err(),
             Error::Guard
         );

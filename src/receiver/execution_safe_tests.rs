@@ -222,7 +222,7 @@ impl Transport for Port {
 #[derive(Default)]
 struct Clock {
     elapsed: Duration,
-    deny: Option<FlashPass>,
+    deny: Option<FlashStage>,
     checks: usize,
     deny_check: Option<usize>,
     operation_progress: Vec<crate::operation::Progress>,
@@ -239,9 +239,9 @@ impl UpdateRuntime for Clock {
     }
 }
 impl ExecutionRuntime<&'static str> for Clock {
-    fn check_pass(&mut self, pass: FlashPass) -> Result<(), &'static str> {
+    fn check_stage(&mut self, stage: FlashStage) -> Result<(), &'static str> {
         self.checks += 1;
-        if self.deny == Some(pass) || self.deny_check == Some(self.checks) {
+        if self.deny == Some(stage) || self.deny_check == Some(self.checks) {
             Err("tray policy refused")
         } else {
             Ok(())
@@ -296,9 +296,9 @@ fn complete_flash_owns_migration_both_passes_and_exact_component_verification() 
             .find(|p| p.phase == Phase::Restarting)
             .unwrap();
         assert_eq!((waiting.done, waiting.total), (None, None));
-        assert_eq!(result.completed_passes, if restore { 2 } else { 1 });
+        assert_eq!(result.completed_stages, if restore { 2 } else { 1 });
         assert_eq!(state.borrow().parameter_writes, [0xffff]);
-        assert_eq!(state.borrow().finishes, result.completed_passes);
+        assert_eq!(state.borrow().finishes, result.completed_stages);
     }
 }
 #[test]
@@ -309,7 +309,7 @@ fn recovery_resumes_loader_and_still_verifies_both_components() {
     assert_eq!(state.borrow().entries, 1); // restoration enters normally
     assert!(state.borrow().parameter_writes.is_empty());
     assert!(result.normal_verified && result.kernel_verified);
-    assert_eq!(result.completed_passes, 2);
+    assert_eq!(result.completed_stages, 2);
 }
 
 #[test]
@@ -318,7 +318,7 @@ fn recovery_unsupported_medium_advances_to_existing_exact_readbacks() {
     state.borrow_mut().unsupported_medium = Some((2, 0x30, 0));
     let result = run(&plan, &state, ExecutionMode::Recovery).unwrap();
     assert!(result.kernel_verified && result.normal_verified);
-    assert_eq!(result.completed_passes, 2);
+    assert_eq!(result.completed_stages, 2);
     assert!(state.borrow().readback_reads > 0);
 }
 
@@ -447,7 +447,7 @@ fn recovery_unsupported_medium_without_normal_readback_is_not_fully_verified() {
     let outcome = run(&plan, &state, ExecutionMode::Recovery).unwrap();
     assert!(outcome.kernel_verified);
     assert!(!outcome.normal_verified);
-    assert_eq!(outcome.completed_passes, 1);
+    assert_eq!(outcome.completed_stages, 1);
 }
 
 #[test]
@@ -470,7 +470,7 @@ fn flash_requires_complete_readback_and_completed_preserves_qualified_evidence()
         panic!("completed evidence was lost");
     };
     assert!(outcome.kernel_verified && !outcome.normal_verified);
-    assert_eq!(outcome.completed_passes, 1);
+    assert_eq!(outcome.completed_stages, 1);
 
     let (plan, state) = setup(false);
     state.borrow_mut().unreadable_normal = true;
@@ -484,7 +484,7 @@ fn flash_requires_complete_readback_and_completed_preserves_qualified_evidence()
         )
         .unwrap();
     assert!(outcome.kernel_verified && !outcome.normal_verified);
-    assert_eq!(outcome.completed_passes, 1);
+    assert_eq!(outcome.completed_stages, 1);
 }
 #[test]
 fn normal_mismatch_is_fatal_and_stops_restoration() {
@@ -585,7 +585,7 @@ fn unreadable_early_span_cannot_hide_a_readable_later_mismatch() {
             &mut reads,
             &vec![0; 0x10000],
             0x410000,
-            FlashPass::Initial,
+            FlashStage::Initial,
             &mut Clock::default()
         ),
         Err(ExecutionError::NormalMismatch {
@@ -709,7 +709,7 @@ fn branding_differences_are_success_when_bytes_match_including_restoration() {
             state.borrow_mut().wrong_target = Some(wrong);
             let outcome = run(&plan, &state, ExecutionMode::Flash).unwrap();
             assert!(outcome.kernel_verified && outcome.normal_verified);
-            assert_eq!(outcome.completed_passes, if restore { 2 } else { 1 });
+            assert_eq!(outcome.completed_stages, if restore { 2 } else { 1 });
         }
     }
 }
@@ -817,7 +817,7 @@ fn handoff_and_marker_bridges_execute_with_each_stages_own_normal() {
             plan.stages()[1].normal_image()
         );
         let result = run(&plan, &state, ExecutionMode::Flash).unwrap();
-        assert_eq!(result.completed_passes, plan.stages().len());
+        assert_eq!(result.completed_stages, plan.stages().len());
         assert!(result.kernel_verified && result.normal_verified);
         assert_eq!(state.borrow().finishes, plan.stages().len());
     }
@@ -859,7 +859,7 @@ fn handoff_bridge_failure_stops_and_retains_completed_stages() {
                 writes: &mut Port(state.clone()),
             },
             &mut Clock {
-                deny: Some(FlashPass::Continuation(1)),
+                deny: Some(FlashStage::Continuation(1)),
                 ..Clock::default()
             },
             ExecutionMode::Flash,
@@ -884,7 +884,7 @@ fn later_stage_settings_roll_back_locally_without_erasing_earlier_completion() {
     );
     let initial = state.borrow().clone();
     let result = run(&plan, &state, ExecutionMode::Flash).unwrap();
-    assert_eq!(result.completed_passes, 2);
+    assert_eq!(result.completed_stages, 2);
     assert_eq!(state.borrow().parameter_writes, [0xffff, 0xfe34]);
 
     let state = Rc::new(RefCell::new(initial));

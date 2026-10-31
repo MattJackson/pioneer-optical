@@ -156,13 +156,13 @@ impl PreparedUpdate {
         self.stages[0].kernel_image().expect("complete pair")
     }
     /// Final OEM transfer when an intermediate precedes it.
-    pub fn restoration_kernel_transfer(&self) -> Option<&[u8]> {
+    pub fn final_stage_kernel_transfer(&self) -> Option<&[u8]> {
         (self.stages.len() > 1)
             .then(|| self.stages.last().expect("final stage").kernel_transfer())
             .flatten()
     }
     /// Receiver for the final transition after an intermediate.
-    pub fn restoration_receiver(&self) -> Option<&Receiver> {
+    pub fn final_stage_receiver(&self) -> Option<&Receiver> {
         (self.stages.len() > 1).then(|| &self.stages.last().expect("final stage").receiver)
     }
     /// Exact final Kernel readback expectation.

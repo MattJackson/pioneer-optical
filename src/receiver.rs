@@ -21,7 +21,7 @@ pub use execution_safe::{ExecutionError, ExecutionMode, ExecutionRuntime, FlashO
 #[cfg(feature = "drive")]
 pub mod transport;
 #[cfg(feature = "drive")]
-pub use execution::{FlashError, FlashPass, FlashRuntime, FlashTransport};
+pub use execution::{FlashError, FlashRuntime, FlashStage, FlashTransport};
 
 type Control = [u8; cdb::CONTROL_LEN as usize];
 

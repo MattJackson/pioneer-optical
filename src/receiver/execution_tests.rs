@@ -140,7 +140,7 @@ impl Transport for Port {
 struct Clock {
     now: Duration,
     starts: Vec<(usize, usize)>,
-    deny: Option<FlashPass>,
+    deny: Option<FlashStage>,
 }
 impl UpdateRuntime for Clock {
     fn elapsed(&self) -> Duration {
@@ -154,8 +154,8 @@ impl UpdateRuntime for Clock {
     }
 }
 impl FlashRuntime<&'static str> for Clock {
-    fn prepare_pass(&mut self, pass: FlashPass) -> Result<UpdateOptions, &'static str> {
-        if self.deny == Some(pass) {
+    fn prepare_stage(&mut self, stage: FlashStage) -> Result<UpdateOptions, &'static str> {
+        if self.deny == Some(stage) {
             return Err("medium inserted");
         }
         Ok(UpdateOptions {
@@ -220,7 +220,7 @@ fn executes_exact_prepared_passes_and_verifies_final_kernel() {
         if restore {
             assert_eq!(
                 state.kernels[1],
-                plan.restoration_kernel_transfer().unwrap()
+                plan.final_stage_kernel_transfer().unwrap()
             );
         }
         assert!(state
@@ -346,7 +346,7 @@ fn initial_policy_refusal_never_changes_startup_settings() {
         reads: false,
     };
     let mut clock = Clock {
-        deny: Some(FlashPass::Initial),
+        deny: Some(FlashStage::Initial),
         ..Clock::default()
     };
     let error = plan
@@ -410,13 +410,15 @@ fn descriptor_failures_prevent_entry_and_identify_the_pass() {
         state.borrow_mut().change_descriptor_at = Some(read);
         let error = run(&plan, &state).err().unwrap();
         let expected = if read <= 2 {
-            FlashPass::Initial
+            FlashStage::Initial
         } else {
-            FlashPass::Restoration
+            FlashStage::Continuation(1)
         };
         match error {
-            FlashError::DescriptorMismatch { pass } if read % 2 == 1 => assert_eq!(pass, expected),
-            FlashError::DescriptorChanged { pass } if read % 2 == 0 => assert_eq!(pass, expected),
+            FlashError::DescriptorMismatch { stage } if read % 2 == 1 => {
+                assert_eq!(stage, expected)
+            }
+            FlashError::DescriptorChanged { stage } if read % 2 == 0 => assert_eq!(stage, expected),
             error => panic!("unexpected {error:?}"),
         }
         assert_eq!(state.borrow().entries, usize::from(read > 2));
@@ -426,7 +428,7 @@ fn descriptor_failures_prevent_entry_and_identify_the_pass() {
     assert!(matches!(
         run(&plan, &state),
         Err(FlashError::DescriptorRead {
-            pass: FlashPass::Initial,
+            stage: FlashStage::Initial,
             source: drive::Error::Short { .. }
         })
     ));
@@ -441,9 +443,9 @@ fn readback_mismatch_stops_before_any_later_pass() {
         state.borrow_mut().corrupt_pass = Some(index);
         let error = run(&plan, &state).err().unwrap();
         assert!(
-            matches!(error, FlashError::ReadbackMismatch { pass, address }
-            if address == crate::image::KERNEL_BASE + 17 && pass ==
-                if index == 1 { FlashPass::Initial } else { FlashPass::Restoration })
+            matches!(error, FlashError::ReadbackMismatch { stage, address }
+            if address == crate::image::KERNEL_BASE + 17 && stage ==
+                if index == 1 { FlashStage::Initial } else { FlashStage::Continuation(1) })
         );
         assert_eq!(state.borrow().entries, index);
     }
@@ -470,8 +472,8 @@ fn short_kernel_readback_stops_before_restoration() {
         let state = state(&plan);
         state.borrow_mut().short_after_finish = Some(index);
         assert!(matches!(run(&plan, &state), Err(FlashError::Readback {
-            pass, source: drive::Error::Short { .. }
-        }) if pass == if index == 1 { FlashPass::Initial } else { FlashPass::Restoration }));
+            stage, source: drive::Error::Short { .. }
+        }) if stage == if index == 1 { FlashStage::Initial } else { FlashStage::Continuation(1) }));
         assert_eq!(state.borrow().entries, index);
     }
 }
@@ -547,7 +549,7 @@ fn normal_only_parameter_migration_obeys_the_same_rollback_boundary() {
             reads: false,
         };
         let mut clock = Clock {
-            deny: (scenario == 3).then_some(FlashPass::Initial),
+            deny: (scenario == 3).then_some(FlashStage::Initial),
             ..Clock::default()
         };
         let result = plan.transfer_with_parameter_unchecked(
@@ -605,7 +607,7 @@ fn normal_only_parameter_migration_obeys_the_same_rollback_boundary() {
 #[test]
 fn host_policy_can_refuse_either_pass_before_entry() {
     let plan = plan(true);
-    for pass in [FlashPass::Initial, FlashPass::Restoration] {
+    for stage in [FlashStage::Initial, FlashStage::Continuation(1)] {
         let state = state(&plan);
         let mut reads = Port {
             state: state.clone(),
@@ -616,7 +618,7 @@ fn host_policy_can_refuse_either_pass_before_entry() {
             reads: false,
         };
         let mut clock = Clock {
-            deny: Some(pass),
+            deny: Some(stage),
             ..Clock::default()
         };
         let error = plan
@@ -629,9 +631,9 @@ fn host_policy_can_refuse_either_pass_before_entry() {
             )
             .unwrap_err();
         assert!(
-            matches!(error, FlashError::Preflight { pass: failed, source: "medium inserted" } if failed == pass)
+            matches!(error, FlashError::Preflight { stage: failed, source: "medium inserted" } if failed == stage)
         );
-        let expected = usize::from(pass == FlashPass::Restoration);
+        let expected = usize::from(stage == FlashStage::Continuation(1));
         assert_eq!(state.borrow().entries, expected);
         assert_eq!(state.borrow().finishes, expected);
         assert_eq!(state.borrow().descriptor_reads, 2 * expected);

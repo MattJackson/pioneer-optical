@@ -30,10 +30,10 @@ pub enum PreparationError {
     UnknownInstalledKernel,
     /// A prepared intermediate still carries a marker rejected by its receiver.
     RejectedMarker,
-    /// The target Kernel cannot be proven to accept its pristine restoration.
-    UnsupportedRestoration,
+    /// The target Kernel cannot be proven to accept the final target stage.
+    UnsupportedFinalStage,
     /// The target Normal's entry requirements could not be established.
-    RestorationEntry(Error),
+    FinalStageEntry(Error),
     /// A required pass has no firmware-derived entry dialect.
     UnsupportedDialect,
     /// A required pass has no valid transfer layout.
@@ -62,10 +62,10 @@ impl core::fmt::Display for PreparationError {
                 f.write_str("installed Kernel marker policy is unsupported or unavailable")
             }
             Self::RejectedMarker => f.write_str("prepared Kernel marker is rejected by its receiving firmware"),
-            Self::UnsupportedRestoration => f.write_str(
-                "target Kernel does not establish a supported pristine restoration path",
+            Self::UnsupportedFinalStage => f.write_str(
+                "target Kernel does not establish a supported final stage",
             ),
-            Self::RestorationEntry(error) => write!(f, "pristine restoration entry: {error}"),
+            Self::FinalStageEntry(error) => write!(f, "final stage entry: {error}"),
             Self::UnsupportedDialect => f.write_str("a required receiver has no unique update-entry dialect signature"),
             Self::UnsupportedTransport => f.write_str("a required receiver transfer layout is unsupported"),
             Self::PatchedRepresentation => {
@@ -81,7 +81,7 @@ impl std::error::Error for PreparationError {
             Self::Adaptation(error) => Some(error),
             Self::KernelHandoff(error) => Some(error),
             Self::Target(error) => Some(error),
-            Self::Compatibility(error) | Self::RestorationEntry(error) => Some(error),
+            Self::Compatibility(error) | Self::FinalStageEntry(error) => Some(error),
             _ => None,
         }
     }
@@ -328,7 +328,7 @@ impl Receiver {
             if kernel_marker_policy(&target.kernel().image)
                 != Some(KernelMarkerPolicy::NoMarkerCheck)
             {
-                return Err(PreparationError::UnsupportedRestoration);
+                return Err(PreparationError::UnsupportedFinalStage);
             }
             let image = downgrade_patch(&target.kernel().image)
                 .map_err(|_| PreparationError::PatchedRepresentation)?
@@ -349,7 +349,7 @@ impl Receiver {
                 Some(BridgeKind::ReceiverMarker),
             )?);
             receiver = Receiver::from_installed(&intermediate)
-                .map_err(PreparationError::RestorationEntry)?;
+                .map_err(PreparationError::FinalStageEntry)?;
         }
         stages.push(PreparedStage::pair(receiver, &target, settings, None)?);
         Ok(PreparedUpdate { stages, target })

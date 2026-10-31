@@ -240,10 +240,10 @@ fn prepares_patch_and_pristine_restore_before_any_io() {
         assert_eq!(plan.final_kernel_image(), pristine);
         assert_eq!(plan.normal_transfer(), normal);
         let first = Envelope::load(plan.kernel_transfer()).unwrap();
-        let restored = Envelope::load(plan.restoration_kernel_transfer().unwrap()).unwrap();
+        let restored = Envelope::load(plan.final_stage_kernel_transfer().unwrap()).unwrap();
         assert_eq!(first.image, plan.first_kernel_image());
         assert_eq!(restored.image, pristine);
-        let restore = plan.restoration_receiver().unwrap();
+        let restore = plan.final_stage_receiver().unwrap();
         assert!(restore
             .entry_control(&installed.normal().image[..16])
             .is_ok());
@@ -323,8 +323,8 @@ fn ungated_receiver_preserves_every_marker_without_a_second_pass() {
         let plan = receiver.prepare(target).unwrap();
         assert_eq!(plan.kernel_transfer(), expected);
         assert_eq!(plan.first_kernel_image(), plan.final_kernel_image());
-        assert!(plan.restoration_kernel_transfer().is_none());
-        assert!(plan.restoration_receiver().is_none());
+        assert!(plan.final_stage_kernel_transfer().is_none());
+        assert!(plan.final_stage_receiver().is_none());
     }
 }
 
@@ -339,11 +339,11 @@ fn refuses_missing_installed_evidence_and_unproven_restoration() {
     let receiver = Receiver::from_installed(&installed).unwrap();
     assert_eq!(
         receiver.prepare(update(true, 0, 0x12, true)).unwrap_err(),
-        PreparationError::UnsupportedRestoration
+        PreparationError::UnsupportedFinalStage
     );
     assert_eq!(
         receiver.prepare(update(false, 0, 0x12, false)).unwrap_err(),
-        PreparationError::RestorationEntry(Error::Unsupported)
+        PreparationError::FinalStageEntry(Error::Unsupported)
     );
     assert!(matches!(
         entry_only.prepare(update(false, 0, 0x13, true)),
@@ -362,7 +362,7 @@ fn gated_receiver_does_not_patch_an_accepted_marker() {
         let expected = target.kernel_transfer().to_vec();
         let plan = receiver.prepare(target).unwrap();
         assert_eq!(plan.kernel_transfer(), expected);
-        assert!(plan.restoration_receiver().is_none());
+        assert!(plan.final_stage_receiver().is_none());
     }
 }
 
@@ -410,7 +410,7 @@ fn explicit_family_override_does_not_waive_receiver_or_restore_checks() {
         receiver
             .prepare_without_family_check(update(true, 0, 0x13, true))
             .unwrap_err(),
-        PreparationError::UnsupportedRestoration
+        PreparationError::UnsupportedFinalStage
     );
     let entry_only = Receiver::detect(installed.normal()).unwrap();
     assert_eq!(

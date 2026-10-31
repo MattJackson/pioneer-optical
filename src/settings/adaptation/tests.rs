@@ -35,7 +35,7 @@ fn production_routes_are_valid_unique_and_only_for_original_ud02_hardware() {
     let registry = Registry::parse(PROFILES).unwrap();
     assert_eq!(registry.0.len(), 2);
     for p in &registry.0 {
-        assert_eq!(p.original_product_codes, ["BDR-UD02TBD"]);
+        assert_eq!(p.original_product_codes, ["BDR-UD02TBD", "BDR-UD02FAN"]);
         assert_eq!(
             p.required_parameters,
             [Requirement {
@@ -92,6 +92,16 @@ fn held_ud02_ud04_images_reproduce_the_tested_output_and_pristine_return() {
         prepare(&back, &ud02, "BDR-UD02D").unwrap_err(),
         Error::OriginalMismatch
     );
+    for code in ["BDR-UD02TBD", "BDR-UD02FAN"] {
+        from.original_product_code = Some(code.into());
+        let converted = prepare(&from, &ud04, "BDR-UD04").unwrap().unwrap();
+        assert_eq!(converted.image, adapted.image);
+        back.original_product_code = Some(code.into());
+        assert_eq!(
+            prepare(&back, &ud02, "BDR-UD02D").unwrap().unwrap().image,
+            ud02
+        );
+    }
     let mut changed = ud04.clone();
     changed[0x1000] ^= 1;
     assert!(prepare(&from, &changed, "BDR-UD04").unwrap().is_none());

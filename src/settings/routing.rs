@@ -36,6 +36,9 @@ pub struct Rule<'a> {
     pub destination: ProductSelector<'a>,
     /// Identifier of the separate reviewed settings adaptation/restore profile.
     pub profile: &'a str,
+    /// Refuse destinations without a rule for this original hardware. An
+    /// additive exception can retain existing family/settings checks instead.
+    pub restricted: bool,
 }
 
 /// Result of the scoped table; none of these results bypass other flash gates.
@@ -70,12 +73,14 @@ impl<'a> Table<'a> {
     /// not an argument: it can never replace A as the hardware routing source.
     pub fn resolve(&self, original: ProductCode<'_>, destination: ProductCode<'_>) -> Decision<'a> {
         let mut scoped = false;
+        let mut restricted = false;
         let mut selected = None;
         for rule in self.rules {
             if !rule.hardware.matches(original) {
                 continue;
             }
             scoped = true;
+            restricted |= rule.restricted;
             if rule.destination.matches(destination) {
                 if selected.is_some() {
                     return Decision::Ambiguous;
@@ -88,7 +93,8 @@ impl<'a> Table<'a> {
         }
         match (scoped, selected) {
             (_, Some(profile)) => Decision::Profile(profile),
-            (true, None) => Decision::UnsupportedDestination,
+            (true, None) if restricted => Decision::UnsupportedDestination,
+            (true, None) => Decision::Unscoped,
             (false, None) => Decision::Unscoped,
         }
     }
@@ -110,11 +116,13 @@ mod tests {
             hardware: platform("UD02"),
             destination: platform("UD04"),
             profile: "a-to-b",
+            restricted: true,
         },
         Rule {
             hardware: platform("UD04"),
             destination: platform("UD03"),
             profile: "b-to-c",
+            restricted: true,
         },
     ];
     fn code(value: &str) -> ProductCode<'_> {
@@ -170,6 +178,34 @@ mod tests {
     }
 
     #[test]
+    fn additive_exception_retains_existing_checks_without_inheriting_other_hardware_rules() {
+        let rules = [
+            RULES[0],
+            Rule {
+                restricted: false,
+                ..RULES[1]
+            },
+        ];
+        let table = Table::new(&rules);
+        assert_eq!(
+            table.resolve(code("BDR-UD04ABC"), code("BDR-UD03")),
+            Decision::Profile("b-to-c")
+        );
+        assert_eq!(
+            table.resolve(code("BDR-UD04ABC"), code("BDR-209")),
+            Decision::Unscoped
+        );
+        assert_eq!(
+            table.resolve(code("BDR-UD02TBD"), code("BDR-209")),
+            Decision::UnsupportedDestination
+        );
+        assert_eq!(
+            table.resolve(code("BDR-UD02TBD"), code("BDR-UD03")),
+            Decision::UnsupportedDestination
+        );
+    }
+
+    #[test]
     fn suffixes_and_prefixes_are_scoped_only_when_requested() {
         let specific = Rule {
             hardware: ProductSelector {
@@ -179,6 +215,7 @@ mod tests {
             },
             destination: platform("UD04"),
             profile: "specific",
+            restricted: true,
         };
         let rules = [specific];
         let table = Table::new(&rules);

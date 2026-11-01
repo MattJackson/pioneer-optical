@@ -226,15 +226,80 @@ fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
                     receiver.prepare_without_family_check(ud03.clone())
                 } else {
                     receiver.prepare(ud03.clone())
-                };
-                assert!(matches!(
-                    result,
-                    Err(PreparationError::Adaptation(
-                        crate::settings::adaptation::Error::OriginalMismatch
-                    ))
-                ));
+                }
+                .unwrap();
+                assert_eq!(
+                    result.settings().adaptation_id(),
+                    Some("pioneer.ud02-to-ud03-1.03")
+                );
+                assert_eq!(
+                    crate::settings::adaptation::digest(&result.target.normal().image),
+                    "f78a48ea604d36663f1da13b5eaad63396e8a0c4ccc6c18fb7f38547f1816a56"
+                );
             }
         }
+    }
+    let ud03_latest = Update::load(
+        &read("oem/pioneer/sat/8511/GENERAL/1.14/kernel/77432fcd9cf4d32e711458015e01c995ee780706d1f9cb4800ff77f4b371e224.enc"),
+        &read("oem/pioneer/sat/8511/GENERAL/1.14/normal/4a5c9c055c4a31bed730618c0ea68597c807ea1e581558acfd7e873f8e32eba8.enc"),
+    ).unwrap();
+    let forward_latest = Receiver::from_installed(&installed)
+        .unwrap()
+        .with_original_parameters(&factory_parameters("BDR-UD02TBD"))
+        .prepare(ud03_latest.clone())
+        .unwrap();
+    assert_eq!(
+        crate::settings::adaptation::digest(&forward_latest.target.normal().image),
+        "57d0be1d40c2c8bba7f71bd7b84e66fd4394eb56924fb385610ba92c62797f32"
+    );
+    // Native mechanisms select the shared inverse, while original UD02 on the
+    // very same firmware selects pristine OEM return. Decode/authentication and
+    // receiver readback cover the relocated routines in the Normal header too.
+    for (current, original) in [
+        (&ud03, "BDR-UD03FAL"),
+        (&ud03_latest, "BDR-UD03ABC"),
+        (&target, "BDR-UD04ABC"),
+    ] {
+        let parameters = factory_parameters(original);
+        let inverse = Receiver::from_installed(current)
+            .unwrap()
+            .with_original_parameters(&parameters)
+            .prepare(installed.clone())
+            .unwrap();
+        assert_eq!(
+            inverse.settings().adaptation_id(),
+            Some(if original == "BDR-UD03FAL" {
+                "pioneer.ud03-to-ud02-1.00-whole"
+            } else if original == "BDR-UD03ABC" {
+                "pioneer.ud03-to-ud02-1.00-packed"
+            } else {
+                "pioneer.ud04-to-ud02-1.00"
+            })
+        );
+        assert!(inverse.settings().requirements().is_empty());
+        assert_eq!(
+            crate::settings::adaptation::digest(&inverse.target.normal().image),
+            if original == "BDR-UD03FAL" {
+                "95e5a7a5c841a5b1b66895ac299285c869c43222f134044280ffbf8971426305"
+            } else {
+                "33d04b3d4f1d432f00f3498706fbb04369cdac0e29253ba5ead8f6b749905995"
+            }
+        );
+        assert_eq!(inverse.target.kernel().image, installed.kernel().image);
+        let returned = Receiver::from_installed(&inverse.target)
+            .unwrap()
+            .with_original_parameters(&parameters)
+            .prepare(current.clone())
+            .unwrap();
+        assert_eq!(returned.target.normal().image, current.normal().image);
+        assert_eq!(returned.target.kernel().image, current.kernel().image);
+        assert!(returned.settings().requirements().is_empty());
+        let reapply = Receiver::from_installed(&inverse.target)
+            .unwrap()
+            .with_original_parameters(&parameters)
+            .prepare(installed.clone())
+            .unwrap();
+        assert_eq!(reapply.target.normal().image, inverse.target.normal().image);
     }
 }
 

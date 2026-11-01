@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-- Add structured factory product-code parsing and scoped original-hardware settings routes. Preserve original UD02 hardware identity through UD04 firmware and refuse uncovered destinations, including native UD03 firmware on a converted UD02 drive.
-- Select the tested UD04 1.14 adaptation and pristine UD02 1.00 return from original hardware evidence; retain target byte/integrity guards and live mechanism prerequisites. Native OEM return requires no adaptation prerequisite.
+- Add structured factory product-code parsing and scoped original-hardware settings routes. Preserve original hardware identity through firmware changes and refuse uncovered destinations.
+- Keep reviewed UD02-to-UD03/UD04 and native UD03/UD04-to-UD02 settings recipes in one compiled registry. Preserve UD03 calibration-reader formats and pristine native OEM returns, target byte/integrity guards and live mechanism prerequisites.
 - Confirm original hardware and all stage mechanism prerequisites before any settings, bridge or firmware write, including Recovery.
 - Expose per-register observations and selectable family comparisons. Recover shared CPU-register constants in diagnostics while preserving all v5 family IDs and matching outcomes.
 

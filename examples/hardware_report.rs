@@ -66,7 +66,7 @@ fn main() {
                 }
                 let f = image::family_fingerprint(&decoded.image).ok_or("no hardware fingerprint")?;
                 assert_eq!(Some(f.family), image::family(&decoded.image));
-                Ok(json!({"family":f.family.to_string(),"asic":f.asic,"board":f.board,"pins":f.pins,"servo":f.servo,"uhd":image::is_uhd(&decoded.image),"decode_basis":if k.is_some(){"paired Kernel"}else{"standalone Normal"}}))
+                Ok(json!({"family":f.family.to_string(),"asic":f.asic,"board":f.board,"pins":f.pins,"raw_pins":f.raw_pins,"servo":f.servo,"uhd":image::is_uhd(&decoded.image),"decode_basis":if k.is_some(){"paired Kernel"}else{"standalone Normal"}}))
             })();
             match result { Ok(v) => v, Err(e) => json!({"error":e}) }
         });

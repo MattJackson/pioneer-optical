@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Exclude FEC0 bit 6 from hardware family matching (scheme v5), retaining all other register and servo evidence. Preserve unmasked register writes in `FamilyFingerprint::raw_pins` for future bit analysis. Rebind existing exact-image settings profiles to the derived v5 family identifiers.
+
 ## [1.4.0] - 2026-11-01
 
 - Select the certified UD02/UD04 conversion and stock-return routes by exact firmware pair, without a factory product-code allowlist. Preserve the required live mechanism setting, image guards, verification and rollback.

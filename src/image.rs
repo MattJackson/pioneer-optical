@@ -47,8 +47,8 @@ const BOARD_REGS: [u16; 3] = [0xFFC5, 0xEDCC, 0xEDCD];
 const SERVO_ROW: [u8; 10] = [0x7f, 0x97, 0x7f, 0x51, 0x7f, 0x51, 0x7f, 0x51, 0x7f, 0x51];
 /// Number of distinct servo rows that form the version-stable base.
 const SERVO_BASE: usize = 7;
-/// Version 4 separates host configuration from hardware evidence.
-pub const FAMILY_SCHEME: &str = "pioneer.hardware.v4";
+/// Version 5 excludes FEC0 bit 6 from hardware identity, retaining raw evidence.
+pub const FAMILY_SCHEME: &str = "pioneer.hardware.v5";
 
 /// Full servo coefficient row width.
 const SERVO_ROW_LEN: usize = 40;
@@ -347,6 +347,9 @@ pub struct FamilyFingerprint {
     /// Canonical remaining hardware/interface setup values.
     /// The legacy field name does not imply verified physical pin assignments.
     pub pins: String,
+    /// Unmasked FE94/FEC0 writes retained for register and feature analysis.
+    /// This diagnostic evidence is not hashed into the family identifier.
+    pub raw_pins: String,
     /// Servo coefficient hash, or `"none"` when no anchor rows were found.
     pub servo: String,
 }
@@ -396,7 +399,15 @@ fn fingerprint_regions(regions: &[&[u8]], body: &[u8]) -> Option<FamilyFingerpri
             .join(" ")
     };
     let asic = regs(&ASIC_REGS, &|a| fmt_ints(w.get(a)));
-    let pins = regs(&PIN_REGS, &|a| fmt_ints(w.get(a)));
+    let raw_pins = regs(&PIN_REGS, &|a| fmt_ints(w.get(a)));
+    // PR1ML/211M differ only in FEC0 bit 6 on otherwise matching platforms.
+    // Its physical role is unresolved; exclude only this bit from identity.
+    // Normalize the set before formatting so duplicate masked values collapse.
+    let mut family_writes = w.clone();
+    if let Some(values) = family_writes.get_mut(&0xFEC0) {
+        *values = values.iter().map(|value| value & !0x40).collect();
+    }
+    let pins = regs(&PIN_REGS, &|a| fmt_ints(family_writes.get(a)));
     let board = regs(&BOARD_REGS, &|a| fmt_board(w.get(a), b.get(a)));
 
     // Servo is independent evidence even on boards whose FFC5 writes include
@@ -408,6 +419,7 @@ fn fingerprint_regions(regions: &[&[u8]], body: &[u8]) -> Option<FamilyFingerpri
         asic,
         board,
         pins,
+        raw_pins,
         servo,
     })
 }

@@ -188,7 +188,7 @@ impl Contract {
     #[cfg(test)]
     pub(crate) fn test_unresolved_scope() -> Self {
         Self {
-            hardware_family: Some("83a4abb2a9b5480e".into()),
+            hardware_family: Some("e4f1f98dcdf4c06b".into()),
             normal_sha256: alloc::string::String::new(),
             phase: None,
         }
@@ -429,7 +429,7 @@ mod tests {
     }
     fn scoped(phase: Option<bool>) -> Contract {
         Contract {
-            hardware_family: Some("83a4abb2a9b5480e".into()),
+            hardware_family: Some("e4f1f98dcdf4c06b".into()),
             normal_sha256: alloc::string::String::new(),
             phase,
         }

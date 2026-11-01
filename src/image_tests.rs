@@ -484,3 +484,35 @@ fn excluded_interface_registers_do_not_change_hardware_family() {
         }
     }
 }
+
+#[test]
+fn fec0_bit6_is_not_family_identity_but_raw_values_survive() {
+    let body = |value| {
+        vec![
+            0xf8, 0x0d, 0x6a, 0x88, 0xe4, 0x36, 0xf8, value, 0x6a, 0x88, 0xfe, 0xc0,
+        ]
+    };
+    for value in 0u8..=255 {
+        let a = family_fingerprint(&body(value)).unwrap();
+        let b = family_fingerprint(&body(value ^ 0x40)).unwrap();
+        assert_eq!(a.family, b.family);
+        assert_eq!(a.pins, b.pins);
+        assert_ne!(a.raw_pins, b.raw_pins);
+        for bit in [0, 1, 2, 3, 4, 5, 7] {
+            assert_ne!(a.family, family(&body(value ^ (1 << bit))).unwrap());
+        }
+    }
+    let a = family_fingerprint(&body(0xc7)).unwrap();
+    assert_eq!(a.pins, "fe94=- fec0=87");
+    assert_eq!(a.raw_pins, "fe94=- fec0=c7");
+    let mut both = body(0xc7);
+    both.extend_from_slice(&body(0x87)[6..]);
+    assert_eq!(family(&both), Some(a.family));
+    assert_eq!(
+        family_fingerprint(&both).unwrap().raw_pins,
+        "fe94=- fec0=87.c7"
+    );
+    let mut fe94 = body(0xc7);
+    fe94.extend_from_slice(&[0xf8, 0x40, 0x6a, 0x88, 0xfe, 0x94]);
+    assert_ne!(family(&fe94), Some(a.family));
+}

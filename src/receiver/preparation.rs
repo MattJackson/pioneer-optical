@@ -8,6 +8,8 @@ use crate::image::{kernel_marker_policy, KernelMarkerPolicy};
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum PreparationError {
+    /// Persistent storage requirements differ or could not be recovered.
+    Startup(crate::startup::checks::Error),
     /// More than one startup comparison prevents selecting a target value.
     AmbiguousStartup,
     /// Required configuration is unresolved or has no validated conversion.
@@ -45,6 +47,7 @@ pub enum PreparationError {
 impl core::fmt::Display for PreparationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Startup(error) => error.fmt(f),
             Self::Settings(error) => error.fmt(f),
             Self::Adaptation(error) => error.fmt(f),
             Self::AmbiguousStartup => f.write_str("target startup checks are ambiguous; no startup setting can be selected"),
@@ -77,6 +80,7 @@ impl core::fmt::Display for PreparationError {
 impl std::error::Error for PreparationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Startup(error) => Some(error),
             Self::Settings(error) => Some(error),
             Self::Adaptation(error) => Some(error),
             Self::KernelHandoff(error) => Some(error),
@@ -88,6 +92,16 @@ impl std::error::Error for PreparationError {
 }
 
 impl Receiver {
+    /// Plan every startup check, independently of hardware-family overrides.
+    pub fn prepare_startup(
+        &self,
+        normal: &[u8],
+        kernel: Option<&[u8]>,
+    ) -> Result<crate::startup::checks::Plan, PreparationError> {
+        self.startup
+            .plan_to(crate::startup::checks::Checks::discover(normal, kernel))
+            .map_err(PreparationError::Startup)
+    }
     /// Retained for source compatibility. Certified conversions are selected
     /// by the firmware pair; live setting prerequisites are checked at execution.
     pub fn with_original_parameters(self, _parameters: &[u8]) -> Self {
@@ -178,6 +192,7 @@ impl Receiver {
             .check(&crate::settings::update::Contract::discover(normal))
             .map_err(PreparationError::Settings)
     }
+    #[cfg(test)]
     fn startup_setting_for(
         &self,
         normal: &[u8],
@@ -228,8 +243,8 @@ impl Receiver {
                     .map_err(PreparationError::Compatibility)?;
             }
         }
-        let settings = crate::settings::update::Plan::target(
-            self.startup_setting_for(&pair.normal().image)?,
+        let settings = crate::settings::update::Plan::startup(
+            self.prepare_startup(&pair.normal().image, Some(&kernel.image))?,
             false,
         )
         .with_adaptation(adaptation);
@@ -299,8 +314,8 @@ impl Receiver {
                 // A source bridge is a real intermediate, with its own Normal
                 // and receiver. It never borrows the final target's settings.
                 let bridge = super::handoff_bridge::prepare(self, target.kernel())?;
-                let settings = crate::settings::update::Plan::target(
-                    self.startup_setting_for(&bridge.normal().image)?,
+                let settings = crate::settings::update::Plan::startup(
+                    self.prepare_startup(&bridge.normal().image, Some(&bridge.kernel().image))?,
                     false,
                 );
                 stages.push(PreparedStage::pair(
@@ -310,6 +325,10 @@ impl Receiver {
                     Some(BridgeKind::KernelHandoff),
                 )?);
                 receiver.installed_kernel = Some(bridge.kernel().clone());
+                receiver.startup = crate::startup::checks::Checks::discover(
+                    &bridge.normal().image,
+                    Some(&bridge.kernel().image),
+                );
             }
             Err(error) => return Err(PreparationError::KernelHandoff(error)),
         }
@@ -317,8 +336,8 @@ impl Receiver {
             policy,
             target.kernel().image.get(KERNEL_MARKER_OFFSET).copied(),
         );
-        let settings = crate::settings::update::Plan::target(
-            receiver.startup_setting_for(&target.normal().image)?,
+        let settings = crate::settings::update::Plan::startup(
+            receiver.prepare_startup(&target.normal().image, Some(&target.kernel().image))?,
             patch,
         )
         .with_adaptation(adaptation);

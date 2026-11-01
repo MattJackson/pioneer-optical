@@ -101,6 +101,7 @@ pub struct Receiver {
     policy: ReceiverControl,
     family: Option<Family>,
     settings_contract: crate::settings::update::Contract,
+    startup: crate::startup::checks::Checks,
     #[cfg(test)]
     adaptation_profiles: Option<Vec<String>>,
     kernel_policy: Option<crate::image::KernelMarkerPolicy>,
@@ -179,6 +180,7 @@ impl Receiver {
             policy,
             family: family(image),
             settings_contract: crate::settings::update::Contract::discover(image),
+            startup: crate::startup::checks::Checks::discover(image, None),
             #[cfg(test)]
             adaptation_profiles: None,
             kernel_policy: None,
@@ -221,6 +223,8 @@ impl Receiver {
             }
         }
         receiver.kernel_policy = crate::image::kernel_marker_policy(&kernel.image);
+        receiver.startup =
+            crate::startup::checks::Checks::discover(&normal.image, Some(&kernel.image));
         receiver.installed_kernel = Some(kernel.clone());
         Ok(receiver)
     }
@@ -228,6 +232,11 @@ impl Receiver {
     /// Hardware family recovered from the captured installed image.
     pub fn family(&self) -> Option<Family> {
         self.family
+    }
+
+    /// All recognized startup requirements belonging to this receiver.
+    pub fn startup_checks(&self) -> crate::startup::checks::Checks {
+        self.startup
     }
 
     /// The already decoded installed Kernel supplied during receiver detection.

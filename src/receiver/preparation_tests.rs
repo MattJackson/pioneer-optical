@@ -62,6 +62,7 @@ pub(in crate::receiver) fn update(gated: bool, marker: u8, family: u8, entry: bo
     kernel[KERNEL_MARKER_OFFSET] = marker;
     fix_sum(&mut kernel);
     let mut normal = normal_image(0x2000);
+    crate::startup::bank::fixture(&mut normal);
     normal[0x400..0x408].copy_from_slice(&[0xf6, family, 0x6a, 0x86, 0xe4, 0x36, 0, 0]);
     if entry {
         normal[0x500..0x510].copy_from_slice(&[
@@ -94,6 +95,44 @@ fn factory_parameters(code: &str) -> [u8; crate::production::PARAMETERS_LEN] {
     bytes[0x90..0x9f].fill(b' ');
     bytes[0x90..0x90 + code.len()].copy_from_slice(code.as_bytes());
     bytes
+}
+
+#[test]
+fn every_preparation_path_uses_the_receivers_startup_checks() {
+    use crate::startup::{bank, checks};
+    let installed = update(false, 1, 0x12, true);
+    let receiver = Receiver::from_installed(&installed).unwrap();
+    let baseline = receiver.prepare(installed.clone()).unwrap();
+    assert!(baseline.settings().startup_plan().is_some());
+    assert_eq!(receiver.startup_checks().iter().count(), 2);
+
+    let mut normal = installed.normal().image.clone();
+    for at in [0x180a, 0x190a] {
+        normal[at..at + 4].copy_from_slice(&0xfedc4322u32.to_be_bytes());
+    }
+    fix_sum(&mut normal);
+    let mut bytes = installed.normal().repack(&normal).unwrap();
+    let mut key = [0; 20];
+    key[19] = 5;
+    SigningKey::from_bytes(key)
+        .unwrap()
+        .sign_normal(&mut bytes)
+        .unwrap();
+    let target = Update::load(installed.kernel_transfer(), &bytes).unwrap();
+    let refused = |e: PreparationError| {
+        assert!(matches!(
+            e,
+            PreparationError::Startup(checks::Error::Banks(bank::Error::ConversionRequired { .. }))
+        ))
+    };
+    refused(receiver.prepare(target.clone()).unwrap_err());
+    refused(receiver.prepare_without_family_check(target).unwrap_err());
+    refused(receiver.prepare_normal(&bytes).unwrap_err());
+    refused(
+        receiver
+            .prepare_normal_without_family_check(&bytes)
+            .unwrap_err(),
+    );
 }
 
 #[test]

@@ -32,6 +32,7 @@ impl PreparedStage {
         settings: crate::settings::update::Plan,
         bridge: Option<BridgeKind>,
     ) -> Result<Self, PreparationError> {
+        receiver.prepare_startup(&target.normal().image, Some(&target.kernel().image))?;
         let installed = receiver
             .installed_kernel()
             .ok_or(PreparationError::MissingInstalledKernel)?;

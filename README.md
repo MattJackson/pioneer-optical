@@ -131,6 +131,16 @@ is a stage setting, not a separate flashing path. `prepare_normal` uses the same
 executor without a Kernel transfer. The full sequence is validated before its
 first mutation.
 
+Each receiver exposes `startup_checks()`: the native parameter comparisons and
+persistent bank requirements recovered from its Kernel and Normal. One startup
+planner checks the complete set for every prepared stage. Its evidence is
+available through `settings().startup_plan()`, keeping a detected requirement
+separate from the existing neutral-word policy. Older bank initialization,
+state-header and Kernel-owned sequence schemes retain their own contracts.
+Missing evidence refuses preparation; family overrides do not waive these checks.
+Different persistent formats require a validated record conversion. The planner
+does not rewrite a header marker as a substitute for converting the records.
+
 `ExecutionError::completed_stages()` retains earlier completion when a later
 stage fails, including a refusal before its first write. No failing firmware
 write is retried. Settings may roll back only before that stage enters firmware

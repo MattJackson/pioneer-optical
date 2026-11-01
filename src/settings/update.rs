@@ -81,6 +81,7 @@ impl Setting {
 pub struct Plan {
     entries: Vec<Setting>,
     adaptation: Option<super::adaptation::Applied>,
+    startup: Option<crate::startup::checks::Plan>,
 }
 impl Plan {
     pub(crate) fn target(startup: Option<crate::startup::Setting>, restore: bool) -> Self {
@@ -104,7 +105,17 @@ impl Plan {
         Self {
             entries,
             adaptation: None,
+            startup: None,
         }
+    }
+    pub(crate) fn startup(plan: crate::startup::checks::Plan, restore: bool) -> Self {
+        let mut settings = Self::target(Some(plan.word_setting()), restore);
+        settings.startup = Some(plan);
+        settings
+    }
+    /// The complete startup check plan used by this firmware stage.
+    pub fn startup_plan(&self) -> Option<crate::startup::checks::Plan> {
+        self.startup
     }
     pub(crate) fn with_adaptation(
         mut self,

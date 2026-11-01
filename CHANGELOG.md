@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.4.0] - 2026-11-01
+
+- Select the certified UD02/UD04 conversion and stock-return routes by exact firmware pair, without a factory product-code allowlist. Preserve the required live mechanism setting, image guards, verification and rollback.
+
+- Name execution progress `FlashStage`, completion `completed_stages`, and final
+  transition helpers `final_stage_*`. All later stages use `Continuation(index)`;
+  marker bridges no longer have a special execution variant. Runtime hooks are
+  `prepare_stage`/`check_stage`. Stable diagnostic error codes are preserved.
+
+- Prepare complete updates as ordered receiver-bound stages, including direct updates, marker intermediates and detected Kernel-handoff bridges. Validate the whole sequence before mutation and verify each completed stage.
+- Preserve each stage’s own Normal image, settings, transfer layout and receiving protocol. Retain completed-stage evidence when a later transition fails before writing.
+- Recognize the unchanged warm-start entry independently of internal calls when validating a bridge’s Kernel ABI. Authenticate unsigned captured Normal transfers without accepting nonzero invalid signatures.
+- Add public stage and bridge descriptions, handoff operands and indexed stage reporting.
+- New handoff bridges have software validation only; physical hardware qualification remains pending.
+
 ## [1.3.1] - 2026-10-30
 
 - Enable the exact owner-tested original UD02 mechanism to UD04 1.14 settings adaptation and pristine return to UD02 1.00. Require hash-bound source/target images, live factory product evidence and unchanged parameter 0x028f = 1; other versions and native reverse conversions remain unsupported.

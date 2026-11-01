@@ -46,17 +46,6 @@ fn word(b: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_be_bytes(b.get(at..at + 4)?.try_into().ok()?))
 }
 
-fn unique(values: impl Iterator<Item = u32>) -> Option<u32> {
-    let mut value = None;
-    for candidate in values {
-        if value.is_some_and(|v| v != candidate) {
-            return None;
-        }
-        value = Some(candidate);
-    }
-    value
-}
-
 // Startup preserves caller registers, resets SP, then masks interrupts. The
 // newer form clears the update-state bit before that prologue. Recognize both
 // push variants without assuming a particular SP value or entry address.
@@ -102,74 +91,96 @@ pub fn kernel_startup_entry(kernel: &[u8]) -> Option<u32> {
 /// interrupt-mask epilogue and absolute restart call/jump. Multiple copied
 /// programmers are accepted only when all recognized restart operands agree.
 pub fn kernel_handoff_entry(kernel: &[u8]) -> Option<u32> {
+    kernel_handoff_contract(kernel).map(|contract| contract.entry)
+}
+
+/// Recognized RAM-programmer restart operands, bound to their copied code spans.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KernelHandoffContract {
+    /// Common absolute restart address used by the recognized programmers.
+    pub entry: u32,
+    /// Three-byte big-endian address operands in the decoded Kernel.
+    pub operands: Vec<usize>,
+}
+
+/// Recover every recognized restart operand and require a common destination.
+pub fn kernel_handoff_contract(kernel: &[u8]) -> Option<KernelHandoffContract> {
     if kernel.len() != KERNEL_LEN {
         return None;
     }
-    unique(
-        (0..kernel.len().saturating_sub(22))
-            .step_by(2)
-            .flat_map(|at| {
-                let copy = (|| {
-                    if kernel.get(at..at + 2) != Some(&[0x7a, 0])
-                        || kernel.get(at + 6..at + 8) != Some(&[0x7a, 1])
-                        || kernel.get(at + 12..at + 14) != Some(&[0x7a, 2])
-                        || kernel[at + 18] != 0x5e
-                    {
-                        return None;
-                    }
-                    let start = word(kernel, at + 2)?.checked_sub(KERNEL_BASE)? as usize;
-                    let end = word(kernel, at + 8)?.checked_sub(KERNEL_BASE)? as usize;
-                    let ram = word(kernel, at + 14)? as usize;
-                    let helper =
-                        u32::from_be_bytes([0, kernel[at + 19], kernel[at + 20], kernel[at + 21]]);
-                    if start >= end
-                        || end > kernel.len()
-                        || start % 2 != 0
-                        || end % 2 != 0
-                        || ram == 0
-                        || ram % 2 != 0
-                        || ram.checked_add(end - start)? > 0x10000
-                        || !(KERNEL_BASE..KERNEL_BASE + KERNEL_LEN as u32).contains(&helper)
-                    {
-                        return None;
-                    }
-                    Some((start, end))
-                })();
-                copy.into_iter().flat_map(move |(start, end)| {
-                    (start..end.saturating_sub(7))
-                        .step_by(2)
-                        .filter_map(move |p| {
-                            if !(0xf8..=0xfb).contains(&kernel[p])
-                                || kernel[p + 1] != 0x80
-                                || kernel[p + 2] != 3
-                                || kernel[p + 3] != kernel[p] - 0xf0
-                            {
-                                return None;
-                            }
-                            let mut call = p + 4;
-                            // Some programmers kick a hardware service after masking CCR.
-                            if kernel.get(call) == Some(&0xf8)
-                                && kernel.get(call + 2) == Some(&0x5d)
-                                && kernel.get(call + 3).is_some_and(|r| r & 0x8f == 0)
-                            {
-                                call += 4;
-                            }
-                            if call + 4 > end || !matches!(kernel[call], 0x5a | 0x5e) {
-                                return None;
-                            }
-                            let target = u32::from_be_bytes([
-                                0,
-                                kernel[call + 1],
-                                kernel[call + 2],
-                                kernel[call + 3],
-                            ]);
-                            ((KERNEL_BASE..KERNEL_BASE + 0x200).contains(&target)
-                                && target % 2 == 0)
-                                .then_some(target)
-                        })
-                })
-            }),
-    )
+    let mut sites: Vec<(usize, u32)> = (0..kernel.len().saturating_sub(22))
+        .step_by(2)
+        .flat_map(|at| {
+            let copy = (|| {
+                if kernel.get(at..at + 2) != Some(&[0x7a, 0])
+                    || kernel.get(at + 6..at + 8) != Some(&[0x7a, 1])
+                    || kernel.get(at + 12..at + 14) != Some(&[0x7a, 2])
+                    || kernel[at + 18] != 0x5e
+                {
+                    return None;
+                }
+                let start = word(kernel, at + 2)?.checked_sub(KERNEL_BASE)? as usize;
+                let end = word(kernel, at + 8)?.checked_sub(KERNEL_BASE)? as usize;
+                let ram = word(kernel, at + 14)? as usize;
+                let helper =
+                    u32::from_be_bytes([0, kernel[at + 19], kernel[at + 20], kernel[at + 21]]);
+                if start >= end
+                    || end > kernel.len()
+                    || start % 2 != 0
+                    || end % 2 != 0
+                    || ram == 0
+                    || ram % 2 != 0
+                    || ram.checked_add(end - start)? > 0x10000
+                    || !(KERNEL_BASE..KERNEL_BASE + KERNEL_LEN as u32).contains(&helper)
+                {
+                    return None;
+                }
+                Some((start, end))
+            })();
+            copy.into_iter().flat_map(move |(start, end)| {
+                (start..end.saturating_sub(7))
+                    .step_by(2)
+                    .filter_map(move |p| {
+                        if !(0xf8..=0xfb).contains(&kernel[p])
+                            || kernel[p + 1] != 0x80
+                            || kernel[p + 2] != 3
+                            || kernel[p + 3] != kernel[p] - 0xf0
+                        {
+                            return None;
+                        }
+                        let mut call = p + 4;
+                        // Some programmers kick a hardware service after masking CCR.
+                        if kernel.get(call) == Some(&0xf8)
+                            && kernel.get(call + 2) == Some(&0x5d)
+                            && kernel.get(call + 3).is_some_and(|r| r & 0x8f == 0)
+                        {
+                            call += 4;
+                        }
+                        if call + 4 > end || !matches!(kernel[call], 0x5a | 0x5e) {
+                            return None;
+                        }
+                        let target = u32::from_be_bytes([
+                            0,
+                            kernel[call + 1],
+                            kernel[call + 2],
+                            kernel[call + 3],
+                        ]);
+                        ((KERNEL_BASE..KERNEL_BASE + 0x200).contains(&target) && target % 2 == 0)
+                            .then_some((call + 1, target))
+                    })
+            })
+        })
+        .collect();
+    sites.sort_unstable();
+    sites.dedup();
+    let entry = sites.first()?.1;
+    if sites.iter().any(|(_, target)| *target != entry) {
+        return None;
+    }
+    Some(KernelHandoffContract {
+        entry,
+        operands: sites.into_iter().map(|(at, _)| at).collect(),
+    })
 }
 
 #[cfg(test)]

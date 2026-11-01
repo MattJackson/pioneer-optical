@@ -166,7 +166,17 @@ pub fn required_abi(body: &[u8]) -> Option<Abi> {
 /// The entries a Kernel body provides. `None` unless `body` is exactly
 /// [`KERNEL_LEN`] bytes.
 pub fn provided_abi(body: &[u8]) -> Option<Abi> {
-    (body.len() == KERNEL_LEN).then(|| Abi::new(provided_entries(body)))
+    (body.len() == KERNEL_LEN).then(|| {
+        let mut entries = provided_entries(body);
+        // The recognized warm-start prologue is an entry in its own right.
+        // A handoff bridge changes the RAM programmer's next-image restart
+        // operand; that must not erase the unchanged current-image startup
+        // from the ABI merely because no internal call still references it.
+        if let Some(startup) = super::kernel_startup_entry(body) {
+            entries.push(startup);
+        }
+        Abi::new(entries)
+    })
 }
 
 #[cfg(test)]

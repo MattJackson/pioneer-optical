@@ -16,7 +16,8 @@ pub use control::{receiver_control, ReceiverControl};
 #[cfg(all(test, feature = "envelope"))]
 pub(crate) use handoff::tests::fixture as handoff_fixture;
 pub use handoff::{
-    check_kernel_handoff, kernel_handoff_entry, kernel_startup_entry, KernelHandoffError,
+    check_kernel_handoff, kernel_handoff_contract, kernel_handoff_entry, kernel_startup_entry,
+    KernelHandoffContract, KernelHandoffError,
 };
 #[cfg(all(test, feature = "envelope"))]
 pub(crate) use receiver::tests::fixture as receiver_fixture;

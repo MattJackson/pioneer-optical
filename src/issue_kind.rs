@@ -62,6 +62,7 @@ pub(super) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         | "pioneer.preparation.kernel_handoff"
         | "pioneer.preparation.unknown_installed_kernel"
         | "pioneer.preparation.unsupported_restoration"
+        | "pioneer.preparation.rejected_marker"
         | "pioneer.preparation.unsupported_dialect"
         | "pioneer.preparation.unsupported_transport"
         | "pioneer.flash.unsupported_transport"

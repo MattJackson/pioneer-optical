@@ -216,3 +216,24 @@ exposing the drive model and trailing product context separately. For example,
 This is an allocation-free view available without `std`; it does not alter
 receiver binding or infer an OEM company from a product suffix. Both optical
 crates expose the same `ProductIdentity` type and methods.
+
+The persistent A0 factory record has a separate, allocation-free product-code
+view. It retains original hardware identity when INQUIRY reports crossflashed
+firmware:
+
+```rust
+use pioneer_optical::production::ProductCode;
+
+let code = ProductCode::parse("BDU-UD02ABC").unwrap();
+assert_eq!(code.prefix, "BDU");
+assert_eq!(code.platform, "UD02");
+assert_eq!(code.suffix, "ABC");
+assert!(code.platform_is("ud02"));
+```
+
+`Production::product_code_parts()` exposes this view on a parsed factory record.
+Naming alone grants no compatibility. Scoped `settings::routing` rules resolve
+original hardware to a destination; currently installed branding cannot grant
+another hardware platform's settings route. See
+[settings adaptations](docs/settings-adaptation.md) for live identity checks,
+reviewed target recipes and the native OEM return path.

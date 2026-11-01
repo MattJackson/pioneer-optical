@@ -4,6 +4,10 @@
 //! and BDR-XD06 hardware. Older captures omit the tag but retain a complete
 //! product code and factory test record; those require both structural checks.
 
+#[path = "production_product_code.rs"]
+mod product_code;
+pub use product_code::ProductCode;
+
 /// Buffer id of the parameters read.
 pub const PARAMETERS_ID: u8 = 0xA0;
 /// Length of the parameters response.
@@ -42,6 +46,14 @@ pub struct Production<'a> {
     pub product_code: &'a str,
     /// Factory test date, if the test string is present and well formed.
     pub manufactured: Option<Date>,
+}
+
+impl<'a> Production<'a> {
+    /// Structured factory identity, when its naming grammar is recognized.
+    /// This does not infer hardware compatibility or a settings conversion.
+    pub fn product_code_parts(&self) -> Option<ProductCode<'a>> {
+        ProductCode::parse(self.product_code)
+    }
 }
 
 /// Decode the parameters response; `None` when the production record is absent.

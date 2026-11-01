@@ -176,7 +176,7 @@ fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
     parameters[0xc0 + 76..0xc0 + 82].copy_from_slice(b"130525");
     let prepared = receiver
         .with_original_parameters(&parameters)
-        .prepare(target)
+        .prepare(target.clone())
         .unwrap();
     assert_eq!(
         prepared.settings().adaptation_id(),
@@ -204,6 +204,38 @@ fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
     );
     assert_eq!(back.target.normal().image, installed.normal().image);
     assert_eq!(back.target.kernel().image, installed.kernel().image);
+
+    let ud03 = Update::load(
+        &read("oem/pioneer/sat/8510/ID19/1.03/kernel/36d0e3542a34a653250295f86d489d5e1e4f7931043351d856f27e57477d72ae.enc"),
+        &read("oem/pioneer/sat/8510/ID19/1.03/normal/6042da6069fec90d0e8052613f3f2d6e8ebb7e0d41dc770a5cf4c601f3960d4e.enc"),
+    ).unwrap();
+    for current in [&installed, &target, &prepared.target, &ud03] {
+        for factory in ["BDR-UD02TBD", "BDU-UD02ABC", "BDR-UD02FAN"] {
+            let receiver = Receiver::from_installed(current)
+                .unwrap()
+                .with_original_parameters(&factory_parameters(factory));
+            let to_ud04 = receiver.prepare(target.clone()).unwrap();
+            assert_eq!(
+                to_ud04.target.normal().image,
+                prepared.target.normal().image
+            );
+            let to_ud02 = receiver.prepare(installed.clone()).unwrap();
+            assert_eq!(to_ud02.target.normal().image, installed.normal().image);
+            for bypass in [false, true] {
+                let result = if bypass {
+                    receiver.prepare_without_family_check(ud03.clone())
+                } else {
+                    receiver.prepare(ud03.clone())
+                };
+                assert!(matches!(
+                    result,
+                    Err(PreparationError::Adaptation(
+                        crate::settings::adaptation::Error::OriginalMismatch
+                    ))
+                ));
+            }
+        }
+    }
 }
 
 #[test]

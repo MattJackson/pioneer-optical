@@ -10,6 +10,90 @@ const PROFILES: &[&str] = &[
     include_str!("adaptation/profiles/ud02-stock-return-1.00.json"),
 ];
 
+const HARDWARE_RULES: &[super::routing::Rule<'_>] = &[super::routing::Rule {
+    hardware: super::routing::ProductSelector {
+        platform: "UD02",
+        prefix: None,
+        suffix: None,
+    },
+    destination: super::routing::ProductSelector {
+        platform: "UD04",
+        prefix: None,
+        suffix: None,
+    },
+    profile: "pioneer.ud02-to-ud04-1.14",
+}];
+
+fn hardware_route(
+    original: &str,
+    target_model: &str,
+) -> Result<super::routing::Decision<'static>, Error> {
+    let original =
+        crate::production::ProductCode::parse(original).ok_or(Error::OriginalRequired)?;
+    if !HARDWARE_RULES
+        .iter()
+        .any(|rule| rule.hardware.matches(original))
+    {
+        return Ok(super::routing::Decision::Unscoped);
+    }
+    let target =
+        crate::production::ProductCode::parse(target_model).ok_or(Error::OriginalMismatch)?;
+    match super::routing::Table::new(HARDWARE_RULES).resolve(original, target) {
+        super::routing::Decision::UnsupportedDestination => Err(Error::OriginalMismatch),
+        super::routing::Decision::Ambiguous => Err(Error::Registry),
+        route => Ok(route),
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct HardwareGuard {
+    model: String,
+    normal_hash: String,
+    profile: Option<String>,
+}
+
+impl HardwareGuard {
+    pub(crate) fn new(model: &str, normal: &[u8], profile: Option<&str>) -> Self {
+        Self {
+            model: model.into(),
+            normal_hash: digest(normal),
+            profile: profile.map(Into::into),
+        }
+    }
+
+    pub(crate) fn check(&self, parameters: &[u8]) -> Result<(), Error> {
+        use super::routing::Decision;
+        let original = crate::production::parse(parameters).ok_or(Error::OriginalRequired)?;
+        let route = hardware_route(original.product_code, &self.model)?;
+        match route {
+            Decision::Unscoped if self.profile.is_none() => Ok(()),
+            Decision::Profile(id) if self.profile.as_deref() == Some(id) => {
+                if registry()?
+                    .0
+                    .iter()
+                    .any(|p| p.id == id && p.output_sha256 == self.normal_hash)
+                {
+                    Ok(())
+                } else {
+                    Err(Error::Guard)
+                }
+            }
+            Decision::OriginalPlatform => {
+                if registry()?.0.iter().any(|p| {
+                    p.mode == Mode::StockReturn
+                        && p.target_model == self.model
+                        && p.target_normal_sha256 == self.normal_hash
+                }) {
+                    Ok(())
+                } else {
+                    Err(Error::Guard)
+                }
+            }
+            _ => Err(Error::OriginalMismatch),
+        }
+    }
+}
+
 /// A reviewed adaptation could not be prepared; no device I/O has occurred.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -227,15 +311,63 @@ impl Registry {
             [p] => *p,
             _ => return Err(Error::Registry),
         };
+        self.apply(p, target)
+    }
+
+    fn prepare_hardware(
+        &self,
+        source: &super::update::Contract,
+        target: &[u8],
+        model: &str,
+        original: &str,
+    ) -> Result<Option<Adapted>, Error> {
+        use super::routing::Decision;
+        let route = hardware_route(original, model)?;
+        if route == Decision::Unscoped {
+            return Ok(None);
+        }
+        let target_hash = digest(target);
+        let selected: Vec<_> = self
+            .0
+            .iter()
+            .filter(|p| {
+                source.hardware_family.as_deref() == Some(p.hardware_family.as_str())
+                    && p.target_model == model
+                    && (p.target_normal_sha256 == target_hash || p.output_sha256 == target_hash)
+                    && match route {
+                        Decision::Profile(id) => p.id == id,
+                        Decision::OriginalPlatform => p.mode == Mode::StockReturn,
+                        _ => false,
+                    }
+            })
+            .collect();
+        match selected.as_slice() {
+            [] => Err(Error::Guard),
+            [profile] => {
+                let mut adapted = self.apply(profile, target)?;
+                if route == Decision::OriginalPlatform {
+                    // Native OEM firmware interprets its own hardware settings;
+                    // the forward adaptation's mechanism prerequisite is absent.
+                    if let Some(adapted) = &mut adapted {
+                        adapted.requirements.clear();
+                    }
+                }
+                Ok(adapted)
+            }
+            _ => Err(Error::Registry),
+        }
+    }
+
+    fn apply(&self, p: &Profile, target: &[u8]) -> Result<Option<Adapted>, Error> {
         if target.len() != p.input_length {
             return Err(Error::Guard);
         }
-        if p.mode == Mode::StockReturn {
+        if p.mode == Mode::StockReturn || digest(target) == p.output_sha256 {
             return Ok(Some(Adapted {
                 id: p.id.clone(),
                 image: target.to_vec(),
                 requirements: p.required_parameters.clone(),
-                stock_return: true,
+                stock_return: p.mode == Mode::StockReturn,
                 resolves_issue: p.resolves_issue.clone(),
             }));
         }
@@ -270,6 +402,17 @@ impl Registry {
 }
 
 impl Adapted {
+    #[cfg(test)]
+    pub(crate) fn test_requirements(requirements: Vec<Requirement>) -> Self {
+        Self {
+            id: "test.requirements".into(),
+            image: Vec::new(),
+            requirements,
+            stock_return: false,
+            resolves_issue: "test.requirements".into(),
+        }
+    }
+
     pub(crate) fn stock_return(&self) -> bool {
         self.stock_return
     }
@@ -285,12 +428,24 @@ pub(crate) fn prepare(
     target: &[u8],
     model: &str,
 ) -> Result<Option<Adapted>, Error> {
+    registry()?.prepare(source, target, model)
+}
+
+fn registry() -> Result<&'static Registry, Error> {
     static REGISTRY: std::sync::OnceLock<Result<Registry, Error>> = std::sync::OnceLock::new();
     REGISTRY
         .get_or_init(|| Registry::parse(PROFILES))
         .as_ref()
-        .map_err(Clone::clone)?
-        .prepare(source, target, model)
+        .map_err(Clone::clone)
+}
+
+pub(crate) fn prepare_hardware(
+    source: &super::update::Contract,
+    target: &[u8],
+    model: &str,
+    original: &str,
+) -> Result<Option<Adapted>, Error> {
+    registry()?.prepare_hardware(source, target, model, original)
 }
 
 #[cfg(test)]

@@ -262,6 +262,99 @@ fn run(
         mode,
     )
 }
+
+#[test]
+fn final_stage_original_hardware_refusal_precedes_all_bridge_and_settings_writes() {
+    struct UnavailableFactory;
+    impl Transport for UnavailableFactory {
+        type Error = &'static str;
+        fn exec(&mut self, command: &[u8], _data: Data<'_>) -> Result<usize, Self::Error> {
+            assert_eq!(command, crate::production::parameters());
+            Err("factory record unavailable")
+        }
+        fn sense(&self) -> Option<(u8, u8, u8)> {
+            None
+        }
+    }
+    for restore in [false, true] {
+        for mode in [ExecutionMode::Flash, ExecutionMode::Recovery] {
+            let (mut plan, state) = setup(restore);
+            let last = plan.stages.last_mut().unwrap();
+            last.settings = last
+                .settings
+                .clone()
+                .with_hardware_guard(&last.normal, true);
+            let error = plan
+                .execute(
+                    FlashTransport {
+                        reads: &mut UnavailableFactory,
+                        writes: &mut Port(state.clone()),
+                    },
+                    &mut Clock::default(),
+                    mode,
+                )
+                .unwrap_err();
+            assert!(matches!(error, ExecutionError::Startup(ref source)
+                if matches!(source.as_ref(), crate::startup::migration::Error::Read(_))));
+            let state = state.borrow();
+            assert_eq!(state.writes, 0);
+            assert_eq!(state.entries, 0);
+            assert_eq!(state.finishes, 0);
+            assert!(state.parameter_writes.is_empty());
+        }
+    }
+}
+
+#[test]
+fn final_stage_mechanism_prerequisite_is_checked_before_the_first_bridge_write() {
+    struct WrongMechanism;
+    impl Transport for WrongMechanism {
+        type Error = &'static str;
+        fn exec(&mut self, command: &[u8], data: Data<'_>) -> Result<usize, Self::Error> {
+            assert_eq!(command, cdb::read_parameter_word(0x28f).unwrap());
+            match data {
+                Data::In(bytes) => {
+                    bytes.copy_from_slice(&0u16.to_be_bytes());
+                    Ok(2)
+                }
+                _ => panic!("only a prerequisite read is permitted"),
+            }
+        }
+        fn sense(&self) -> Option<(u8, u8, u8)> {
+            None
+        }
+    }
+    for restore in [false, true] {
+        for mode in [ExecutionMode::Flash, ExecutionMode::Recovery] {
+            let (mut plan, state) = setup(restore);
+            let last = plan.stages.last_mut().unwrap();
+            last.settings = last.settings.clone().with_adaptation(Some(
+                crate::settings::adaptation::Adapted::test_requirements(vec![
+                    crate::settings::adaptation::Requirement {
+                        parameter: 0x28f,
+                        value: 1,
+                    },
+                ]),
+            ));
+            let error = plan
+                .execute(
+                    FlashTransport {
+                        reads: &mut WrongMechanism,
+                        writes: &mut Port(state.clone()),
+                    },
+                    &mut Clock::default(),
+                    mode,
+                )
+                .unwrap_err();
+            assert!(matches!(error, ExecutionError::Startup(ref source)
+                if matches!(source.as_ref(), crate::startup::migration::Error::Prerequisite {
+                    parameter: 0x28f, expected: 1, actual: 0 })));
+            let state = state.borrow();
+            assert_eq!((state.writes, state.entries, state.finishes), (0, 0, 0));
+            assert!(state.parameter_writes.is_empty());
+        }
+    }
+}
 #[test]
 fn complete_flash_owns_migration_both_passes_and_exact_component_verification() {
     for restore in [false, true] {

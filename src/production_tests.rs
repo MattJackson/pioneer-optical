@@ -33,6 +33,11 @@ fn decodes_product_code_and_factory_date() {
             }),
         })
     );
+    let production = parse(&b).unwrap();
+    let parts = production.product_code_parts().unwrap();
+    assert_eq!(parts.prefix, "BDR");
+    assert_eq!(parts.platform, "UD03");
+    assert_eq!(parts.suffix, "FAL");
 }
 
 #[test]

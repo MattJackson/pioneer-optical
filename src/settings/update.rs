@@ -82,6 +82,7 @@ pub struct Plan {
     entries: Vec<Setting>,
     adaptation: Option<super::adaptation::Applied>,
     startup: Option<crate::startup::checks::Plan>,
+    hardware_guard: Option<super::adaptation::HardwareGuard>,
 }
 impl Plan {
     pub(crate) fn target(startup: Option<crate::startup::Setting>, restore: bool) -> Self {
@@ -106,6 +107,7 @@ impl Plan {
             entries,
             adaptation: None,
             startup: None,
+            hardware_guard: None,
         }
     }
     pub(crate) fn startup(plan: crate::startup::checks::Plan, restore: bool) -> Self {
@@ -124,7 +126,36 @@ impl Plan {
         self.adaptation = adaptation.map(Into::into);
         self
     }
-    /// Compiled-in adaptation selected for this exact source and target.
+    pub(crate) fn with_hardware_guard(
+        mut self,
+        target: &crate::envelope::Envelope,
+        scoped: bool,
+    ) -> Self {
+        if scoped {
+            self.hardware_guard = Some(super::adaptation::HardwareGuard::new(
+                &target.info().model,
+                &target.image,
+                self.adaptation_id(),
+            ));
+        }
+        self
+    }
+
+    /// Execution must confirm the original factory hardware before any stage
+    /// writes. This is independent of the currently reported firmware model.
+    pub fn requires_original_hardware(&self) -> bool {
+        self.hardware_guard.is_some()
+    }
+
+    #[cfg(feature = "drive")]
+    pub(crate) fn check_hardware(&self, parameters: &[u8]) -> Result<(), super::adaptation::Error> {
+        match &self.hardware_guard {
+            Some(guard) => guard.check(parameters),
+            None => Ok(()),
+        }
+    }
+
+    /// Compiled-in adaptation selected for the original hardware and target.
     pub fn adaptation_id(&self) -> Option<&str> {
         self.adaptation.as_ref().map(|a| a.id.as_str())
     }
@@ -196,6 +227,9 @@ pub struct Contract {
     phase: Option<bool>,
 }
 impl Contract {
+    pub(crate) fn hardware_sensitive(&self) -> bool {
+        self.hardware_family.as_deref() == Some("e4f1f98dcdf4c06b")
+    }
     #[cfg(test)]
     pub(crate) fn test_unresolved_scope() -> Self {
         Self {

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add structured factory product-code parsing and scoped original-hardware settings routes. Preserve original UD02 hardware identity through UD04 firmware and refuse uncovered destinations, including native UD03 firmware on a converted UD02 drive.
+- Select the tested UD04 1.14 adaptation and pristine UD02 1.00 return from original hardware evidence; retain target byte/integrity guards and live mechanism prerequisites. Native OEM return requires no adaptation prerequisite.
+- Confirm original hardware and all stage mechanism prerequisites before any settings, bridge or firmware write, including Recovery.
+- Expose per-register observations and selectable family comparisons. Recover shared CPU-register constants in diagnostics while preserving all v5 family IDs and matching outcomes.
+
 - Exclude FEC0 bit 6 from hardware family matching (scheme v5), retaining all other register and servo evidence. Preserve unmasked register writes in `FamilyFingerprint::raw_pins` for future bit analysis. Rebind existing exact-image settings profiles to the derived v5 family identifiers.
 
 ## [1.4.0] - 2026-11-01

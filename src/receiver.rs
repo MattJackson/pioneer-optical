@@ -101,6 +101,7 @@ pub struct Receiver {
     policy: ReceiverControl,
     family: Option<Family>,
     settings_contract: crate::settings::update::Contract,
+    original_product: Option<Result<String, crate::settings::adaptation::Error>>,
     startup: crate::startup::checks::Checks,
     #[cfg(test)]
     adaptation_profiles: Option<Vec<String>>,
@@ -180,6 +181,7 @@ impl Receiver {
             policy,
             family: family(image),
             settings_contract: crate::settings::update::Contract::discover(image),
+            original_product: None,
             startup: crate::startup::checks::Checks::discover(image, None),
             #[cfg(test)]
             adaptation_profiles: None,
@@ -232,6 +234,12 @@ impl Receiver {
     /// Hardware family recovered from the captured installed image.
     pub fn family(&self) -> Option<Family> {
         self.family
+    }
+
+    /// This settings cohort needs original factory evidence at live preparation
+    /// and execution. Unrelated receivers require no additional parameters read.
+    pub fn requires_original_hardware(&self) -> bool {
+        self.settings_contract.hardware_sensitive()
     }
 
     /// All recognized startup requirements belonging to this receiver.

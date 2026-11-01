@@ -43,6 +43,177 @@ fn production_routes_are_valid_unique_and_bound_to_exact_firmware_pairs() {
 }
 
 #[test]
+fn ud02_original_hardware_routes_do_not_inherit_installed_firmware_permissions() {
+    use super::super::routing::Decision;
+    for original in ["BDR-UD02TBD", "BDU-UD02ABC", "bdr ud02fan"] {
+        assert_eq!(
+            hardware_route(original, "BDR-UD04"),
+            Ok(Decision::Profile("pioneer.ud02-to-ud04-1.14"))
+        );
+        assert_eq!(
+            hardware_route(original, "BDR-UD03"),
+            Err(Error::OriginalMismatch)
+        );
+        assert_eq!(
+            hardware_route(original, "BDR-UD02D"),
+            Ok(Decision::OriginalPlatform)
+        );
+    }
+    for original in ["BDR-UD03FAL", "BDR-UD04ABC", "BDR-209XJB", "BDR-UD020TBD"] {
+        for destination in ["BDR-UD02D", "BDR-UD03", "BDR-UD04"] {
+            assert_eq!(
+                hardware_route(original, destination),
+                Ok(Decision::Unscoped)
+            );
+        }
+        assert_eq!(
+            hardware_route(original, "SBC-06D2X-U"),
+            Ok(Decision::Unscoped)
+        );
+        assert_eq!(
+            hardware_route(original, "unclassified alias"),
+            Ok(Decision::Unscoped)
+        );
+    }
+}
+
+#[test]
+fn held_original_hardware_current_firmware_destination_matrix() {
+    let Ok(original_path) = std::env::var("PIONEER_UD02_NORMAL") else {
+        return;
+    };
+    let ud02 = std::fs::read(original_path).unwrap();
+    let ud04 = std::fs::read(std::env::var("PIONEER_UD04_NORMAL").unwrap()).unwrap();
+    let ud03 = std::fs::read(std::env::var("PIONEER_UD03_NORMAL").unwrap()).unwrap();
+    let registry = Registry::parse(PROFILES).unwrap();
+    let converted = registry
+        .prepare_hardware(
+            &super::super::update::Contract::discover(&ud02),
+            &ud04,
+            "BDR-UD04",
+            "BDR-UD02TBD",
+        )
+        .unwrap()
+        .unwrap()
+        .image;
+    for (current_name, current) in [
+        ("UD02 OEM", &ud02),
+        ("UD03 OEM", &ud03),
+        ("UD04 OEM", &ud04),
+        ("UD04 adapted", &converted),
+    ] {
+        let source = super::super::update::Contract::discover(current);
+        for original in ["BDR-UD02TBD", "BDU-UD02ABC", "bdr ud02fan"] {
+            for (model, target) in [
+                ("BDR-UD02D", &ud02),
+                ("BDR-UD03", &ud03),
+                ("BDR-UD04", &ud04),
+            ] {
+                let result = registry.prepare_hardware(&source, target, model, original);
+                match model {
+                    "BDR-UD02D" => {
+                        let prepared = result.unwrap().unwrap();
+                        assert!(prepared.stock_return());
+                        assert!(
+                            prepared.requirements.is_empty(),
+                            "OEM return has no adaptation settings"
+                        );
+                        assert_eq!(prepared.image, ud02, "{original}/{current_name} → {model}");
+                    }
+                    "BDR-UD04" => {
+                        let prepared = result.unwrap().unwrap();
+                        assert!(!prepared.stock_return());
+                        assert_eq!(
+                            prepared.image, converted,
+                            "{original}/{current_name} → {model}"
+                        );
+                    }
+                    _ => assert!(matches!(result, Err(Error::OriginalMismatch))),
+                }
+            }
+            let repeated = registry
+                .prepare_hardware(&source, &converted, "BDR-UD04", original)
+                .unwrap()
+                .unwrap();
+            assert_eq!(repeated.image, converted, "adaptation must be idempotent");
+        }
+        for original in ["BDR-UD03FAL", "BDR-UD04ABC"] {
+            for (model, target) in [
+                ("BDR-UD02D", &ud02),
+                ("BDR-UD03", &ud03),
+                ("BDR-UD04", &ud04),
+            ] {
+                assert!(
+                    registry
+                        .prepare_hardware(&source, target, model, original)
+                        .unwrap()
+                        .is_none(),
+                    "unscoped {original} must retain independent settings checks"
+                );
+            }
+        }
+    }
+}
+
+fn factory_code(code: &str) -> Vec<u8> {
+    let mut parameters = vec![0xff; crate::production::PARAMETERS_LEN];
+    parameters[0x84..0x88].copy_from_slice(b"kw01");
+    parameters[0x90..0x9f].fill(b' ');
+    parameters[0x90..0x90 + code.len()].copy_from_slice(code.as_bytes());
+    parameters
+}
+
+#[test]
+fn execution_guard_refuses_native_ud03_for_ud02_hardware_even_without_an_adaptation() {
+    let guard = HardwareGuard::new("BDR-UD03", b"unmodified UD03", None);
+    for code in ["BDR-UD02TBD", "BDU-UD02ABC", "BDR-UD02FAN"] {
+        assert_eq!(
+            guard.check(&factory_code(code)),
+            Err(Error::OriginalMismatch)
+        );
+    }
+    for code in ["BDR-UD03FAL", "BDR-UD04ABC"] {
+        assert_eq!(guard.check(&factory_code(code)), Ok(()));
+    }
+    assert_eq!(
+        guard.check(&[0xff; crate::production::PARAMETERS_LEN]),
+        Err(Error::OriginalRequired)
+    );
+}
+
+#[test]
+fn held_execution_guard_binds_original_hardware_adaptation_and_pristine_return() {
+    let Ok(path) = std::env::var("PIONEER_UD02_NORMAL") else {
+        return;
+    };
+    let ud02 = std::fs::read(path).unwrap();
+    let ud04 = std::fs::read(std::env::var("PIONEER_UD04_NORMAL").unwrap()).unwrap();
+    let source = super::super::update::Contract::discover(&ud02);
+    let prepared = prepare_hardware(&source, &ud04, "BDR-UD04", "BDR-UD02TBD")
+        .unwrap()
+        .unwrap();
+    let adapted = HardwareGuard::new("BDR-UD04", &prepared.image, Some(&prepared.id));
+    let pristine = HardwareGuard::new("BDR-UD04", &ud04, None);
+    let returned = HardwareGuard::new("BDR-UD02D", &ud02, None);
+    for original in ["BDR-UD02TBD", "BDU-UD02ABC", "BDR-UD02FAN"] {
+        let parameters = factory_code(original);
+        assert_eq!(adapted.check(&parameters), Ok(()));
+        assert_eq!(pristine.check(&parameters), Err(Error::OriginalMismatch));
+        assert_eq!(returned.check(&parameters), Ok(()));
+    }
+    let native = factory_code("BDR-UD03FAL");
+    assert_eq!(adapted.check(&native), Err(Error::OriginalMismatch));
+    assert_eq!(pristine.check(&native), Ok(()));
+    let mut corrupt = ud02;
+    corrupt[0x400] ^= 1;
+    let bad_return = HardwareGuard::new("BDR-UD02D", &corrupt, None);
+    assert_eq!(
+        bad_return.check(&factory_code("BDR-UD02TBD")),
+        Err(Error::Guard)
+    );
+}
+
+#[test]
 fn held_ud02_ud04_images_reproduce_the_tested_output_and_pristine_return() {
     let Ok(original) = std::env::var("PIONEER_UD02_NORMAL") else {
         return;

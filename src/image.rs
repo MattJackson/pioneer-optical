@@ -8,11 +8,17 @@
 
 mod abi;
 mod control;
+#[path = "image_evidence.rs"]
+mod evidence;
 pub(crate) mod h8;
 mod handoff;
 mod receiver;
 pub use abi::{provided_abi, required_abi, Abi};
 pub use control::{receiver_control, ReceiverControl};
+pub use evidence::{
+    CriterionComparison, FamilyComparison, FamilyCriterion, FamilyEvidence, RegisterEvidence,
+    RegisterObservation, RegisterOperation, FAMILY_CRITERIA,
+};
 #[cfg(all(test, feature = "envelope"))]
 pub(crate) use handoff::tests::fixture as handoff_fixture;
 pub use handoff::{
@@ -40,7 +46,7 @@ const ASIC_REGS: [u16; 7] = [0xE436, 0xE43A, 0xE43B, 0xE45B, 0xE463, 0xE46A, 0xE
 /// Remaining hardware/interface initialization evidence.
 /// Excluded host configuration is retained separately for settings admission.
 const PIN_REGS: [u16; 2] = [0xFE94, 0xFEC0];
-/// PCB-revision marker registers.
+/// Legacy board-key fields: interrupt setup and collimator command writes.
 const BOARD_REGS: [u16; 3] = [0xFFC5, 0xEDCC, 0xEDCD];
 
 /// Servo loop-filter coefficient-row anchor (`7f 97 7f 51 7f 51 7f 51 7f 51`).
@@ -342,13 +348,13 @@ pub struct FamilyFingerprint {
     pub family: Family,
     /// Canonical servo/RF register values.
     pub asic: String,
-    /// Canonical board marker writes and bit operations.
+    /// Legacy interrupt/collimator inputs, not confirmed board identifiers.
     pub board: String,
     /// Canonical remaining hardware/interface setup values.
     /// The legacy field name does not imply verified physical pin assignments.
     pub pins: String,
-    /// Unmasked FE94/FEC0 writes retained for register and feature analysis.
-    /// This diagnostic evidence is not hashed into the family identifier.
+    /// Unmasked observed FE94/FEC0 constants, including shared-register stores.
+    /// These corrected diagnostics are independent of the v5 key projection.
     pub raw_pins: String,
     /// Servo coefficient hash, or `"none"` when no anchor rows were found.
     pub servo: String,
@@ -356,17 +362,51 @@ pub struct FamilyFingerprint {
 
 /// Extract the configuration evidence used by [`family`].
 pub fn family_fingerprint(body: &[u8]) -> Option<FamilyFingerprint> {
+    family_evidence(body).map(|e| e.fingerprint)
+}
+
+/// Collect register observations alongside the current family policy inputs.
+/// Unrecognized images retain the same admission behavior as [`family`].
+pub fn family_evidence(body: &[u8]) -> Option<FamilyEvidence> {
     let regions = regions(body)?;
-    fingerprint_regions(&regions.slices(), body)
+    evidence_regions(&regions.slices(), body)
 }
 
 /// Already-decoded regions supplied by the analysis pipeline.
 #[cfg(feature = "analysis")]
 pub(crate) fn family_regions(regions: &[&[u8]], body: &[u8]) -> Option<Family> {
-    fingerprint_regions(regions, body).map(|f| f.family)
+    evidence_regions(regions, body).map(|e| e.fingerprint.family)
 }
 
+fn evidence_regions(regions: &[&[u8]], body: &[u8]) -> Option<FamilyEvidence> {
+    let mut fingerprint = legacy_fingerprint_regions(regions, body)?;
+    let registers = evidence::register_observations(regions, body);
+    fingerprint.raw_pins = PIN_REGS
+        .iter()
+        .map(|address| {
+            let values = registers
+                .iter()
+                .find(|r| r.address == *address)
+                .expect("host registers are collected")
+                .values();
+            format!("{address:04x}={}", fmt_ints(Some(&values)))
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(FamilyEvidence {
+        fingerprint,
+        registers,
+    })
+}
+
+#[cfg(test)]
 fn fingerprint_regions(regions: &[&[u8]], body: &[u8]) -> Option<FamilyFingerprint> {
+    evidence_regions(regions, body).map(|e| e.fingerprint)
+}
+
+// Keep v5 extraction and serialization stable while fixing the observations.
+// Inserting recovered constants here would rekey existing family identifiers.
+fn legacy_fingerprint_regions(regions: &[&[u8]], body: &[u8]) -> Option<FamilyFingerprint> {
     let wanted: BTreeSet<u16> = ASIC_REGS
         .iter()
         .chain(PIN_REGS.iter())

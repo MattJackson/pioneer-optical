@@ -102,9 +102,15 @@ impl Receiver {
             .plan_to(crate::startup::checks::Checks::discover(normal, kernel))
             .map_err(PreparationError::Startup)
     }
-    /// Retained for source compatibility. Certified conversions are selected
-    /// by the firmware pair; live setting prerequisites are checked at execution.
-    pub fn with_original_parameters(self, _parameters: &[u8]) -> Self {
+    /// Bind the persistent factory hardware independently of installed branding.
+    /// Invalid supplied evidence cannot fall back to firmware-hash selection.
+    pub fn with_original_parameters(mut self, parameters: &[u8]) -> Self {
+        self.original_product = Some(
+            crate::production::parse(parameters)
+                .filter(|p| p.product_code_parts().is_some())
+                .map(|p| p.product_code.to_owned())
+                .ok_or(crate::settings::adaptation::Error::OriginalRequired),
+        );
         self
     }
 
@@ -133,6 +139,20 @@ impl Receiver {
             &normal.image,
             &normal.info().model,
         );
+        let result = if self.settings_contract.hardware_sensitive() {
+            match &self.original_product {
+                Some(Ok(original)) => crate::settings::adaptation::prepare_hardware(
+                    &self.settings_contract,
+                    &normal.image,
+                    &normal.info().model,
+                    original,
+                ),
+                Some(Err(error)) => Err(error.clone()),
+                None => result,
+            }
+        } else {
+            result
+        };
         let adapted = result.map_err(PreparationError::Adaptation)?;
         // A stock-return profile authorizes only its exact OEM image and
         // original factory mechanism; native reverse routes are not inferred.
@@ -247,7 +267,8 @@ impl Receiver {
             self.prepare_startup(&pair.normal().image, Some(&kernel.image))?,
             false,
         )
-        .with_adaptation(adaptation);
+        .with_adaptation(adaptation)
+        .with_hardware_guard(pair.normal(), self.requires_original_hardware());
         let (normal, normal_bytes) = pair.into_normal();
         Ok(PreparedNormal {
             stage: PreparedStage {
@@ -340,7 +361,8 @@ impl Receiver {
             receiver.prepare_startup(&target.normal().image, Some(&target.kernel().image))?,
             patch,
         )
-        .with_adaptation(adaptation);
+        .with_adaptation(adaptation)
+        .with_hardware_guard(target.normal(), self.requires_original_hardware());
         if patch {
             if kernel_marker_policy(&target.kernel().image)
                 != Some(KernelMarkerPolicy::NoMarkerCheck)

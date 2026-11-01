@@ -78,6 +78,13 @@ fn ud02_original_hardware_routes_do_not_inherit_installed_firmware_permissions()
 }
 
 #[test]
+fn catalogue_scopes_are_the_same_compiled_hardware_rules() {
+    assert_eq!(hardware_rules(), HARDWARE_RULES);
+    assert_eq!(hardware_rules()[0].hardware.platform, "UD02");
+    assert_eq!(hardware_rules()[0].destination.platform, "UD04");
+}
+
+#[test]
 fn held_original_hardware_current_firmware_destination_matrix() {
     let Ok(original_path) = std::env::var("PIONEER_UD02_NORMAL") else {
         return;

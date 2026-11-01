@@ -37,6 +37,12 @@ Live preparation binds the persistent factory record before selecting a route.
 Execution re-reads it and validates all stages before any settings, bridge or
 firmware write. Current firmware is never substituted for original hardware.
 
+`adaptation::hardware_rules()` exposes the same reviewed scopes to catalogue
+consumers. A scope is not an admission result: the app prepares each candidate
+with explicit original-hardware context and retains independent image, receiver,
+family and startup checks. Additional admitted routes are published separately
+from ordinary crossflashes and still require live hardware verification.
+
 ## Current registry
 
 The production registry contains the tested original UD02 mechanism to UD04

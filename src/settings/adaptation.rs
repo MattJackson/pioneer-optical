@@ -24,6 +24,13 @@ const HARDWARE_RULES: &[super::routing::Rule<'_>] = &[super::routing::Rule {
     profile: "pioneer.ud02-to-ud04-1.14",
 }];
 
+/// Reviewed original-hardware scopes and destination recipes. Catalogue
+/// consumers must still prepare each firmware pair with the original hardware
+/// evidence; these selectors alone do not grant a flash or an OEM return.
+pub fn hardware_rules() -> &'static [super::routing::Rule<'static>] {
+    HARDWARE_RULES
+}
+
 fn hardware_route(
     original: &str,
     target_model: &str,

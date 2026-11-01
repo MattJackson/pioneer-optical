@@ -223,15 +223,15 @@ fn normal_layout_error_catalogue_preserves_every_failure_class() {
 #[cfg(all(feature = "envelope", feature = "drive"))]
 #[test]
 fn flash_code_is_independent_of_pass_and_retains_pass_for_presentation() {
-    use crate::receiver::{FlashError, FlashPass};
-    for pass in [FlashPass::Initial, FlashPass::Restoration] {
+    use crate::receiver::{FlashError, FlashStage};
+    for stage in [FlashStage::Initial, FlashStage::Continuation(1)] {
         let error = FlashError::<()>::ReadbackMismatch {
-            pass,
+            stage,
             address: 0x400020,
         };
         assert_eq!(error.code(), "pioneer.flash.readback_mismatch");
         assert!(
-            matches!(error, FlashError::ReadbackMismatch { pass: p, address: 0x400020 } if p == pass)
+            matches!(error, FlashError::ReadbackMismatch { stage: p, address: 0x400020 } if p == stage)
         );
     }
 }

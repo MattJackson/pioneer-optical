@@ -130,12 +130,7 @@ fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
         &read("oem/pioneer/sat/8A10/GENERAL/1.14/normal/8e02ed7244d8de7564f6e0606ba803f8614a6e2b87b5e24f7ee344cdcea71141.enc"),
     ).unwrap();
     let receiver = Receiver::from_installed(&installed).unwrap();
-    assert!(matches!(
-        receiver.prepare(target.clone()),
-        Err(PreparationError::Adaptation(
-            crate::settings::adaptation::Error::OriginalRequired
-        ))
-    ));
+    assert!(receiver.prepare(target.clone()).is_ok());
     let mut parameters = factory_parameters("BDR-UD02TBD");
     parameters[0x84..0x88].fill(0xff);
     parameters[0xc0..0xc0 + 90].fill(b'0');
@@ -185,7 +180,7 @@ fn adding_one_test_profile_changes_only_the_matching_prepared_image() {
         "hardware_scheme": crate::image::FAMILY_SCHEME,
         "hardware_family": installed.family().unwrap().to_string(),
         "source_normal_sha256": [crate::settings::adaptation::digest(&installed.normal().image)],
-        "original_product_codes": ["BDR-UD02TBD"], "mode": "adapt",
+        "mode": "adapt",
         "resolves_issue": "ud02-mechanism-convention",
         "target_normal_sha256": crate::settings::adaptation::digest(&target_normal),
         "target_model": target.normal().info().model,
@@ -213,15 +208,12 @@ fn adding_one_test_profile_changes_only_the_matching_prepared_image() {
     let prepared = receiver.prepare_normal(&normal).unwrap();
     assert_eq!(prepared.normal_image(), expected);
 
-    // Identical running firmware and hardware family cannot authorize native
-    // UD04 hardware to use a route restricted to originally UD02 mechanisms.
+    // Factory metadata is not an extra eligibility gate for a certified pair.
     let receiver = receiver.with_original_parameters(&factory_parameters("BDR-UD04"));
-    assert!(matches!(
-        receiver.prepare(target),
-        Err(PreparationError::Adaptation(
-            crate::settings::adaptation::Error::OriginalMismatch
-        ))
-    ));
+    assert_eq!(
+        receiver.prepare(target).unwrap().target.normal().image,
+        expected
+    );
 }
 
 #[test]
@@ -240,10 +232,10 @@ fn prepares_patch_and_pristine_restore_before_any_io() {
         assert_eq!(plan.final_kernel_image(), pristine);
         assert_eq!(plan.normal_transfer(), normal);
         let first = Envelope::load(plan.kernel_transfer()).unwrap();
-        let restored = Envelope::load(plan.restoration_kernel_transfer().unwrap()).unwrap();
+        let restored = Envelope::load(plan.final_stage_kernel_transfer().unwrap()).unwrap();
         assert_eq!(first.image, plan.first_kernel_image());
         assert_eq!(restored.image, pristine);
-        let restore = plan.restoration_receiver().unwrap();
+        let restore = plan.final_stage_receiver().unwrap();
         assert!(restore
             .entry_control(&installed.normal().image[..16])
             .is_ok());
@@ -276,8 +268,14 @@ fn first_kernel_transport_is_selected_from_installed_loader() {
         .prepare(target)
         .unwrap();
     assert_eq!(
-        prepared.initial_receive,
-        Some(crate::receiver::transport::KernelReceive::FrontKeyTwoRegion)
+        crate::receiver::transport::detect(
+            &prepared.stages[0]
+                .receiver
+                .installed_kernel()
+                .unwrap()
+                .image
+        ),
+        crate::receiver::transport::KernelReceive::FrontKeyTwoRegion
     );
 }
 
@@ -317,8 +315,8 @@ fn ungated_receiver_preserves_every_marker_without_a_second_pass() {
         let plan = receiver.prepare(target).unwrap();
         assert_eq!(plan.kernel_transfer(), expected);
         assert_eq!(plan.first_kernel_image(), plan.final_kernel_image());
-        assert!(plan.restoration_kernel_transfer().is_none());
-        assert!(plan.restoration_receiver().is_none());
+        assert!(plan.final_stage_kernel_transfer().is_none());
+        assert!(plan.final_stage_receiver().is_none());
     }
 }
 
@@ -333,11 +331,11 @@ fn refuses_missing_installed_evidence_and_unproven_restoration() {
     let receiver = Receiver::from_installed(&installed).unwrap();
     assert_eq!(
         receiver.prepare(update(true, 0, 0x12, true)).unwrap_err(),
-        PreparationError::UnsupportedRestoration
+        PreparationError::UnsupportedFinalStage
     );
     assert_eq!(
         receiver.prepare(update(false, 0, 0x12, false)).unwrap_err(),
-        PreparationError::RestorationEntry(Error::Unsupported)
+        PreparationError::FinalStageEntry(Error::Unsupported)
     );
     assert!(matches!(
         entry_only.prepare(update(false, 0, 0x13, true)),
@@ -356,7 +354,7 @@ fn gated_receiver_does_not_patch_an_accepted_marker() {
         let expected = target.kernel_transfer().to_vec();
         let plan = receiver.prepare(target).unwrap();
         assert_eq!(plan.kernel_transfer(), expected);
-        assert!(plan.restoration_receiver().is_none());
+        assert!(plan.final_stage_receiver().is_none());
     }
 }
 
@@ -404,7 +402,7 @@ fn explicit_family_override_does_not_waive_receiver_or_restore_checks() {
         receiver
             .prepare_without_family_check(update(true, 0, 0x13, true))
             .unwrap_err(),
-        PreparationError::UnsupportedRestoration
+        PreparationError::UnsupportedFinalStage
     );
     let entry_only = Receiver::detect(installed.normal()).unwrap();
     assert_eq!(
@@ -517,4 +515,116 @@ fn hardware_override_never_waives_required_settings() {
         receiver.prepare_normal_without_family_check(installed.normal_transfer()),
         Err(PreparationError::Settings(_))
     ));
+}
+
+#[test]
+fn handoff_bridge_preserves_source_normal_and_finishes_with_exact_target() {
+    let source = update(false, 1, 0x12, true);
+    let original_target = update(false, 1, 0x12, true);
+    let mut kernel = original_target.kernel().image.clone();
+    kernel.copy_within(0x20..0x30, 0x2a);
+    kernel[0x20..0x2a].fill(0);
+    kernel[0x2107] = 0x2a;
+    fix_sum(&mut kernel);
+    let target = Update::load(
+        &original_target.kernel().repack(&kernel).unwrap(),
+        &original_target
+            .normal()
+            .repack(&original_target.normal().image)
+            .unwrap(),
+    )
+    .unwrap();
+    let prepared = Receiver::from_installed(&source)
+        .unwrap()
+        .prepare(target.clone())
+        .unwrap();
+    assert_eq!(prepared.stages().len(), 2);
+    let bridge = &prepared.stages()[0];
+    assert_eq!(bridge.bridge(), Some(BridgeKind::KernelHandoff));
+    assert_eq!(bridge.normal_image(), source.normal().image);
+    let patched = bridge.kernel_image().unwrap();
+    assert_eq!(crate::image::kernel_startup_entry(patched), Some(0x400020));
+    assert_eq!(crate::image::kernel_handoff_entry(patched), Some(0x40002a));
+    // The only allowed edits are the programmer's restart operand and checksum.
+    for (at, (before, after)) in source.kernel().image.iter().zip(patched).enumerate() {
+        if before != after {
+            assert!(
+                (0x2105..0x2108).contains(&at)
+                    || (crate::envelope::KERNEL_CHECKSUM_WORD_OFFSET
+                        ..crate::envelope::KERNEL_CHECKSUM_WORD_OFFSET + 4)
+                        .contains(&at)
+            );
+        }
+    }
+    let final_stage = &prepared.stages()[1];
+    assert_eq!(final_stage.bridge(), None);
+    assert_eq!(
+        final_stage.kernel_transfer().unwrap(),
+        target.kernel_transfer()
+    );
+    assert_eq!(final_stage.normal_transfer(), target.normal_transfer());
+    assert_eq!(final_stage.kernel_image().unwrap(), target.kernel().image);
+}
+
+#[test]
+fn intermediate_marker_must_be_accepted_by_its_receiver() {
+    let source = update(true, 0, 0x12, true);
+    let receiver = Receiver::from_installed(&source).unwrap();
+    // A handoff bridge retains the source marker. A source that rejects that
+    // marker cannot install its own bridge, even though its final target could
+    // otherwise be accepted. Stage admission must catch this before any I/O.
+    let error = PreparedStage::pair(
+        receiver,
+        &source,
+        crate::settings::update::Plan::default(),
+        Some(BridgeKind::KernelHandoff),
+    )
+    .unwrap_err();
+    assert_eq!(error, PreparationError::RejectedMarker);
+}
+
+#[test]
+fn handoff_bridge_signs_unsigned_capture_without_accepting_invalid_signatures() {
+    let source = update(false, 1, 0x12, true);
+    let original_target = update(false, 1, 0x12, true);
+    let mut kernel = original_target.kernel().image.clone();
+    kernel.copy_within(0x20..0x30, 0x2a);
+    kernel[0x20..0x2a].fill(0);
+    kernel[0x2107] = 0x2a;
+    fix_sum(&mut kernel);
+    let target = Update::load(
+        &original_target.kernel().repack(&kernel).unwrap(),
+        &original_target
+            .normal()
+            .repack(&original_target.normal().image)
+            .unwrap(),
+    )
+    .unwrap();
+    for invalid in [false, true] {
+        let mut bytes = source.normal().repack(&source.normal().image).unwrap();
+        bytes[0x170..0x1c0].fill(0);
+        if invalid {
+            bytes[0x170] = 1;
+        }
+        let normal = Envelope::load_with_kernel(&bytes, source.kernel()).unwrap();
+        let receiver = Receiver::detect_with_kernel(&normal, source.kernel()).unwrap();
+        let result = receiver.prepare(target.clone());
+        if invalid {
+            assert!(matches!(
+                result,
+                Err(PreparationError::Target(UpdateError::Authentication))
+            ));
+        } else {
+            let prepared = result.unwrap();
+            let stage = &prepared.stages()[0];
+            assert_eq!(stage.normal_image(), source.normal().image);
+            assert!(stage.normal_transfer()[0x170..0x1c0]
+                .iter()
+                .any(|byte| *byte != 0));
+            assert!(crate::envelope::builder::normal_authentication_valid(
+                stage.normal_transfer(),
+                stage.kernel_image().unwrap()
+            ));
+        }
+    }
 }

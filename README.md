@@ -116,10 +116,28 @@ pub fn prepare(
 }
 ```
 
-Preparation performs no device I/O. `PreparedUpdate::flash` rebinds the live
-receiver, migrates required startup settings, transfers each required pass,
-restores a temporary Kernel when needed, and confirms target startup and Kernel
-readback. `prepare_normal` supports a Normal-only update.
+Preparation performs no device I/O. `PreparedUpdate::stages()` exposes the
+ordered transitions before execution. Each immutable stage contains its receiving
+firmware, Kernel/Normal transfers, required settings and readback expectations.
+A direct update has one stage. A receiver-marker bridge temporarily changes the
+target marker and then restores the requested bytes. A Kernel-handoff bridge
+retains the source Normal and startup code while adapting its recognized RAM
+programmer restart operand for the target. Independent requirements may compose
+into three stages; unknown contracts refuse preparation.
+
+`PreparedUpdate::flash` uses one stage executor, with live receiver binding,
+settings migration, transfer and verification at each transition. Parameter 0x9F
+is a stage setting, not a separate flashing path. `prepare_normal` uses the same
+executor without a Kernel transfer. The full sequence is validated before its
+first mutation.
+
+`ExecutionError::completed_stages()` retains earlier completion when a later
+stage fails, including a refusal before its first write. No failing firmware
+write is retried. Settings may roll back only before that stage enters firmware
+update mode. Recovery and rollback require evidence of the firmware actually
+installed; an original backup is not automatically a valid Current reference
+after a handoff bridge. New handoff bridges still require physical hardware
+qualification.
 
 `PreparedUpdate::flash` requires complete Kernel and Normal readback.
 `flash_completed` returns a `FlashOutcome` with target-startup evidence and

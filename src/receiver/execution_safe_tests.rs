@@ -38,12 +38,13 @@ fn fixture(gated: bool, marker: u8) -> Update {
     checksum(&mut kernel);
     Update::load(&original.kernel().repack(&kernel).unwrap(), &normal_wire).unwrap()
 }
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct State {
     installed_id: Option<Identity>,
     target_id: Option<Identity>,
     descriptor: Vec<u8>,
     normal: Vec<u8>,
+    stage_normals: Vec<Vec<u8>>,
     kernels: Vec<Vec<u8>>,
     parameter: u16,
     parameter_writes: Vec<u16>,
@@ -91,14 +92,11 @@ fn setup_updates(installed: Update, target: Update) -> (PreparedUpdate, Rc<RefCe
     layout
         .validate(&target.normal().image)
         .expect("fixture Normal body");
-    let kernels = if plan.restoration_receiver().is_some() {
-        vec![
-            plan.first_kernel_image().to_vec(),
-            plan.final_kernel_image().to_vec(),
-        ]
-    } else {
-        vec![plan.final_kernel_image().to_vec()]
-    };
+    let kernels = plan
+        .stages()
+        .iter()
+        .map(|stage| stage.kernel_image().unwrap().to_vec())
+        .collect();
     let state = Rc::new(RefCell::new(State {
         installed_id: Some(id(installed.normal())),
         target_id: Some(id(target.normal())),
@@ -133,6 +131,10 @@ impl Transport for Port {
                     s.loader = true;
                 } else if command == cdb::finish() {
                     s.finishes += 1;
+                    if let Some(normal) = s.stage_normals.get(s.finishes - 1).cloned() {
+                        s.descriptor = normal[..16].to_vec();
+                        s.normal = normal;
+                    }
                     s.loader = s.stay_loader;
                 }
                 Ok(bytes.len())
@@ -220,7 +222,7 @@ impl Transport for Port {
 #[derive(Default)]
 struct Clock {
     elapsed: Duration,
-    deny: Option<FlashPass>,
+    deny: Option<FlashStage>,
     checks: usize,
     deny_check: Option<usize>,
     operation_progress: Vec<crate::operation::Progress>,
@@ -237,9 +239,9 @@ impl UpdateRuntime for Clock {
     }
 }
 impl ExecutionRuntime<&'static str> for Clock {
-    fn check_pass(&mut self, pass: FlashPass) -> Result<(), &'static str> {
+    fn check_stage(&mut self, stage: FlashStage) -> Result<(), &'static str> {
         self.checks += 1;
-        if self.deny == Some(pass) || self.deny_check == Some(self.checks) {
+        if self.deny == Some(stage) || self.deny_check == Some(self.checks) {
             Err("tray policy refused")
         } else {
             Ok(())
@@ -294,9 +296,9 @@ fn complete_flash_owns_migration_both_passes_and_exact_component_verification() 
             .find(|p| p.phase == Phase::Restarting)
             .unwrap();
         assert_eq!((waiting.done, waiting.total), (None, None));
-        assert_eq!(result.completed_passes, if restore { 2 } else { 1 });
+        assert_eq!(result.completed_stages, if restore { 2 } else { 1 });
         assert_eq!(state.borrow().parameter_writes, [0xffff]);
-        assert_eq!(state.borrow().finishes, result.completed_passes);
+        assert_eq!(state.borrow().finishes, result.completed_stages);
     }
 }
 #[test]
@@ -307,7 +309,7 @@ fn recovery_resumes_loader_and_still_verifies_both_components() {
     assert_eq!(state.borrow().entries, 1); // restoration enters normally
     assert!(state.borrow().parameter_writes.is_empty());
     assert!(result.normal_verified && result.kernel_verified);
-    assert_eq!(result.completed_passes, 2);
+    assert_eq!(result.completed_stages, 2);
 }
 
 #[test]
@@ -316,7 +318,7 @@ fn recovery_unsupported_medium_advances_to_existing_exact_readbacks() {
     state.borrow_mut().unsupported_medium = Some((2, 0x30, 0));
     let result = run(&plan, &state, ExecutionMode::Recovery).unwrap();
     assert!(result.kernel_verified && result.normal_verified);
-    assert_eq!(result.completed_passes, 2);
+    assert_eq!(result.completed_stages, 2);
     assert!(state.borrow().readback_reads > 0);
 }
 
@@ -445,7 +447,7 @@ fn recovery_unsupported_medium_without_normal_readback_is_not_fully_verified() {
     let outcome = run(&plan, &state, ExecutionMode::Recovery).unwrap();
     assert!(outcome.kernel_verified);
     assert!(!outcome.normal_verified);
-    assert_eq!(outcome.completed_passes, 1);
+    assert_eq!(outcome.completed_stages, 1);
 }
 
 #[test]
@@ -468,7 +470,7 @@ fn flash_requires_complete_readback_and_completed_preserves_qualified_evidence()
         panic!("completed evidence was lost");
     };
     assert!(outcome.kernel_verified && !outcome.normal_verified);
-    assert_eq!(outcome.completed_passes, 1);
+    assert_eq!(outcome.completed_stages, 1);
 
     let (plan, state) = setup(false);
     state.borrow_mut().unreadable_normal = true;
@@ -482,7 +484,7 @@ fn flash_requires_complete_readback_and_completed_preserves_qualified_evidence()
         )
         .unwrap();
     assert!(outcome.kernel_verified && !outcome.normal_verified);
-    assert_eq!(outcome.completed_passes, 1);
+    assert_eq!(outcome.completed_stages, 1);
 }
 #[test]
 fn normal_mismatch_is_fatal_and_stops_restoration() {
@@ -583,7 +585,7 @@ fn unreadable_early_span_cannot_hide_a_readable_later_mismatch() {
             &mut reads,
             &vec![0; 0x10000],
             0x410000,
-            FlashPass::Initial,
+            FlashStage::Initial,
             &mut Clock::default()
         ),
         Err(ExecutionError::NormalMismatch {
@@ -707,7 +709,7 @@ fn branding_differences_are_success_when_bytes_match_including_restoration() {
             state.borrow_mut().wrong_target = Some(wrong);
             let outcome = run(&plan, &state, ExecutionMode::Flash).unwrap();
             assert!(outcome.kernel_verified && outcome.normal_verified);
-            assert_eq!(outcome.completed_passes, if restore { 2 } else { 1 });
+            assert_eq!(outcome.completed_stages, if restore { 2 } else { 1 });
         }
     }
 }
@@ -775,4 +777,146 @@ fn recovery_loader_may_reveal_its_serial_only_after_normal_starts() {
     let result = run(&plan, &state, ExecutionMode::Recovery).unwrap();
     assert!(result.kernel_verified && result.normal_verified);
     assert_eq!(result.identity.serial(), "ORIGINAL");
+}
+
+fn setup_handoff_bridge(marker: bool) -> (PreparedUpdate, Rc<RefCell<State>>) {
+    let source = fixture(marker, 1);
+    let original = fixture(false, if marker { 0 } else { 1 });
+    let mut kernel = original.kernel().image.clone();
+    kernel.copy_within(0x20..0x30, 0x2a);
+    kernel[0x20..0x2a].fill(0);
+    kernel[0x2107] = 0x2a;
+    checksum(&mut kernel);
+    let mut normal = original.normal().image.clone();
+    normal[0x700] ^= 1; // Distinguish source and destination readback.
+    checksum(&mut normal);
+    let mut normal_wire = original.normal().repack(&normal).unwrap();
+    let mut key = [0; 20];
+    key[19] = 5;
+    crate::envelope::signature::SigningKey::from_bytes(key)
+        .unwrap()
+        .sign_normal(&mut normal_wire)
+        .unwrap();
+    let target = Update::load(&original.kernel().repack(&kernel).unwrap(), &normal_wire).unwrap();
+    let (plan, state) = setup_updates(source, target);
+    state.borrow_mut().stage_normals = plan
+        .stages()
+        .iter()
+        .map(|stage| stage.normal_image().to_vec())
+        .collect();
+    (plan, state)
+}
+
+#[test]
+fn handoff_and_marker_bridges_execute_with_each_stages_own_normal() {
+    for marker in [false, true] {
+        let (plan, state) = setup_handoff_bridge(marker);
+        assert_eq!(plan.stages().len(), if marker { 3 } else { 2 });
+        assert_ne!(
+            plan.stages()[0].normal_image(),
+            plan.stages()[1].normal_image()
+        );
+        let result = run(&plan, &state, ExecutionMode::Flash).unwrap();
+        assert_eq!(result.completed_stages, plan.stages().len());
+        assert!(result.kernel_verified && result.normal_verified);
+        assert_eq!(state.borrow().finishes, plan.stages().len());
+    }
+}
+
+#[test]
+fn handoff_bridge_failure_stops_and_retains_completed_stages() {
+    let (plan, state) = setup_handoff_bridge(true);
+    let initial = state.borrow().clone();
+    run(&plan, &state, ExecutionMode::Flash).unwrap();
+    let writes = state.borrow().writes;
+    for fail in 1..=writes {
+        let mut next = initial.clone();
+        next.fail_write = Some(fail);
+        let state = Rc::new(RefCell::new(next));
+        let error = run(&plan, &state, ExecutionMode::Flash).unwrap_err();
+        if fail == 1 {
+            // Before entering UPDATE, the settings transaction may restore its
+            // original word. This is the established safe rollback boundary.
+            assert_eq!(state.borrow().entries, 0);
+            assert_eq!(state.borrow().parameter, initial.parameter);
+        } else {
+            assert_eq!(
+                state.borrow().writes,
+                fail,
+                "a failing firmware write must not retry or advance"
+            );
+        }
+        assert_eq!(error.completed_stages(), state.borrow().finishes);
+        if state.borrow().finishes > 0 {
+            assert!(error.write_started() && error.firmware_write_started());
+        }
+    }
+    let state = Rc::new(RefCell::new(initial));
+    let error = plan
+        .execute(
+            FlashTransport {
+                reads: &mut Port(state.clone()),
+                writes: &mut Port(state.clone()),
+            },
+            &mut Clock {
+                deny: Some(FlashStage::Continuation(1)),
+                ..Clock::default()
+            },
+            ExecutionMode::Flash,
+        )
+        .unwrap_err();
+    assert_eq!(error.completed_stages(), 1);
+    assert!(error.firmware_write_started());
+    assert_eq!(state.borrow().finishes, 1);
+    assert_eq!(state.borrow().entries, 1);
+}
+
+#[test]
+fn later_stage_settings_roll_back_locally_without_erasing_earlier_completion() {
+    let (mut plan, state) = setup_handoff_bridge(false);
+    plan.stages[1].settings = crate::settings::update::Plan::target(
+        Some(crate::startup::Setting {
+            parameter: 0x9f,
+            value: 0xfe34,
+            explicit: true,
+        }),
+        false,
+    );
+    let initial = state.borrow().clone();
+    let result = run(&plan, &state, ExecutionMode::Flash).unwrap();
+    assert_eq!(result.completed_stages, 2);
+    assert_eq!(state.borrow().parameter_writes, [0xffff, 0xfe34]);
+
+    let state = Rc::new(RefCell::new(initial));
+    let error = plan
+        .execute(
+            FlashTransport {
+                reads: &mut Port(state.clone()),
+                writes: &mut Port(state.clone()),
+            },
+            &mut Clock {
+                deny_check: Some(4),
+                ..Clock::default()
+            },
+            ExecutionMode::Flash,
+        )
+        .unwrap_err();
+    assert_eq!(error.completed_stages(), 1);
+    assert!(error.firmware_write_started());
+    assert_eq!(state.borrow().entries, 1);
+    assert_eq!(state.borrow().finishes, 1);
+    assert_eq!(state.borrow().parameter_writes, [0xffff, 0xfe34, 0xffff]);
+    let ExecutionError::AfterStage { source, .. } = error else {
+        panic!("lost completed bridge")
+    };
+    let ExecutionError::Startup(source) = *source else {
+        panic!("lost stage settings failure")
+    };
+    assert!(matches!(
+        *source,
+        crate::startup::migration::Error::Flash {
+            rollback: crate::startup::migration::Rollback::Restored,
+            ..
+        }
+    ));
 }

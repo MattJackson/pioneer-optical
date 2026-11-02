@@ -41,17 +41,31 @@ fn hardware_route(
     if !rules.iter().any(|rule| rule.hardware.matches(original)) {
         return Ok(super::routing::Decision::Unscoped);
     }
-    let Some(target) = crate::production::ProductCode::parse(target_model) else {
-        return if rules
+    destination_route(
+        target_model,
+        rules
             .iter()
-            .any(|r| r.restricted && r.hardware.matches(original))
-        {
+            .any(|r| r.restricted && r.hardware.matches(original)),
+        |target| super::routing::Table::new(rules).resolve(original, target),
+    )
+}
+
+// Live and symbolic preparation share destination parsing and refusal policy.
+// OEM names outside the factory product grammar retain normal checks on an
+// unrestricted scope, while a restricted scope still refuses them.
+fn destination_route<'a>(
+    target_model: &str,
+    restricted: bool,
+    resolve: impl FnOnce(crate::production::ProductCode<'_>) -> super::routing::Decision<'a>,
+) -> Result<super::routing::Decision<'a>, Error> {
+    let Some(target) = crate::production::ProductCode::parse(target_model) else {
+        return if restricted {
             Err(Error::OriginalMismatch)
         } else {
             Ok(super::routing::Decision::Unscoped)
         };
     };
-    match super::routing::Table::new(rules).resolve(original, target) {
+    match resolve(target) {
         super::routing::Decision::UnsupportedDestination => Err(Error::OriginalMismatch),
         super::routing::Decision::Ambiguous => Err(Error::Registry),
         route => Ok(route),
@@ -469,17 +483,12 @@ impl Registry {
         model: &str,
         scope: super::routing::ProductSelector<'static>,
     ) -> Result<Option<Adapted>, Error> {
-        let target_model =
-            crate::production::ProductCode::parse(model).ok_or(Error::OriginalMismatch)?;
-        let route =
-            super::routing::Table::new(hardware_rules()?).resolve_scope(scope, target_model);
-        match route {
-            super::routing::Decision::UnsupportedDestination => {
-                return Err(Error::OriginalMismatch)
-            }
-            super::routing::Decision::Ambiguous => return Err(Error::Registry),
-            _ => {}
-        }
+        let rules = hardware_rules()?;
+        let route = destination_route(
+            model,
+            rules.iter().any(|r| r.restricted && r.hardware == scope),
+            |target| super::routing::Table::new(rules).resolve_scope(scope, target),
+        )?;
         self.prepare_route(source, target, model, route)
     }
 

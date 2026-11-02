@@ -524,3 +524,46 @@ fn compiled_routes_reject_overlapping_broad_and_specific_hardware_scopes() {
         Err(Error::Registry)
     ));
 }
+
+#[test]
+fn arbitrary_oem_destination_has_identical_live_and_symbolic_policy_and_guard() {
+    let registry = Registry::parse(PROFILES).unwrap();
+    let rules = hardware_rules().unwrap();
+    let mut scopes = Vec::new();
+    for rule in rules {
+        if !scopes.contains(&rule.hardware) {
+            scopes.push(rule.hardware);
+        }
+    }
+    for scope in scopes {
+        let original = format!(
+            "{}-{}{}",
+            scope.prefix.unwrap_or("BDR"),
+            scope.platform,
+            scope.suffix.unwrap_or("")
+        );
+        let restricted = rules.iter().any(|r| r.hardware == scope && r.restricted);
+        for model in ["Arbitrary OEM Name", "SBC-06D2X-U", "SlimtypeEB1"] {
+            let live = registry.prepare_hardware(&source(), &target(), model, &original);
+            let symbolic = registry.prepare_scope(&source(), &target(), model, scope);
+            if restricted {
+                assert_eq!(live.unwrap_err(), Error::OriginalMismatch);
+                assert_eq!(symbolic.unwrap_err(), Error::OriginalMismatch);
+            } else {
+                assert!(live.unwrap().is_none());
+                assert!(symbolic.unwrap().is_none());
+                let guard = HardwareGuard::new(model, &target(), None).with_scope(Some(scope));
+                assert_eq!(guard.scope(), Some(scope));
+                assert_eq!(guard.check(&factory_code(&original)), Ok(()));
+                assert_eq!(
+                    guard.check(&factory_code("BDR-UD02TBD")),
+                    Err(Error::OriginalMismatch)
+                );
+                assert_eq!(
+                    guard.check(&[0xff; crate::production::PARAMETERS_LEN]),
+                    Err(Error::OriginalRequired)
+                );
+            }
+        }
+    }
+}

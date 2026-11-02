@@ -1,6 +1,136 @@
 use super::*;
 
 #[test]
+fn shared_fe94_constant_is_observed_without_rekeying_v5() {
+    let mut code = vec![0xf8, 0x0d, 0x6a, 0x88, 0xe4, 0x36];
+    let legacy = family_fingerprint(&code).unwrap();
+    code.extend_from_slice(&[
+        0xf9, 0x40, 0x6a, 0x89, 0xfe, 0x9d, 0xf8, 0x01, 0x6a, 0x88, 0xfe, 0x9f, 0x6a, 0x89, 0xfe,
+        0x94,
+    ]);
+    let actual = family_fingerprint(&code).unwrap();
+    assert_eq!(actual.raw_pins, "fe94=40 fec0=-");
+    assert_eq!(actual.family, legacy.family);
+    assert_eq!(actual.pins, legacy.pins);
+}
+
+fn observed_values(evidence: &FamilyEvidence, address: u16) -> BTreeSet<u8> {
+    evidence
+        .registers()
+        .iter()
+        .find(|r| r.address == address)
+        .unwrap()
+        .values()
+}
+
+#[test]
+fn collimator_shared_zero_has_both_observations_and_distinct_policy_inputs() {
+    let code = [
+        0xf8, 0x0d, 0x6a, 0x88, 0xe4, 0x36, 0x18, 0x99, 0x6a, 0x89, 0xed, 0xcc, 0x6a, 0x89, 0xed,
+        0xcd,
+    ];
+    let evidence = family_evidence(&code).unwrap();
+    assert_eq!(observed_values(&evidence, 0xedcc), BTreeSet::from([0]));
+    assert_eq!(observed_values(&evidence, 0xedcd), BTreeSet::from([0]));
+    assert_eq!(evidence.fingerprint().board, "ffc5=- edcc=0 edcd=-");
+    let observation = &evidence
+        .registers()
+        .iter()
+        .find(|r| r.address == 0xedcd)
+        .unwrap()
+        .observations[0];
+    assert_eq!((observation.region, observation.offset), (0, 12));
+    assert_eq!(
+        observation.operation,
+        RegisterOperation::Write {
+            value: 0,
+            loaded_at: 6
+        }
+    );
+}
+
+#[test]
+fn observed_constants_do_not_cross_control_flow_or_operand_boundaries() {
+    let seed = [0xf8, 0x0d, 0x6a, 0x88, 0xe4, 0x36];
+    for interruption in [
+        &[0x40, 0x00][..],             // branch
+        &[0x5e, 0x40, 0x12, 0x00][..], // call
+        &[0x5e, 0xf9, 0x40, 0x00][..], // call operand resembles MOV.B #40,R1L
+        &[0x79, 0x01, 0xf9, 0x40][..], // word write clobbers the byte register
+        &[0x6a, 0x09, 0xfe, 0xfc][..], // unknown hardware read
+    ] {
+        let mut code = seed.to_vec();
+        code.extend_from_slice(&[0xf9, 0x40]);
+        code.extend_from_slice(interruption);
+        code.extend_from_slice(&[0x6a, 0x89, 0xfe, 0x94]);
+        assert!(
+            observed_values(&family_evidence(&code).unwrap(), 0xfe94).is_empty(),
+            "{interruption:02x?}"
+        );
+    }
+}
+
+#[test]
+fn corrected_observations_do_not_join_separate_regions() {
+    let seed = [0xf8, 0x0d, 0x6a, 0x88, 0xe4, 0x36, 0xf9, 0x40];
+    let store = [0x6a, 0x89, 0xfe, 0x94];
+    let evidence = evidence_regions(&[&seed, &store], &[]).unwrap();
+    assert!(observed_values(&evidence, 0xfe94).is_empty());
+}
+
+#[test]
+fn each_family_criterion_can_be_compared_without_changing_ids() {
+    let make = |value| {
+        family_evidence(&[
+            0xf8, 0x0d, 0x6a, 0x88, 0xe4, 0x36, 0xf8, value, 0x6a, 0x88, 0xfe, 0x94,
+        ])
+        .unwrap()
+    };
+    let (a, b) = (make(0x40), make(0xc0));
+    let ids = (a.fingerprint().family, b.fingerprint().family);
+    let comparison = a.compare(&b);
+    assert!(!comparison.matches);
+    assert_eq!(comparison.criteria.iter().filter(|c| !c.matches).count(), 1);
+    let different = comparison.criteria.iter().find(|c| !c.matches).unwrap();
+    assert_eq!(different.criterion, FamilyCriterion::Fe94);
+    assert!(different.evidence_known);
+    let selected: Vec<_> = FAMILY_CRITERIA
+        .iter()
+        .copied()
+        .filter(|c| *c != FamilyCriterion::Fe94)
+        .collect();
+    assert!(a.compare_with(&b, &selected).matches);
+    assert_eq!((a.fingerprint().family, b.fingerprint().family), ids);
+    let missing_servo = comparison
+        .criteria
+        .iter()
+        .find(|c| c.criterion == FamilyCriterion::Servo)
+        .unwrap();
+    assert!(missing_servo.matches);
+    assert!(!missing_servo.evidence_known);
+}
+
+#[test]
+fn criterion_comparison_retains_only_the_existing_fec0_mask() {
+    let make = |value| {
+        family_evidence(&[
+            0xf8, 0x0d, 0x6a, 0x88, 0xe4, 0x36, 0xf8, value, 0x6a, 0x88, 0xfe, 0xc0,
+        ])
+        .unwrap()
+    };
+    let (a, b, c) = (make(0x87), make(0xc7), make(0xc6));
+    assert!(a.compare(&b).matches);
+    assert_eq!(a.fingerprint().family, b.fingerprint().family);
+    assert!(!a.compare(&c).matches);
+    assert_eq!(observed_values(&b, 0xfec0), BTreeSet::from([0xc7]));
+    assert_eq!(FamilyCriterion::Fec0.value_mask(), 0xbf);
+    assert!(FAMILY_CRITERIA
+        .iter()
+        .filter(|c| **c != FamilyCriterion::Fec0)
+        .all(|c| c.value_mask() == 0xff));
+}
+
+#[test]
 fn empty_and_junk_bodies_have_no_family() {
     assert_eq!(family(&[]), None);
     assert_eq!(family(&[0u8; 64]), None);
@@ -483,4 +613,36 @@ fn excluded_interface_registers_do_not_change_hardware_family() {
             assert_eq!(family(&body), expected);
         }
     }
+}
+
+#[test]
+fn fec0_bit6_is_not_family_identity_but_raw_values_survive() {
+    let body = |value| {
+        vec![
+            0xf8, 0x0d, 0x6a, 0x88, 0xe4, 0x36, 0xf8, value, 0x6a, 0x88, 0xfe, 0xc0,
+        ]
+    };
+    for value in 0u8..=255 {
+        let a = family_fingerprint(&body(value)).unwrap();
+        let b = family_fingerprint(&body(value ^ 0x40)).unwrap();
+        assert_eq!(a.family, b.family);
+        assert_eq!(a.pins, b.pins);
+        assert_ne!(a.raw_pins, b.raw_pins);
+        for bit in [0, 1, 2, 3, 4, 5, 7] {
+            assert_ne!(a.family, family(&body(value ^ (1 << bit))).unwrap());
+        }
+    }
+    let a = family_fingerprint(&body(0xc7)).unwrap();
+    assert_eq!(a.pins, "fe94=- fec0=87");
+    assert_eq!(a.raw_pins, "fe94=- fec0=c7");
+    let mut both = body(0xc7);
+    both.extend_from_slice(&body(0x87)[6..]);
+    assert_eq!(family(&both), Some(a.family));
+    assert_eq!(
+        family_fingerprint(&both).unwrap().raw_pins,
+        "fe94=- fec0=87.c7"
+    );
+    let mut fe94 = body(0xc7);
+    fe94.extend_from_slice(&[0xf8, 0x40, 0x6a, 0x88, 0xfe, 0x94]);
+    assert_ne!(family(&fe94), Some(a.family));
 }

@@ -43,6 +43,9 @@ pub(super) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         "pioneer.settings.adaptation_registry_invalid"
         | "pioneer.settings.adaptation_guard_failed" => IssueKind::Unexpected,
         "pioneer.settings.adaptation_representation_failed"
+        | "pioneer.startup.bank_unknown_installed"
+        | "pioneer.startup.bank_unknown_target"
+        | "pioneer.startup.bank_conversion_required"
         | "pioneer.settings.original_hardware_required"
         | "pioneer.device.unsupported"
         | "pioneer.kernel_handoff.unknown_installed"
@@ -180,6 +183,8 @@ mod tests {
             include_str!("error_codes.rs"),
             include_str!("receiver/execution_safe.rs"),
             include_str!("startup/migration.rs"),
+            include_str!("startup/bank.rs"),
+            include_str!("startup/checks.rs"),
             include_str!("settings/adaptation.rs"),
         ] {
             for code in source.split('"').filter(|s| {

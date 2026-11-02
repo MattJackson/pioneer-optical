@@ -625,6 +625,64 @@ where
             &mut storage,
         )?;
     }
+    if stages
+        .iter()
+        .any(|stage| stage.settings.requires_original_hardware())
+    {
+        let mut parameters = [0; crate::production::PARAMETERS_LEN];
+        drive::read(
+            io.reads,
+            &crate::production::parameters(),
+            &mut parameters,
+            crate::production::PARAMETERS_LEN,
+        )
+        .map_err(|error| {
+            ExecutionError::Startup(Box::new(crate::startup::migration::Error::Read(error)))
+        })?;
+        for stage in stages {
+            stage.settings.check_hardware(&parameters).map_err(|_| {
+                ExecutionError::Startup(Box::new(
+                    crate::startup::migration::Error::OriginalHardware,
+                ))
+            })?;
+        }
+    }
+    // Later-stage mechanism prerequisites must not fail after a bridge has
+    // already changed firmware. Recheck them at the normal stage boundary too.
+    let mut prerequisites = alloc::collections::BTreeMap::new();
+    for requirement in stages
+        .iter()
+        .flat_map(|stage| stage.settings.requirements())
+    {
+        if let Some(previous) = prerequisites.insert(requirement.parameter, requirement.value) {
+            if previous != requirement.value {
+                return Err(ExecutionError::Startup(Box::new(
+                    crate::startup::migration::Error::ConflictingParameters,
+                )));
+            }
+        }
+    }
+    for (parameter, expected) in prerequisites {
+        let command = crate::cdb::read_parameter_word(parameter).ok_or_else(|| {
+            ExecutionError::Startup(Box::new(
+                crate::startup::migration::Error::InvalidParameter(parameter),
+            ))
+        })?;
+        let mut value = [0; 2];
+        drive::read(io.reads, &command, &mut value, 2).map_err(|error| {
+            ExecutionError::Startup(Box::new(crate::startup::migration::Error::Read(error)))
+        })?;
+        let actual = u16::from_be_bytes(value);
+        if actual != expected {
+            return Err(ExecutionError::Startup(Box::new(
+                crate::startup::migration::Error::Prerequisite {
+                    parameter,
+                    expected,
+                    actual,
+                },
+            )));
+        }
+    }
     let mut result: Option<FlashOutcome> = None;
     for (index, stage) in stages.iter().enumerate() {
         // A marker-only intermediate already applied the same Normal's settings.

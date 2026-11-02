@@ -102,6 +102,7 @@ pub struct Receiver {
     family: Option<Family>,
     settings_contract: crate::settings::update::Contract,
     original_product: Option<Result<String, crate::settings::adaptation::Error>>,
+    original_scope: Option<crate::settings::routing::ProductSelector<'static>>,
     startup: crate::startup::checks::Checks,
     #[cfg(test)]
     adaptation_profiles: Option<Vec<String>>,
@@ -182,6 +183,7 @@ impl Receiver {
             family: family(image),
             settings_contract: crate::settings::update::Contract::discover(image),
             original_product: None,
+            original_scope: None,
             startup: crate::startup::checks::Checks::discover(image, None),
             #[cfg(test)]
             adaptation_profiles: None,

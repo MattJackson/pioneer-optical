@@ -214,6 +214,23 @@ fn held_original_hardware_current_firmware_destination_matrix() {
                     .prepare_hardware(&source, target, model, original)
                     .unwrap()
                     .unwrap();
+                let scope = hardware_rules()
+                    .unwrap()
+                    .iter()
+                    .find(|r| {
+                        r.hardware
+                            .matches(crate::production::ProductCode::parse(original).unwrap())
+                    })
+                    .unwrap()
+                    .hardware;
+                let symbolic = registry
+                    .prepare_scope(&source, target, model, scope)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    symbolic.image, prepared.image,
+                    "symbolic and factory evidence select the same exact profile"
+                );
                 let original02 = crate::production::ProductCode::parse(original)
                     .unwrap()
                     .platform_is("UD02");
@@ -496,4 +513,14 @@ fn wrong_expected_bytes_or_output_digest_abort_without_mutating_input() {
         );
         assert_eq!(input, target());
     }
+}
+
+#[test]
+fn compiled_routes_reject_overlapping_broad_and_specific_hardware_scopes() {
+    let mut document: serde_json::Value = serde_json::from_str(PROFILES[0]).unwrap();
+    document["hardware_rules"][1]["hardware"]["prefix"] = serde_json::json!("BDR");
+    assert!(matches!(
+        Registry::parse(&[&document.to_string()]),
+        Err(Error::Registry)
+    ));
 }

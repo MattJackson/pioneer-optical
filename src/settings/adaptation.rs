@@ -63,6 +63,7 @@ pub(crate) struct HardwareGuard {
     model: String,
     normal_hash: String,
     profile: Option<String>,
+    scope: Option<super::routing::ProductSelector<'static>>,
 }
 
 impl HardwareGuard {
@@ -71,12 +72,32 @@ impl HardwareGuard {
             model: model.into(),
             normal_hash: digest(normal),
             profile: profile.map(Into::into),
+            scope: None,
         }
+    }
+
+    pub(crate) fn with_scope(
+        mut self,
+        scope: Option<super::routing::ProductSelector<'static>>,
+    ) -> Self {
+        self.scope = scope;
+        self
+    }
+
+    pub(crate) fn scope(&self) -> Option<super::routing::ProductSelector<'static>> {
+        self.scope
     }
 
     pub(crate) fn check(&self, parameters: &[u8]) -> Result<(), Error> {
         use super::routing::Decision;
         let original = crate::production::parse(parameters).ok_or(Error::OriginalRequired)?;
+        if self.scope.is_some_and(|scope| {
+            !original
+                .product_code_parts()
+                .is_some_and(|code| scope.matches(code))
+        }) {
+            return Err(Error::OriginalMismatch);
+        }
         let route = hardware_route(original.product_code, &self.model)?;
         match route {
             Decision::Unscoped if self.profile.is_none() => Ok(()),
@@ -384,7 +405,9 @@ impl Registry {
             if !rule.hardware.valid()
                 || !rule.destination.valid()
                 || rules[..index].iter().any(|r: &HardwareRule| {
-                    r.hardware.overlaps(&rule.hardware) && r.destination.overlaps(&rule.destination)
+                    r.hardware.overlaps(&rule.hardware)
+                        && (r.hardware != rule.hardware
+                            || r.destination.overlaps(&rule.destination))
                 })
                 || !profiles.iter().any(|p| {
                     p.policy() == rule.profile
@@ -435,8 +458,39 @@ impl Registry {
         model: &str,
         original: &str,
     ) -> Result<Option<Adapted>, Error> {
-        use super::routing::Decision;
         let route = hardware_route(original, model)?;
+        self.prepare_route(source, target, model, route)
+    }
+
+    fn prepare_scope(
+        &self,
+        source: &super::update::Contract,
+        target: &[u8],
+        model: &str,
+        scope: super::routing::ProductSelector<'static>,
+    ) -> Result<Option<Adapted>, Error> {
+        let target_model =
+            crate::production::ProductCode::parse(model).ok_or(Error::OriginalMismatch)?;
+        let route =
+            super::routing::Table::new(hardware_rules()?).resolve_scope(scope, target_model);
+        match route {
+            super::routing::Decision::UnsupportedDestination => {
+                return Err(Error::OriginalMismatch)
+            }
+            super::routing::Decision::Ambiguous => return Err(Error::Registry),
+            _ => {}
+        }
+        self.prepare_route(source, target, model, route)
+    }
+
+    fn prepare_route(
+        &self,
+        source: &super::update::Contract,
+        target: &[u8],
+        model: &str,
+        route: super::routing::Decision<'_>,
+    ) -> Result<Option<Adapted>, Error> {
+        use super::routing::Decision;
         if route == Decision::Unscoped {
             return Ok(None);
         }
@@ -562,6 +616,15 @@ pub(crate) fn prepare_hardware(
     original: &str,
 ) -> Result<Option<Adapted>, Error> {
     registry()?.prepare_hardware(source, target, model, original)
+}
+
+pub(crate) fn prepare_scope(
+    source: &super::update::Contract,
+    target: &[u8],
+    model: &str,
+    scope: super::routing::ProductSelector<'static>,
+) -> Result<Option<Adapted>, Error> {
+    registry()?.prepare_scope(source, target, model, scope)
 }
 
 #[cfg(test)]

@@ -130,15 +130,30 @@ impl Plan {
         mut self,
         target: &crate::envelope::Envelope,
         scoped: bool,
+        scope: Option<super::routing::ProductSelector<'static>>,
     ) -> Self {
         if scoped {
-            self.hardware_guard = Some(super::adaptation::HardwareGuard::new(
-                &target.info().model,
-                &target.image,
-                self.adaptation_id(),
-            ));
+            self.hardware_guard = Some(
+                super::adaptation::HardwareGuard::new(
+                    &target.info().model,
+                    &target.image,
+                    self.adaptation_id(),
+                )
+                .with_scope(scope),
+            );
         }
         self
+    }
+
+    /// The compiled hardware predicate bound to this selected offline plan.
+    /// A guarded plan without a predicate must not become an ordinary route.
+    pub fn original_hardware_scope(
+        &self,
+    ) -> Result<Option<super::routing::ProductSelector<'static>>, super::adaptation::Error> {
+        self.hardware_guard
+            .as_ref()
+            .map(|g| g.scope().ok_or(super::adaptation::Error::OriginalRequired))
+            .transpose()
     }
 
     /// Execution must confirm the original factory hardware before any stage

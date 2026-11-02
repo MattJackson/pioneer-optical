@@ -105,6 +105,7 @@ impl Receiver {
     /// Bind the persistent factory hardware independently of installed branding.
     /// Invalid supplied evidence cannot fall back to firmware-hash selection.
     pub fn with_original_parameters(mut self, parameters: &[u8]) -> Self {
+        self.original_scope = None;
         self.original_product = Some(
             crate::production::parse(parameters)
                 .filter(|p| p.product_code_parts().is_some())
@@ -112,6 +113,24 @@ impl Receiver {
                 .ok_or(crate::settings::adaptation::Error::OriginalRequired),
         );
         self
+    }
+
+    /// Prepare under a compiled hardware predicate for offline route analysis.
+    /// This supplies no factory evidence: every resulting guarded plan still
+    /// verifies real factory parameters before execution can write anything.
+    pub fn with_original_hardware_scope(
+        mut self,
+        scope: crate::settings::routing::ProductSelector<'static>,
+    ) -> Result<Self, crate::settings::adaptation::Error> {
+        if !crate::settings::adaptation::hardware_rules()?
+            .iter()
+            .any(|r| r.hardware == scope)
+        {
+            return Err(crate::settings::adaptation::Error::OriginalMismatch);
+        }
+        self.original_product = None;
+        self.original_scope = Some(scope);
+        Ok(self)
     }
 
     fn adapt_normal(
@@ -148,7 +167,15 @@ impl Receiver {
                     original,
                 ),
                 Some(Err(error)) => Err(error.clone()),
-                None => result,
+                None => match self.original_scope {
+                    Some(scope) => crate::settings::adaptation::prepare_scope(
+                        &self.settings_contract,
+                        &normal.image,
+                        &normal.info().model,
+                        scope,
+                    ),
+                    None => result,
+                },
             }
         } else {
             result
@@ -268,7 +295,11 @@ impl Receiver {
             false,
         )
         .with_adaptation(adaptation)
-        .with_hardware_guard(pair.normal(), self.requires_original_hardware());
+        .with_hardware_guard(
+            pair.normal(),
+            self.requires_original_hardware(),
+            self.original_scope,
+        );
         let (normal, normal_bytes) = pair.into_normal();
         Ok(PreparedNormal {
             stage: PreparedStage {
@@ -362,7 +393,11 @@ impl Receiver {
             patch,
         )
         .with_adaptation(adaptation)
-        .with_hardware_guard(target.normal(), self.requires_original_hardware());
+        .with_hardware_guard(
+            target.normal(),
+            self.requires_original_hardware(),
+            self.original_scope,
+        );
         if patch {
             if kernel_marker_policy(&target.kernel().image)
                 != Some(KernelMarkerPolicy::NoMarkerCheck)

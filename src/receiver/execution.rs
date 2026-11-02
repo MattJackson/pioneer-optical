@@ -160,6 +160,13 @@ impl PreparedUpdate {
         R: Transport<Error = W::Error>,
         H: FlashRuntime<W::Error>,
     {
+        if self.bank_transition.is_some() {
+            return Err(crate::startup::migration::Error::Preflight(
+                FlashError::UnsupportedTransport {
+                    stage: FlashStage::Initial,
+                },
+            ));
+        }
         let stages = self.stages();
         runtime
             .prepare_stage(FlashStage::Initial)
@@ -194,6 +201,11 @@ impl PreparedUpdate {
         R: Transport<Error = W::Error>,
         H: FlashRuntime<W::Error>,
     {
+        if self.bank_transition.is_some() {
+            return Err(FlashError::UnsupportedTransport {
+                stage: FlashStage::Initial,
+            });
+        }
         transfer_stages(self.stages(), io, runtime)
     }
 }
@@ -264,7 +276,9 @@ where
         let options = runtime
             .prepare_stage(stage)
             .map_err(|source| FlashError::Preflight { stage, source })?;
-        let control = prepared.receiver.control();
+        let control = prepared
+            .entry_control
+            .unwrap_or_else(|| prepared.receiver.control());
         bind(io.reads, &control, stage)?;
         let installed = prepared
             .receiver

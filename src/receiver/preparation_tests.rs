@@ -98,12 +98,16 @@ fn factory_parameters(code: &str) -> [u8; crate::production::PARAMETERS_LEN] {
 }
 
 #[test]
-fn every_preparation_path_uses_the_receivers_startup_checks() {
+fn ordinary_preparation_keeps_the_receivers_bank_checks() {
     use crate::startup::{bank, checks};
     let installed = update(false, 1, 0x12, true);
     let receiver = Receiver::from_installed(&installed).unwrap();
     let baseline = receiver.prepare(installed.clone()).unwrap();
     assert!(baseline.settings().startup_plan().is_some());
+    assert_eq!(
+        baseline.settings().startup_plan().unwrap().policy(),
+        crate::startup::checks::Policy::CompatibleBanks
+    );
     assert_eq!(receiver.startup_checks().iter().count(), 2);
 
     let mut normal = installed.normal().image.clone();
@@ -126,13 +130,106 @@ fn every_preparation_path_uses_the_receivers_startup_checks() {
         ))
     };
     refused(receiver.prepare(target.clone()).unwrap_err());
-    refused(receiver.prepare_without_family_check(target).unwrap_err());
     refused(receiver.prepare_normal(&bytes).unwrap_err());
-    refused(
-        receiver
-            .prepare_normal_without_family_check(&bytes)
-            .unwrap_err(),
-    );
+}
+
+#[test]
+fn explicit_crossflash_refuses_unknown_banks_without_a_verified_conversion() {
+    use crate::startup::{bank, checks};
+    let installed = update(false, 1, 0x12, true);
+    let receiver = Receiver::from_installed(&installed).unwrap();
+    let mut normal = installed.normal().image.clone();
+    normal[0x1800..0x1a00].fill(0);
+    fix_sum(&mut normal);
+    let mut bytes = installed.normal().repack(&normal).unwrap();
+    let mut key = [0; 20];
+    key[19] = 5;
+    SigningKey::from_bytes(key)
+        .unwrap()
+        .sign_normal(&mut bytes)
+        .unwrap();
+    let target = Update::load(installed.kernel_transfer(), &bytes).unwrap();
+    assert!(matches!(
+        receiver.prepare(target.clone()),
+        Err(PreparationError::Startup(checks::Error::Banks(
+            bank::Error::UnknownTarget
+        )))
+    ));
+    assert!(matches!(
+        receiver.prepare_without_family_check(target),
+        Err(PreparationError::Startup(checks::Error::Banks(
+            bank::Error::UnknownTarget
+        )))
+    ));
+    assert!(matches!(
+        receiver.prepare_normal_without_family_check(&bytes),
+        Err(PreparationError::Startup(checks::Error::Banks(
+            bank::Error::UnknownTarget
+        )))
+    ));
+}
+
+#[test]
+fn explicit_crossflash_refuses_unaudited_bank_conversion_even_with_a_target_word() {
+    let installed = update(false, 1, 0x12, true);
+    let receiver = Receiver::from_installed(&installed).unwrap();
+    let mut normal = installed.normal().image.clone();
+    for at in [0x180a, 0x190a] {
+        normal[at..at + 4].copy_from_slice(&0xfedc4322u32.to_be_bytes());
+    }
+    normal[0x600..0x614].copy_from_slice(&[
+        0x79, 0, 0, 0x9f, 0x5e, 0x41, 1, 0, 0x79, 0x20, 0xfe, 0x24, 0x47, 6, 0xf8, 1, 0x5e, 0x41,
+        6, 0x80,
+    ]);
+    normal[0x680..0x686].copy_from_slice(&[0x5e, 0x40, 0x0a, 0x1a, 0x54, 0x70]);
+    fix_sum(&mut normal);
+    let mut bytes = installed.normal().repack(&normal).unwrap();
+    let mut key = [0; 20];
+    key[19] = 5;
+    SigningKey::from_bytes(key)
+        .unwrap()
+        .sign_normal(&mut bytes)
+        .unwrap();
+    let target = Update::load(installed.kernel_transfer(), &bytes).unwrap();
+    use crate::startup::{bank, checks};
+    assert!(matches!(
+        receiver.prepare_without_family_check(target),
+        Err(PreparationError::Startup(checks::Error::Banks(
+            bank::Error::ConversionRequired { .. }
+        )))
+    ));
+    assert!(matches!(
+        receiver.prepare_normal_without_family_check(&bytes),
+        Err(PreparationError::Startup(checks::Error::Banks(
+            bank::Error::ConversionRequired { .. }
+        )))
+    ));
+    // With bank compatibility established, bypass still cannot select between
+    // conflicting startup words. Do not couple this check to error priority.
+    for at in [0x180a, 0x190a] {
+        normal[at..at + 4].copy_from_slice(&0xfedc4321u32.to_be_bytes());
+    }
+    let duplicate = normal[0x600..0x614].to_vec();
+    normal[0x620..0x634].copy_from_slice(&duplicate);
+    fix_sum(&mut normal);
+    let mut ambiguous = installed.normal().repack(&normal).unwrap();
+    SigningKey::from_bytes(key)
+        .unwrap()
+        .sign_normal(&mut ambiguous)
+        .unwrap();
+    let target = Update::load(installed.kernel_transfer(), &ambiguous).unwrap();
+    assert!(matches!(
+        receiver.prepare_without_family_check(target),
+        Err(PreparationError::Startup(
+            crate::startup::checks::Error::AmbiguousWord
+        ))
+    ));
+    assert!(matches!(
+        receiver.prepare_normal_without_family_check(&ambiguous),
+        Err(PreparationError::Startup(
+            crate::startup::checks::Error::AmbiguousWord
+        ))
+    ));
 }
 
 #[test]

@@ -123,6 +123,7 @@ fn damaged_control_flow_or_ambiguous_validators_are_unknown() {
             (layout.calculation - 0x410000) as usize + if model == "212" { 0x2c } else { 0x30 };
         unbound[store + 3] ^= 2; // Break the data-flow binding to the guard's slot.
         assert!(guard.layout(&unbound).is_none());
+        assert!(bank::analyze(&unbound).is_none());
     }
 }
 
@@ -213,4 +214,247 @@ fn unified_startup_plan_preserves_checks_and_refuses_format_conversion() {
         a.plan_to(unknown),
         Err(Error::Banks(bank::Error::UnknownTarget))
     );
+}
+
+fn customer_image(model: &str) -> Vec<u8> {
+    let root = std::env::var("PIONEER_SETTINGS_HOARD")
+        .expect("set PIONEER_SETTINGS_HOARD to the retained OEM corpus");
+    let (path, encoded_hash, decoded_hash) = match model {
+        "212" => (
+            "oem/pioneer/sat/8F01/ID83/1.01/normal/9201ee0287df6e6b2acbd26f79414c75d4ed08745a0f3c4bae0908880c86567a.enc",
+            "9201ee0287df6e6b2acbd26f79414c75d4ed08745a0f3c4bae0908880c86567a",
+            "f03d176de05bc788d16b5fa4c44024a07c836006863d13ee5226ce1047939ac9",
+        ),
+        "213" => (
+            "oem/pioneer/sat/9201/ID58/1.02/normal/c45156efa3e19f3092cdd57e68a6d4e71cb2d7fa54509cb56a0c470a8fe65fc4.enc",
+            "c45156efa3e19f3092cdd57e68a6d4e71cb2d7fa54509cb56a0c470a8fe65fc4",
+            "4b0192fdc3050b222eee0fe0faac7675887d7873af47dbc6674f80a2b7916fd8",
+        ),
+        _ => panic!("unknown customer image"),
+    };
+    let encoded = std::fs::read(std::path::Path::new(&root).join(path)).unwrap();
+    assert_eq!(format!("{:x}", Sha256::digest(&encoded)), encoded_hash);
+    let bytes = pioneer_optical::envelope::Envelope::load(&encoded)
+        .unwrap()
+        .image;
+    assert_eq!(format!("{:x}", Sha256::digest(&bytes)), decoded_hash);
+    bytes
+}
+
+#[test]
+#[ignore = "requires PIONEER_SETTINGS_HOARD with hash-locked customer OEM envelopes"]
+fn customer_both_bank_addresses_and_capacity_cases_are_code_derived() {
+    for (model, magic, compact, extended, stride) in [
+        (
+            "212",
+            0xfedc4321,
+            [0x5efffa, 0x5ffffa],
+            [0x7dfffa, 0x7efffa],
+            0x10000,
+        ),
+        (
+            "213",
+            0xfedc4322,
+            [0x5f3ffa, 0x5ffffa],
+            [0x7dbffa, 0x7e7ffa],
+            0xc000,
+        ),
+    ] {
+        let bytes = customer_image(model);
+        let guard = bank::discover(&bytes).unwrap();
+        let layout = guard.layout(&bytes).unwrap();
+        assert_eq!(guard.magic, magic);
+        assert_eq!(guard.stride(), Some(stride));
+        assert_eq!(layout.when_one.markers, compact);
+        assert_eq!(layout.otherwise.markers, extended);
+        assert_eq!(
+            bank::analyze_pair(&bytes, None),
+            Some(bank::Storage::Versioned(bank::Contract {
+                magic,
+                addresses: bank::Addresses::Capacity {
+                    when_one: compact,
+                    otherwise: extended
+                },
+                validation: bank::Validation::RejectMismatch
+            }))
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires PIONEER_SETTINGS_HOARD with hash-locked customer OEM envelopes"]
+fn customer_guard_rejects_changed_accept_branches_operands_and_loader_effects() {
+    for model in ["212", "213"] {
+        let bytes = customer_image(model);
+        let guard = bank::discover(&bytes).unwrap();
+        let at = (guard.validator - 0x410000) as usize;
+        // Independent semantic mutation sites: both acceptance branches,
+        // initialization writes, matching operands, and rejection call.
+        for offset in [0x7b, 0x89, 0x26, 0x82, 0x66, 0x5c, 0x72, 0x8a] {
+            let mut changed = bytes.clone();
+            changed[at + offset] ^= 2;
+            assert!(
+                bank::discover(&changed).is_none(),
+                "{model} mutation {offset:x}"
+            );
+        }
+        for (offset, value) in [
+            (0xe, u32::MAX),
+            (0x34, u32::MAX),
+            (0x46, guard.marker_offsets[0]),
+        ] {
+            let mut changed = bytes.clone();
+            changed[at + offset..at + offset + 4].copy_from_slice(&value.to_be_bytes());
+            assert!(
+                bank::discover(&changed).is_none(),
+                "{model} operand {offset:x}"
+            );
+        }
+        let helper = (guard.reject_helper - 0x410000) as usize;
+        for offset in [0, 6, 12, 2, 8] {
+            let mut changed = bytes.clone();
+            changed[helper + offset] ^= 2;
+            assert!(
+                bank::discover(&changed).is_none(),
+                "{model} helper {offset:x}"
+            );
+        }
+        for call_at in [helper + 2, helper + 8] {
+            let wrapper = u32::from_be_bytes([
+                0,
+                bytes[call_at + 1],
+                bytes[call_at + 2],
+                bytes[call_at + 3],
+            ]) as usize
+                - 0x410000;
+            let mut changed = bytes.clone();
+            changed[wrapper + 3] ^= 2;
+            assert!(bank::discover(&changed).is_none());
+        }
+        let mut duplicate = bytes.clone();
+        duplicate.extend_from_slice(&bytes[at..at + 0x96]);
+        assert!(bank::discover(&duplicate).is_none());
+    }
+}
+
+#[test]
+#[ignore = "requires PIONEER_SETTINGS_HOARD with hash-locked customer OEM envelopes"]
+fn customer_capacity_layout_rejects_unbound_ambiguous_and_overflowing_geometry() {
+    for model in ["212", "213"] {
+        let bytes = customer_image(model);
+        let guard = bank::discover(&bytes).unwrap();
+        let layout = guard.layout(&bytes).unwrap();
+        let at = (layout.calculation - 0x410000) as usize;
+        let compare = if model == "212" { 18 } else { 22 };
+        for offset in [
+            4,
+            10,
+            compare,
+            compare + 6,
+            compare + 14,
+            compare + 22,
+            compare + 26,
+            compare + 30,
+        ] {
+            let mut changed = bytes.clone();
+            changed[at + offset] ^= 2;
+            assert!(
+                guard.layout(&changed).is_none(),
+                "{model} layout {offset:x}"
+            );
+        }
+        for offset in [compare + 10, compare + 18] {
+            let mut changed = bytes.clone();
+            changed[at + offset..at + offset + 4].copy_from_slice(&u32::MAX.to_be_bytes());
+            assert!(guard.layout(&changed).is_none());
+        }
+        let mut unbound = bytes.clone();
+        let mut calls = 0;
+        for p in (0..bytes.len() - 8).step_by(2) {
+            if bytes[p] == 0x5e
+                && bytes[p + 1..p + 4] == layout.calculation.to_be_bytes()[1..]
+                && bytes[p + 4] == 0x5e
+                && bytes[p + 5..p + 8] == guard.validator.to_be_bytes()[1..]
+            {
+                unbound[p] = 0;
+                calls += 1;
+            }
+        }
+        assert!(calls > 0);
+        assert!(guard.layout(&unbound).is_none());
+        assert!(bank::analyze(&unbound).is_none());
+        let mut duplicate = bytes.clone();
+        let moved = duplicate.len();
+        duplicate.extend_from_slice(&bytes[at..at + compare + 32]);
+        let addr = 0x410000 + moved as u32;
+        duplicate.push(0x5e);
+        duplicate.extend_from_slice(&addr.to_be_bytes()[1..]);
+        duplicate.push(0x5e);
+        duplicate.extend_from_slice(&guard.validator.to_be_bytes()[1..]);
+        assert!(guard.layout(&duplicate).is_none());
+    }
+}
+
+#[test]
+#[ignore = "requires PIONEER_SETTINGS_HOARD with hash-locked legacy OEM envelopes"]
+fn customer_policy_does_not_reclassify_legacy_bank_formats_as_capacity_banks() {
+    let root = std::path::PathBuf::from(std::env::var("PIONEER_SETTINGS_HOARD").unwrap());
+    let expected_state = bank::Storage::StateHeaders {
+        headers: [[0x7dfff6, 0x7dfffa], [0x7efff6, 0x7efffa]],
+        sequences: [0x7dfffe, 0x7efffe],
+        status: [0x7d8000, 0x7e8000],
+    };
+    let expected_fixed = bank::Storage::Versioned(bank::Contract {
+        magic: 0xfedc4321,
+        addresses: bank::Addresses::Fixed([0x7dfffa, 0x7efffa]),
+        validation: bank::Validation::RejectMismatch,
+    });
+    for (directory, hash, expected) in [
+        (
+            "1005/GENERAL/1.10",
+            "9293eb86cdade4392b98a34ce3cb0526e3d759b6e2d8c38eeb1e7245377b96f1",
+            expected_state,
+        ),
+        (
+            "1010/GENERAL/0.05e",
+            "c9863dfa278034a908dc397e787c35caf1310fccbc96371c56f2387e86e19fda",
+            expected_fixed,
+        ),
+    ] {
+        let encoded =
+            std::fs::read(root.join(format!("oem/pioneer/sat/{directory}/normal/{hash}.enc")))
+                .unwrap();
+        assert_eq!(format!("{:x}", Sha256::digest(&encoded)), hash);
+        let normal = pioneer_optical::envelope::Envelope::load(&encoded)
+            .unwrap()
+            .image;
+        assert_eq!(bank::discover(&normal), None);
+        assert_eq!(bank::analyze_pair(&normal, None), Some(expected));
+        assert_eq!(bank::check(Some(expected), Some(expected)), Ok(()));
+        // Sharing the 212's magic or final header addresses does not establish
+        // equality with its capacity-dependent storage contract.
+        let customer = bank::analyze_pair(&customer_image("212"), None).unwrap();
+        assert!(matches!(
+            bank::check(Some(expected), Some(customer)),
+            Err(bank::Error::ConversionRequired { .. })
+        ));
+    }
+}
+
+#[test]
+#[ignore = "requires PIONEER_SETTINGS_HOARD with hash-locked customer OEM envelopes"]
+fn customer_native_programmer_binds_normal_mode_not_destination_or_kernel_vectors() {
+    let source = customer_image("212");
+    let evidence = bank::programmer::discover(&source).unwrap();
+    assert_eq!(evidence.erase_entry(), 0x4f0);
+    assert_eq!(evidence.program_entry(), 0x53c);
+    assert_eq!(evidence.sector_size(), 0x10000);
+    let (ram, length) = evidence.runtime_interval();
+    assert_eq!((ram, length), (0x4be, 0x28c));
+    assert!(evidence.matches_runtime(&source[0x57e8fc - 0x410000..0x57eb88 - 0x410000]));
+    assert!(bank::programmer::discover(&customer_image("213")).is_none());
+    // Kernel-mode entry addresses have different meanings and cannot replace
+    // the audited Normal vector block by matching the erase/program intent.
+    assert_ne!(evidence.erase_entry(), 0x270);
+    assert_ne!(evidence.program_entry(), 0x2bc);
 }

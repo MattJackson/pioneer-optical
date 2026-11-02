@@ -98,9 +98,29 @@ impl Receiver {
         normal: &[u8],
         kernel: Option<&[u8]>,
     ) -> Result<crate::startup::checks::Plan, PreparationError> {
-        self.startup
-            .plan_to(crate::startup::checks::Checks::discover(normal, kernel))
-            .map_err(PreparationError::Startup)
+        self.prepare_startup_with_policy(
+            normal,
+            kernel,
+            crate::startup::checks::Policy::CompatibleBanks,
+        )
+    }
+    pub(super) fn prepare_startup_with_policy(
+        &self,
+        normal: &[u8],
+        kernel: Option<&[u8]>,
+        policy: crate::startup::checks::Policy,
+    ) -> Result<crate::startup::checks::Plan, PreparationError> {
+        let target = crate::startup::checks::Checks::discover(normal, kernel);
+        if policy == crate::startup::checks::Policy::ExplicitCrossflash
+            && self.source_schema().is_some_and(|source| {
+                crate::startup::bank::conversion::LayoutPair::discover(source, normal).is_ok()
+            })
+        {
+            self.startup.plan_verified_bank_transition(target, policy)
+        } else {
+            self.startup.plan_to_with_policy(target, policy)
+        }
+        .map_err(PreparationError::Startup)
     }
     /// Bind the persistent factory hardware independently of installed branding.
     /// Invalid supplied evidence cannot fall back to firmware-hash selection.
@@ -233,6 +253,66 @@ impl Receiver {
         Ok(bytes)
     }
 
+    /// Authenticate the bounded bank bridge for the unchanged source Kernel.
+    pub(super) fn prepare_persistent_bridge(
+        &self,
+        image: &[u8],
+        settings: crate::settings::update::Plan,
+    ) -> Result<PreparedStage, PreparationError> {
+        use crate::envelope::{
+            builder::{
+                normal_authentication_from_kernel, normal_authentication_valid,
+                NormalAuthentication,
+            },
+            signature::SigningKey,
+        };
+        let kernel = self
+            .installed_kernel
+            .as_ref()
+            .ok_or(PreparationError::MissingInstalledKernel)?;
+        let source = self
+            .installed_normal
+            .as_ref()
+            .ok_or(PreparationError::PatchedRepresentation)?;
+        let mut bytes = source
+            .repack_resized_normal(image)
+            .ok_or(PreparationError::PatchedRepresentation)?;
+        let signer = SigningKey::random().map_err(|_| PreparationError::PatchedRepresentation)?;
+        match normal_authentication_from_kernel(&kernel.image) {
+            Some(NormalAuthentication::KeyAndCiphertext) => signer.sign_normal(&mut bytes),
+            Some(NormalAuthentication::CiphertextOnly) => {
+                signer.sign_normal_ciphertext_only(&mut bytes)
+            }
+            _ => return Err(PreparationError::PatchedRepresentation),
+        }
+        .map_err(|_| PreparationError::PatchedRepresentation)?;
+        if !normal_authentication_valid(&bytes, &kernel.image) {
+            return Err(PreparationError::PatchedRepresentation);
+        }
+        let kernel_bytes = kernel
+            .repack(&kernel.image)
+            .ok_or(PreparationError::InstalledKernelRepresentation)?;
+        let pair = Update::load(&kernel_bytes, &bytes).map_err(PreparationError::Target)?;
+        if pair.normal().image != image {
+            return Err(PreparationError::PatchedRepresentation);
+        }
+        let (normal, normal_bytes) = pair.into_normal();
+        let stage = PreparedStage {
+            #[cfg(feature = "drive")]
+            normal_region: normal_region(kernel, &normal.image),
+            receiver: self.clone(),
+            kernel: None,
+            kernel_bytes: None,
+            normal,
+            normal_bytes,
+            settings,
+            bridge: Some(BridgeKind::PersistentBanks),
+            entry_control: self.bank_bridge.as_ref().map(|b| b.restore_control()),
+        };
+        stage.validate_transfer()?;
+        Ok(stage)
+    }
+
     /// Independent required-settings gate; hardware overrides never waive it.
     pub fn check_settings(&self, normal: &[u8]) -> Result<(), PreparationError> {
         self.settings_contract
@@ -256,7 +336,8 @@ impl Receiver {
     /// Prepare Normal-only with a deliberate caller override of family comparison.
     ///
     /// Component compatibility, integrity and installed-Kernel authentication
-    /// remain mandatory. This may target incompatible hardware.
+    /// remain mandatory. Persistent banks must remain compatible; Normal-only
+    /// preparation cannot authorize a deferred bank conversion.
     pub fn prepare_normal_without_family_check(
         &self,
         target: &[u8],
@@ -312,6 +393,7 @@ impl Receiver {
                 normal_bytes,
                 settings,
                 bridge: None,
+                entry_control: self.bank_bridge.as_ref().map(|b| b.restore_control()),
             },
         })
     }
@@ -324,17 +406,26 @@ impl Receiver {
     pub fn prepare(&self, target: Update) -> Result<PreparedUpdate, PreparationError> {
         self.check_family(target.normal())
             .map_err(PreparationError::Compatibility)?;
-        self.prepare_without_family_check(target)
+        self.prepare_with_startup_policy(target, crate::startup::checks::Policy::CompatibleBanks)
     }
 
     /// Prepare with an explicit caller override of the hardware family gate.
     ///
     /// Intended for applications exposing a deliberate force option. This may
-    /// target incompatible hardware; it waives only family comparison. Target
-    /// integrity, installed marker policy and restoration checks still apply.
+    /// target incompatible hardware. Persistent banks must remain compatible,
+    /// or the exact audited pair must produce a deferred, receipt-bound bank
+    /// transition. Target integrity, marker policy and restoration still apply.
     pub fn prepare_without_family_check(
         &self,
+        target: Update,
+    ) -> Result<PreparedUpdate, PreparationError> {
+        self.prepare_with_startup_policy(target, crate::startup::checks::Policy::ExplicitCrossflash)
+    }
+
+    fn prepare_with_startup_policy(
+        &self,
         mut target: Update,
+        startup_policy: crate::startup::checks::Policy,
     ) -> Result<PreparedUpdate, PreparationError> {
         let policy = self
             .kernel_policy
@@ -367,7 +458,11 @@ impl Receiver {
                 // and receiver. It never borrows the final target's settings.
                 let bridge = super::handoff_bridge::prepare(self, target.kernel())?;
                 let settings = crate::settings::update::Plan::startup(
-                    self.prepare_startup(&bridge.normal().image, Some(&bridge.kernel().image))?,
+                    self.prepare_startup_with_policy(
+                        &bridge.normal().image,
+                        Some(&bridge.kernel().image),
+                        startup_policy,
+                    )?,
                     false,
                 );
                 stages.push(PreparedStage::pair(
@@ -389,7 +484,11 @@ impl Receiver {
             target.kernel().image.get(KERNEL_MARKER_OFFSET).copied(),
         );
         let settings = crate::settings::update::Plan::startup(
-            receiver.prepare_startup(&target.normal().image, Some(&target.kernel().image))?,
+            receiver.prepare_startup_with_policy(
+                &target.normal().image,
+                Some(&target.kernel().image),
+                startup_policy,
+            )?,
             patch,
         )
         .with_adaptation(adaptation)
@@ -426,7 +525,27 @@ impl Receiver {
                 .map_err(PreparationError::FinalStageEntry)?;
         }
         stages.push(PreparedStage::pair(receiver, &target, settings, None)?);
-        Ok(PreparedUpdate { stages, target })
+        let bank_transition = self.source_schema().and_then(|source| {
+            crate::startup::bank::conversion::LayoutPair::discover(source, &target.normal().image)
+                .ok()
+                .map(|_| self.clone())
+        });
+        // The audited conversion cannot be combined with another source bridge.
+        if bank_transition.is_some()
+            && (stages
+                .first()
+                .map_or(true, |s| s.normal_image() != target.normal().image)
+                || stages
+                    .iter()
+                    .any(|s| s.bridge == Some(BridgeKind::KernelHandoff)))
+        {
+            return Err(PreparationError::UnsupportedFinalStage);
+        }
+        Ok(PreparedUpdate {
+            stages,
+            target,
+            bank_transition,
+        })
     }
 }
 

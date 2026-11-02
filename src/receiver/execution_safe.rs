@@ -18,6 +18,21 @@ pub enum ExecutionMode {
 
 /// Host checks and progress. Protocol selection belongs to the prepared firmware.
 pub trait ExecutionRuntime<E>: UpdateRuntime {
+    /// Persist the complete source-bank backup atomically, sync its file and
+    /// directory, then return a receipt from byte-exact persisted readback.
+    /// The default supplies no receipt and cannot authorize bank mutation.
+    /// This callback has no effect until an explicit bank transition invokes it.
+    fn persist_bank_backup(
+        &mut self,
+        _backup: &crate::startup::bank::backup::BankBackup,
+    ) -> Result<Option<crate::startup::bank::backup::BackupReceipt>, E> {
+        Ok(None)
+    }
+    /// Persist the exact temporary Normal artifact before installing it. The
+    /// default refuses operations which could leave temporary firmware behind.
+    fn persist_bank_bridge(&mut self, _pair: &crate::envelope::Update) -> Result<bool, E> {
+        Ok(false)
+    }
     /// Check host conditions (for example, an empty tray) before each stage.
     fn check_stage(&mut self, stage: FlashStage) -> Result<(), E>;
     /// A component comparison completed; emitted before any later failure.
@@ -66,6 +81,19 @@ impl FlashOutcome {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ExecutionError<E> {
+    /// A read-only preflight failed before this operation attempted any mutation.
+    BeforeWrite(Box<ExecutionError<E>>),
+    /// A deferred bank transition failed; retain its backup and temporary image.
+    BankTransition {
+        /// Exact temporary Normal may already be installed.
+        temporary_firmware: bool,
+        /// The armed FF command may have attempted persistent-bank mutation.
+        bank_write_started: bool,
+        /// Bank-transition boundary which failed.
+        phase: &'static str,
+        /// Original failure, including transport diagnostics.
+        source: Box<ExecutionError<E>>,
+    },
     /// A later transition failed after earlier stages already changed firmware.
     AfterStage {
         /// Number of stages verified before this failure.
@@ -111,6 +139,8 @@ pub enum ExecutionError<E> {
 impl<E: core::fmt::Debug> core::fmt::Display for ExecutionError<E> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::BeforeWrite(source) => write!(f, "before update writes: {source}"),
+            Self::BankTransition { phase, temporary_firmware, source, .. } => write!(f, "bank transition {phase} (temporary firmware installed: {temporary_firmware}): {source}"),
             Self::AfterStage { completed, source } => {
                 write!(f, "after {completed} completed update stages: {source}")
             }
@@ -155,7 +185,9 @@ impl<E: core::fmt::Debug> core::fmt::Display for ExecutionError<E> {
 impl<E: core::fmt::Debug + 'static> std::error::Error for ExecutionError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::AfterStage { source, .. } => Some(source),
+            Self::BeforeWrite(source)
+            | Self::BankTransition { source, .. }
+            | Self::AfterStage { source, .. } => Some(source),
             Self::IdentityRead { source, .. } => Some(source),
             Self::Flash(source) => Some(source),
             Self::Startup(source) => Some(source),
@@ -165,10 +197,32 @@ impl<E: core::fmt::Debug + 'static> std::error::Error for ExecutionError<E> {
 }
 
 impl<E> ExecutionError<E> {
+    /// Whether a temporary bank bridge may remain installed after this failure.
+    pub fn temporary_bank_bridge(&self) -> bool {
+        match self {
+            Self::BankTransition {
+                temporary_firmware,
+                source,
+                ..
+            } => *temporary_firmware || source.temporary_bank_bridge(),
+            Self::BeforeWrite(source) | Self::AfterStage { source, .. } => {
+                source.temporary_bank_bridge()
+            }
+            Self::Startup(error) => match error.as_ref() {
+                crate::startup::migration::Error::Preflight(source)
+                | crate::startup::migration::Error::Flash { source, .. } => {
+                    source.temporary_bank_bridge()
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
     /// Completed transitions retained by the executor, even when the next
     /// stage fails before its first command or host progress callback.
     pub fn completed_stages(&self) -> usize {
         match self {
+            Self::BankTransition { source, .. } => source.completed_stages(),
             Self::AfterStage { completed, .. } => *completed,
             Self::VerificationIncomplete(outcome) => outcome.completed_stages,
             Self::Startup(error) => match error.as_ref() {
@@ -184,6 +238,8 @@ impl<E> ExecutionError<E> {
     /// Firmware transfer may have been attempted; conservative for uncertain entry failures.
     pub fn firmware_write_started(&self) -> bool {
         match self {
+            Self::BeforeWrite(_) => false,
+            Self::BankTransition { source, .. } => source.firmware_write_started(),
             Self::AfterStage { .. } => true,
             Self::VerificationIncomplete(_) => true,
             Self::Plan(_) => false,
@@ -215,6 +271,17 @@ impl<E> ExecutionError<E> {
     }
     /// Any device mutation may have been attempted, including startup settings.
     pub fn write_started(&self) -> bool {
+        if matches!(self, Self::BeforeWrite(_)) {
+            return false;
+        }
+        if let Self::BankTransition {
+            bank_write_started,
+            source,
+            ..
+        } = self
+        {
+            return *bank_write_started || source.write_started();
+        }
         if let Self::Startup(error) = self {
             return match error.as_ref() {
                 crate::startup::migration::Error::Change { .. } => true,
@@ -233,6 +300,8 @@ impl<E> ExecutionError<E> {
     /// The boundary which failed, suitable for operation diagnostics.
     pub fn phase(&self) -> &'static str {
         match self {
+            Self::BeforeWrite(_) => "preflight",
+            Self::BankTransition { phase, .. } => phase,
             Self::AfterStage { source, .. } => source.phase(),
             Self::VerificationIncomplete(_) => "Normal readback",
             Self::Plan(_) => "preflight",
@@ -261,7 +330,9 @@ impl<E> ExecutionError<E> {
 impl<E> crate::CodedError for ExecutionError<E> {
     fn code(&self) -> &'static str {
         match self {
-            Self::AfterStage { source, .. } => source.code(),
+            Self::BeforeWrite(source)
+            | Self::BankTransition { source, .. }
+            | Self::AfterStage { source, .. } => source.code(),
             Self::VerificationIncomplete(_) => "pioneer.execute.verification_incomplete",
             Self::Plan(_) => "pioneer.execute.plan",
             Self::IdentityRead { .. } => "pioneer.execute.identity_read",
@@ -526,7 +597,7 @@ impl PreparedUpdate {
         R: Transport<Error = W::Error>,
         H: ExecutionRuntime<W::Error>,
     {
-        execute_stages(self.stages(), io, runtime, ExecutionMode::Flash)
+        self.execute(io, runtime, ExecutionMode::Flash)
     }
     /// Execute the complete prepared sequence with per-stage settings and checks.
     pub fn execute<R, W, H>(
@@ -540,7 +611,11 @@ impl PreparedUpdate {
         R: Transport<Error = W::Error>,
         H: ExecutionRuntime<W::Error>,
     {
-        execute_stages(self.stages(), io, runtime, mode)
+        if self.bank_transition.is_some() {
+            bank_execution::execute(self, io, runtime, mode)
+        } else {
+            execute_stages(self.stages(), io, runtime, mode)
+        }
     }
 }
 impl PreparedNormal {
@@ -594,20 +669,10 @@ impl PreparedNormal {
         )
     }
 }
-fn execute_stages<R, W, H>(
+fn preflight_stages<T: Transport>(
     stages: &[PreparedStage],
-    io: FlashTransport<'_, R, W>,
-    runtime: &mut H,
-    mode: ExecutionMode,
-) -> Result<FlashOutcome, ExecutionError<W::Error>>
-where
-    W: Transport,
-    R: Transport<Error = W::Error>,
-    H: ExecutionRuntime<W::Error>,
-{
-    if stages.is_empty() {
-        return Err(ExecutionError::Plan("empty update sequence"));
-    }
+    reads: &mut T,
+) -> Result<(), ExecutionError<T::Error>> {
     // Validate the whole sequence before the first settings or firmware write.
     for stage in stages {
         let installed = stage
@@ -616,9 +681,9 @@ where
             .ok_or(ExecutionError::Plan(
                 "installed Kernel evidence unavailable",
             ))?;
-        class::<W::Error>(installed.update_dialect())?;
+        class::<T::Error>(installed.update_dialect())?;
         let mut storage = [Segment::PLACEHOLDER; 3];
-        plan::<W::Error>(
+        plan::<T::Error>(
             stage.kernel_transfer(),
             stage.normal_transfer(),
             transport::detect(&installed.image),
@@ -631,7 +696,7 @@ where
     {
         let mut parameters = [0; crate::production::PARAMETERS_LEN];
         drive::read(
-            io.reads,
+            reads,
             &crate::production::parameters(),
             &mut parameters,
             crate::production::PARAMETERS_LEN,
@@ -669,7 +734,7 @@ where
             ))
         })?;
         let mut value = [0; 2];
-        drive::read(io.reads, &command, &mut value, 2).map_err(|error| {
+        drive::read(reads, &command, &mut value, 2).map_err(|error| {
             ExecutionError::Startup(Box::new(crate::startup::migration::Error::Read(error)))
         })?;
         let actual = u16::from_be_bytes(value);
@@ -683,6 +748,54 @@ where
             )));
         }
     }
+    Ok(())
+}
+
+fn existing_bridge_error<E>(source: ExecutionError<E>) -> ExecutionError<E> {
+    ExecutionError::BankTransition {
+        temporary_firmware: true,
+        bank_write_started: false,
+        phase: "existing temporary Normal",
+        source: Box::new(source),
+    }
+}
+fn execute_stages<R, W, H>(
+    stages: &[PreparedStage],
+    io: FlashTransport<'_, R, W>,
+    runtime: &mut H,
+    mode: ExecutionMode,
+) -> Result<FlashOutcome, ExecutionError<W::Error>>
+where
+    W: Transport,
+    R: Transport<Error = W::Error>,
+    H: ExecutionRuntime<W::Error>,
+{
+    let existing = stages
+        .first()
+        .is_some_and(|s| s.receiver.bank_bridge.is_some());
+    execute_stages_inner(stages, io, runtime, mode).map_err(|e| {
+        if existing {
+            existing_bridge_error(e)
+        } else {
+            e
+        }
+    })
+}
+fn execute_stages_inner<R, W, H>(
+    stages: &[PreparedStage],
+    io: FlashTransport<'_, R, W>,
+    runtime: &mut H,
+    mode: ExecutionMode,
+) -> Result<FlashOutcome, ExecutionError<W::Error>>
+where
+    W: Transport,
+    R: Transport<Error = W::Error>,
+    H: ExecutionRuntime<W::Error>,
+{
+    if stages.is_empty() {
+        return Err(ExecutionError::Plan("empty update sequence"));
+    }
+    preflight_stages(stages, io.reads)?;
     let mut result: Option<FlashOutcome> = None;
     for (index, stage) in stages.iter().enumerate() {
         // A marker-only intermediate already applied the same Normal's settings.
@@ -833,7 +946,9 @@ impl PreparedStage {
             .receiver
             .installed_kernel()
             .expect("validated installed Kernel");
-        let control = self.receiver.control();
+        let control = self
+            .entry_control
+            .unwrap_or_else(|| self.receiver.control());
         let (_, before) = self.bind_stage(
             io.reads,
             runtime,
@@ -889,3 +1004,6 @@ impl PreparedStage {
 #[cfg(test)]
 #[path = "execution_safe_tests.rs"]
 mod tests;
+
+#[path = "bank_execution.rs"]
+mod bank_execution;

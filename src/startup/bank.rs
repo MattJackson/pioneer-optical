@@ -5,6 +5,21 @@ const BASE: u32 = 0x410000;
 
 mod legacy;
 
+/// Offline, lossless-receipt conversion for byte-bound audited native layouts.
+#[cfg(feature = "envelope")]
+pub mod conversion;
+
+/// Immutable source-bank backup and persisted-readback receipts.
+#[cfg(feature = "envelope")]
+pub mod backup;
+
+/// Offline construction of the audited temporary Normal bridge.
+#[cfg(feature = "envelope")]
+pub mod bridge;
+
+/// Read-only evidence for audited native bank programming routines.
+pub mod programmer;
+
 /// Persistent header locations extracted from the firmware's addressing code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Addresses {
@@ -355,4 +370,64 @@ pub fn discover(normal: &[u8]) -> Option<Requirement> {
         .filter_map(|at| candidate(normal, at));
     let result = matches.next()?;
     matches.next().is_none().then_some(result)
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+    use crate::CodedError;
+    #[test]
+    fn unknown_and_changed_contracts_keep_distinct_public_refusals() {
+        let contract = Storage::KernelSequences {
+            sequences: [0x5efffe, 0x5ffffe],
+            bases: [0x5e0000, 0x5f0000],
+        };
+        let other = Storage::StateHeaders {
+            headers: [[1, 2], [3, 4]],
+            sequences: [5, 6],
+            status: [7, 8],
+        };
+        assert_eq!(check(Some(contract), Some(contract)), Ok(()));
+        for (result, code, phrase) in [
+            (
+                check(None, Some(contract)),
+                "pioneer.startup.bank_unknown_installed",
+                "installed",
+            ),
+            (
+                check(Some(contract), None),
+                "pioneer.startup.bank_unknown_target",
+                "target",
+            ),
+            (
+                check(Some(contract), Some(other)),
+                "pioneer.startup.bank_conversion_required",
+                "conversion",
+            ),
+        ] {
+            let error = result.unwrap_err();
+            assert_eq!(error.code(), code);
+            assert!(error.to_string().contains(phrase));
+        }
+    }
+    #[test]
+    fn address_resolution_rejects_overflow_in_either_bank_and_reverse_stride() {
+        let mut guard = Requirement {
+            validator: 0x5509e8,
+            base_slot: 0x10,
+            magic: 0xfedc4322,
+            marker_offsets: [0xbffa, 0x17ffa],
+            reject_helper: 0x4afa7c,
+        };
+        assert_eq!(guard.stride(), Some(0xc000));
+        assert_eq!(guard.addresses(0x5e8000), Some([0x5f3ffa, 0x5ffffa]));
+        assert_eq!(guard.addresses(u32::MAX - 0xbffa + 1), None);
+        assert_eq!(guard.addresses(u32::MAX - 0xbffa), None);
+        guard.marker_offsets.reverse();
+        assert_eq!(guard.stride(), None);
+        assert_eq!(guard.layout(&[]), None);
+        assert_eq!(analyze_pair(&[], None), None);
+        assert_eq!(analyze_pair(&[], Some(&[])), None);
+        assert_eq!(analyze_pair(&[], Some(&vec![0; 0x10000])), None);
+    }
 }

@@ -9,10 +9,12 @@ pub enum BridgeKind {
     ReceiverMarker,
     /// Source programmer adapted to the target's recognized startup entry.
     KernelHandoff,
+    /// Receipt-bound temporary Normal for an audited persistent-bank conversion.
+    PersistentBanks,
 }
 
 /// One immutable transition, including its receiving firmware and settings.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PreparedStage {
     pub(super) receiver: Receiver,
     pub(super) kernel: Option<Envelope>,
@@ -21,6 +23,7 @@ pub struct PreparedStage {
     pub(super) normal_bytes: Vec<u8>,
     pub(super) settings: crate::settings::update::Plan,
     pub(super) bridge: Option<BridgeKind>,
+    pub(super) entry_control: Option<super::Control>,
     #[cfg(feature = "drive")]
     pub(super) normal_region: Option<crate::envelope::NormalRegion>,
 }
@@ -32,7 +35,16 @@ impl PreparedStage {
         settings: crate::settings::update::Plan,
         bridge: Option<BridgeKind>,
     ) -> Result<Self, PreparationError> {
-        receiver.prepare_startup(&target.normal().image, Some(&target.kernel().image))?;
+        let policy = settings
+            .startup_plan()
+            .map_or(crate::startup::checks::Policy::CompatibleBanks, |plan| {
+                plan.policy()
+            });
+        receiver.prepare_startup_with_policy(
+            &target.normal().image,
+            Some(&target.kernel().image),
+            policy,
+        )?;
         let installed = receiver
             .installed_kernel()
             .ok_or(PreparationError::MissingInstalledKernel)?;
@@ -50,6 +62,16 @@ impl PreparedStage {
         ) {
             return Err(PreparationError::RejectedMarker);
         }
+        let entry_control = receiver.bank_bridge.as_ref().and_then(|bridge| {
+            receiver
+                .startup
+                .plan_to(crate::startup::checks::Checks::discover(
+                    &target.normal().image,
+                    Some(&target.kernel().image),
+                ))
+                .ok()
+                .map(|_| bridge.restore_control())
+        });
         let stage = Self {
             #[cfg(feature = "drive")]
             normal_region: super::preparation::normal_region(
@@ -63,6 +85,7 @@ impl PreparedStage {
             normal_bytes: target.normal_transfer().to_vec(),
             settings,
             bridge,
+            entry_control,
         };
         stage.validate_transfer()?;
         Ok(stage)
@@ -120,15 +143,23 @@ impl PreparedStage {
     }
 }
 
-/// A complete, prevalidated sequence ending in the requested target firmware.
+/// Static firmware stages and any audited bank transition requiring live capture.
 #[derive(Debug)]
 pub struct PreparedUpdate {
     pub(super) stages: Vec<PreparedStage>,
     pub(super) target: Update,
+    pub(super) bank_transition: Option<Receiver>,
 }
 
 impl PreparedUpdate {
-    /// Ordered transitions, including any temporary bridge and final OEM pass.
+    /// A live, receipt-bound bank bridge must be materialized before these final stages.
+    pub fn pending_bridge(&self) -> Option<BridgeKind> {
+        self.bank_transition
+            .as_ref()
+            .map(|_| BridgeKind::PersistentBanks)
+    }
+    /// Static transitions, including marker/handoff bridges and final OEM pass.
+    /// A pending persistent-bank bridge is materialized before these at execution.
     pub fn stages(&self) -> &[PreparedStage] {
         &self.stages
     }
@@ -144,11 +175,12 @@ impl PreparedUpdate {
     pub fn settings(&self) -> &crate::settings::update::Plan {
         self.stages.last().expect("prepared stage").settings()
     }
-    /// Initial Kernel transfer, including an intermediate when required.
+    /// First static Kernel transfer. A pending bank bridge precedes this without
+    /// changing the source Kernel.
     pub fn kernel_transfer(&self) -> &[u8] {
         self.stages[0].kernel_transfer().expect("complete pair")
     }
-    /// Initial stage's Normal transfer.
+    /// First static stage's Normal transfer, after any pending bank bridge.
     pub fn normal_transfer(&self) -> &[u8] {
         self.stages[0].normal_transfer()
     }

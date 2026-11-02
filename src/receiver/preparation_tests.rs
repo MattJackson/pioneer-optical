@@ -710,7 +710,7 @@ fn hardware_override_never_waives_required_settings() {
         .unwrap();
     let installed = Update::load(installed.kernel_transfer(), &bytes).unwrap();
     let receiver = Receiver::from_installed(&installed).unwrap();
-    assert_eq!(receiver.family().unwrap().to_string(), "e4f1f98dcdf4c06b");
+    assert_eq!(receiver.family().unwrap().to_string(), "cde0e74d51e08f19");
     // No phase evidence is supplied, so the required settings remain unresolved.
     for result in [
         receiver.prepare(installed.clone()),

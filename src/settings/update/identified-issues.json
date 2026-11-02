@@ -3,8 +3,8 @@
   "issues": [
     {
       "id": "ud02-mechanism-convention",
-      "hardware_scheme": "pioneer.hardware.v5",
-      "hardware_family": "e4f1f98dcdf4c06b",
+      "hardware_scheme": "pioneer.hardware.v6",
+      "hardware_family": "cde0e74d51e08f19",
       "reason": "UD02 and UD03/UD04-related firmware use different mechanism conventions. Only exact compiled-in UD02/UD04 profiles resolve this issue; native reverse migration remains unavailable.",
       "unknown_within_scope": "unresolved",
       "requirements": [

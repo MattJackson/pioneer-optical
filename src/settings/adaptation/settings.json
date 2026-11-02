@@ -90,8 +90,8 @@
     {
       "schema_version": 1,
       "id": "pioneer.ud02-to-ud04-1.14",
-      "hardware_scheme": "pioneer.hardware.v5",
-      "hardware_family": "e4f1f98dcdf4c06b",
+      "hardware_scheme": "pioneer.hardware.v6",
+      "hardware_family": "cde0e74d51e08f19",
       "source_normal_sha256": [
         "84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750",
         "ca09032288c62b8b26bb983431af11b52aaeec8da9bd0e80afcccdf3b07f0815",
@@ -227,8 +227,8 @@
     {
       "schema_version": 1,
       "id": "pioneer.ud02-to-ud03-1.03",
-      "hardware_scheme": "pioneer.hardware.v5",
-      "hardware_family": "e4f1f98dcdf4c06b",
+      "hardware_scheme": "pioneer.hardware.v6",
+      "hardware_family": "cde0e74d51e08f19",
       "source_normal_sha256": [
         "84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750",
         "ca09032288c62b8b26bb983431af11b52aaeec8da9bd0e80afcccdf3b07f0815",
@@ -360,8 +360,8 @@
     {
       "schema_version": 1,
       "id": "pioneer.ud02-to-ud03-1.14",
-      "hardware_scheme": "pioneer.hardware.v5",
-      "hardware_family": "e4f1f98dcdf4c06b",
+      "hardware_scheme": "pioneer.hardware.v6",
+      "hardware_family": "cde0e74d51e08f19",
       "source_normal_sha256": [
         "84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750",
         "ca09032288c62b8b26bb983431af11b52aaeec8da9bd0e80afcccdf3b07f0815",
@@ -498,8 +498,8 @@
     {
       "schema_version": 1,
       "id": "pioneer.ud02-stock-return-1.00",
-      "hardware_scheme": "pioneer.hardware.v5",
-      "hardware_family": "e4f1f98dcdf4c06b",
+      "hardware_scheme": "pioneer.hardware.v6",
+      "hardware_family": "cde0e74d51e08f19",
       "source_normal_sha256": [
         "ca09032288c62b8b26bb983431af11b52aaeec8da9bd0e80afcccdf3b07f0815",
         "f78a48ea604d36663f1da13b5eaad63396e8a0c4ccc6c18fb7f38547f1816a56",
@@ -524,8 +524,8 @@
       "schema_version": 1,
       "id": "pioneer.ud03-native-1.03",
       "policy": "pioneer.ud03-native",
-      "hardware_scheme": "pioneer.hardware.v5",
-      "hardware_family": "e4f1f98dcdf4c06b",
+      "hardware_scheme": "pioneer.hardware.v6",
+      "hardware_family": "cde0e74d51e08f19",
       "source_normal_sha256": [],
       "mode": "stock_return",
       "resolves_issue": "ud02-mechanism-convention",
@@ -541,8 +541,8 @@
       "schema_version": 1,
       "id": "pioneer.ud04-native-1.11",
       "policy": "pioneer.ud04-native",
-      "hardware_scheme": "pioneer.hardware.v5",
-      "hardware_family": "e4f1f98dcdf4c06b",
+      "hardware_scheme": "pioneer.hardware.v6",
+      "hardware_family": "cde0e74d51e08f19",
       "source_normal_sha256": [],
       "mode": "stock_return",
       "resolves_issue": "ud02-mechanism-convention",
@@ -558,8 +558,8 @@
       "schema_version": 1,
       "id": "pioneer.ud04-native-1.14",
       "policy": "pioneer.ud04-native",
-      "hardware_scheme": "pioneer.hardware.v5",
-      "hardware_family": "e4f1f98dcdf4c06b",
+      "hardware_scheme": "pioneer.hardware.v6",
+      "hardware_family": "cde0e74d51e08f19",
       "source_normal_sha256": [],
       "mode": "stock_return",
       "resolves_issue": "ud02-mechanism-convention",
@@ -575,8 +575,8 @@
       "schema_version": 1,
       "id": "pioneer.ud03-native-1.14",
       "policy": "pioneer.ud03-native",
-      "hardware_scheme": "pioneer.hardware.v5",
-      "hardware_family": "e4f1f98dcdf4c06b",
+      "hardware_scheme": "pioneer.hardware.v6",
+      "hardware_family": "cde0e74d51e08f19",
       "source_normal_sha256": [],
       "mode": "stock_return",
       "resolves_issue": "ud02-mechanism-convention",
@@ -591,8 +591,8 @@
     {
       "schema_version": 1,
       "id": "pioneer.ud04-to-ud02-1.00",
-      "hardware_scheme": "pioneer.hardware.v5",
-      "hardware_family": "e4f1f98dcdf4c06b",
+      "hardware_scheme": "pioneer.hardware.v6",
+      "hardware_family": "cde0e74d51e08f19",
       "source_normal_sha256": [
         "87e8152f1de1d3be53eb4ad9144c1bb0c45a9be6f78713a0b7487a637f989bf1"
       ],
@@ -710,8 +710,8 @@
     {
       "schema_version": 1,
       "id": "pioneer.ud03-to-ud02-1.00-packed",
-      "hardware_scheme": "pioneer.hardware.v5",
-      "hardware_family": "e4f1f98dcdf4c06b",
+      "hardware_scheme": "pioneer.hardware.v6",
+      "hardware_family": "cde0e74d51e08f19",
       "source_normal_sha256": [
         "e6bdfa9bd0220f618d3e4bf722a590c2e1cf4216431869ab399561b94c71f515"
       ],
@@ -831,8 +831,8 @@
     {
       "schema_version": 1,
       "id": "pioneer.ud03-to-ud02-1.00-whole",
-      "hardware_scheme": "pioneer.hardware.v5",
-      "hardware_family": "e4f1f98dcdf4c06b",
+      "hardware_scheme": "pioneer.hardware.v6",
+      "hardware_family": "cde0e74d51e08f19",
       "source_normal_sha256": [
         "95664992a098ff6c3c8a9c4bae228209d956f4a1462c238fb37863b910b72149"
       ],

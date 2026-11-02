@@ -1,11 +1,11 @@
 //! Register observations and independently selectable family criteria.
 //!
 //! Observations describe recognized code, not measured hardware state. The
-//! current family policy deliberately retains its v5 inputs and serialization.
+//! current family policy excludes movement-command bytes from identity.
 
 use super::*;
 
-/// One independently selectable input to the existing family policy.
+/// One independently comparable field. Only [`FAMILY_CRITERIA`] define identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FamilyCriterion {
     /// ASIC/DSP initialization; physical field meaning remains unresolved.
@@ -24,9 +24,9 @@ pub enum FamilyCriterion {
     E46b,
     /// Interrupt configuration; not a proven board identifier.
     Ffc5,
-    /// Collimator movement-command high byte; retained by the current policy.
+    /// Collimator movement-command high byte; diagnostic only.
     Edcc,
-    /// Collimator movement-command low byte; retained by the current policy.
+    /// Collimator movement-command low byte; diagnostic only.
     Edcd,
     /// Host-interface initialization; exact bit meanings remain unresolved.
     Fe94,
@@ -46,8 +46,6 @@ pub const FAMILY_CRITERIA: &[FamilyCriterion] = &[
     FamilyCriterion::E46a,
     FamilyCriterion::E46b,
     FamilyCriterion::Ffc5,
-    FamilyCriterion::Edcc,
-    FamilyCriterion::Edcd,
     FamilyCriterion::Fe94,
     FamilyCriterion::Fec0,
     FamilyCriterion::Servo,
@@ -146,7 +144,7 @@ pub struct CriterionComparison {
     /// Equality under the selected policy, including its missing-value rules.
     pub matches: bool,
     /// Both policy values have recognized evidence. Two missing values can
-    /// match under v5 without establishing physical equivalence.
+    /// match under the current policy without establishing physical equivalence.
     pub evidence_known: bool,
 }
 
@@ -159,7 +157,7 @@ pub struct FamilyComparison {
     pub criteria: Vec<CriterionComparison>,
 }
 
-/// Rich observations alongside the explicit, unchanged v5 family projection.
+/// Rich observations alongside the explicit family projection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FamilyEvidence {
     pub(super) fingerprint: FamilyFingerprint,
@@ -182,8 +180,8 @@ impl FamilyEvidence {
         self.compare_with(other, FAMILY_CRITERIA)
     }
 
-    /// Explore a subset of existing criteria without changing stored IDs or
-    /// any flash admission policy. This result is not a crossflash permit.
+    /// Compare selected fields, including diagnostic-only movement commands.
+    /// This does not change stored IDs and is not a crossflash permit.
     pub fn compare_with(&self, other: &Self, selected: &[FamilyCriterion]) -> FamilyComparison {
         let criteria: Vec<_> = selected
             .iter()
@@ -207,12 +205,31 @@ impl FamilyEvidence {
     }
 
     fn policy_value(&self, criterion: FamilyCriterion) -> String {
+        if matches!(criterion, FamilyCriterion::Edcc | FamilyCriterion::Edcd) {
+            let register = self
+                .registers
+                .iter()
+                .find(|r| Some(r.address) == criterion.address())
+                .expect("diagnostic command registers are collected");
+            let values = register.values();
+            let operations = register
+                .observations
+                .iter()
+                .filter_map(|o| match o.operation {
+                    RegisterOperation::SetBit(bit) => Some(format!("BSET{bit}")),
+                    RegisterOperation::ClearBit(bit) => Some(format!("BCLR{bit}")),
+                    RegisterOperation::ToggleBit(bit) => Some(format!("BNOT{bit}")),
+                    RegisterOperation::Write { .. } => None,
+                })
+                .collect();
+            return fmt_board(Some(&values), Some(&operations));
+        }
         let f = &self.fingerprint;
         if criterion == FamilyCriterion::Servo {
             return f.servo.clone();
         }
         let source = match criterion {
-            FamilyCriterion::Ffc5 | FamilyCriterion::Edcc | FamilyCriterion::Edcd => &f.board,
+            FamilyCriterion::Ffc5 => &f.board,
             FamilyCriterion::Fe94 | FamilyCriterion::Fec0 => &f.pins,
             _ => &f.asic,
         };
@@ -220,7 +237,7 @@ impl FamilyEvidence {
         source
             .split_whitespace()
             .find_map(|part| part.strip_prefix(&prefix))
-            .expect("all v5 criteria are serialized")
+            .expect("all identity criteria are serialized")
             .to_owned()
     }
 }
@@ -230,6 +247,7 @@ impl FamilyEvidence {
 pub(super) fn register_observations(regions: &[&[u8]], body: &[u8]) -> Vec<RegisterEvidence> {
     let mut registers: Vec<_> = FAMILY_CRITERIA
         .iter()
+        .chain([FamilyCriterion::Edcc, FamilyCriterion::Edcd].iter())
         .filter_map(|c| c.address())
         .map(|address| RegisterEvidence {
             address,

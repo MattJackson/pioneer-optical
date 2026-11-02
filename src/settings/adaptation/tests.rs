@@ -451,6 +451,23 @@ fn certified_pair_requires_no_factory_sku_record() {
 }
 
 #[test]
+fn derived_family_with_leading_zero_can_bind_a_settings_profile() {
+    let family = crate::image::family(&[0xf8, 8, 0x6a, 0x88, 0xe4, 0x36])
+        .unwrap()
+        .to_string();
+    assert_eq!(family, "07b32d08f374ae00");
+    let mut document = value();
+    document["hardware_family"] = family.clone().into();
+    let registry = registry(&document).unwrap();
+    let mut source = source();
+    source.hardware_family = Some(family);
+    assert!(registry
+        .prepare(&source, &target(), "TEST-UD03")
+        .unwrap()
+        .is_some());
+}
+
+#[test]
 fn stock_return_is_pristine_for_the_certified_source_pair() {
     let mut v = value();
     v["mode"] = "stock_return".into();
@@ -467,7 +484,7 @@ fn stock_return_is_pristine_for_the_certified_source_pair() {
 
 #[test]
 fn malformed_conflicting_or_overlapping_profiles_are_rejected_before_use() {
-    for mutate in 0..9 {
+    for mutate in 0..10 {
         let mut v = value();
         match mutate {
             0 => v["replacements"][0]["offset"] = 31.into(),
@@ -481,6 +498,7 @@ fn malformed_conflicting_or_overlapping_profiles_are_rejected_before_use() {
             5 => v["schema_version"] = 2.into(),
             6 => v["required_parameters"][0]["parameter"] = 1024.into(),
             7 => v["unexpected"] = true.into(),
+            9 => v["hardware_scheme"] = "pioneer.hardware.v5".into(),
             _ => v["source_normal_sha256"] = serde_json::json!([]),
         }
         assert!(

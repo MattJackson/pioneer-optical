@@ -29,6 +29,13 @@ Original UD03 or UD04 running adapted UD02 can return to its own OEM image.
 The independent family, receiver, startup, authentication and transport checks
 still apply to every route, including Recovery with a family override.
 
+The UD02 mechanism-convention issue applies within its identified firmware
+family. A known different family does not by itself require that conversion;
+the independent family gate decides whether to refuse it or honor an explicit
+Recovery override. Missing family evidence remains unresolved when the other
+image is in the issue's scope. Original-hardware destination restrictions and
+required adaptations remain enforced independently of a family override.
+
 ## One declarative settings file
 
 `src/settings/adaptation/settings.json` contains the hardware selectors and

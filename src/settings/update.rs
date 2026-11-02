@@ -323,6 +323,13 @@ impl Contract {
                 continue;
             }
             if self.hardware_family != target.hardware_family {
+                // This issue describes conventions within one identified family.
+                // A known different family belongs to the independent family
+                // gate, including its explicit Recovery override. It is not
+                // evidence that this mechanism conversion is required.
+                if self.hardware_family.is_some() && target.hardware_family.is_some() {
+                    continue;
+                }
                 return Err(Error::Unresolved);
             }
             // A prepared, hash-bound adaptation can change the phase grammar
@@ -505,7 +512,7 @@ mod tests {
         assert_eq!(calibration(&corrupt), None);
     }
     #[test]
-    fn prepared_profile_resolves_only_its_issue_and_never_family_mismatch() {
+    fn prepared_profile_resolves_only_its_issue_within_its_family() {
         let source = Contract::test_unresolved_scope();
         let mut target = source.clone();
         assert_eq!(source.check(&target), Err(Error::Unresolved));
@@ -519,8 +526,23 @@ mod tests {
         target.hardware_family = Some("1111111111111111".into());
         assert_eq!(
             source.check_resolving(&target, Some("ud02-mechanism-convention")),
-            Err(Error::Unresolved)
+            Ok(())
         );
+    }
+    #[test]
+    fn known_other_families_do_not_require_this_mechanism_conversion() {
+        let mut other = scoped(None);
+        other.hardware_family = Some("other-platform".into());
+        for phase in [None, Some(false), Some(true)] {
+            let source = scoped(phase);
+            assert_eq!(source.check(&other), Ok(()));
+            assert_eq!(other.check(&source), Ok(()));
+        }
+        // Missing family evidence cannot establish that a transition is outside
+        // this issue's scope. Keep the existing unresolved-evidence behavior.
+        other.hardware_family = None;
+        assert_eq!(scoped(Some(false)).check(&other), Err(Error::Unresolved));
+        assert_eq!(other.check(&scoped(Some(false))), Err(Error::Unresolved));
     }
     fn helper(word: u8, control: u8, output: u8) -> Vec<u8> {
         let mut b = alloc::vec![1, 0, 0x6d, 0xf3, 0x1a, 0xb3, 0x0c, 0x8b, 0x10, 0x73, 0x0a, 0x93];

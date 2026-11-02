@@ -626,12 +626,92 @@ fn normal_only_retains_typed_target_errors_and_rejects_kernel_tag_mismatch() {
 }
 
 #[test]
+fn held_ud04_211m_recovery_does_not_invent_a_settings_requirement() {
+    let Ok(root) = std::env::var("PIONEER_SETTINGS_HOARD") else {
+        return;
+    };
+    let root = std::path::Path::new(&root);
+    let read = |path: &str| std::fs::read(root.join(path)).unwrap();
+    let ud04 = Update::load(
+        &read("oem/pioneer/sat/8A10/GENERAL/1.00/kernel/36996326ae5eaa369ef34a8434514ca137b31a3f144af0955c2d12f4a8b2ea83.enc"),
+        &read("oem/pioneer/sat/8A10/GENERAL/1.14/normal/8e02ed7244d8de7564f6e0606ba803f8614a6e2b87b5e24f7ee344cdcea71141.enc"),
+    ).unwrap();
+    let m211 = Update::load(
+        &read("oem/pioneer/sat/8801/GENERAL/1.53/kernel/f4dc0b8072158512df7616d407a406f22bba1dc18ed22b5e7fe92b81c159b0a1.enc"),
+        &read("oem/pioneer/sat/8801/GENERAL/1.53/normal/769a7bdbfd9f59ea26f8875b19dcb86b193078cfdae3b00f0d1bd52f3097702b.enc"),
+    ).unwrap();
+    for (installed, target, original) in
+        [(&ud04, &m211, "BDR-UD04ABC"), (&m211, &ud04, "BDR-211MABC")]
+    {
+        for receiver in [
+            Receiver::from_installed(installed).unwrap(),
+            Receiver::from_installed(installed)
+                .unwrap()
+                .with_original_parameters(&factory_parameters(original)),
+        ] {
+            assert!(matches!(
+                receiver.prepare(target.clone()),
+                Err(PreparationError::Compatibility(
+                    Error::FamilyMismatch { .. }
+                ))
+            ));
+            let prepared = receiver
+                .prepare_without_family_check(target.clone())
+                .unwrap();
+            assert!(prepared.settings().adaptation_id().is_none());
+            let final_stage = prepared.stages().last().unwrap();
+            assert_eq!(final_stage.normal_image(), target.normal().image);
+            assert_eq!(final_stage.normal_transfer(), target.normal_transfer());
+        }
+    }
+    // Original UD02 remains restricted, even when it is running UD04 firmware
+    // and Recovery deliberately bypasses the independent family comparison.
+    let receiver = Receiver::from_installed(&ud04)
+        .unwrap()
+        .with_original_parameters(&factory_parameters("BDR-UD02TBD"));
+    assert!(matches!(
+        receiver.prepare_without_family_check(m211),
+        Err(PreparationError::Adaptation(
+            crate::settings::adaptation::Error::OriginalMismatch
+        ))
+    ));
+}
+
+#[test]
 fn hardware_override_never_waives_required_settings() {
     let installed = update(false, 1, 0x12, true);
-    let mut receiver = Receiver::from_installed(&installed).unwrap();
-    // The captured receiver is in the scope of an identified unresolved issue;
-    // target fixture does not supply the required evidence for that issue.
-    receiver.settings_contract = crate::settings::update::Contract::test_unresolved_scope();
+    let mut normal = installed.normal().image.clone();
+    // Both images really belong to the identified issue's family. A different
+    // known family is governed by the independent family gate instead.
+    let mut setup = Vec::new();
+    for (address, value) in [
+        (0xe436u16, 0x0d),
+        (0xe43a, 0x35),
+        (0xe43b, 6),
+        (0xe45b, 0x0a),
+        (0xe463, 7),
+        (0xe46a, 0x0b),
+        (0xe46b, 1),
+        (0xedcc, 0),
+        (0xfe94, 0x40),
+        (0xfec0, 0x87),
+    ] {
+        setup.extend([0xf8, value, 0x6a, 0x88]);
+        setup.extend(address.to_be_bytes());
+    }
+    setup.extend([0x7f, 0xc5, 0x72, 0x50]);
+    normal[0x400..0x480].fill(0);
+    normal[0x400..0x400 + setup.len()].copy_from_slice(&setup);
+    fix_sum(&mut normal);
+    let mut bytes = installed.normal().repack(&normal).unwrap();
+    SigningKey::random()
+        .unwrap()
+        .sign_normal(&mut bytes)
+        .unwrap();
+    let installed = Update::load(installed.kernel_transfer(), &bytes).unwrap();
+    let receiver = Receiver::from_installed(&installed).unwrap();
+    assert_eq!(receiver.family().unwrap().to_string(), "e4f1f98dcdf4c06b");
+    // No phase evidence is supplied, so the required settings remain unresolved.
     for result in [
         receiver.prepare(installed.clone()),
         receiver.prepare_without_family_check(installed.clone()),

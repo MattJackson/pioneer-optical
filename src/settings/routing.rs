@@ -15,6 +15,16 @@ pub struct ProductSelector<'a> {
 }
 
 impl ProductSelector<'_> {
+    fn overlaps(&self, other: Self) -> bool {
+        let compatible = |a: Option<&str>, b: Option<&str>| match (a, b) {
+            (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+            _ => true,
+        };
+        self.platform.eq_ignore_ascii_case(other.platform)
+            && compatible(self.prefix, other.prefix)
+            && compatible(self.suffix, other.suffix)
+    }
+
     /// Syntactic match only. An adaptation must validate mechanism prerequisites.
     pub fn matches(&self, product: ProductCode<'_>) -> bool {
         product.platform_is(self.platform)
@@ -67,6 +77,49 @@ impl<'a> Table<'a> {
     /// Construct a read-only routing view. This does not register byte patches.
     pub const fn new(rules: &'a [Rule<'a>]) -> Self {
         Self { rules }
+    }
+
+    /// Resolve a compiled original-hardware predicate without inventing a
+    /// factory product or treating it as evidence read from a drive.
+    pub fn resolve_scope(
+        &self,
+        original: ProductSelector<'_>,
+        destination: ProductCode<'_>,
+    ) -> Decision<'a> {
+        // A single exported predicate must resolve uniformly for every product
+        // it covers. Reject overlapping, unequal scopes until they can be
+        // represented as disjoint predicates; never guess a representative SKU.
+        if self
+            .rules
+            .iter()
+            .any(|r| r.hardware != original && r.hardware.overlaps(original))
+        {
+            return Decision::Ambiguous;
+        }
+        let mut scoped = false;
+        let mut restricted = false;
+        let mut selected = None;
+        for rule in self.rules {
+            if rule.hardware != original {
+                continue;
+            }
+            scoped = true;
+            restricted |= rule.restricted;
+            if rule.destination.matches(destination) {
+                if selected.is_some() {
+                    return Decision::Ambiguous;
+                }
+                selected = Some(rule.profile);
+            }
+        }
+        if scoped && destination.platform_is(original.platform) {
+            return Decision::OriginalPlatform;
+        }
+        match (scoped, selected) {
+            (_, Some(profile)) => Decision::Profile(profile),
+            (true, None) if restricted => Decision::UnsupportedDestination,
+            _ => Decision::Unscoped,
+        }
     }
 
     /// Resolve original A to destination X. Current firmware B is deliberately
@@ -235,6 +288,54 @@ mod tests {
             Table::new(RULES).resolve(code("BDU-UD02ABC"), code("BDR-UD04")),
             Decision::Profile("a-to-b")
         );
+    }
+
+    #[test]
+    fn symbolic_scopes_match_live_routing_without_fabricated_factory_parameters() {
+        for original in ["BDR-UD02TBD", "BDU-UD04ABC"] {
+            let product = code(original);
+            let scope = RULES
+                .iter()
+                .find(|r| r.hardware.matches(product))
+                .unwrap()
+                .hardware;
+            for destination in ["BDR-UD02D", "BDR-UD03", "BDR-UD04", "BDR-209"] {
+                assert_eq!(
+                    Table::new(RULES).resolve_scope(scope, code(destination)),
+                    Table::new(RULES).resolve(product, code(destination))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn symbolic_scopes_reject_nonuniform_prefix_or_suffix_overlaps() {
+        for specific in [
+            ProductSelector {
+                prefix: Some("BDR"),
+                ..platform("UD02")
+            },
+            ProductSelector {
+                suffix: Some("TBD"),
+                ..platform("UD02")
+            },
+        ] {
+            let rules = [
+                RULES[0],
+                Rule {
+                    hardware: specific,
+                    destination: platform("UD03"),
+                    profile: "specific",
+                    restricted: true,
+                },
+            ];
+            for scope in [platform("UD02"), specific] {
+                assert_eq!(
+                    Table::new(&rules).resolve_scope(scope, code("BDR-UD04")),
+                    Decision::Ambiguous
+                );
+            }
+        }
     }
 
     #[test]

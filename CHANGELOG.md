@@ -1,10 +1,12 @@
 # Changelog
 
-## Unreleased
+## [1.5.0] - 2026-11-02
 
+- Scope the UD02 mechanism-convention settings refusal to its identified family. Explicit Recovery family overrides no longer invent a settings requirement for known different families; original-hardware routes and required adaptations remain enforced.
 - Add structured factory product-code parsing and scoped original-hardware settings routes. Preserve original hardware identity through firmware changes and refuse uncovered destinations.
 - Keep reviewed UD02-to-UD03/UD04 and native UD03/UD04-to-UD02 settings recipes in one compiled registry. Preserve UD03 calibration-reader formats and pristine native OEM returns, target byte/integrity guards and live mechanism prerequisites.
 - Confirm original hardware and all stage mechanism prerequisites before any settings, bridge or firmware write, including Recovery.
+- Expose compiled original-hardware predicates on prepared settings plans for offline route analysis. Preserve live hardware, profile and exact-image checks; reject overlapping symbolic scopes.
 - Expose per-register observations and selectable family comparisons. Recover shared CPU-register constants in diagnostics while preserving all v5 family IDs and matching outcomes.
 
 - Exclude FEC0 bit 6 from hardware family matching (scheme v5), retaining all other register and servo evidence. Preserve unmasked register writes in `FamilyFingerprint::raw_pins` for future bit analysis. Rebind existing exact-image settings profiles to the derived v5 family identifiers.

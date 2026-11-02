@@ -283,7 +283,7 @@ fn final_stage_original_hardware_refusal_precedes_all_bridge_and_settings_writes
             last.settings = last
                 .settings
                 .clone()
-                .with_hardware_guard(&last.normal, true);
+                .with_hardware_guard(&last.normal, true, None);
             let error = plan
                 .execute(
                     FlashTransport {

@@ -7,6 +7,12 @@ const BASE: usize = 0x410000;
 /// Read-only binding of the audited direct native parameter surface.
 pub mod surface;
 
+/// Read-only recognition of the persistent-bank format check at startup.
+pub mod bank;
+
+/// Receiver-owned startup requirements and their shared transition planner.
+pub mod checks;
+
 /// Startup word selected for an update, not a saved historical value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Setting {
@@ -23,13 +29,13 @@ pub struct Setting {
 /// not proof that an arbitrary image has no unrecognized check. The live A0
 /// transaction must succeed before firmware transfer.
 pub fn setting(normal: &[u8]) -> Result<Setting, Ambiguous> {
-    Ok(match discover(normal)? {
-        Some(r) => Setting {
+    Ok(match analyze(normal)? {
+        Analysis::Required(r) => Setting {
             parameter: r.parameter,
             value: r.required,
             explicit: true,
         },
-        None => Setting {
+        Analysis::Unknown => Setting {
             parameter: 0x9f,
             value: 0xffff,
             explicit: false,
@@ -62,53 +68,121 @@ pub struct Requirement {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ambiguous;
 
+/// Evidence from target code. Unknown carries no selected parameter value.
+/// In particular, it is not evidence that the erased value is required.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Analysis {
+    /// A supported comparison has a loader-setting mismatch path.
+    Required(Requirement),
+    /// No supported requirement was established. Other code may use the word.
+    Unknown,
+}
+
+/// Analyze a target without choosing a fallback value or authorizing a write.
+pub fn analyze(normal: &[u8]) -> Result<Analysis, Ambiguous> {
+    Ok(match discover(normal)? {
+        Some(requirement) => Analysis::Required(requirement),
+        None => Analysis::Unknown,
+    })
+}
+
 fn address(bytes: &[u8]) -> usize {
     u32::from_be_bytes([0, bytes[0], bytes[1], bytes[2]]) as usize
 }
 
-fn calls_loader_flag(mut tail: &[u8], normal: &[u8]) -> bool {
-    use h8_asm::{isa::decode_insn, Mode, Target};
-    let mut found = false;
-    while !tail.is_empty() {
-        let Ok(insn) = decode_insn(tail, Target::H8S2000, Mode::Advanced) else {
-            return false;
-        };
-        if insn.len == 0 || insn.len > tail.len() {
+fn calls_loader_flag(tail: &[u8], normal: &[u8]) -> bool {
+    fn path(tail: &[u8], normal: &[u8], at: usize, argument: bool, budget: usize) -> bool {
+        use h8_asm::{isa::decode_insn, Mode, Target};
+        if budget == 0 {
             return false;
         }
-        if insn.len == 4 && tail[0] == 0x5e {
-            found |= address(&tail[1..4])
+        let Some(bytes) = tail.get(at..) else {
+            return false;
+        };
+        let Ok(insn) = decode_insn(bytes, Target::H8S2000, Mode::Advanced) else {
+            return false;
+        };
+        let next = at + insn.len;
+        let instruction = &bytes[..insn.len];
+        if insn.len == 4 && bytes[0] == 0x5e {
+            let wrapper = address(&bytes[1..4])
                 .checked_sub(BASE)
                 .and_then(|i| normal.get(i..i + 6))
                 == Some(&[0x5e, 0x40, 0x0a, 0x1a, 0x54, 0x70][..]);
+            if wrapper {
+                return argument;
+            }
         }
-        tail = &tail[insn.len..];
+        let branch = if insn.len == 2 && (0x40..=0x4f).contains(&bytes[0]) {
+            Some((bytes[0] & 15, i16::from(bytes[1] as i8)))
+        } else if insn.len == 4 && bytes[0] == 0x58 && bytes[1] & 15 == 0 {
+            Some((bytes[1] >> 4, i16::from_be_bytes([bytes[2], bytes[3]])))
+        } else {
+            None
+        };
+        if let Some((condition, distance)) = branch {
+            if condition == 1 {
+                return path(tail, normal, next, argument, budget - 1);
+            }
+            let target = next as isize + distance as isize;
+            if target < 0 || target as usize >= tail.len() || target % 2 != 0 {
+                return false;
+            }
+            let taken = path(tail, normal, target as usize, argument, budget - 1);
+            return taken && (condition == 0 || path(tail, normal, next, argument, budget - 1));
+        }
+        let mnemonic = insn.insn.mnemonic;
+        if mnemonic.starts_with('B')
+            || matches!(mnemonic, "JMP" | "RTS" | "RTE" | "TRAPA")
+            || (mnemonic == "JSR" && bytes[0] != 0x5e)
+        {
+            return false;
+        }
+        // Conservative local argument tracking: a recognized explicit load must
+        // immediately precede the loader-setting call on every reachable path.
+        path(tail, normal, next, instruction == [0xf8, 1], budget - 1)
     }
-    found
+    path(tail, normal, 0, false, 64)
 }
 
 /// Inspect a decoded Normal body loaded at CPU 0x410000.
 ///
 /// Recognizes immediate word index -> JSR -> immediate word comparison ->
-/// short BEQ, with a mismatch-branch call to a wrapper of Kernel service
+/// short or long BEQ, with a mismatch-branch call to a wrapper of Kernel service
 /// 0x400a1a. Only aligned matches are considered. `Ok(None)` means no
 /// recognized sequence, not absence of a requirement. No write decision
 /// should be made from this result alone.
 pub fn discover(normal: &[u8]) -> Result<Option<Requirement>, Ambiguous> {
     let mut result = None;
     for p in (0..normal.len().saturating_sub(13)).step_by(2) {
-        let w = &normal[p..p + 14];
-        if w[0] != 0x79 || w[1] > 1 || w[4] != 0x5e || w[8..10] != [0x79, 0x20] || w[12] != 0x47 {
+        let w = &normal[p..];
+        if w[0] != 0x79 || w[1] > 1 {
             continue;
         }
-        let distance = w[13] as i8;
+        let Some((getter, compare)) = getter_call(normal, p) else {
+            continue;
+        };
+        let Some(cmp) = normal.get(compare..compare + 4) else {
+            continue;
+        };
+        if cmp[..2] != [0x79, 0x20] {
+            continue;
+        }
+        let branch = compare + 4;
+        let (end, distance) = match normal.get(branch..branch + 2) {
+            Some([0x47, distance]) => (branch + 2, i16::from(*distance as i8)),
+            Some([0x58, 0x70]) => match normal.get(branch + 2..branch + 4) {
+                Some(bytes) => (branch + 4, i16::from_be_bytes([bytes[0], bytes[1]])),
+                None => continue,
+            },
+            _ => continue,
+        };
         if distance <= 0 || distance % 2 != 0 {
             continue;
         }
-        let Some(tail) = normal.get(p + 14..p + 14 + distance as usize) else {
+        let Some(tail) = normal.get(end..end + distance as usize) else {
             continue;
         };
-        let getter = address(&w[5..8]);
         if getter.checked_sub(BASE).map_or(true, |i| i >= normal.len()) {
             continue;
         }
@@ -117,7 +191,7 @@ pub fn discover(normal: &[u8]) -> Result<Option<Requirement>, Ambiguous> {
         }
         let candidate = Requirement {
             parameter: u16::from_be_bytes([w[2], w[3]]),
-            required: u16::from_be_bytes([w[10], w[11]]),
+            required: u16::from_be_bytes([cmp[2], cmp[3]]),
             check_address: (BASE + p) as u32,
             getter_address: getter as u32,
             argument_register: w[1],
@@ -127,6 +201,33 @@ pub fn discover(normal: &[u8]) -> Result<Option<Requirement>, Ambiguous> {
         }
     }
     Ok(result)
+}
+
+// Bind a call to its explicit address load. Never infer an indirect callee
+// from register number alone or carry it across unrelated instructions.
+fn getter_call(normal: &[u8], parameter: usize) -> Option<(usize, usize)> {
+    let call = parameter + 4;
+    if normal.get(call) == Some(&0x5e) {
+        return Some((address(normal.get(call + 1..call + 4)?), call + 4));
+    }
+    let indirect = |load: usize, call: usize| {
+        let bytes = normal.get(load..load + 6)?;
+        let register = bytes[1];
+        if bytes[0] != 0x7a
+            || register > 6
+            || register == normal[parameter + 1]
+            || normal.get(call..call + 2) != Some(&[0x5d, register << 4])
+        {
+            return None;
+        }
+        let getter = u32::from_be_bytes(bytes[2..6].try_into().ok()?) as usize;
+        Some((getter, call + 2))
+    };
+    indirect(call, call + 6).or_else(|| {
+        parameter
+            .checked_sub(6)
+            .and_then(|load| indirect(load, call))
+    })
 }
 
 #[cfg(test)]
@@ -141,6 +242,57 @@ mod tests {
         ]);
         b[0x180..0x186].copy_from_slice(&[0x5e, 0x40, 0x0a, 0x1a, 0x54, 0x70]);
         b
+    }
+
+    #[test]
+    fn indirect_getter_and_long_equal_branch_recover_requirement() {
+        for before in [false, true] {
+            let mut b = fixture(0, 0xfe24);
+            b[0x20..0x50].fill(0);
+            let load = [0x7a, 5, 0, 0x41, 1, 0];
+            let parameter = [0x79, 0, 0, 0x9f];
+            let mut code = std::vec::Vec::new();
+            if before {
+                code.extend(load);
+                code.extend(parameter);
+            } else {
+                code.extend(parameter);
+                code.extend(load);
+            }
+            code.extend([0x5d, 0x50, 0x79, 0x20, 0xfe, 0x24, 0x58, 0x70, 0, 6]);
+            code.extend([0xf8, 1, 0x5e, 0x41, 1, 0x80]);
+            b[0x20..0x20 + code.len()].copy_from_slice(&code);
+            let Analysis::Required(r) = analyze(&b).unwrap() else {
+                panic!("missed indirect getter requirement");
+            };
+            assert_eq!(
+                (r.parameter, r.required, r.getter_address),
+                (0x9f, 0xfe24, 0x410100)
+            );
+            // Reusing the argument register destroys either the pointer or the
+            // index; this must not be reported as a proven getter call.
+            let at = if before { 0x20 } else { 0x24 };
+            b[at + 1] = 0;
+            b[0x2b] = 0;
+            assert_eq!(analyze(&b), Ok(Analysis::Unknown));
+        }
+    }
+
+    #[test]
+    fn unknown_analysis_never_invents_a_parameter_value() {
+        assert_eq!(analyze(&[]), Ok(Analysis::Unknown));
+        let mut b = fixture(0, 0xfe24);
+        b[0x2c] = 0x46; // BNE gives the opposite success/failure semantics.
+        assert_eq!(analyze(&b), Ok(Analysis::Unknown));
+    }
+
+    #[test]
+    fn clearing_or_skipping_the_loader_call_is_not_a_requirement() {
+        let mut b = fixture(0, 0xfe24);
+        b[0x2e..0x30].copy_from_slice(&[0x18, 0x88]); // SUB.B R0L,R0L
+        assert_eq!(analyze(&b), Ok(Analysis::Unknown));
+        b[0x2e..0x30].copy_from_slice(&[0x40, 4]); // BRA skips the wrapper call.
+        assert_eq!(analyze(&b), Ok(Analysis::Unknown));
     }
     #[test]
     fn both_argument_conventions_preserve_the_observed_value() {

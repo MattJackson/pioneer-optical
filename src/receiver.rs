@@ -101,6 +101,9 @@ pub struct Receiver {
     policy: ReceiverControl,
     family: Option<Family>,
     settings_contract: crate::settings::update::Contract,
+    original_product: Option<Result<String, crate::settings::adaptation::Error>>,
+    original_scope: Option<crate::settings::routing::ProductSelector<'static>>,
+    startup: crate::startup::checks::Checks,
     #[cfg(test)]
     adaptation_profiles: Option<Vec<String>>,
     kernel_policy: Option<crate::image::KernelMarkerPolicy>,
@@ -179,6 +182,9 @@ impl Receiver {
             policy,
             family: family(image),
             settings_contract: crate::settings::update::Contract::discover(image),
+            original_product: None,
+            original_scope: None,
+            startup: crate::startup::checks::Checks::discover(image, None),
             #[cfg(test)]
             adaptation_profiles: None,
             kernel_policy: None,
@@ -221,6 +227,8 @@ impl Receiver {
             }
         }
         receiver.kernel_policy = crate::image::kernel_marker_policy(&kernel.image);
+        receiver.startup =
+            crate::startup::checks::Checks::discover(&normal.image, Some(&kernel.image));
         receiver.installed_kernel = Some(kernel.clone());
         Ok(receiver)
     }
@@ -228,6 +236,17 @@ impl Receiver {
     /// Hardware family recovered from the captured installed image.
     pub fn family(&self) -> Option<Family> {
         self.family
+    }
+
+    /// This settings cohort needs original factory evidence at live preparation
+    /// and execution. Unrelated receivers require no additional parameters read.
+    pub fn requires_original_hardware(&self) -> bool {
+        self.settings_contract.hardware_sensitive()
+    }
+
+    /// All recognized startup requirements belonging to this receiver.
+    pub fn startup_checks(&self) -> crate::startup::checks::Checks {
+        self.startup
     }
 
     /// The already decoded installed Kernel supplied during receiver detection.

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "test.ud02-to-ud03",
-  "hardware_scheme": "pioneer.hardware.v4",
+  "hardware_scheme": "pioneer.hardware.v5",
   "hardware_family": "1111111111111111",
   "source_normal_sha256": [
     "bfbd30e993f8fa17fb740dc84d232dc6205b893e0ec93414b9387a78374a8f7e"

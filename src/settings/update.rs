@@ -81,6 +81,8 @@ impl Setting {
 pub struct Plan {
     entries: Vec<Setting>,
     adaptation: Option<super::adaptation::Applied>,
+    startup: Option<crate::startup::checks::Plan>,
+    hardware_guard: Option<super::adaptation::HardwareGuard>,
 }
 impl Plan {
     pub(crate) fn target(startup: Option<crate::startup::Setting>, restore: bool) -> Self {
@@ -104,7 +106,18 @@ impl Plan {
         Self {
             entries,
             adaptation: None,
+            startup: None,
+            hardware_guard: None,
         }
+    }
+    pub(crate) fn startup(plan: crate::startup::checks::Plan, restore: bool) -> Self {
+        let mut settings = Self::target(Some(plan.word_setting()), restore);
+        settings.startup = Some(plan);
+        settings
+    }
+    /// The complete startup check plan used by this firmware stage.
+    pub fn startup_plan(&self) -> Option<crate::startup::checks::Plan> {
+        self.startup
     }
     pub(crate) fn with_adaptation(
         mut self,
@@ -113,7 +126,51 @@ impl Plan {
         self.adaptation = adaptation.map(Into::into);
         self
     }
-    /// Compiled-in adaptation selected for this exact source and target.
+    pub(crate) fn with_hardware_guard(
+        mut self,
+        target: &crate::envelope::Envelope,
+        scoped: bool,
+        scope: Option<super::routing::ProductSelector<'static>>,
+    ) -> Self {
+        if scoped {
+            self.hardware_guard = Some(
+                super::adaptation::HardwareGuard::new(
+                    &target.info().model,
+                    &target.image,
+                    self.adaptation_id(),
+                )
+                .with_scope(scope),
+            );
+        }
+        self
+    }
+
+    /// The compiled hardware predicate bound to this selected offline plan.
+    /// A guarded plan without a predicate must not become an ordinary route.
+    pub fn original_hardware_scope(
+        &self,
+    ) -> Result<Option<super::routing::ProductSelector<'static>>, super::adaptation::Error> {
+        self.hardware_guard
+            .as_ref()
+            .map(|g| g.scope().ok_or(super::adaptation::Error::OriginalRequired))
+            .transpose()
+    }
+
+    /// Execution must confirm the original factory hardware before any stage
+    /// writes. This is independent of the currently reported firmware model.
+    pub fn requires_original_hardware(&self) -> bool {
+        self.hardware_guard.is_some()
+    }
+
+    #[cfg(feature = "drive")]
+    pub(crate) fn check_hardware(&self, parameters: &[u8]) -> Result<(), super::adaptation::Error> {
+        match &self.hardware_guard {
+            Some(guard) => guard.check(parameters),
+            None => Ok(()),
+        }
+    }
+
+    /// Compiled-in adaptation selected for the original hardware and target.
     pub fn adaptation_id(&self) -> Option<&str> {
         self.adaptation.as_ref().map(|a| a.id.as_str())
     }
@@ -183,22 +240,83 @@ pub struct Contract {
     pub(super) hardware_family: Option<alloc::string::String>,
     pub(super) normal_sha256: alloc::string::String,
     phase: Option<bool>,
+    pub(super) calibration: Option<Calibration>,
+}
+
+/// How the running firmware interprets this unit's existing calibration words.
+/// This is a format contract, separate from original hardware identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Calibration {
+    WholeWord,
+    PackedBytes,
+}
+
+fn calibration(normal: &[u8]) -> Option<Calibration> {
+    const WHOLE: &[u8] = &[
+        0x0c, 0x88, 0x47, 0x16, 0xa8, 1, 0x47, 0x12, 0xa8, 2, 0x47, 8, 0xa8, 3, 0x47, 4, 0xf8,
+        0xff, 0x40, 0x0e, 0x79, 0, 1, 0x13, 0x40, 4, 0x79, 0, 1, 0x12, 0x5e,
+    ];
+    const PACKED: &[u8] = &[
+        0x6d, 0xf3, 0x0c, 0x89, 0x79, 3, 0, 0xff, 0x0d, 0x30, 0x0c, 0x99, 0x47, 0x22, 0xa9, 1,
+        0x47, 0x14, 0xa9, 2, 0x47, 0x0a, 0xa9, 3, 0x46, 0x24, 0x79, 0, 1, 0x13, 0x40, 0x0a, 0x79,
+        0, 1, 0x13, 0x40, 0x0e, 0x79, 0, 1, 0x12, 0x5e,
+    ];
+    let regions = crate::image::regions(normal)?;
+    let mut found = Vec::new();
+    for region in regions.slices() {
+        for b in region.windows(36).step_by(2) {
+            if b.starts_with(WHOLE) && b[34..] == [0x54, 0x70] {
+                found.push(Calibration::WholeWord);
+            }
+        }
+        for b in region.windows(66).step_by(2) {
+            if !b.starts_with(PACKED)
+                || b[46..53] != [0x40, 0x0c, 0x79, 0, 1, 0x12, 0x5e]
+                || b[58..] != [0x18, 0, 0x66, 0x30, 0x6d, 0x73, 0x54, 0x70]
+            {
+                continue;
+            }
+            match &b[56..58] {
+                [0x0c, 0x08] => found.push(Calibration::PackedBytes),
+                [0, 0] => found.push(Calibration::WholeWord),
+                _ => {}
+            }
+        }
+    }
+    found.sort_unstable();
+    found.dedup();
+    match found.as_slice() {
+        [format] => Some(*format),
+        _ => None,
+    }
 }
 impl Contract {
+    pub(crate) fn hardware_sensitive(&self) -> bool {
+        self.hardware_family.as_deref() == Some("e4f1f98dcdf4c06b")
+    }
     #[cfg(test)]
     pub(crate) fn test_unresolved_scope() -> Self {
         Self {
-            hardware_family: Some("83a4abb2a9b5480e".into()),
+            hardware_family: Some("e4f1f98dcdf4c06b".into()),
             normal_sha256: alloc::string::String::new(),
             phase: None,
+            calibration: None,
         }
     }
     /// Inspect independently decoded firmware; no model names or fixed offsets.
     pub fn discover(normal: &[u8]) -> Self {
+        let hardware_family = crate::image::family(normal).map(|f| f.to_string());
+        let calibration = if hardware_family.as_deref() == Some("e4f1f98dcdf4c06b") {
+            calibration(normal)
+        } else {
+            None
+        };
         Self {
-            hardware_family: crate::image::family(normal).map(|f| f.to_string()),
+            hardware_family,
             normal_sha256: super::adaptation::digest(normal),
             phase: phase(normal),
+            calibration,
         }
     }
     /// Compare required configuration without granting an adaptation.
@@ -220,6 +338,13 @@ impl Contract {
                 continue;
             }
             if self.hardware_family != target.hardware_family {
+                // This issue describes conventions within one identified family.
+                // A known different family belongs to the independent family
+                // gate, including its explicit Recovery override. It is not
+                // evidence that this mechanism conversion is required.
+                if self.hardware_family.is_some() && target.hardware_family.is_some() {
+                    continue;
+                }
                 return Err(Error::Unresolved);
             }
             // A prepared, hash-bound adaptation can change the phase grammar
@@ -362,7 +487,47 @@ fn phase_at(mut b: &[u8]) -> Option<(u8, u8, u8)> {
 mod tests {
     use super::*;
     #[test]
-    fn prepared_profile_resolves_only_its_issue_and_never_family_mismatch() {
+    fn calibration_formats_follow_reader_code_and_refuse_conflicting_evidence() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("adaptation/mechanism-fixture.json")).unwrap();
+        let decode = |field: &str| {
+            let h = fixture[field].as_str().unwrap();
+            (0..h.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap())
+                .collect::<Vec<_>>()
+        };
+        let packed = decode("calibration_native");
+        let whole = decode("calibration_old");
+        assert_eq!(calibration(&packed), Some(Calibration::PackedBytes));
+        assert_eq!(calibration(&whole), Some(Calibration::WholeWord));
+        let mut shim = packed.clone();
+        shim[56..58].fill(0);
+        assert_eq!(calibration(&shim), Some(Calibration::WholeWord));
+        for (bytes, format) in [
+            (&packed, Calibration::PackedBytes),
+            (&whole, Calibration::WholeWord),
+            (&shim, Calibration::WholeWord),
+        ] {
+            let mut relocated = vec![0; 128];
+            relocated.extend(bytes);
+            assert_eq!(calibration(&relocated), Some(format));
+            for length in 0..bytes.len() {
+                assert_eq!(calibration(&bytes[..length]), None);
+            }
+        }
+        let mut mixed = packed.clone();
+        mixed.extend(&whole);
+        assert_eq!(calibration(&mixed), None);
+        let mut duplicate = packed.clone();
+        duplicate.extend(&packed);
+        assert_eq!(calibration(&duplicate), Some(Calibration::PackedBytes));
+        let mut corrupt = packed;
+        corrupt[58] ^= 1;
+        assert_eq!(calibration(&corrupt), None);
+    }
+    #[test]
+    fn prepared_profile_resolves_only_its_issue_within_its_family() {
         let source = Contract::test_unresolved_scope();
         let mut target = source.clone();
         assert_eq!(source.check(&target), Err(Error::Unresolved));
@@ -376,8 +541,23 @@ mod tests {
         target.hardware_family = Some("1111111111111111".into());
         assert_eq!(
             source.check_resolving(&target, Some("ud02-mechanism-convention")),
-            Err(Error::Unresolved)
+            Ok(())
         );
+    }
+    #[test]
+    fn known_other_families_do_not_require_this_mechanism_conversion() {
+        let mut other = scoped(None);
+        other.hardware_family = Some("other-platform".into());
+        for phase in [None, Some(false), Some(true)] {
+            let source = scoped(phase);
+            assert_eq!(source.check(&other), Ok(()));
+            assert_eq!(other.check(&source), Ok(()));
+        }
+        // Missing family evidence cannot establish that a transition is outside
+        // this issue's scope. Keep the existing unresolved-evidence behavior.
+        other.hardware_family = None;
+        assert_eq!(scoped(Some(false)).check(&other), Err(Error::Unresolved));
+        assert_eq!(other.check(&scoped(Some(false))), Err(Error::Unresolved));
     }
     fn helper(word: u8, control: u8, output: u8) -> Vec<u8> {
         let mut b = alloc::vec![1, 0, 0x6d, 0xf3, 0x1a, 0xb3, 0x0c, 0x8b, 0x10, 0x73, 0x0a, 0x93];
@@ -429,9 +609,10 @@ mod tests {
     }
     fn scoped(phase: Option<bool>) -> Contract {
         Contract {
-            hardware_family: Some("83a4abb2a9b5480e".into()),
+            hardware_family: Some("e4f1f98dcdf4c06b".into()),
             normal_sha256: alloc::string::String::new(),
             phase,
+            calibration: None,
         }
     }
     #[test]
@@ -457,6 +638,7 @@ mod tests {
             hardware_family: Some("other-platform".into()),
             normal_sha256: alloc::string::String::new(),
             phase: None,
+            calibration: None,
         };
         assert_eq!(a.check(&a), Ok(()));
     }

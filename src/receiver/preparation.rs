@@ -8,6 +8,8 @@ use crate::image::{kernel_marker_policy, KernelMarkerPolicy};
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum PreparationError {
+    /// Persistent storage requirements differ or could not be recovered.
+    Startup(crate::startup::checks::Error),
     /// More than one startup comparison prevents selecting a target value.
     AmbiguousStartup,
     /// Required configuration is unresolved or has no validated conversion.
@@ -45,6 +47,7 @@ pub enum PreparationError {
 impl core::fmt::Display for PreparationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Startup(error) => error.fmt(f),
             Self::Settings(error) => error.fmt(f),
             Self::Adaptation(error) => error.fmt(f),
             Self::AmbiguousStartup => f.write_str("target startup checks are ambiguous; no startup setting can be selected"),
@@ -77,6 +80,7 @@ impl core::fmt::Display for PreparationError {
 impl std::error::Error for PreparationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Startup(error) => Some(error),
             Self::Settings(error) => Some(error),
             Self::Adaptation(error) => Some(error),
             Self::KernelHandoff(error) => Some(error),
@@ -88,10 +92,45 @@ impl std::error::Error for PreparationError {
 }
 
 impl Receiver {
-    /// Retained for source compatibility. Certified conversions are selected
-    /// by the firmware pair; live setting prerequisites are checked at execution.
-    pub fn with_original_parameters(self, _parameters: &[u8]) -> Self {
+    /// Plan every startup check, independently of hardware-family overrides.
+    pub fn prepare_startup(
+        &self,
+        normal: &[u8],
+        kernel: Option<&[u8]>,
+    ) -> Result<crate::startup::checks::Plan, PreparationError> {
+        self.startup
+            .plan_to(crate::startup::checks::Checks::discover(normal, kernel))
+            .map_err(PreparationError::Startup)
+    }
+    /// Bind the persistent factory hardware independently of installed branding.
+    /// Invalid supplied evidence cannot fall back to firmware-hash selection.
+    pub fn with_original_parameters(mut self, parameters: &[u8]) -> Self {
+        self.original_scope = None;
+        self.original_product = Some(
+            crate::production::parse(parameters)
+                .filter(|p| p.product_code_parts().is_some())
+                .map(|p| p.product_code.to_owned())
+                .ok_or(crate::settings::adaptation::Error::OriginalRequired),
+        );
         self
+    }
+
+    /// Prepare under a compiled hardware predicate for offline route analysis.
+    /// This supplies no factory evidence: every resulting guarded plan still
+    /// verifies real factory parameters before execution can write anything.
+    pub fn with_original_hardware_scope(
+        mut self,
+        scope: crate::settings::routing::ProductSelector<'static>,
+    ) -> Result<Self, crate::settings::adaptation::Error> {
+        if !crate::settings::adaptation::hardware_rules()?
+            .iter()
+            .any(|r| r.hardware == scope)
+        {
+            return Err(crate::settings::adaptation::Error::OriginalMismatch);
+        }
+        self.original_product = None;
+        self.original_scope = Some(scope);
+        Ok(self)
     }
 
     fn adapt_normal(
@@ -119,6 +158,28 @@ impl Receiver {
             &normal.image,
             &normal.info().model,
         );
+        let result = if self.settings_contract.hardware_sensitive() {
+            match &self.original_product {
+                Some(Ok(original)) => crate::settings::adaptation::prepare_hardware(
+                    &self.settings_contract,
+                    &normal.image,
+                    &normal.info().model,
+                    original,
+                ),
+                Some(Err(error)) => Err(error.clone()),
+                None => match self.original_scope {
+                    Some(scope) => crate::settings::adaptation::prepare_scope(
+                        &self.settings_contract,
+                        &normal.image,
+                        &normal.info().model,
+                        scope,
+                    ),
+                    None => result,
+                },
+            }
+        } else {
+            result
+        };
         let adapted = result.map_err(PreparationError::Adaptation)?;
         // A stock-return profile authorizes only its exact OEM image and
         // original factory mechanism; native reverse routes are not inferred.
@@ -178,6 +239,7 @@ impl Receiver {
             .check(&crate::settings::update::Contract::discover(normal))
             .map_err(PreparationError::Settings)
     }
+    #[cfg(test)]
     fn startup_setting_for(
         &self,
         normal: &[u8],
@@ -228,11 +290,16 @@ impl Receiver {
                     .map_err(PreparationError::Compatibility)?;
             }
         }
-        let settings = crate::settings::update::Plan::target(
-            self.startup_setting_for(&pair.normal().image)?,
+        let settings = crate::settings::update::Plan::startup(
+            self.prepare_startup(&pair.normal().image, Some(&kernel.image))?,
             false,
         )
-        .with_adaptation(adaptation);
+        .with_adaptation(adaptation)
+        .with_hardware_guard(
+            pair.normal(),
+            self.requires_original_hardware(),
+            self.original_scope,
+        );
         let (normal, normal_bytes) = pair.into_normal();
         Ok(PreparedNormal {
             stage: PreparedStage {
@@ -299,8 +366,8 @@ impl Receiver {
                 // A source bridge is a real intermediate, with its own Normal
                 // and receiver. It never borrows the final target's settings.
                 let bridge = super::handoff_bridge::prepare(self, target.kernel())?;
-                let settings = crate::settings::update::Plan::target(
-                    self.startup_setting_for(&bridge.normal().image)?,
+                let settings = crate::settings::update::Plan::startup(
+                    self.prepare_startup(&bridge.normal().image, Some(&bridge.kernel().image))?,
                     false,
                 );
                 stages.push(PreparedStage::pair(
@@ -310,6 +377,10 @@ impl Receiver {
                     Some(BridgeKind::KernelHandoff),
                 )?);
                 receiver.installed_kernel = Some(bridge.kernel().clone());
+                receiver.startup = crate::startup::checks::Checks::discover(
+                    &bridge.normal().image,
+                    Some(&bridge.kernel().image),
+                );
             }
             Err(error) => return Err(PreparationError::KernelHandoff(error)),
         }
@@ -317,11 +388,16 @@ impl Receiver {
             policy,
             target.kernel().image.get(KERNEL_MARKER_OFFSET).copied(),
         );
-        let settings = crate::settings::update::Plan::target(
-            receiver.startup_setting_for(&target.normal().image)?,
+        let settings = crate::settings::update::Plan::startup(
+            receiver.prepare_startup(&target.normal().image, Some(&target.kernel().image))?,
             patch,
         )
-        .with_adaptation(adaptation);
+        .with_adaptation(adaptation)
+        .with_hardware_guard(
+            target.normal(),
+            self.requires_original_hardware(),
+            self.original_scope,
+        );
         if patch {
             if kernel_marker_policy(&target.kernel().image)
                 != Some(KernelMarkerPolicy::NoMarkerCheck)

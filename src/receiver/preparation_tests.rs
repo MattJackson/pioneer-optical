@@ -62,6 +62,7 @@ pub(in crate::receiver) fn update(gated: bool, marker: u8, family: u8, entry: bo
     kernel[KERNEL_MARKER_OFFSET] = marker;
     fix_sum(&mut kernel);
     let mut normal = normal_image(0x2000);
+    crate::startup::bank::fixture(&mut normal);
     normal[0x400..0x408].copy_from_slice(&[0xf6, family, 0x6a, 0x86, 0xe4, 0x36, 0, 0]);
     if entry {
         normal[0x500..0x510].copy_from_slice(&[
@@ -94,6 +95,44 @@ fn factory_parameters(code: &str) -> [u8; crate::production::PARAMETERS_LEN] {
     bytes[0x90..0x9f].fill(b' ');
     bytes[0x90..0x90 + code.len()].copy_from_slice(code.as_bytes());
     bytes
+}
+
+#[test]
+fn every_preparation_path_uses_the_receivers_startup_checks() {
+    use crate::startup::{bank, checks};
+    let installed = update(false, 1, 0x12, true);
+    let receiver = Receiver::from_installed(&installed).unwrap();
+    let baseline = receiver.prepare(installed.clone()).unwrap();
+    assert!(baseline.settings().startup_plan().is_some());
+    assert_eq!(receiver.startup_checks().iter().count(), 2);
+
+    let mut normal = installed.normal().image.clone();
+    for at in [0x180a, 0x190a] {
+        normal[at..at + 4].copy_from_slice(&0xfedc4322u32.to_be_bytes());
+    }
+    fix_sum(&mut normal);
+    let mut bytes = installed.normal().repack(&normal).unwrap();
+    let mut key = [0; 20];
+    key[19] = 5;
+    SigningKey::from_bytes(key)
+        .unwrap()
+        .sign_normal(&mut bytes)
+        .unwrap();
+    let target = Update::load(installed.kernel_transfer(), &bytes).unwrap();
+    let refused = |e: PreparationError| {
+        assert!(matches!(
+            e,
+            PreparationError::Startup(checks::Error::Banks(bank::Error::ConversionRequired { .. }))
+        ))
+    };
+    refused(receiver.prepare(target.clone()).unwrap_err());
+    refused(receiver.prepare_without_family_check(target).unwrap_err());
+    refused(receiver.prepare_normal(&bytes).unwrap_err());
+    refused(
+        receiver
+            .prepare_normal_without_family_check(&bytes)
+            .unwrap_err(),
+    );
 }
 
 #[test]
@@ -137,7 +176,7 @@ fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
     parameters[0xc0 + 76..0xc0 + 82].copy_from_slice(b"130525");
     let prepared = receiver
         .with_original_parameters(&parameters)
-        .prepare(target)
+        .prepare(target.clone())
         .unwrap();
     assert_eq!(
         prepared.settings().adaptation_id(),
@@ -165,6 +204,103 @@ fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
     );
     assert_eq!(back.target.normal().image, installed.normal().image);
     assert_eq!(back.target.kernel().image, installed.kernel().image);
+
+    let ud03 = Update::load(
+        &read("oem/pioneer/sat/8510/ID19/1.03/kernel/36d0e3542a34a653250295f86d489d5e1e4f7931043351d856f27e57477d72ae.enc"),
+        &read("oem/pioneer/sat/8510/ID19/1.03/normal/6042da6069fec90d0e8052613f3f2d6e8ebb7e0d41dc770a5cf4c601f3960d4e.enc"),
+    ).unwrap();
+    for current in [&installed, &target, &prepared.target, &ud03] {
+        for factory in ["BDR-UD02TBD", "BDU-UD02ABC", "BDR-UD02FAN"] {
+            let receiver = Receiver::from_installed(current)
+                .unwrap()
+                .with_original_parameters(&factory_parameters(factory));
+            let to_ud04 = receiver.prepare(target.clone()).unwrap();
+            assert_eq!(
+                to_ud04.target.normal().image,
+                prepared.target.normal().image
+            );
+            let to_ud02 = receiver.prepare(installed.clone()).unwrap();
+            assert_eq!(to_ud02.target.normal().image, installed.normal().image);
+            for bypass in [false, true] {
+                let result = if bypass {
+                    receiver.prepare_without_family_check(ud03.clone())
+                } else {
+                    receiver.prepare(ud03.clone())
+                }
+                .unwrap();
+                assert_eq!(
+                    result.settings().adaptation_id(),
+                    Some("pioneer.ud02-to-ud03-1.03")
+                );
+                assert_eq!(
+                    crate::settings::adaptation::digest(&result.target.normal().image),
+                    "f78a48ea604d36663f1da13b5eaad63396e8a0c4ccc6c18fb7f38547f1816a56"
+                );
+            }
+        }
+    }
+    let ud03_latest = Update::load(
+        &read("oem/pioneer/sat/8511/GENERAL/1.14/kernel/77432fcd9cf4d32e711458015e01c995ee780706d1f9cb4800ff77f4b371e224.enc"),
+        &read("oem/pioneer/sat/8511/GENERAL/1.14/normal/4a5c9c055c4a31bed730618c0ea68597c807ea1e581558acfd7e873f8e32eba8.enc"),
+    ).unwrap();
+    let forward_latest = Receiver::from_installed(&installed)
+        .unwrap()
+        .with_original_parameters(&factory_parameters("BDR-UD02TBD"))
+        .prepare(ud03_latest.clone())
+        .unwrap();
+    assert_eq!(
+        crate::settings::adaptation::digest(&forward_latest.target.normal().image),
+        "57d0be1d40c2c8bba7f71bd7b84e66fd4394eb56924fb385610ba92c62797f32"
+    );
+    // Native mechanisms select the shared inverse, while original UD02 on the
+    // very same firmware selects pristine OEM return. Decode/authentication and
+    // receiver readback cover the relocated routines in the Normal header too.
+    for (current, original) in [
+        (&ud03, "BDR-UD03FAL"),
+        (&ud03_latest, "BDR-UD03ABC"),
+        (&target, "BDR-UD04ABC"),
+    ] {
+        let parameters = factory_parameters(original);
+        let inverse = Receiver::from_installed(current)
+            .unwrap()
+            .with_original_parameters(&parameters)
+            .prepare(installed.clone())
+            .unwrap();
+        assert_eq!(
+            inverse.settings().adaptation_id(),
+            Some(if original == "BDR-UD03FAL" {
+                "pioneer.ud03-to-ud02-1.00-whole"
+            } else if original == "BDR-UD03ABC" {
+                "pioneer.ud03-to-ud02-1.00-packed"
+            } else {
+                "pioneer.ud04-to-ud02-1.00"
+            })
+        );
+        assert!(inverse.settings().requirements().is_empty());
+        assert_eq!(
+            crate::settings::adaptation::digest(&inverse.target.normal().image),
+            if original == "BDR-UD03FAL" {
+                "95e5a7a5c841a5b1b66895ac299285c869c43222f134044280ffbf8971426305"
+            } else {
+                "33d04b3d4f1d432f00f3498706fbb04369cdac0e29253ba5ead8f6b749905995"
+            }
+        );
+        assert_eq!(inverse.target.kernel().image, installed.kernel().image);
+        let returned = Receiver::from_installed(&inverse.target)
+            .unwrap()
+            .with_original_parameters(&parameters)
+            .prepare(current.clone())
+            .unwrap();
+        assert_eq!(returned.target.normal().image, current.normal().image);
+        assert_eq!(returned.target.kernel().image, current.kernel().image);
+        assert!(returned.settings().requirements().is_empty());
+        let reapply = Receiver::from_installed(&inverse.target)
+            .unwrap()
+            .with_original_parameters(&parameters)
+            .prepare(installed.clone())
+            .unwrap();
+        assert_eq!(reapply.target.normal().image, inverse.target.normal().image);
+    }
 }
 
 #[test]
@@ -490,12 +626,92 @@ fn normal_only_retains_typed_target_errors_and_rejects_kernel_tag_mismatch() {
 }
 
 #[test]
+fn held_ud04_211m_recovery_does_not_invent_a_settings_requirement() {
+    let Ok(root) = std::env::var("PIONEER_SETTINGS_HOARD") else {
+        return;
+    };
+    let root = std::path::Path::new(&root);
+    let read = |path: &str| std::fs::read(root.join(path)).unwrap();
+    let ud04 = Update::load(
+        &read("oem/pioneer/sat/8A10/GENERAL/1.00/kernel/36996326ae5eaa369ef34a8434514ca137b31a3f144af0955c2d12f4a8b2ea83.enc"),
+        &read("oem/pioneer/sat/8A10/GENERAL/1.14/normal/8e02ed7244d8de7564f6e0606ba803f8614a6e2b87b5e24f7ee344cdcea71141.enc"),
+    ).unwrap();
+    let m211 = Update::load(
+        &read("oem/pioneer/sat/8801/GENERAL/1.53/kernel/f4dc0b8072158512df7616d407a406f22bba1dc18ed22b5e7fe92b81c159b0a1.enc"),
+        &read("oem/pioneer/sat/8801/GENERAL/1.53/normal/769a7bdbfd9f59ea26f8875b19dcb86b193078cfdae3b00f0d1bd52f3097702b.enc"),
+    ).unwrap();
+    for (installed, target, original) in
+        [(&ud04, &m211, "BDR-UD04ABC"), (&m211, &ud04, "BDR-211MABC")]
+    {
+        for receiver in [
+            Receiver::from_installed(installed).unwrap(),
+            Receiver::from_installed(installed)
+                .unwrap()
+                .with_original_parameters(&factory_parameters(original)),
+        ] {
+            assert!(matches!(
+                receiver.prepare(target.clone()),
+                Err(PreparationError::Compatibility(
+                    Error::FamilyMismatch { .. }
+                ))
+            ));
+            let prepared = receiver
+                .prepare_without_family_check(target.clone())
+                .unwrap();
+            assert!(prepared.settings().adaptation_id().is_none());
+            let final_stage = prepared.stages().last().unwrap();
+            assert_eq!(final_stage.normal_image(), target.normal().image);
+            assert_eq!(final_stage.normal_transfer(), target.normal_transfer());
+        }
+    }
+    // Original UD02 remains restricted, even when it is running UD04 firmware
+    // and Recovery deliberately bypasses the independent family comparison.
+    let receiver = Receiver::from_installed(&ud04)
+        .unwrap()
+        .with_original_parameters(&factory_parameters("BDR-UD02TBD"));
+    assert!(matches!(
+        receiver.prepare_without_family_check(m211),
+        Err(PreparationError::Adaptation(
+            crate::settings::adaptation::Error::OriginalMismatch
+        ))
+    ));
+}
+
+#[test]
 fn hardware_override_never_waives_required_settings() {
     let installed = update(false, 1, 0x12, true);
-    let mut receiver = Receiver::from_installed(&installed).unwrap();
-    // The captured receiver is in the scope of an identified unresolved issue;
-    // target fixture does not supply the required evidence for that issue.
-    receiver.settings_contract = crate::settings::update::Contract::test_unresolved_scope();
+    let mut normal = installed.normal().image.clone();
+    // Both images really belong to the identified issue's family. A different
+    // known family is governed by the independent family gate instead.
+    let mut setup = Vec::new();
+    for (address, value) in [
+        (0xe436u16, 0x0d),
+        (0xe43a, 0x35),
+        (0xe43b, 6),
+        (0xe45b, 0x0a),
+        (0xe463, 7),
+        (0xe46a, 0x0b),
+        (0xe46b, 1),
+        (0xedcc, 0),
+        (0xfe94, 0x40),
+        (0xfec0, 0x87),
+    ] {
+        setup.extend([0xf8, value, 0x6a, 0x88]);
+        setup.extend(address.to_be_bytes());
+    }
+    setup.extend([0x7f, 0xc5, 0x72, 0x50]);
+    normal[0x400..0x480].fill(0);
+    normal[0x400..0x400 + setup.len()].copy_from_slice(&setup);
+    fix_sum(&mut normal);
+    let mut bytes = installed.normal().repack(&normal).unwrap();
+    SigningKey::random()
+        .unwrap()
+        .sign_normal(&mut bytes)
+        .unwrap();
+    let installed = Update::load(installed.kernel_transfer(), &bytes).unwrap();
+    let receiver = Receiver::from_installed(&installed).unwrap();
+    assert_eq!(receiver.family().unwrap().to_string(), "e4f1f98dcdf4c06b");
+    // No phase evidence is supplied, so the required settings remain unresolved.
     for result in [
         receiver.prepare(installed.clone()),
         receiver.prepare_without_family_check(installed.clone()),

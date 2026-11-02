@@ -73,8 +73,9 @@ const SIG0: [u8; 24] = [
 /// protocol or generation differences. Invalid packages and unimplemented
 /// transfer paths must be reported separately from hardware incompatibility.
 ///
-/// The value is an opaque hash; only equality and the hex [`Display`] form are
-/// meaningful.
+/// The value is an opaque hash; only equality and the 16-digit lowercase hex
+/// [`Display`] form are meaningful. Leading zeroes are retained so the same
+/// identifier can bind a settings profile.
 ///
 /// [`Display`]: core::fmt::Display
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -82,7 +83,7 @@ pub struct Family(u64);
 
 impl core::fmt::Display for Family {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{:x}", self.0)
+        write!(f, "{:016x}", self.0)
     }
 }
 

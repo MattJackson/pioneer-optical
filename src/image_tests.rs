@@ -210,7 +210,9 @@ fn empty_and_junk_bodies_have_no_family() {
 
 #[test]
 fn family_displays_lowercase_hex() {
-    assert_eq!(format!("{}", Family(0xABCD_1234)), "abcd1234");
+    assert_eq!(format!("{}", Family(0xABCD_1234)), "00000000abcd1234");
+    assert_eq!(format!("{}", Family(0)), "0000000000000000");
+    assert_eq!(format!("{}", Family(u64::MAX)), "ffffffffffffffff");
 }
 
 #[test]

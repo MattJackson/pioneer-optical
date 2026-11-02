@@ -15,7 +15,8 @@ the other 192 retain the same missing-fingerprint or decode result. All
 281,430 directed comparisons among the recognized packages are unchanged:
 39,386 same-family matches, zero added matches and zero removed matches.
 All 21 old keys map one-to-one to 21 new keys, under scheme
-`pioneer.hardware.v6`. Cached IDs must be regenerated. Bound settings metadata
+`pioneer.hardware.v6`. IDs retain 16 hex digits, including leading zeroes, to
+match the compiled settings schema. Cached IDs must be regenerated. Bound settings metadata
 is rekeyed without changing profiles, firmware/output hashes, operands,
 factory hardware scopes or their guards.
 

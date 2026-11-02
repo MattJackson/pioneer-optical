@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Remove EDCC/EDCD collimator movement-command bytes from hardware identity while retaining their register observations and optional diagnostic comparisons. Scheme `pioneer.hardware.v6` rekeys family identifiers and bound settings metadata; consumers must regenerate cached IDs. The 530 recognized Normal images across 531 packages retain exactly the same 21-family partition and all 39,386 same-family directed matches. No register, firmware operand, settings recipe or hardware scope is changed.
+- Retain leading zeroes in the 16-digit family ID so every derived family can bind the same compiled settings schema.
 
 ## [1.5.0] - 2026-11-02
 

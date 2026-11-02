@@ -39,6 +39,8 @@ fn pair(source: bool) -> Update {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Fault {
+    FirstPointerRead,
+    SecondPointerRead,
     PostReadError,
     Geometry,
     PointerDrift,
@@ -262,6 +264,12 @@ impl Transport for Port {
                     let address = u32::from_be_bytes([0, command[3], command[4], command[5]]);
                     if address == 0x33e0 {
                         s.bank_pointer_reads += 1;
+                        if (s.bank_pointer_reads == 1 && s.fault == Some(Fault::FirstPointerRead))
+                            || (s.bank_pointer_reads == 2
+                                && s.fault == Some(Fault::SecondPointerRead))
+                        {
+                            return Err("bank pointer read failed");
+                        }
                         bytes[..4].copy_from_slice(&s.base.to_be_bytes());
                         bytes[4..].copy_from_slice(&s.active.to_be_bytes());
                         if s.fault == Some(Fault::Geometry) {
@@ -695,4 +703,30 @@ fn competing_target_header_refuses_before_settings_or_firmware_write() {
     assert!(!error.write_started());
     assert!(state.borrow().entries.is_empty());
     assert!(state.borrow().parameter_writes.is_empty());
+}
+
+#[test]
+#[ignore = "requires PIONEER_BANK_HOARD exact OEM archives; mandatory bank-pipeline signoff"]
+fn either_capture_pointer_read_failure_prevents_all_mutations() {
+    let source = pair(true);
+    let target = pair(false);
+    let plan = Receiver::from_installed(&source)
+        .unwrap()
+        .prepare_without_family_check(target.clone())
+        .unwrap();
+    for (fault, reads) in [(Fault::FirstPointerRead, 1), (Fault::SecondPointerRead, 2)] {
+        let state = setup(&source, &target, Some(fault), 0x5e0000);
+        let error = run(&plan, &state).unwrap_err();
+        assert!(error.to_string().contains("bank pointer read failed"));
+        assert!(!error.write_started());
+        assert!(!error.firmware_write_started());
+        assert!(!error.temporary_bank_bridge());
+        assert_eq!(error.completed_stages(), 0);
+        let s = state.borrow();
+        assert_eq!(s.bank_pointer_reads, reads);
+        assert!(s.entries.is_empty());
+        assert!(s.parameter_writes.is_empty());
+        assert!(s.backups.is_empty());
+        assert_eq!(s.bank_mutations, 0);
+    }
 }

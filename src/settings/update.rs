@@ -293,12 +293,12 @@ fn calibration(normal: &[u8]) -> Option<Calibration> {
 }
 impl Contract {
     pub(crate) fn hardware_sensitive(&self) -> bool {
-        self.hardware_family.as_deref() == Some("e4f1f98dcdf4c06b")
+        self.hardware_family.as_deref() == Some("cde0e74d51e08f19")
     }
     #[cfg(test)]
     pub(crate) fn test_unresolved_scope() -> Self {
         Self {
-            hardware_family: Some("e4f1f98dcdf4c06b".into()),
+            hardware_family: Some("cde0e74d51e08f19".into()),
             normal_sha256: alloc::string::String::new(),
             phase: None,
             calibration: None,
@@ -307,7 +307,7 @@ impl Contract {
     /// Inspect independently decoded firmware; no model names or fixed offsets.
     pub fn discover(normal: &[u8]) -> Self {
         let hardware_family = crate::image::family(normal).map(|f| f.to_string());
-        let calibration = if hardware_family.as_deref() == Some("e4f1f98dcdf4c06b") {
+        let calibration = if hardware_family.as_deref() == Some("cde0e74d51e08f19") {
             calibration(normal)
         } else {
             None
@@ -609,7 +609,7 @@ mod tests {
     }
     fn scoped(phase: Option<bool>) -> Contract {
         Contract {
-            hardware_family: Some("e4f1f98dcdf4c06b".into()),
+            hardware_family: Some("cde0e74d51e08f19".into()),
             normal_sha256: alloc::string::String::new(),
             phase,
             calibration: None,

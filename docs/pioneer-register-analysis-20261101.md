@@ -1,5 +1,48 @@
 # Pioneer register analysis backlog — 2026-11-01
 
+## Isolated v6 correction — 2026-11-02
+
+This research branch removes EDCC/EDCD movement-command bytes from identity;
+their observations remain available through `FamilyEvidence::registers()` and
+explicit `compare_with()` selection. The 11 remaining criteria are the seven
+ASIC registers, FFC5, FE94, FEC0 excluding bit 6, and the existing servo-row
+fingerprint. This is a semantic correction with no changed corpus grouping.
+The v5 decision and exploratory notes below describe the earlier baseline.
+
+Fresh public-SDK exports before and after the change inspect all 723 Pioneer
+packages. Both recognize 531 packages carrying 530 distinct Normal images;
+the other 192 retain the same missing-fingerprint or decode result. All
+281,430 directed comparisons among the recognized packages are unchanged:
+39,386 same-family matches, zero added matches and zero removed matches.
+All 21 old keys map one-to-one to 21 new keys, under scheme
+`pioneer.hardware.v6`. Cached IDs must be regenerated. Bound settings metadata
+is rekeyed without changing profiles, firmware/output hashes, operands,
+factory hardware scopes or their guards.
+
+UD04 1.14, 211M 1.53 SAT8801 and XU03 1.03 remain three distinct families.
+They already share FFC5 BCLR5 and the same collimator observations. Removing
+the movement-command inputs therefore neither permits those crossflashes nor
+claims to repair either observed no-eject outcome. Those two outcomes do not
+prove a particular register caused the failure.
+
+Native interrupt setup provides additional evidence for retaining FFC5:
+257 of 530 Normal images bind an exact FFC5/CPU-side interrupt-init grammar.
+The XS05/XS06 group uses FFC5 clear-bit 7 and CPU-side enable address
+`FFFDFF28` bit 1; the larger AD/XD/XS07/XS08 group uses clear-bit 5 and
+`FFFDFF29` bit 7, with corresponding different priority registers. A separate
+relocation-checked mask-helper prefix binds in 225 images. Its argument
+`0x200040` selects the `0x200000` bank with low-word mask `0x0040`; it does
+not establish two independent interrupt sources. These address relationships
+do not establish pin names, trigger polarity, wiring or complete physical
+equivalence. UD04, 211M and XU03 share this setup, so it cannot explain their
+different outcomes by itself.
+
+Private reproducible receipts are `v6-family-partition-proof.json`, the two
+fresh package-fingerprint exports and `native-interrupt-route-inventory.json`
+under `test-runs/pioneer-other-setup-ablation-20261101`. Family count remains
+an observation rather than a target. No experimental v6 change belongs in
+the 0.17.2 release.
+
 ## Decision and evidence
 
 Exclude **FEC0 bit 6 only** from hardware-family matching. Keep FE94, the

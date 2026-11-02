@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn shared_fe94_constant_is_observed_without_rekeying_v5() {
+fn shared_fe94_constant_is_observed_without_rekeying_identity() {
     let mut code = vec![0xf8, 0x0d, 0x6a, 0x88, 0xe4, 0x36];
     let legacy = family_fingerprint(&code).unwrap();
     code.extend_from_slice(&[
@@ -24,7 +24,7 @@ fn observed_values(evidence: &FamilyEvidence, address: u16) -> BTreeSet<u8> {
 }
 
 #[test]
-fn collimator_shared_zero_has_both_observations_and_distinct_policy_inputs() {
+fn collimator_shared_zero_has_both_observations_without_identity_constraints() {
     let code = [
         0xf8, 0x0d, 0x6a, 0x88, 0xe4, 0x36, 0x18, 0x99, 0x6a, 0x89, 0xed, 0xcc, 0x6a, 0x89, 0xed,
         0xcd,
@@ -32,7 +32,7 @@ fn collimator_shared_zero_has_both_observations_and_distinct_policy_inputs() {
     let evidence = family_evidence(&code).unwrap();
     assert_eq!(observed_values(&evidence, 0xedcc), BTreeSet::from([0]));
     assert_eq!(observed_values(&evidence, 0xedcd), BTreeSet::from([0]));
-    assert_eq!(evidence.fingerprint().board, "ffc5=- edcc=0 edcd=-");
+    assert_eq!(evidence.fingerprint().board, "ffc5=-");
     let observation = &evidence
         .registers()
         .iter()
@@ -47,6 +47,77 @@ fn collimator_shared_zero_has_both_observations_and_distinct_policy_inputs() {
             loaded_at: 6
         }
     );
+}
+
+#[test]
+fn movement_commands_remain_comparable_without_defining_hardware_identity() {
+    let make = |high, low| {
+        family_evidence(&[
+            0xf8, 0x0d, 0x6a, 0x88, 0xe4, 0x36, 0xf8, high, 0x6a, 0x88, 0xed, 0xcc, 0xf8, low,
+            0x6a, 0x88, 0xed, 0xcd,
+        ])
+        .unwrap()
+    };
+    let (a, b) = (make(0, 1), make(0xff, 2));
+    assert_eq!(a.fingerprint().family, b.fingerprint().family);
+    assert!(a.compare(&b).matches);
+    assert!(FAMILY_CRITERIA
+        .iter()
+        .all(|c| !matches!(c, FamilyCriterion::Edcc | FamilyCriterion::Edcd)));
+    let commands = a.compare_with(&b, &[FamilyCriterion::Edcc, FamilyCriterion::Edcd]);
+    assert!(!commands.matches);
+    assert!(commands
+        .criteria
+        .iter()
+        .all(|c| c.evidence_known && !c.matches));
+    assert_eq!(
+        (
+            commands.criteria[0].left.as_str(),
+            commands.criteria[0].right.as_str()
+        ),
+        ("0", "ff")
+    );
+    assert_eq!(
+        (
+            commands.criteria[1].left.as_str(),
+            commands.criteria[1].right.as_str()
+        ),
+        ("1", "2")
+    );
+    // Command observations alone do not establish an otherwise missing family.
+    assert!(family_evidence(&[0xf8, 1, 0x6a, 0x88, 0xed, 0xcd]).is_none());
+}
+
+#[test]
+fn removing_movement_commands_preserves_other_hardware_distinctions() {
+    let seed = [0xf8, 0x0d, 0x6a, 0x88, 0xe4, 0x36];
+    for (criterion, address) in [
+        (FamilyCriterion::E436, 0xe436u16),
+        (FamilyCriterion::Ffc5, 0xffc5),
+        (FamilyCriterion::Fe94, 0xfe94),
+        (FamilyCriterion::Fec0, 0xfec0),
+    ] {
+        let make = |value| {
+            let mut code = seed.to_vec();
+            code.extend_from_slice(&[0xf8, value, 0x6a, 0x88]);
+            code.extend_from_slice(&address.to_be_bytes());
+            family_evidence(&code).unwrap()
+        };
+        let (a, b) = (make(1), make(2));
+        assert_ne!(
+            a.fingerprint().family,
+            b.fingerprint().family,
+            "{criterion:?}"
+        );
+        assert!(!a.compare_with(&b, &[criterion]).matches);
+    }
+    let mut a = seed.to_vec();
+    a.extend_from_slice(&servo_row(0x11));
+    let mut b = seed.to_vec();
+    b.extend_from_slice(&servo_row(0x12));
+    let (a, b) = (family_evidence(&a).unwrap(), family_evidence(&b).unwrap());
+    assert_ne!(a.fingerprint().family, b.fingerprint().family);
+    assert!(!a.compare_with(&b, &[FamilyCriterion::Servo]).matches);
 }
 
 #[test]
@@ -509,7 +580,7 @@ fn ffc5_high_boards_still_compare_servo_tables() {
         0xF6, 0x12, 0x6A, 0x86, 0xE4, 0x36, 0xF6, 0x20, 0x6A, 0x86, 0xFF, 0xC5,
     ];
     let missing = family_fingerprint(&body).unwrap();
-    assert_eq!(missing.board, "ffc5=20 edcc=- edcd=-");
+    assert_eq!(missing.board, "ffc5=20");
     assert_eq!(missing.servo, "none");
     let first = servo_row(0x11);
     body.extend_from_slice(&first);

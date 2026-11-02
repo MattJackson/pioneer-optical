@@ -467,7 +467,7 @@ fn stock_return_is_pristine_for_the_certified_source_pair() {
 
 #[test]
 fn malformed_conflicting_or_overlapping_profiles_are_rejected_before_use() {
-    for mutate in 0..9 {
+    for mutate in 0..10 {
         let mut v = value();
         match mutate {
             0 => v["replacements"][0]["offset"] = 31.into(),
@@ -481,6 +481,7 @@ fn malformed_conflicting_or_overlapping_profiles_are_rejected_before_use() {
             5 => v["schema_version"] = 2.into(),
             6 => v["required_parameters"][0]["parameter"] = 1024.into(),
             7 => v["unexpected"] = true.into(),
+            9 => v["hardware_scheme"] = "pioneer.hardware.v5".into(),
             _ => v["source_normal_sha256"] = serde_json::json!([]),
         }
         assert!(

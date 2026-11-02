@@ -46,15 +46,17 @@ const ASIC_REGS: [u16; 7] = [0xE436, 0xE43A, 0xE43B, 0xE45B, 0xE463, 0xE46A, 0xE
 /// Remaining hardware/interface initialization evidence.
 /// Excluded host configuration is retained separately for settings admission.
 const PIN_REGS: [u16; 2] = [0xFE94, 0xFEC0];
-/// Legacy board-key fields: interrupt setup and collimator command writes.
-const BOARD_REGS: [u16; 3] = [0xFFC5, 0xEDCC, 0xEDCD];
+/// Interrupt setup evidence. Collimator movement commands are observations,
+/// rather than inputs to hardware identity.
+const BOARD_REGS: [u16; 1] = [0xFFC5];
 
 /// Servo loop-filter coefficient-row anchor (`7f 97 7f 51 7f 51 7f 51 7f 51`).
 const SERVO_ROW: [u8; 10] = [0x7f, 0x97, 0x7f, 0x51, 0x7f, 0x51, 0x7f, 0x51, 0x7f, 0x51];
 /// Number of distinct servo rows that form the version-stable base.
 const SERVO_BASE: usize = 7;
-/// Version 5 excludes FEC0 bit 6 from hardware identity, retaining raw evidence.
-pub const FAMILY_SCHEME: &str = "pioneer.hardware.v5";
+/// Version 6 excludes collimator movement-command bytes from identity.
+/// The version-5 FEC0 bit-6 normalization remains in force.
+pub const FAMILY_SCHEME: &str = "pioneer.hardware.v6";
 
 /// Full servo coefficient row width.
 const SERVO_ROW_LEN: usize = 40;
@@ -348,13 +350,13 @@ pub struct FamilyFingerprint {
     pub family: Family,
     /// Canonical servo/RF register values.
     pub asic: String,
-    /// Legacy interrupt/collimator inputs, not confirmed board identifiers.
+    /// Interrupt setup inputs; these do not assert immutable board identifiers.
     pub board: String,
     /// Canonical remaining hardware/interface setup values.
     /// The legacy field name does not imply verified physical pin assignments.
     pub pins: String,
     /// Unmasked observed FE94/FEC0 constants, including shared-register stores.
-    /// These corrected diagnostics are independent of the v5 key projection.
+    /// These corrected diagnostics are independent of the family-key projection.
     pub raw_pins: String,
     /// Servo coefficient hash, or `"none"` when no anchor rows were found.
     pub servo: String,
@@ -379,7 +381,7 @@ pub(crate) fn family_regions(regions: &[&[u8]], body: &[u8]) -> Option<Family> {
 }
 
 fn evidence_regions(regions: &[&[u8]], body: &[u8]) -> Option<FamilyEvidence> {
-    let mut fingerprint = legacy_fingerprint_regions(regions, body)?;
+    let mut fingerprint = policy_fingerprint_regions(regions, body)?;
     let registers = evidence::register_observations(regions, body);
     fingerprint.raw_pins = PIN_REGS
         .iter()
@@ -404,9 +406,9 @@ fn fingerprint_regions(regions: &[&[u8]], body: &[u8]) -> Option<FamilyFingerpri
     evidence_regions(regions, body).map(|e| e.fingerprint)
 }
 
-// Keep v5 extraction and serialization stable while fixing the observations.
-// Inserting recovered constants here would rekey existing family identifiers.
-fn legacy_fingerprint_regions(regions: &[&[u8]], body: &[u8]) -> Option<FamilyFingerprint> {
+// Retain the existing extraction/missing-evidence behavior for hardware inputs.
+// Richer observations do not silently become additional identity constraints.
+fn policy_fingerprint_regions(regions: &[&[u8]], body: &[u8]) -> Option<FamilyFingerprint> {
     let wanted: BTreeSet<u16> = ASIC_REGS
         .iter()
         .chain(PIN_REGS.iter())

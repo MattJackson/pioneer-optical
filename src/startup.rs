@@ -163,11 +163,39 @@ fn address(bytes: &[u8]) -> usize {
 }
 
 fn calls_loader_flag(tail: &[u8], normal: &[u8]) -> bool {
-    fn path(tail: &[u8], normal: &[u8], at: usize, argument: bool, budget: usize) -> bool {
-        use h8_asm::{isa::decode_insn, Mode, Target};
+    // path() is a pure function of (at, argument, budget) for a fixed tail and
+    // Normal, so memoizing on that key keeps every decision identical while
+    // bounding work by the number of distinct states.
+    type Memo = alloc::collections::BTreeMap<(usize, bool, usize), bool>;
+    fn path(
+        tail: &[u8],
+        normal: &[u8],
+        memo: &mut Memo,
+        at: usize,
+        argument: bool,
+        budget: usize,
+    ) -> bool {
+        #[cfg(test)]
+        tests::PATH_CALLS.with(|c| c.set(c.get() + 1));
         if budget == 0 {
             return false;
         }
+        if let Some(&known) = memo.get(&(at, argument, budget)) {
+            return known;
+        }
+        let result = step(tail, normal, memo, at, argument, budget);
+        memo.insert((at, argument, budget), result);
+        result
+    }
+    fn step(
+        tail: &[u8],
+        normal: &[u8],
+        memo: &mut Memo,
+        at: usize,
+        argument: bool,
+        budget: usize,
+    ) -> bool {
+        use h8_asm::{isa::decode_insn, Mode, Target};
         let Some(bytes) = tail.get(at..) else {
             return false;
         };
@@ -194,14 +222,15 @@ fn calls_loader_flag(tail: &[u8], normal: &[u8]) -> bool {
         };
         if let Some((condition, distance)) = branch {
             if condition == 1 {
-                return path(tail, normal, next, argument, budget - 1);
+                return path(tail, normal, memo, next, argument, budget - 1);
             }
             let target = next as isize + distance as isize;
             if target < 0 || target as usize >= tail.len() || target % 2 != 0 {
                 return false;
             }
-            let taken = path(tail, normal, target as usize, argument, budget - 1);
-            return taken && (condition == 0 || path(tail, normal, next, argument, budget - 1));
+            let taken = path(tail, normal, memo, target as usize, argument, budget - 1);
+            return taken
+                && (condition == 0 || path(tail, normal, memo, next, argument, budget - 1));
         }
         let mnemonic = insn.insn.mnemonic;
         if mnemonic.starts_with('B')
@@ -212,9 +241,16 @@ fn calls_loader_flag(tail: &[u8], normal: &[u8]) -> bool {
         }
         // Conservative local argument tracking: a recognized explicit load must
         // immediately precede the loader-setting call on every reachable path.
-        path(tail, normal, next, instruction == [0xf8, 1], budget - 1)
+        path(
+            tail,
+            normal,
+            memo,
+            next,
+            instruction == [0xf8, 1],
+            budget - 1,
+        )
     }
-    path(tail, normal, 0, false, 64)
+    path(tail, normal, &mut Memo::new(), 0, false, 64)
 }
 
 // Full mismatch arm of the audited conditional gate. FE23 skips this arm;
@@ -346,6 +382,32 @@ fn getter_call(normal: &[u8], parameter: usize) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::cell::Cell;
+
+    std::thread_local! {
+        pub(super) static PATH_CALLS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    #[test]
+    fn branch_chain_tail_is_analyzed_in_linear_work() {
+        let mut b = std::vec![0; 0x200];
+        b[0x180..0x186].copy_from_slice(&[0x5e, 0x40, 0x0a, 0x1a, 0x54, 0x70]);
+        let mut code =
+            std::vec![0x79, 0, 0, 0x9f, 0x5e, 0x41, 1, 0, 0x79, 0x20, 0xfe, 0x24, 0x47, 0x2e,];
+        for _ in 0..20 {
+            code.extend([0x46, 0]); // BNE +0: both arms reach the same next instruction.
+        }
+        code.extend([0xf8, 1, 0x5e, 0x41, 1, 0x80]);
+        b[0x20..0x20 + code.len()].copy_from_slice(&code);
+        PATH_CALLS.with(|c| c.set(0));
+        let Ok(Analysis::Required(r)) = analyze(&b) else {
+            panic!("missed branch-chain requirement");
+        };
+        assert_eq!((r.parameter, r.required), (0x9f, 0xfe24));
+        let calls = PATH_CALLS.with(Cell::get);
+        assert!(calls < 1_000, "{calls} path evaluations");
+    }
+
     fn fixture(register: u8, required: u16) -> std::vec::Vec<u8> {
         let mut b = std::vec![0; 0x200];
         let [hi, lo] = required.to_be_bytes();

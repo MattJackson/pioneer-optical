@@ -318,8 +318,9 @@ impl Envelope {
                 })
                 .is_some();
             if valid {
-                for (index, stream) in indexed {
-                    check(observer, "Inspecting streams", index, total)?;
+                let count = indexed.len();
+                for (position, (index, stream)) in indexed.into_iter().enumerate() {
+                    check(observer, "Inspecting streams", position, count)?;
                     let start = stream.image_offset;
                     if start > cursor {
                         result.push_region(

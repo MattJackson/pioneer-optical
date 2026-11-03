@@ -312,6 +312,33 @@ fn analysis_uses_the_lean_comp_parser() {
     }
 }
 
+#[cfg(feature = "analysis")]
+#[test]
+fn analysis_reports_stream_progress_as_position_over_count() {
+    struct Recorder(Vec<(usize, usize)>);
+    impl crate::analysis::Observer for Recorder {
+        fn proceed(&mut self, stage: &'static str, done: usize, total: usize) -> bool {
+            if stage == "Inspecting streams" {
+                self.0.push((done, total));
+            }
+            true
+        }
+    }
+    // Directory order (second stream first) differs from storage order.
+    let mut img = image();
+    let directory = img[0x1004..0x1014].to_vec();
+    img[0x1004..0x100c].copy_from_slice(&directory[8..]);
+    img[0x100c..0x1014].copy_from_slice(&directory[..8]);
+    let d = decode_envelope(&envelope(&img, &[])).unwrap();
+    let mut recorder = Recorder(Vec::new());
+    let analysis = d
+        .analyze(crate::analysis::Options::default(), &mut recorder)
+        .unwrap();
+    assert_eq!(recorder.0, [(0, 2), (1, 2)]);
+    let names: Vec<_> = analysis.regions.iter().filter_map(|r| r.stream).collect();
+    assert_eq!(names, [1, 0]);
+}
+
 #[test]
 fn kernel_xor_skip_inside_a_comp_stream_keeps_splices() {
     use super::builder::{encode_kernel_envelope, KernelBuild};

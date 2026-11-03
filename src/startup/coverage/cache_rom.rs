@@ -2,6 +2,7 @@
 //! an index set. Every other caller and pointer route remains explicit.
 use super::{cache_flow::Reference, CallKind};
 use crate::image::layout::Observation;
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 pub(super) struct Pattern {
     pub bytes: &'static [u8],
@@ -99,22 +100,21 @@ impl Helper {
 fn word(b: &[u8]) -> u32 {
     b.iter().fold(0, |v, b| (v << 8) | u32::from(*b))
 }
-fn stored(normal: &[u8], at: usize, len: usize) -> bool {
-    crate::image::regions(normal).is_some_and(|r| {
-        r.stored.iter().any(|s| {
-            let start = s.as_ptr() as usize - normal.as_ptr() as usize;
-            at >= start && at.saturating_add(len) <= start + s.len()
-        })
+/// `stored` are the stored slices of `normal` from one `image::regions` decode.
+fn stored(normal: &[u8], stored: &[&[u8]], at: usize, len: usize) -> bool {
+    stored.iter().any(|s| {
+        let start = s.as_ptr() as usize - normal.as_ptr() as usize;
+        at >= start && at.saturating_add(len) <= start + s.len()
     })
 }
-fn validator(normal: &[u8], target: u32, accessor: u32) -> Option<usize> {
+fn validator(normal: &[u8], regions: &[&[u8]], target: u32, accessor: u32) -> Option<usize> {
     let at = (target as usize).checked_sub(0x410000)?;
     for shape in super::cache_rom_shapes::VALIDATORS {
         let Some(b) = normal.get(at..at.checked_add(shape.pattern.bytes.len())?) else {
             continue;
         };
         if shape.pattern.matches(b)
-            && stored(normal, at, b.len())
+            && stored(normal, regions, at, b.len())
             && shape
                 .pointers
                 .iter()
@@ -127,6 +127,7 @@ fn validator(normal: &[u8], target: u32, accessor: u32) -> Option<usize> {
 }
 fn selector(
     normal: &[u8],
+    regions: &[&[u8]],
     region: &[u8],
     local: usize,
     register: u8,
@@ -149,7 +150,7 @@ fn selector(
             continue;
         }
         let target = word(&b[shape.validator + 1..shape.validator + 4]);
-        if let Some(at) = validator(normal, target, accessor) {
+        if let Some(at) = validator(normal, regions, target, accessor) {
             // Full selector has fixed branches and mode constants 0,1,2. Its
             // validator saves/restores ER4/5 and never writes ER3.
             return (Some(alloc::vec![0, 1, 2]), Some(at));
@@ -168,6 +169,8 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Helper>> {
     };
     let regions = crate::image::regions(normal).expect("bound cache regions");
     let mut helpers = Vec::new();
+    // Accessor entry each helper's reads were bound to, by helper index.
+    let mut accessors = Vec::new();
     for cache in caches {
         for accessor in cache.accessors.iter().filter(|a| a.argument_register == 0) {
             let target = 0x410000 + accessor.offset as u32;
@@ -191,12 +194,13 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Helper>> {
                         else {
                             continue;
                         };
-                        if !stored(normal, table, 3) {
+                        if !stored(normal, &regions.stored, table, 3) {
                             continue;
                         }
                         let Some(values) = normal.get(table..table + 3) else {
                             continue;
                         };
+                        accessors.push(target);
                         helpers.push(Helper {
                             offset: base + local,
                             argument_register: shape.register,
@@ -211,74 +215,103 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Helper>> {
                     }
                 }
             }
-            for h in helpers.iter_mut().filter(|h| h.callers.is_empty()) {
-                let entry = 0x410000 + h.offset as i64;
-                for region in &regions.stored {
-                    let base = region.as_ptr() as usize - normal.as_ptr() as usize;
-                    for local in (base & 1..region.len()).step_by(2) {
-                        let b = &region[local..];
-                        let at = base + local;
-                        let absolute = |b: &[u8]| word(&b[1..4]) as i64;
-                        let call = if b.len() >= 4 && b[0] == 0x5e {
-                            Some((CallKind::Absolute, absolute(b)))
-                        } else if b.len() >= 2 && b[0] == 0x55 {
-                            Some((
-                                CallKind::Relative8,
-                                0x410000 + at as i64 + 2 + i64::from(b[1] as i8),
-                            ))
-                        } else if b.len() >= 4 && b[..2] == [0x5c, 0] {
-                            Some((
-                                CallKind::Relative16,
-                                0x410000
-                                    + at as i64
-                                    + 4
-                                    + i64::from(i16::from_be_bytes([b[2], b[3]])),
-                            ))
-                        } else {
-                            None
-                        };
-                        if let Some((kind, _)) = call.filter(|(_, t)| *t == entry) {
-                            let (modes, validator) =
-                                selector(normal, region, local, h.argument_register, target);
-                            h.callers.push(Caller {
-                                offset: at,
-                                kind,
-                                modes,
-                                validator,
-                            });
-                        }
-                        if b.len() >= 4 && b[0] == 0x5a && absolute(b) == entry {
-                            h.other_references.push(Reference::Stored(at));
-                        }
-                    }
-                    for (i, b) in region.windows(4).enumerate() {
-                        if b == (entry as u32).to_be_bytes() {
-                            let stack_increment = i >= 2
-                                && region.get(i - 2..i + 8)
-                                    == Some(&[0x6e, 0x70, 0, 0x54, 0x0a, 0, 0x6e, 0xf0, 0, 0x54]);
-                            if (base + i) & 1 == 0
-                                && (stack_increment
-                                    || (i >= 8
-                                        && region.get(i - 8..i + 4)
-                                            == Some(&[
-                                                0x6e, 0x7a, 0, 0x54, 0x70, 0x1a, 0x6e, 0xfa, 0,
-                                                0x54, 0x1a, 0xc4,
-                                            ])))
-                            {
-                                h.instruction_overlaps.push(base + i);
-                            } else {
-                                h.other_references.push(Reference::Stored(base + i));
-                            }
-                        }
+        }
+    }
+    // One pass over the image; each decoded target is looked up among helper
+    // entries, preserving each helper's per-region reference order.
+    let mut by_entry: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+    for (i, h) in helpers.iter().enumerate() {
+        by_entry
+            .entry(0x410000 + h.offset as u32)
+            .or_default()
+            .push(i);
+    }
+    let lookup = |target: i64| {
+        u32::try_from(target)
+            .ok()
+            .and_then(|t| by_entry.get(&t))
+            .map_or(&[][..], Vec::as_slice)
+    };
+    if !helpers.is_empty() {
+        for region in &regions.stored {
+            let base = region.as_ptr() as usize - normal.as_ptr() as usize;
+            for local in (base & 1..region.len()).step_by(2) {
+                let b = &region[local..];
+                let at = base + local;
+                let absolute = |b: &[u8]| word(&b[1..4]) as i64;
+                let call = if b.len() >= 4 && b[0] == 0x5e {
+                    Some((CallKind::Absolute, absolute(b)))
+                } else if b.len() >= 2 && b[0] == 0x55 {
+                    Some((
+                        CallKind::Relative8,
+                        0x410000 + at as i64 + 2 + i64::from(b[1] as i8),
+                    ))
+                } else if b.len() >= 4 && b[..2] == [0x5c, 0] {
+                    Some((
+                        CallKind::Relative16,
+                        0x410000 + at as i64 + 4 + i64::from(i16::from_be_bytes([b[2], b[3]])),
+                    ))
+                } else {
+                    None
+                };
+                if let Some((kind, entry)) = call {
+                    for &i in lookup(entry) {
+                        let h = &mut helpers[i];
+                        let (modes, validator) = selector(
+                            normal,
+                            &regions.stored,
+                            region,
+                            local,
+                            h.argument_register,
+                            accessors[i],
+                        );
+                        h.callers.push(Caller {
+                            offset: at,
+                            kind,
+                            modes,
+                            validator,
+                        });
                     }
                 }
-                for (stream, b) in regions.expanded.iter().enumerate() {
-                    for (offset, b) in b.windows(4).enumerate() {
-                        if b == (entry as u32).to_be_bytes() {
-                            h.other_references
-                                .push(Reference::Expanded { stream, offset });
-                        }
+                if b.len() >= 4 && b[0] == 0x5a {
+                    for &i in lookup(absolute(b)) {
+                        helpers[i].other_references.push(Reference::Stored(at));
                     }
+                }
+            }
+            for (i, b) in region.windows(4).enumerate() {
+                let found = lookup(i64::from(word(b)));
+                if found.is_empty() {
+                    continue;
+                }
+                let stack_increment = i >= 2
+                    && region.get(i - 2..i + 8)
+                        == Some(&[0x6e, 0x70, 0, 0x54, 0x0a, 0, 0x6e, 0xf0, 0, 0x54]);
+                let overlap = (base + i) & 1 == 0
+                    && (stack_increment
+                        || (i >= 8
+                            && region.get(i - 8..i + 4)
+                                == Some(&[
+                                    0x6e, 0x7a, 0, 0x54, 0x70, 0x1a, 0x6e, 0xfa, 0, 0x54, 0x1a,
+                                    0xc4,
+                                ])));
+                for &h in found {
+                    if overlap {
+                        helpers[h].instruction_overlaps.push(base + i);
+                    } else {
+                        helpers[h]
+                            .other_references
+                            .push(Reference::Stored(base + i));
+                    }
+                }
+            }
+        }
+        for (stream, b) in regions.expanded.iter().enumerate() {
+            for (offset, b) in b.windows(4).enumerate() {
+                for &h in lookup(i64::from(word(b))) {
+                    helpers[h]
+                        .other_references
+                        .push(Reference::Expanded { stream, offset });
                 }
             }
         }
@@ -387,6 +420,54 @@ mod tests {
             panic!("fixture")
         };
         assert!(found.is_empty());
+    }
+    #[test]
+    fn later_accessors_do_not_rescan_or_duplicate_helper_references() {
+        let mut raw = fixture();
+        let s = &super::super::cache_rom_shapes::SELECTORS[0];
+        raw[0x800..0x800 + s.pattern.bytes.len()].fill(0xff);
+        raw[0x2900..0x2910].copy_from_slice(&[
+            0x0c, 0x89, 0x1a, 0x80, 0x0c, 0x98, 0x78, 0, 0x6a, 0x28, 0, 0xa0, 0x10, 0, 0x54, 0x70,
+        ]);
+        raw[0x700..0x704].copy_from_slice(&0x414000u32.to_be_bytes());
+        let Observation::Known(found) = discover(&raw) else {
+            panic!("fixture")
+        };
+        assert_eq!(found.len(), 1);
+        assert!(found[0].callers.is_empty());
+        assert_eq!(
+            found[0].other_references,
+            alloc::vec![Reference::Stored(0x700)]
+        );
+    }
+    #[test]
+    fn region_decoding_does_not_scale_with_helper_candidates() {
+        let reads = |raw: &[u8]| {
+            crate::comp_streams::READS.with(|r| r.set(0));
+            let Observation::Known(found) = discover(raw) else {
+                panic!("fixture")
+            };
+            (found.len(), crate::comp_streams::READS.with(|r| r.get()))
+        };
+        let mut raw = fixture();
+        let (one, baseline) = reads(&raw);
+        assert_eq!(one, 1);
+        let h = &super::super::cache_rom_shapes::HELPERS[0];
+        let body = raw[0x4000..0x4000 + h.pattern.bytes.len()].to_vec();
+        let selector = raw[0x800..0x830].to_vec();
+        for k in 1..8 {
+            let at = 0x4000 + k * 0x80;
+            raw[at..at + body.len()].copy_from_slice(&body);
+            // Each copy has a selector caller, so the validator is checked too.
+            let s = &super::super::cache_rom_shapes::SELECTORS[0];
+            let call = 0x900 + k * 0x40;
+            raw[call..call + selector.len()].copy_from_slice(&selector);
+            raw[call + s.helper + 1..call + s.helper + 4]
+                .copy_from_slice(&(0x410000 + at as u32).to_be_bytes()[1..]);
+        }
+        let (many, count) = reads(&raw);
+        assert_eq!(many, 8);
+        assert_eq!(count, baseline);
     }
     #[test]
     fn index_resolution_preserves_wrap_and_rejects_unknown_or_foreign_callers() {

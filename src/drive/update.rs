@@ -105,7 +105,8 @@ pub trait UpdateRuntime {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum UpdateError<E> {
-    /// A component is empty or exceeds the CDB address space; no entry attempted.
+    /// The plan has no segments, or a segment is empty, has a zero chunk size,
+    /// or exceeds the CDB address space; no entry attempted.
     InvalidSpan {
         /// Invalid component.
         role: Role,
@@ -143,7 +144,7 @@ impl<E: core::fmt::Debug> core::fmt::Display for UpdateError<E> {
         match self {
             Self::InvalidSpan { role, length } => write!(
                 f,
-                "{role:?} transfer length {length:#x} is empty or exceeds the CDB address space"
+                "{role:?} transfer plan (length {length:#x}) is empty, has a zero chunk size or exceeds the CDB address space"
             ),
             Self::Entry(error) => write!(f, "update entry: {error}"),
             Self::EntryStateRead(error) => write!(f, "post-entry INQUIRY: {error}"),

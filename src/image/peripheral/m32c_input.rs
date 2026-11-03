@@ -1,5 +1,6 @@
 //! Native startup/loading-state predicates and the older eject-key program.
 use super::{unique, Input, Observation, Unresolved};
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 #[path = "m32c_input_shapes.rs"]
 mod shapes;
@@ -113,7 +114,27 @@ pub fn discover(raw: &[u8], base: u32) -> Observation<Input> {
             });
         }
     }
+    // Diagnostic positions per (kind, register, closed, opened), ascending.
+    let mut diagnostics: BTreeMap<(bool, u32, u8, u8), Vec<usize>> = BTreeMap::new();
+    for d in &hits {
+        let s = d.shape;
+        if matches!(s.kind, Kind::ClosedDiagnostic | Kind::OpenDiagnostic) {
+            diagnostics
+                .entry((
+                    s.kind == Kind::OpenDiagnostic,
+                    s.register,
+                    s.closed,
+                    s.opened,
+                ))
+                .or_default()
+                .push(d.at);
+        }
+    }
+    for positions in diagnostics.values_mut() {
+        positions.sort_unstable();
+    }
     let mut found = Vec::new();
+    let mut evaluated = BTreeSet::new();
     for h in &hits {
         let s = h.shape;
         if s.kind == Kind::KeyEvent {
@@ -124,7 +145,9 @@ pub fn discover(raw: &[u8], base: u32) -> Observation<Input> {
             });
             continue;
         }
-        if s.kind != Kind::Startup {
+        // Startups with the same key and action reach the same result.
+        if s.kind != Kind::Startup || !evaluated.insert((s.register, s.closed, s.opened, h.action))
+        {
             continue;
         }
         let compatible = |other: &&Hit<'_>| {
@@ -134,29 +157,28 @@ pub fn discover(raw: &[u8], base: u32) -> Observation<Input> {
                 && other.action == h.action
         };
         let mut roles = [false; 2];
-        for (i, (role, diagnostic)) in [
-            (Kind::Closed, Kind::ClosedDiagnostic),
-            (Kind::Opened, Kind::OpenDiagnostic),
-        ]
-        .into_iter()
-        .enumerate()
+        for (i, (role, open)) in [(Kind::Closed, false), (Kind::Opened, true)]
+            .into_iter()
+            .enumerate()
         {
-            for arrival in hits
+            let nearby = diagnostics.get(&(open, s.register, s.closed, s.opened));
+            roles[i] = hits
                 .iter()
                 .filter(compatible)
                 .filter(|p| p.shape.kind == role)
-            {
-                let named = s.register == 0x56f9
-                    || hits.iter().any(|d| {
-                        d.shape.kind == diagnostic
-                            && d.shape.register == s.register
-                            && d.shape.closed == s.closed
-                            && d.shape.opened == s.opened
-                            && d.at < arrival.at
-                            && arrival.at - d.at < 512
-                    });
-                roles[i] |= named;
-            }
+                .any(|arrival| {
+                    // A diagnostic d with d < arrival and arrival - d < 512.
+                    s.register == 0x56f9
+                        || nearby.is_some_and(|d| {
+                            let lo = arrival.at.saturating_sub(511);
+                            let i = d.partition_point(|&d| {
+                                #[cfg(test)]
+                                tests::DIAGNOSTIC_CHECKS.with(|c| c.set(c.get() + 1));
+                                d < lo
+                            });
+                            d.get(i).is_some_and(|&d| d < arrival.at)
+                        })
+                });
         }
         if roles == [true, true] {
             found.push(Input::LoadingLimits {
@@ -207,6 +229,80 @@ mod tests {
         }
     }
 
+    std::thread_local! {
+        pub(super) static DIAGNOSTIC_CHECKS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    }
+    const BASE: u32 = 0xf40000;
+    fn loading(o: Observation<Input>) -> bool {
+        matches!(
+            o,
+            Observation::Known(Input::LoadingLimits {
+                address: 385,
+                closed_bit: 6,
+                opened_bit: 7,
+                active: false,
+                open_first: true,
+            })
+        )
+    }
+    fn shape(kind: Kind) -> &'static Shape {
+        shapes::SHAPES
+            .iter()
+            .find(|s| s.kind == kind && s.register == 385 && s.closed == 6)
+            .unwrap()
+    }
+    fn place(raw: &mut [u8], at: usize, kind: Kind) {
+        let s = shape(kind);
+        raw[at..at + s.bytes.len()].copy_from_slice(s.bytes);
+    }
+    // One complete 385/6/7 set: startup, then each arrival 0x100 after its
+    // diagnostic, with the diagnostic labels at their native pointer targets.
+    fn loading_fixture() -> Vec<u8> {
+        let mut raw = alloc::vec![0xff; 0xb0000];
+        for (kind, label) in [
+            (Kind::ClosedDiagnostic, &b"[LOADIN]"[..]),
+            (Kind::OpenDiagnostic, &b"[LOADOUT]"[..]),
+        ] {
+            let s = shape(kind);
+            let at = (integer(&s.bytes[2..6]) - BASE) as usize;
+            raw[at..at + label.len()].copy_from_slice(label);
+        }
+        place_set(&mut raw, 0x1000);
+        raw
+    }
+    fn place_set(raw: &mut [u8], at: usize) {
+        place(raw, at, Kind::Startup);
+        place(raw, at + 0x100, Kind::ClosedDiagnostic);
+        place(raw, at + 0x200, Kind::Closed);
+        place(raw, at + 0x300, Kind::OpenDiagnostic);
+        place(raw, at + 0x400, Kind::Opened);
+    }
+    #[test]
+    fn complete_loading_set_requires_both_arrivals_and_nearby_diagnostics() {
+        let raw = loading_fixture();
+        assert!(loading(discover(&raw, BASE)));
+        let mut missing = raw.clone();
+        missing[0x1400..0x1400 + shape(Kind::Opened).bytes.len()].fill(0xff);
+        assert!(matches!(
+            discover(&missing, BASE),
+            Observation::Unresolved(_)
+        ));
+        let mut far = raw.clone();
+        let len = shape(Kind::ClosedDiagnostic).bytes.len();
+        far[0x1100..0x1100 + len].fill(0xff);
+        place(&mut far, 0x1200 - 600, Kind::ClosedDiagnostic);
+        assert!(matches!(discover(&far, BASE), Observation::Unresolved(_)));
+    }
+    #[test]
+    fn tiled_loading_sets_need_bounded_diagnostic_checks() {
+        let mut raw = loading_fixture();
+        for k in 1..100 {
+            place_set(&mut raw, 0x1000 + k * 0x600);
+        }
+        DIAGNOSTIC_CHECKS.with(|c| c.set(0));
+        assert!(loading(discover(&raw, BASE)));
+        assert!(DIAGNOSTIC_CHECKS.with(core::cell::Cell::get) < 20_000);
+    }
     #[test]
     fn isolated_startup_or_input_read_is_not_a_complete_loading_contract() {
         let s = shapes::SHAPES

@@ -390,8 +390,10 @@ pub enum NormalSignature<'a> {
     Sign(&'a SigningKey),
     /// Stamp a verbatim OEM signature block (`NORMAL_SIGNATURE_RANGE`, 0x50
     /// bytes) taken from an OEM envelope, yielding a byte-exact OEM Normal.
-    /// Ignored (the region stays zero) when the Kernel's authentication policy
-    /// carries no signature, as with every `NormalSignature` variant.
+    /// Ignored when the Kernel's authentication policy carries no body
+    /// signature, as with every `NormalSignature` variant: the region then
+    /// keeps the header's bytes, which an unsigned policy requires to be zero
+    /// (otherwise [`Error::InvalidSignedEnvelope`]).
     Oem(&'a [u8]),
     /// Leave the signature region all-zero: the deliberate, obvious "not OEM /
     /// unverified" sentinel. The resulting Normal does not pass ECDSA checks.

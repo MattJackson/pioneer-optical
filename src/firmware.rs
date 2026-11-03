@@ -129,6 +129,21 @@ pub mod abi {
             let keeps_flags = matches!(decoded.insn.mnemonic, "CMP" | "BEQ" | "STM");
             let [first, second, third] = decoded.insn.operands;
             ensure!(third == O::None, "unsupported third ABI operand");
+            // SP is tracked only in `state.sp`; any ER7 write other than the
+            // modelled SUB.W frame adjustment would desynchronize the stack model.
+            let writes_sp = matches!(
+                second,
+                O::Register(R::Long(7) | R::Word(7 | 15) | R::Byte(7 | 15))
+            );
+            ensure!(
+                !writes_sp
+                    || decoded.insn.mnemonic == "CMP"
+                    || matches!(
+                        (decoded.insn.mnemonic, decoded.insn.size, first),
+                        ("SUB", Some(S::Word), O::Immediate { .. })
+                    ),
+                "unsupported stack pointer write"
+            );
             match (decoded.insn.mnemonic, decoded.insn.size, first, second) {
                 (
                     "STM",

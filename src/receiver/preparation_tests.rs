@@ -636,6 +636,30 @@ fn captured_receiver_evidence_does_not_require_a_distribution_signature() {
             actual: crate::ComponentKind::Normal
         }
     );
+    let tag = |b: &[u8]| b[..0x200].windows(7).position(|s| s == b"GENERAL").unwrap();
+    let mut other_kernel_tag = bytes.clone();
+    let at = tag(&other_kernel_tag);
+    other_kernel_tag[at + 6] = b'X';
+    let other_kernel_tag =
+        Envelope::load_with_kernel(&other_kernel_tag, installed.kernel()).unwrap();
+    assert_eq!(
+        Receiver::detect_with_kernel(&other_kernel_tag, installed.kernel()).unwrap_err(),
+        Error::InstalledPairMismatch
+    );
+    let mut blank_normal = bytes.clone();
+    let at = tag(&blank_normal);
+    blank_normal[at..at + 7].fill(b' ');
+    let mut blank_kernel = installed.kernel_transfer().to_vec();
+    let at = tag(&blank_kernel);
+    blank_kernel[at..at + 7].fill(b' ');
+    let blank_kernel = Envelope::load(&blank_kernel).unwrap();
+    let blank_normal = Envelope::load_with_kernel(&blank_normal, &blank_kernel).unwrap();
+    assert_eq!(blank_normal.info().kernel_version, "");
+    assert_eq!(blank_kernel.info().kernel_version, "");
+    assert_eq!(
+        Receiver::detect_with_kernel(&blank_normal, &blank_kernel).unwrap_err(),
+        Error::InstalledPairMismatch
+    );
     let mut mismatched = bytes;
     let hardware = mismatched[..0x200]
         .windows(8)

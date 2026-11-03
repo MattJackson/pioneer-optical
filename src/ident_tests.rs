@@ -224,6 +224,21 @@ fn embedded_id_rejects_model_that_is_a_prefix() {
 }
 
 #[test]
+fn embedded_id_rejects_model_continued_by_digits() {
+    // A following digit is a boundary only when a full ` X.XX ` revision follows.
+    let img = image_with("PIONEER BD-RW   BDR-21299");
+    assert_eq!(
+        embedded_envelope_id("PIONEER", "BD-RW   BDR-212", &[&img]),
+        Err(IdentError::NotFound)
+    );
+    let img = image_with("PIONEER BD-RW   BDR-2129.0X");
+    assert_eq!(
+        embedded_envelope_id("PIONEER", "BD-RW   BDR-212", &[&img]),
+        Err(IdentError::NotFound)
+    );
+}
+
+#[test]
 fn embedded_id_accepts_identity_abutting_its_revision() {
     // Some layouts place the revision directly after the identity with no NUL:
     // "...BDR-212U1.05 ". The ` X.XX ` tail is accepted as a boundary.

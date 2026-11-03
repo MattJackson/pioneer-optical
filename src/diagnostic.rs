@@ -21,7 +21,11 @@ pub struct ReadSurface {
 impl ReadSurface {
     /// Encode a bounded chunk, or return `None` for invalid ranges.
     pub fn read_cdb(self, offset: usize, length: usize) -> Option<[u8; 10]> {
-        if length == 0 || length > self.chunk || offset.checked_add(length)? > self.length {
+        if length == 0
+            || length > FIELD_MAX
+            || length > self.chunk
+            || offset.checked_add(length)? > self.length
+        {
             return None;
         }
         let address = self.offset.checked_add(u32::try_from(offset).ok()?)?;

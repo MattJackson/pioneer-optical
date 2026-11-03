@@ -359,6 +359,53 @@ mod tests {
     }
 
     #[test]
+    fn full_bus_permutation_is_pinned_and_round_trips() {
+        // Stored data bit k appears at native bit NATIVE_BIT[k].
+        const NATIVE_BIT: [u32; 16] = [0, 1, 3, 2, 5, 4, 6, 7, 9, 8, 11, 10, 13, 14, 12, 15];
+        for (k, &native) in NATIVE_BIT.iter().enumerate() {
+            let mut stored = vec![0; 8192];
+            stored[..2].copy_from_slice(&(1u16 << k).to_le_bytes());
+            let decoded = decode_bus(&stored).unwrap();
+            assert_eq!(le16(&decoded, 0), 1 << native, "data bit {k}");
+            assert!(decoded[2..].iter().all(|&b| b == 0));
+        }
+        // Stored byte address bit pairs exchange positions within 8 KiB.
+        for (stored_at, native_at) in [
+            (2, 4),
+            (4, 2),
+            (8, 16),
+            (16, 8),
+            (128, 256),
+            (256, 128),
+            (512, 1024),
+            (1024, 512),
+            (2048, 4096),
+            (4096, 2048),
+            (32, 32),
+            (64, 64),
+            (8192 + 2, 8192 + 4),
+        ] {
+            let mut stored = vec![0; 16384];
+            stored[stored_at..stored_at + 2].copy_from_slice(&1u16.to_le_bytes());
+            let decoded = decode_bus(&stored).unwrap();
+            let set: Vec<_> = (0..decoded.len()).filter(|&i| decoded[i] != 0).collect();
+            assert_eq!(set, [native_at], "address {stored_at:#x}");
+        }
+        let mut state = 0x1234_5678u32;
+        let x: Vec<u8> = (0..16384)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as u8
+            })
+            .collect();
+        assert_eq!(encode_bus(&decode_bus(&x).unwrap()).unwrap(), x);
+        assert_eq!(decode_bus(&encode_bus(&x).unwrap()).unwrap(), x);
+        assert!(encode_bus(&x[..8190]).is_none());
+    }
+
+    #[test]
     fn all_kernel_bus_permutation_bytes_are_required() {
         let (normal, kernel) = fixture(false);
         for offset in 0..KERNEL_READER.len() {

@@ -3,6 +3,7 @@
 //! writers must be audited separately before making an acceptance claim.
 use super::CallKind;
 use crate::image::layout::Observation;
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 pub(super) struct Shape {
     pub bytes: &'static [u8],
@@ -62,6 +63,7 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
     };
     let regions = crate::image::regions(normal).expect("stored references");
     let mut blocks = Vec::new();
+    let mut accessors: Option<BTreeMap<u32, Vec<Accessor>>> = None;
     for call in refs.calls.iter().filter(|c| c.kind == CallKind::Absolute) {
         for shape in super::cache_shapes::SHAPES
             .iter()
@@ -82,29 +84,11 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
             }) {
                 continue;
             }
-            let mut accessors = Vec::new();
-            for r in &regions.stored {
-                let base = r.as_ptr() as usize - normal.as_ptr() as usize;
-                for local in (base & 1..r.len()).step_by(2) {
-                    for (register, head) in [(0, R0), (1, R1)] {
-                        let Some(bytes) = r.get(local..local + head.len() + 6) else {
-                            continue;
-                        };
-                        if register == 1 && local >= 2 && r[local - 2..local] == [0x0c, 0x89] {
-                            continue;
-                        }
-                        if bytes[..head.len()] == *head
-                            && bytes[head.len()..head.len() + 4] == ram_base.to_be_bytes()
-                            && bytes[head.len() + 4..] == [0x54, 0x70]
-                        {
-                            accessors.push(Accessor {
-                                offset: base + local,
-                                argument_register: register,
-                            });
-                        }
-                    }
-                }
-            }
+            let accessors = accessors
+                .get_or_insert_with(|| scan_accessors(normal, &regions.stored))
+                .get(&ram_base)
+                .cloned()
+                .unwrap_or_default();
             blocks.push(Block {
                 offset: at,
                 getter_call: call.offset,
@@ -115,9 +99,78 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
     }
     Observation::Known(blocks)
 }
+/// One pass over stored Normal collecting every accessor leaf keyed by the RAM
+/// base it reads, in physical order, so each bound loop reuses the same scan.
+fn scan_accessors(normal: &[u8], stored: &[&[u8]]) -> BTreeMap<u32, Vec<Accessor>> {
+    #[cfg(test)]
+    tests::ACCESSOR_SCANS.with(|c| c.set(c.get() + 1));
+    let mut accessors: BTreeMap<u32, Vec<Accessor>> = BTreeMap::new();
+    for r in stored {
+        let base = r.as_ptr() as usize - normal.as_ptr() as usize;
+        for local in (base & 1..r.len()).step_by(2) {
+            for (register, head) in [(0, R0), (1, R1)] {
+                let Some(bytes) = r.get(local..local + head.len() + 6) else {
+                    continue;
+                };
+                if register == 1 && local >= 2 && r[local - 2..local] == [0x0c, 0x89] {
+                    continue;
+                }
+                if bytes[..head.len()] == *head && bytes[head.len() + 4..] == [0x54, 0x70] {
+                    let ram_base =
+                        u32::from_be_bytes(bytes[head.len()..head.len() + 4].try_into().unwrap());
+                    accessors.entry(ram_base).or_default().push(Accessor {
+                        offset: base + local,
+                        argument_register: register,
+                    });
+                }
+            }
+        }
+    }
+    accessors
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::cell::Cell;
+    std::thread_local! {
+        pub(super) static ACCESSOR_SCANS: Cell<usize> = const { Cell::new(0) };
+    }
+    #[test]
+    fn repeated_loops_share_one_accessor_scan_per_ram_base() {
+        let mut raw = alloc::vec![0xff;0x5000];
+        crate::image::layout::install_test_layout(&mut raw, 0x1000);
+        let shape = &super::super::cache_shapes::SHAPES[0];
+        for at in [0x2000, 0x2400] {
+            raw[at..at + shape.bytes.len()].copy_from_slice(shape.bytes);
+            raw[at + shape.call + 1..at + shape.call + 4].copy_from_slice(&[0x41, 0x10, 0]);
+            for r in shape.ram {
+                raw[at + r..at + r + 4].copy_from_slice(&0xa01000u32.to_be_bytes());
+            }
+        }
+        let mut leaf = R0.to_vec();
+        leaf.extend_from_slice(&0xa01000u32.to_be_bytes());
+        leaf.extend_from_slice(&[0x54, 0x70]);
+        raw[0x3000..0x3000 + leaf.len()].copy_from_slice(&leaf);
+        ACCESSOR_SCANS.with(|c| c.set(0));
+        let Observation::Known(blocks) = discover(&raw) else {
+            panic!("fixture")
+        };
+        assert_eq!(ACCESSOR_SCANS.with(Cell::get), 1);
+        let expected = alloc::vec![Accessor {
+            offset: 0x3000,
+            argument_register: 0
+        }];
+        assert_eq!(
+            blocks
+                .iter()
+                .map(|b| (b.offset, b.ram_base, b.accessors.clone()))
+                .collect::<Vec<_>>(),
+            alloc::vec![
+                (0x2000, 0xa01000, expected.clone()),
+                (0x2400, 0xa01000, expected)
+            ]
+        );
+    }
     #[test]
     fn every_loop_instruction_and_operand_relationship_is_required() {
         for shape in super::super::cache_shapes::SHAPES {

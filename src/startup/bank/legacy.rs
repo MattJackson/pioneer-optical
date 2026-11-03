@@ -422,6 +422,17 @@ pub(super) fn kernel_sequences(kernel: &[u8]) -> Option<super::Storage> {
     result
 }
 
+/// Audited grammars for the sibling bank tests' fixtures.
+#[cfg(test)]
+pub(super) mod shapes {
+    pub(in crate::startup::bank) const REJECT_SHORT: &[u8] = super::patterns::REJECT_SHORT.code;
+    pub(in crate::startup::bank) const REJECT_SHORT_ALT: &[u8] =
+        super::patterns::REJECT_SHORT_ALT.code;
+    pub(in crate::startup::bank) const REJECT_LONG: &[u8] = super::patterns::REJECT_LONG.code;
+    pub(in crate::startup::bank) const STATE_NORMAL: &[u8] = super::patterns::STATE_NORMAL.code;
+    pub(in crate::startup::bank) const STATE_SELECTOR: &[u8] = super::patterns::STATE_SELECTOR.code;
+}
+
 #[cfg(test)]
 pub(super) fn fixture(normal: &mut [u8]) {
     let start = 0x1800;

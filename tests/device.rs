@@ -171,6 +171,26 @@ fn pureread_payload_readback_and_failed_verification() {
         }))
     ));
     assert_eq!(t.calls.len(), 3);
+    // A readable readback with another mode is a mismatch, not success.
+    let mut after = status();
+    after[5] = 8;
+    let mut t = Mock::new(vec![status(), after]);
+    assert!(matches!(
+        Device::new(&mut t).set(PureRead, value, Persistence::Saved),
+        Ok(WriteOutcome::Mismatch(_))
+    ));
+    // So is the requested mode with a different real-time flag.
+    let mut before = status();
+    before[28] = 0;
+    before[29] = 1;
+    let mut after = before.clone();
+    after[5] = 254;
+    after[28] = 1;
+    let mut t = Mock::new(vec![before, after]);
+    assert!(matches!(
+        Device::new(&mut t).set(PureRead, value, Persistence::Saved),
+        Ok(WriteOutcome::Mismatch(_))
+    ));
 }
 #[test]
 fn a_noop_does_not_consume_a_region_change() {

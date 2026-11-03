@@ -52,6 +52,14 @@ fn discovers_code_without_identity_and_rejects_broken_proof() {
         changed[at] = 0x22;
     }
     assert_eq!(discover(&changed).unwrap().mask_address, 0x3322);
+    let mut high = b.clone();
+    for at in [0x184, 0x30c, 0x506] {
+        high[at] = 0x80;
+    }
+    assert!(discover(&high).is_none(), "accepted mask outside low RAM");
+    let mut group = b.clone();
+    group[0x400] = 0x13;
+    assert!(discover(&group).is_none(), "accepted low dispatch group");
 }
 
 #[cfg(feature = "drive")]

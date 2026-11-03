@@ -2,6 +2,7 @@
 //! Native operand correction is separate from full image/update admission.
 use super::{unique, Interface, Observation, Phase, Unresolved};
 use crate::image::phase::{Assignment, CorrectionError};
+use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 struct Shape {
     bytes: &'static [u8],
@@ -45,6 +46,7 @@ struct Pair {
 }
 fn pairs(normal: &[u8]) -> Vec<Pair> {
     let mut found = Vec::new();
+    let mut offsets = BTreeSet::new();
     for s in shapes::SHAPES {
         for (at, b) in normal.windows(s.bytes.len()).enumerate().step_by(2) {
             if b[..2] != [0x20, 0x36] {
@@ -76,9 +78,16 @@ fn pairs(normal: &[u8]) -> Vec<Pair> {
                     writer: target,
                     assignment,
                 };
-                if !found.contains(&pair) {
-                    found.push(pair);
+                // Pairs at distinct offsets never compare equal; only a
+                // repeated offset (another shape at one site) needs comparison.
+                if !offsets.insert(at) {
+                    #[cfg(test)]
+                    tests::COMPARISONS.with(|c| c.set(c.get() + found.len()));
+                    if found.contains(&pair) {
+                        continue;
+                    }
                 }
+                found.push(pair);
             }
         }
     }
@@ -241,6 +250,34 @@ mod tests {
             correct_pair(&ambiguous, Assignment::Direct),
             Err(CorrectionError::Unresolved)
         );
+    }
+    std::thread_local! {
+        pub(super) static COMPARISONS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    }
+    #[test]
+    fn tiled_pairs_are_deduplicated_without_quadratic_comparisons() {
+        let s = &shapes::SHAPES[0];
+        let w = shapes::WRITERS[0];
+        let stride = (s.bytes.len() + 3) & !1;
+        let count = 2000;
+        let writer = count * stride;
+        let mut b = vec![0xff; writer + w.len()];
+        b[writer..].copy_from_slice(w);
+        for k in 0..count {
+            let base = k * stride;
+            b[base..base + s.bytes.len()].copy_from_slice(s.bytes);
+            for at in s.calls {
+                let disp = writer - (base + at);
+                b[base + at..base + at + 2]
+                    .copy_from_slice(&(0xff80u16 | ((disp >> 16) as u16)).to_le_bytes());
+                b[base + at + 2..base + at + 4].copy_from_slice(&(disp as u16).to_le_bytes());
+            }
+        }
+        COMPARISONS.with(|c| c.set(0));
+        let found = pairs(&b);
+        assert_eq!(found.len(), count);
+        assert!(found.iter().all(|p| p.writer == writer));
+        assert!(COMPARISONS.with(core::cell::Cell::get) < 4 * count);
     }
     #[test]
     fn paired_loads_require_the_same_complete_writer() {

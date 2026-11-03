@@ -426,6 +426,65 @@ mod tests {
         assert!(nine.as_is_key().is_none());
     }
     #[test]
+    fn every_platform_field_is_required_and_distinguishes_keys() {
+        type Change = fn(&mut SatEvidence, bool);
+        let geometry: Change = |e, conflict| {
+            e.geometry = if conflict {
+                Observation::Conflicting
+            } else {
+                Observation::Known(geometry::Geometry::MarkerBanks {
+                    marker: 0xfedc4322,
+                    stride: 0x20000,
+                })
+            }
+        };
+        let irq: Change = |e, conflict| {
+            e.irq.selected = if conflict {
+                Observation::Conflicting
+            } else {
+                Observation::Known(irq::Value::Controller {
+                    and_mask: 0,
+                    or_mask: 0x40,
+                })
+            }
+        };
+        let host: Change = |e, conflict| {
+            if conflict {
+                e.host = Observation::Conflicting;
+            } else if let Observation::Known(h) = &mut e.host {
+                h.value = 0x80;
+            }
+        };
+        let inputs: Change = |e, conflict| {
+            if conflict {
+                e.inputs = Observation::Conflicting;
+            } else if let Observation::Known(p) = &mut e.inputs {
+                p.closed[0].bit = 7;
+            }
+        };
+        for (platform, fields) in [
+            (SatPlatform::Sat1, &[geometry, irq][..]),
+            (SatPlatform::Sat8, &[inputs, host, irq][..]),
+            (SatPlatform::Sat9, &[geometry, host][..]),
+        ] {
+            let original = evidence(platform);
+            assert!(original.as_is_key().is_some());
+            for (i, change) in fields.iter().enumerate() {
+                let mut missing = original.clone();
+                change(&mut missing, true);
+                assert!(missing.as_is_key().is_none(), "{platform:?} field {i}");
+                let mut other = original.clone();
+                change(&mut other, false);
+                assert!(other.as_is_key().is_some(), "{platform:?} field {i}");
+                assert_ne!(
+                    original.as_is_key(),
+                    other.as_is_key(),
+                    "{platform:?} field {i}"
+                );
+            }
+        }
+    }
+    #[test]
     fn platform_is_a_structured_tag_not_a_model_guess() {
         assert_eq!(
             SatPlatform::from_hardware("SAT 8A10"),

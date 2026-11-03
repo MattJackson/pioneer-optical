@@ -589,6 +589,50 @@ mod tests {
     }
 
     #[test]
+    fn conditional_branch_in_mismatch_tail_requires_every_arm() {
+        let with_tail = |tail: &[u8]| {
+            let mut b = fixture(0, 0xfe24);
+            b[0x2d] = tail.len() as u8;
+            b[0x2e..0x2e + tail.len()].copy_from_slice(tail);
+            b
+        };
+        // BNE +2: the taken arm keeps R0L=1 and reaches the wrapper, but the
+        // fall-through SUB.B clears the argument first.
+        let b = with_tail(&[0xf8, 1, 0x46, 2, 0x18, 0x88, 0x5e, 0x41, 1, 0x80]);
+        assert_eq!(analyze(&b), Ok(Analysis::Unknown));
+        let b = with_tail(&[0xf8, 1, 0x46, 0, 0x5e, 0x41, 1, 0x80]);
+        let Ok(Analysis::Required(r)) = analyze(&b) else {
+            panic!("missed requirement with both arms reaching the wrapper");
+        };
+        assert_eq!((r.parameter, r.required), (0x9f, 0xfe24));
+    }
+
+    #[test]
+    fn bound_selection_reports_conflicts_and_ignores_other_parameters() {
+        use crate::image::layout::{install_test_layout, Observation};
+        let mut raw = fixture(0, 0xfe24);
+        raw.resize(0x2000, 0xff);
+        install_test_layout(&mut raw, 0x1000);
+        raw[0x25..0x28].copy_from_slice(&[0x41, 0x10, 0]);
+        assert!(matches!(bound_selection(&raw), Observation::Known(_)));
+        let mut conflicting = raw.clone();
+        let other = fixture(1, 0xff01);
+        conflicting[0x60..0x74].copy_from_slice(&other[0x20..0x34]);
+        assert_eq!(discover(&conflicting), Err(Ambiguous));
+        assert!(matches!(
+            bound_selection(&conflicting),
+            Observation::Conflicting
+        ));
+        let mut other_word = raw;
+        other_word[0x22..0x24].copy_from_slice(&[0, 0xa0]);
+        assert_eq!(discover(&other_word).unwrap().unwrap().parameter, 0xa0);
+        assert!(!matches!(
+            bound_selection(&other_word),
+            Observation::Known(_)
+        ));
+    }
+
+    #[test]
     fn call_bytes_inside_an_immediate_do_not_establish_a_loader_path() {
         let mut b = fixture(0, 0xfe24);
         // MOV.L #0x5e410180,ER0 contains aligned JSR-looking bytes.

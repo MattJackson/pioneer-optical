@@ -493,6 +493,91 @@ mod tests {
             site: 0x412100,
             target: Some(0x400a1a)
         }));
+        assert!(graph.obligations.contains(&Obligation::Boundary(0x400a1a)));
+    }
+    #[test]
+    fn leaf_binding_rejects_odd_long_non_nop_and_truncated_bodies() {
+        let mut raw = fixture();
+        raw[0x2200..0x2212].fill(0);
+        raw[0x2212..0x2214].copy_from_slice(&[0x54, 0x70]);
+        assert!(bind_leaf(&raw, 0x412200).is_none(), "nine NOPs");
+        assert!(bind_leaf(&raw, 0x412202).is_some(), "eight NOPs");
+        raw[0x2301..0x2305].copy_from_slice(&[0, 0, 0x54, 0x70]);
+        assert!(bind_leaf(&raw, 0x412301).is_none(), "odd entry");
+        raw[0x2400..0x2404].copy_from_slice(&[0x01, 0, 0x54, 0x70]);
+        assert!(bind_leaf(&raw, 0x412400).is_none(), "non-NOP body");
+        raw[0x3ffe..0x4000].fill(0);
+        assert!(
+            bind_leaf(&raw, 0x413ffe).is_none(),
+            "leaf past the stored end"
+        );
+        assert!(bind_leaf(&raw, 0x40fffe).is_none(), "below the Normal base");
+    }
+    #[test]
+    fn unresolved_transfers_and_overlaps_are_explicit_obligations() {
+        let mut raw = fixture();
+        raw[0x2100..0x2102].copy_from_slice(&[0x59, 0x00]);
+        assert!(trace(&raw, 0x412100, &[])
+            .obligations
+            .contains(&Obligation::IndirectJump(0x412100)));
+        // MOV.L #imm,ER0 then BRA into its immediate operand.
+        raw[0x2100..0x2108].copy_from_slice(&[0x7a, 0, 0, 0, 0, 0, 0x40, 0xfa]);
+        let graph = trace(&raw, 0x412100, &[]);
+        assert!(graph
+            .obligations
+            .contains(&Obligation::InstructionOverlap(0x412102)));
+        assert!(!graph.nodes.iter().any(|n| n.address == 0x412102));
+        raw[0x2100..0x2104].copy_from_slice(&[0x5a, 0x40, 0, 0]);
+        let graph = trace(&raw, 0x412100, &[]);
+        assert!(graph.obligations.contains(&Obligation::Boundary(0x400000)));
+        assert!(graph.edges.contains(&Edge {
+            from: 0x412100,
+            to: 0x400000,
+            kind: EdgeKind::Native
+        }));
+    }
+    #[test]
+    fn branch_never_keeps_only_its_fall_through_edge() {
+        let mut raw = fixture();
+        raw[0x2100..0x2104].copy_from_slice(&[0x41, 0x10, 0x54, 0x70]);
+        let graph = trace(&raw, 0x412100, &[]);
+        let edges: Vec<_> = graph.edges.iter().filter(|e| e.from == 0x412100).collect();
+        assert_eq!(
+            edges,
+            [&Edge {
+                from: 0x412100,
+                to: 0x412102,
+                kind: EdgeKind::Native
+            }]
+        );
+        assert!(!graph.reachable.contains(&0x412112));
+    }
+    #[test]
+    fn exploration_bound_is_reported() {
+        let mut raw = alloc::vec![0xff; 0x2100 + 2 * (NODE_LIMIT + 8)];
+        raw[0x2000..0x2004].copy_from_slice(&[0x5a, 0x41, 0x21, 0]);
+        let sled = raw.len() - 2;
+        raw[0x2100..sled].fill(0);
+        raw[sled..].copy_from_slice(&[0x54, 0x70]);
+        let Observation::Known(graph) = discover(&raw) else {
+            panic!("native vector");
+        };
+        assert!(graph.obligations.contains(&Obligation::NodeLimit));
+        raw.truncate(0x2100 + 2 * (NODE_LIMIT - 8));
+        let sled = raw.len() - 2;
+        raw[sled..].copy_from_slice(&[0x54, 0x70]);
+        let Observation::Known(graph) = discover(&raw) else {
+            panic!("native vector");
+        };
+        assert!(!graph.obligations.contains(&Obligation::NodeLimit));
+    }
+    #[test]
+    fn vector_must_be_a_native_absolute_jump() {
+        let mut raw = fixture();
+        assert!(matches!(discover(&raw), Observation::Known(_)));
+        assert!(matches!(bind_getter(&raw), Observation::Unresolved(_)));
+        raw[0x2000] = 0x5e;
+        assert!(matches!(discover(&raw), Observation::Unresolved(_)));
     }
     #[test]
     fn exact_leaf_closes_return_but_mutated_or_foreign_contract_does_not() {

@@ -107,6 +107,37 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Argument>> {
 mod tests {
     use super::*;
     #[test]
+    fn discover_traces_calls_in_regions_after_a_compressed_stream() {
+        use std::io::Write;
+        let mut raw = alloc::vec![0xff; 0x8000];
+        crate::image::layout::install_test_layout(&mut raw, 0x3000);
+        raw[0x1000..0x1004].copy_from_slice(b"COMP");
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&[7; 32]).unwrap();
+        let compressed = encoder.finish().unwrap();
+        raw[0x2000..0x2004].copy_from_slice(&32u32.to_be_bytes());
+        raw[0x2004..0x2004 + compressed.len()].copy_from_slice(&compressed);
+        let start = 0x412000u32;
+        raw[0x1004..0x1008].copy_from_slice(&start.to_be_bytes());
+        raw[0x1008..0x100c].copy_from_slice(&(start + compressed.len() as u32).to_be_bytes());
+        raw[0x2100..0x2108].copy_from_slice(&[0x79, 0, 0, 0x9f, 0x5e, 0x41, 0x30, 0]);
+        let regions = crate::image::regions(&raw).unwrap();
+        assert_eq!(regions.expanded.len(), 1);
+        assert!(regions.stored.len() >= 2 && regions.stored[1].as_ptr() > raw[0x2000..].as_ptr());
+        let Observation::Known(found) = discover(&raw) else {
+            panic!("fixture")
+        };
+        assert_eq!(
+            found,
+            alloc::vec![Argument {
+                start: 0x2100,
+                call: 0x2104,
+                domain: Domain::Constant(0x9f)
+            }]
+        );
+    }
+    #[test]
     fn moves_additions_and_word_overflow_preserve_native_semantics() {
         let bytes = [0x79, 3, 0xff, 0xff, 0x0d, 0x30, 0x79, 0x10, 0, 0xa0];
         assert_eq!(suffix(&bytes, bytes.len(), 0), (0, Domain::Constant(0x9f)));

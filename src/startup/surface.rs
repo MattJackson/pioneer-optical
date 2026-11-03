@@ -272,6 +272,20 @@ mod tests {
     }
 
     #[test]
+    fn write_branch_needs_the_write_flag_and_excludes_argument_registers() {
+        // A whitelisted MOV.L in place of the write-flag load leaves a
+        // read-only handler, which must not bind the write selector.
+        let mut b = fixture();
+        b[0x50e..0x510].copy_from_slice(&[0x0f, 0x82]);
+        assert_eq!(discover(&b), None);
+        for (at, value) in [(0x513, 0x71), (0x50d, 0xf1)] {
+            let mut b = fixture();
+            b[at] = value;
+            assert_eq!(discover(&b), None, "register exclusion at {at:x}");
+        }
+    }
+
+    #[test]
     fn many_access_candidates_scan_selectors_once() {
         let mut b = fixture();
         let block = fixture();

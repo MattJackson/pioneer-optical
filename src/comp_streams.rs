@@ -26,6 +26,8 @@ pub(crate) enum StreamError {
 #[cfg(test)]
 thread_local! {
     pub(crate) static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    // Largest single inflate output, to pin the per-stream allocation bound.
+    pub(crate) static PEAK_INFLATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 pub(crate) fn read(
@@ -102,6 +104,8 @@ pub(crate) fn read(
                 .read_to_end(&mut expanded)
                 .is_err();
             work = work.saturating_add(expanded.len());
+            #[cfg(test)]
+            PEAK_INFLATED.with(|peak| peak.set(peak.get().max(expanded.len())));
             if failed
                 || expanded.len() != expanded_size
                 || decoder.total_in() as usize != compressed.len()

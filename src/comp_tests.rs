@@ -97,3 +97,25 @@ fn comp_streams_share_one_decode_budget_across_candidate_bases() {
     assert_eq!(read(2000), Some(crate::comp_streams::StreamError::Invalid));
     assert_eq!(read(1500), Some(crate::comp_streams::StreamError::Limit));
 }
+
+#[cfg(feature = "image")]
+#[test]
+fn comp_stream_inflation_stops_after_the_declared_size() {
+    use std::io::Write;
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(&vec![0u8; 8 << 20]).unwrap();
+    let compressed = encoder.finish().unwrap();
+    let base = 0x40_0000u32;
+    let mut image = vec![0u8; 0x2004 + compressed.len()];
+    let entries = [base + 0x2000, base + 0x2000 + compressed.len() as u32];
+    image[..COMP_OFFSET + 0x104].copy_from_slice(&body(&entries, true));
+    // Declares 512 bytes but inflates to 8 MiB.
+    image[0x2000..0x2004].copy_from_slice(&512u32.to_be_bytes());
+    image[0x2004..].copy_from_slice(&compressed);
+    crate::comp_streams::PEAK_INFLATED.with(|peak| peak.set(0));
+    assert_eq!(
+        crate::comp_streams::read(&image, usize::MAX, &mut || true).err(),
+        Some(crate::comp_streams::StreamError::Invalid)
+    );
+    assert!(crate::comp_streams::PEAK_INFLATED.with(|peak| peak.get()) <= 513);
+}

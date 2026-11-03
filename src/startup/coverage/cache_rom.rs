@@ -490,6 +490,25 @@ mod tests {
         assert_eq!(caller.modes, Some(alloc::vec![2]));
     }
     #[test]
+    fn relative_callers_resolve_their_targets() {
+        let mut raw = fixture();
+        // BSR 0x4000 at 0x3fa0; BSR.W 0x4000 at 0x100.
+        raw[0x3fa0..0x3fa2].copy_from_slice(&[0x55, 0x5e]);
+        raw[0x100..0x104].copy_from_slice(&[0x5c, 0, 0x3e, 0xfc]);
+        let Observation::Known(found) = discover(&raw) else {
+            panic!("fixture")
+        };
+        let calls: Vec<_> = found[0]
+            .callers
+            .iter()
+            .map(|c| (c.offset, c.kind))
+            .collect();
+        assert!(calls.contains(&(0x100, CallKind::Relative16)), "{calls:?}");
+        assert!(calls.contains(&(0x3fa0, CallKind::Relative8)), "{calls:?}");
+        assert!(calls.contains(&(0x82a, CallKind::Absolute)), "{calls:?}");
+        assert_eq!(calls.len(), 3);
+    }
+    #[test]
     fn index_resolution_preserves_wrap_and_rejects_unknown_or_foreign_callers() {
         let Observation::Known(mut helpers) = discover(&fixture()) else {
             panic!("fixture")

@@ -36,6 +36,9 @@ struct Mock {
     restart_pending: bool,
     require_sense_restart: bool,
     fail_sense: bool,
+    /// Sense reported after a failed (busy) TEST UNIT READY.
+    busy_sense: Option<(u8, u8, u8)>,
+    last_sense: Option<(u8, u8, u8)>,
 }
 impl Default for Mock {
     fn default() -> Self {
@@ -50,6 +53,8 @@ impl Default for Mock {
             restart_pending: false,
             require_sense_restart: false,
             fail_sense: false,
+            busy_sense: None,
+            last_sense: None,
         }
     }
 }
@@ -61,6 +66,7 @@ impl Transport for Mock {
             _ => Vec::new(),
         };
         self.calls.push((cdb.to_vec(), payload));
+        self.last_sense = None;
         match data {
             Data::Out(bytes) => {
                 let index = self.writes;
@@ -93,6 +99,7 @@ impl Transport for Mock {
                 }
                 if cdb == crate::cdb::test_unit_ready() && self.busy > 0 {
                     self.busy -= 1;
+                    self.last_sense = self.busy_sense;
                     return Err("not ready");
                 }
                 if cdb == crate::cdb::get_event_status() && self.fail_event {
@@ -104,7 +111,7 @@ impl Transport for Mock {
         }
     }
     fn sense(&self) -> Option<(u8, u8, u8)> {
-        None
+        self.last_sense
     }
 }
 fn options(recover: bool) -> UpdateOptions {
@@ -412,6 +419,34 @@ fn every_failed_write_aborts_without_retry_or_later_commands() {
         }
         assert_eq!(mock.writes, fail + 1);
         assert!(!mock.calls.iter().any(|c| c.0 == cdb::test_unit_ready()));
+    }
+}
+
+#[test]
+fn only_not_ready_medium_absent_sense_counts_as_restarted() {
+    for (sense, ready) in [((2, 0x3a, 0), true), ((6, 0x3a, 0), false)] {
+        let mut mock = Mock {
+            busy: usize::MAX,
+            busy_sense: Some(sense),
+            ..Mock::default()
+        };
+        let mut clock = Clock::default();
+        let result = execute_update(
+            &mut mock,
+            &mut clock,
+            &[0; 256],
+            UpdateTransfer {
+                kernel: None,
+                normal: &[1],
+            },
+            options(false),
+        );
+        if ready {
+            result.unwrap();
+            assert_eq!(clock.failures, 0);
+        } else {
+            assert!(matches!(result, Err(UpdateError::ReadyTimeout(_))));
+        }
     }
 }
 

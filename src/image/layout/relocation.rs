@@ -26,6 +26,7 @@ pub struct H8AddressEdit {
 
 /// Why Normal-only address correction is not established.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum H8RelocationError {
     /// A complete, checksum-valid modern H8 Normal is required.
     InvalidNormal,
@@ -46,6 +47,27 @@ pub enum H8RelocationError {
     /// An atomic edit or the complete-program postcondition failed.
     Verification,
 }
+
+impl core::fmt::Display for H8RelocationError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::InvalidNormal => "a complete, checksum-valid modern H8 Normal is required",
+            Self::KernelMismatch => "the associated Kernel is missing, malformed or differs",
+            Self::UnresolvedReader => "the complete native primary reader could not be bound",
+            Self::ResidentReader => {
+                "a resident Kernel reader needs a separate Normal-side replacement proof"
+            }
+            Self::FormatChange => "record dimensions, interpretation or logical domains differ",
+            Self::NormalOverlap => "keeping the installed records would overlap target Normal",
+            Self::OtherProgramDifference => {
+                "the programs differ in more than address operands and proven phase"
+            }
+            Self::Phase => "independent native phase normalization is unavailable or conflicts",
+            Self::Verification => "an atomic edit or the complete-program postcondition failed",
+        })
+    }
+}
+impl std::error::Error for H8RelocationError {}
 
 /// Immutable address-only correction bound to the two exact Normal images.
 pub struct H8RelocationPlan<'a> {

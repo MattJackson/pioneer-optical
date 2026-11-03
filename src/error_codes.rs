@@ -267,6 +267,23 @@ impl CodedError for crate::image::KernelHandoffError {
 }
 
 #[cfg(feature = "image")]
+impl CodedError for crate::image::layout::H8RelocationError {
+    fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidNormal => "pioneer.layout.h8_relocation.invalid_normal",
+            Self::KernelMismatch => "pioneer.layout.h8_relocation.kernel_mismatch",
+            Self::UnresolvedReader => "pioneer.layout.h8_relocation.unresolved_reader",
+            Self::ResidentReader => "pioneer.layout.h8_relocation.resident_reader",
+            Self::FormatChange => "pioneer.layout.h8_relocation.format_change",
+            Self::NormalOverlap => "pioneer.layout.h8_relocation.normal_overlap",
+            Self::OtherProgramDifference => "pioneer.layout.h8_relocation.other_program_difference",
+            Self::Phase => "pioneer.layout.h8_relocation.phase",
+            Self::Verification => "pioneer.layout.h8_relocation.verification",
+        }
+    }
+}
+
+#[cfg(feature = "image")]
 impl CodedError for crate::startup::Ambiguous {
     fn code(&self) -> &'static str {
         "pioneer.startup.ambiguous"

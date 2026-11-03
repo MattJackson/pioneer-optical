@@ -163,7 +163,7 @@ impl core::fmt::Display for Error {
                 "target Normal occupies retained parameter-record addresses {start:#08x}..{end:#08x}; changing the primary address alone cannot preserve these records"),
             Self::Unsupported => f.write_str("this native firmware correction is unsupported"),
             Self::Phase(error) => write!(f, "native phase correction failed: {error:?}"),
-            Self::PersistentLayout(error) => write!(f, "persistent layout correction proof failed: {error:?}"),
+            Self::PersistentLayout(error) => write!(f, "persistent layout correction proof failed: {error}"),
             Self::VerificationFailed => {
                 f.write_str("prepared firmware did not reproduce the required identity")
             }
@@ -179,7 +179,14 @@ impl core::fmt::Display for Error {
         }
     }
 }
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::PersistentLayout(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl crate::CodedError for Error {
     fn code(&self) -> &'static str {

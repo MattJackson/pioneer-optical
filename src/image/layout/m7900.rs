@@ -302,4 +302,41 @@ mod tests {
             Observation::Unresolved(Unresolved::AmbiguousReader)
         ));
     }
+
+    fn known(o: Observation<ParameterLayout>) -> bool {
+        matches!(o, Observation::Known(_))
+    }
+    fn put(body: &[u8], at: usize, value: u16) -> Vec<u8> {
+        let mut changed = body.to_vec();
+        changed[at..at + 2].copy_from_slice(&value.to_le_bytes());
+        changed
+    }
+
+    #[test]
+    fn scsi_serial_word_addresses_stop_at_1024() {
+        let body = fixture();
+        // Header word operand.
+        assert!(known(discover_m7900_scsi(&put(&body, 207, 1023), 0x3800)));
+        assert!(!known(discover_m7900_scsi(&put(&body, 207, 1024), 0x3800)));
+        // First base plus the largest slot (12).
+        assert!(known(discover_m7900_scsi(&put(&body, 230, 1011), 0x3800)));
+        assert!(!known(discover_m7900_scsi(&put(&body, 230, 1012), 0x3800)));
+    }
+
+    #[test]
+    fn ata_serial_word_addresses_stop_at_1024_and_duplicates_are_ambiguous() {
+        let body = ata_fixture();
+        // First fallback word operand.
+        assert!(known(discover_m7900_ata(&put(&body, 268, 1023), 0x3800)));
+        assert!(!known(discover_m7900_ata(&put(&body, 268, 1024), 0x3800)));
+        // First base plus the largest slot (12).
+        assert!(known(discover_m7900_ata(&put(&body, 220, 1011), 0x3800)));
+        assert!(!known(discover_m7900_ata(&put(&body, 220, 1012), 0x3800)));
+        let mut duplicate = body.clone();
+        duplicate.extend_from_slice(&body[200..371]);
+        assert!(matches!(
+            discover_m7900_ata(&duplicate, 0x3800),
+            Observation::Unresolved(Unresolved::AmbiguousReader)
+        ));
+    }
 }

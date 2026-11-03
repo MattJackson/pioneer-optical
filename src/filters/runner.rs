@@ -796,6 +796,41 @@ mod tests {
     }
 
     #[test]
+    fn specific_refusals_outrank_generic_ones_and_unknown_domains_refuse() {
+        let target = image();
+        let mut source = target.clone();
+        source[24] = 2;
+        checksum(&mut source);
+        let (a, b) = (context(&source), context(&target));
+        let mut first = Owner::field("first", 24);
+        first.correctable = false;
+        let mut second = Owner::field("second", 25);
+        second.error = Some(Error::Unsupported);
+        for registry in [[&first, &second], [&second, &first]] {
+            let registry: Vec<&dyn Filter> =
+                registry.into_iter().map(|o| o as &dyn Filter).collect();
+            let plan = evaluate_with(&a, &b, Policy::Strict, &registry).unwrap();
+            assert_eq!(plan.admit(), Err(Error::Unsupported));
+        }
+        let unknown = |normal| {
+            Context::new(Firmware {
+                hardware: "UNKNOWN",
+                normal,
+                kernel: None,
+            })
+        };
+        let owner = Owner::field("constant", 24);
+        let plan = evaluate_with(
+            &unknown(&target),
+            &unknown(&target),
+            Policy::Strict,
+            &[&owner],
+        )
+        .unwrap();
+        assert_eq!(plan.admit(), Err(Error::UnresolvedIdentity));
+    }
+
+    #[test]
     fn one_registration_automatically_changes_matching_and_report_inventory() {
         let target = image();
         let mut source = target.clone();

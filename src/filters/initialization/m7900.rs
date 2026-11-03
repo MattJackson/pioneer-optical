@@ -62,16 +62,17 @@ pub fn discover(normal: &[u8]) -> Observation<Evidence> {
     })
 }
 
+/// Decoded Normal holding only the reviewed block at its native entry.
+#[cfg(test)]
+pub(super) fn fixture() -> alloc::vec::Vec<u8> {
+    let mut normal = alloc::vec![0xff; ENTRY - BASE + BLOCK.len()];
+    normal[ENTRY - BASE..].copy_from_slice(BLOCK);
+    normal
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::{vec, vec::Vec};
-
-    fn fixture() -> Vec<u8> {
-        let mut normal = vec![0xff; ENTRY - BASE + BLOCK.len()];
-        normal[ENTRY - BASE..].copy_from_slice(BLOCK);
-        normal
-    }
 
     #[test]
     fn native_io_values_are_preserved_without_claiming_reset_reachability() {

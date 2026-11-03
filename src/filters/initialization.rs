@@ -168,6 +168,46 @@ mod tests {
         }
     }
     #[test]
+    fn native_blocks_follow_their_interface_and_both_together_conflict() {
+        use super::super::Finding;
+        let m7900 = m7900::fixture();
+        let expected = Value::Variant(
+            5,
+            vec![Value::Sequence(
+                [(0x7d, 0x30), (0x7e, 0x20), (0x7f, 0x20)]
+                    .into_iter()
+                    .map(|(address, value)| {
+                        Value::Variant(1, vec![Value::U16(address), Value::U8(value)])
+                    })
+                    .collect(),
+            )],
+        );
+        assert_eq!(
+            inspect(&context("SCSI0001", &m7900)).finding,
+            Finding::Known(expected.clone())
+        );
+        assert_eq!(
+            inspect(&context("ATA 0005", &m7900)).finding,
+            Finding::Known(expected)
+        );
+        let shape = m32c::fixture();
+        let mut m32 = vec![0xff; 0x100 + shape.bytes.len()];
+        m32[0x100..].copy_from_slice(shape.bytes);
+        let finding = inspect(&context("ATA 0005", &m32)).finding;
+        assert!(matches!(finding, Finding::Known(Value::Variant(4, _))));
+        assert_eq!(finding, Finding::Known(m32c_value(shape.operations)));
+        assert!(matches!(
+            inspect(&context("SCSI0001", &m32)).finding,
+            Finding::Unresolved(_)
+        ));
+        let mut both = m7900;
+        both[0x100..0x100 + shape.bytes.len()].copy_from_slice(shape.bytes);
+        assert!(matches!(
+            inspect(&context("ATA 0005", &both)).finding,
+            Finding::Conflicting(_)
+        ));
+    }
+    #[test]
     fn physical_levels_encodings_and_roles_are_not_projected_away() {
         let term = inputs::Term {
             address: 0xff414000,

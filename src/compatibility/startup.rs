@@ -22,6 +22,16 @@ pub enum Evidence {
 
 /// How the startup word is selected. Native comparison evidence and neutral
 /// startup selection retain separate provenance.
+///
+/// ```compile_fail
+/// use pioneer_optical::compatibility::startup::StartupPolicy;
+/// fn exhaustive(p: StartupPolicy) {
+///     match p {
+///         StartupPolicy::NativeEvidenceOnly => (),
+///         StartupPolicy::NeutralSelection => (),
+///     }
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum StartupPolicy {
@@ -61,6 +71,16 @@ impl Plan {
 }
 
 /// A target startup decision could not be established uniquely.
+///
+/// ```compile_fail
+/// use pioneer_optical::compatibility::startup::Error;
+/// fn exhaustive(e: Error) {
+///     match e {
+///         Error::Ambiguous => (),
+///         Error::Unresolved => (),
+///     }
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Error {
@@ -148,6 +168,18 @@ mod tests {
         ]);
         normal[0x180..0x186].copy_from_slice(&[0x5e, 0x40, 0x0a, 0x1a, 0x54, 0x70]);
         normal
+    }
+
+    #[test]
+    fn strict_planning_reports_conflicting_comparisons_as_ambiguous() {
+        let mut normal = comparison_fixture();
+        crate::image::layout::install_test_layout(&mut normal, 0x1000);
+        normal.copy_within(0x20..0x34, 0x60);
+        assert!(matches!(plan(&normal), Err(Error::Ambiguous)));
+        assert!(matches!(
+            plan_with_policy(&normal, StartupPolicy::NativeEvidenceOnly),
+            Err(Error::Ambiguous)
+        ));
     }
 
     #[test]

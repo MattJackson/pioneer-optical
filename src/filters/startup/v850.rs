@@ -248,7 +248,7 @@ pub(super) fn discover(normal_bus: &[u8], kernel_bus: Option<&[u8]>) -> Observat
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use alloc::{vec, vec::Vec};
 
@@ -260,7 +260,7 @@ mod tests {
         b[at..at + 2].copy_from_slice(&(opcode | ((displacement >> 16) as u16)).to_le_bytes());
         b[at + 2..at + 4].copy_from_slice(&(displacement as u16).to_le_bytes());
     }
-    fn fixture(new: bool) -> (Vec<u8>, Vec<u8>) {
+    pub(crate) fn fixture(new: bool) -> (Vec<u8>, Vec<u8>) {
         let mut b = vec![0xff; 8192];
         let mut k = vec![0xff; 8192];
         let (at, shape) = if new {

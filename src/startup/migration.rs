@@ -39,7 +39,8 @@ pub enum Error<E, F> {
         /// Observed value.
         actual: u16,
     },
-    /// Initial read failed; no parameter or firmware write was attempted.
+    /// Initial A0 word or factory production-record read failed; no parameter
+    /// or firmware write was attempted.
     Read(drive::Error<E>),
     /// Parameter change or verification failed; flash was never invoked.
     Change {
@@ -51,6 +52,9 @@ pub enum Error<E, F> {
         rollback: Rollback<E>,
     },
     /// Flash callback failed, with rollback limited to pre-transfer failures.
+    /// For multi-setting plans, `original` and `target` describe the first
+    /// changed setting, or the first setting when none changed (zero only for
+    /// an empty plan).
     Flash {
         /// Original captured word.
         original: u16,
@@ -130,7 +134,7 @@ impl<E: core::fmt::Debug, F: core::fmt::Display> core::fmt::Display for Error<E,
             Self::OriginalHardware => f.write_str("the drive’s original hardware could not be confirmed for this transition; no settings or firmware were written"),
             Self::ConflictingParameters => f.write_str("conflicting settings plan; no command was sent"),
             Self::InvalidParameter(p)=>write!(f,"startup parameter {p:#x} is outside the supported parameter surface; no command was sent"),
-            Self::Read(e)=>write!(f,"A0 startup parameter read failed; no firmware was written. The drive may not implement this command in its current mode: {e}"),
+            Self::Read(e)=>write!(f,"initial drive read (A0 startup parameter or factory production record) failed; no settings or firmware were written. The drive may not implement this command in its current mode: {e}"),
             Self::Change{source,rollback,..}=>write!(f,"A0 startup parameter write or verification failed; no firmware was written: {source}; {rollback}"),
             Self::Flash{source,rollback,..}=>write!(f,"firmware update failed: {source}; {rollback}"),
         }
@@ -333,11 +337,14 @@ where
                 restore(io.inner, &originals)
             };
             // Retain legacy mutation reporting: any changed word makes these
-            // unequal. Attempt-local originals are used only for safe restoration.
+            // unequal. When nothing changed, report the first captured word so
+            // the fields stay real (equal) values. Attempt-local originals are
+            // used only for safe restoration.
             let (_, original, target) = originals
                 .iter()
                 .copied()
                 .find(|(_, old, new)| old != new)
+                .or_else(|| originals.first().copied())
                 .unwrap_or((0, 0, 0));
             Err(Error::Flash {
                 original,
@@ -501,6 +508,74 @@ mod tests {
         assert_eq!(checked.writes, original.writes);
     }
 
+    /// Factory production-record transport: `None` fails the read, otherwise
+    /// the whole record is filled with the given byte.
+    #[cfg(feature = "envelope")]
+    struct Record {
+        inner: Mock,
+        fill: Option<u8>,
+    }
+    #[cfg(feature = "envelope")]
+    impl Transport for Record {
+        type Error = &'static str;
+        fn exec(&mut self, cdb: &[u8], data: Data<'_>) -> Result<usize, Self::Error> {
+            if cdb == crate::production::parameters() {
+                let (Some(fill), Data::In(bytes)) = (self.fill, data) else {
+                    return Err("factory record read failed");
+                };
+                bytes.fill(fill);
+                return Ok(bytes.len());
+            }
+            self.inner.exec(cdb, data)
+        }
+        fn sense(&self) -> Option<(u8, u8, u8)> {
+            None
+        }
+    }
+
+    #[cfg(feature = "envelope")]
+    #[test]
+    fn failed_factory_record_read_is_reported_as_an_initial_read() {
+        let mut t = Record {
+            inner: mock(0xffff),
+            fill: None,
+        };
+        let err = execute_many_checked(
+            &mut t,
+            &[(0x9f, 7)],
+            &[],
+            Some("BDR-UD02TBD"),
+            |_| -> Result<(), &str> { panic!("must not flash") },
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Read(_)));
+        assert!(format!("{err}").contains("factory production record"));
+        assert!(t.inner.writes.is_empty());
+        assert_eq!(t.inner.reads, 0);
+    }
+
+    #[cfg(feature = "envelope")]
+    #[test]
+    fn absent_or_unparseable_factory_record_is_not_original_hardware() {
+        for fill in [0xff, 0] {
+            let mut t = Record {
+                inner: mock(0xffff),
+                fill: Some(fill),
+            };
+            let err = execute_many_checked(
+                &mut t,
+                &[(0x9f, 7)],
+                &[],
+                Some("BDR-UD02TBD"),
+                |_| -> Result<(), &str> { panic!("must not flash") },
+            )
+            .unwrap_err();
+            assert!(matches!(err, Error::OriginalHardware), "fill {fill:#x}");
+            assert_eq!(t.inner.reads, 0);
+            assert!(t.inner.writes.is_empty());
+        }
+    }
+
     #[cfg(feature = "envelope")]
     #[test]
     fn live_factory_identity_is_rechecked_before_any_mutation() {
@@ -634,7 +709,7 @@ mod tests {
             panic!("flash must not run without original state")
         })
         .unwrap_err();
-        assert!(format!("{err}").contains("A0 startup parameter read failed"));
+        assert!(format!("{err}").contains("initial drive read (A0 startup parameter"));
         assert!(matches!(err, Error::Read(_)));
         assert!(t.writes.is_empty());
         assert_eq!(t.firmware_attempts, 0);
@@ -655,6 +730,39 @@ mod tests {
         assert_eq!(t.word, 0xfe24);
         assert_eq!(t.writes, [0xfe24]);
         assert_eq!(t.firmware_attempts, 0);
+    }
+
+    #[test]
+    fn a0_commands_through_the_adapter_are_not_firmware_attempts() {
+        let mut t = mock(0xffff);
+        let err = execute(&mut t, 0x9f, 0xfe24, |io| {
+            let mut b = [0; 2];
+            io.exec(
+                &crate::cdb::read_parameter_word(0x9f).unwrap(),
+                Data::In(&mut b),
+            )
+            .unwrap();
+            io.exec(
+                &crate::cdb::write_parameter_word(0x9f).unwrap(),
+                Data::Out(&0xfe24u16.to_be_bytes()),
+            )
+            .unwrap();
+            Err::<(), _>("policy")
+        })
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Flash {
+                rollback: Rollback::Restored,
+                ..
+            }
+        ));
+        assert_eq!(
+            crate::CodedError::code(&err),
+            "pioneer.startup.flash_failed_before_transfer"
+        );
+        assert_eq!(t.firmware_attempts, 0);
+        assert_eq!(t.word, 0xffff);
     }
 
     #[test]
@@ -684,7 +792,8 @@ mod collection_tests {
         words: [u16; 2],
         log: Vec<(u8, usize, u16)>,
         fail_read: Option<usize>,
-        fail_write: Option<usize>,
+        /// (index, successful writes to it before one write fails).
+        fail_write: Option<(usize, usize)>,
     }
     impl Transport for Mock {
         type Error = &'static str;
@@ -707,9 +816,14 @@ mod collection_tests {
                 Data::Out(b) => {
                     let v = u16::from_be_bytes(b.try_into().unwrap());
                     self.log.push((0x3b, index, v));
-                    if self.fail_write == Some(index) {
-                        self.fail_write = None;
-                        return Err("write uncertain");
+                    if let Some((at, before)) = self.fail_write {
+                        if at == index {
+                            if before == 0 {
+                                self.fail_write = None;
+                                return Err("write uncertain");
+                            }
+                            self.fail_write = Some((at, before - 1));
+                        }
                     }
                     self.words[index] = v;
                     Ok(2)
@@ -763,7 +877,7 @@ mod collection_tests {
     #[test]
     fn partial_change_rolls_back_in_reverse_order_without_flash() {
         let mut m = mock();
-        m.fail_write = Some(1);
+        m.fail_write = Some((1, 0));
         assert!(
             execute_many(&mut m, &[(0x9f, 3), (0xa0, 4)], |_| -> Result<(), &str> {
                 panic!("must not flash")
@@ -782,6 +896,136 @@ mod collection_tests {
         let mut m = mock();
         assert!(execute_many(&mut m, &[(0x9f, 3), (0xa0, 4)], |_| Err::<(), _>("policy")).is_err());
         assert_eq!(m.words, [1, 2]);
+    }
+    #[test]
+    fn restore_tries_every_word_in_reverse_and_skips_unchanged_words() {
+        let mut m = mock();
+        // The change and its readback succeed; the restore write to 0xa0 fails.
+        m.fail_write = Some((1, 1));
+        let err =
+            execute_many(&mut m, &[(0x9f, 3), (0xa0, 4)], |_| Err::<(), _>("policy")).unwrap_err();
+        let Error::Flash {
+            rollback: Rollback::Settings(results),
+            ..
+        } = err
+        else {
+            panic!("expected per-setting rollback");
+        };
+        assert!(matches!(
+            results.as_slice(),
+            [(0xa0, Rollback::Failed(_)), (0x9f, Rollback::Restored)]
+        ));
+        assert_eq!(m.words, [1, 4]);
+
+        let mut m = mock();
+        let err =
+            execute_many(&mut m, &[(0x9f, 1), (0xa0, 4)], |_| Err::<(), _>("policy")).unwrap_err();
+        let Error::Flash {
+            rollback: Rollback::Settings(results),
+            ..
+        } = err
+        else {
+            panic!("expected per-setting rollback");
+        };
+        assert!(matches!(
+            results.as_slice(),
+            [(0xa0, Rollback::Restored), (0x9f, Rollback::Unchanged)]
+        ));
+        assert!(!m.log.iter().any(|e| e.0 == 0x3b && e.1 == 0));
+        assert_eq!(m.words, [1, 2]);
+    }
+
+    #[test]
+    fn unchanged_words_in_a_plan_are_not_rewritten() {
+        let mut m = mock();
+        execute_many(&mut m, &[(0x9f, 1), (0xa0, 4)], |_| Ok::<_, &str>(())).unwrap();
+        let writes: Vec<_> = m.log.iter().filter(|e| e.0 == 0x3b).copied().collect();
+        assert_eq!(writes, vec![(0x3b, 1, 4)]);
+    }
+
+    #[cfg(feature = "envelope")]
+    #[test]
+    fn every_prerequisite_is_validated_and_checked_before_any_write() {
+        use crate::compatibility::ParameterPrerequisite as P;
+        let checked = |m: &mut Mock, requirements: &[P]| {
+            execute_many_checked(
+                m,
+                &[(0x9f, 3), (0xa0, 4)],
+                requirements,
+                None,
+                |_| -> Result<(), &str> { panic!("must not flash") },
+            )
+            .unwrap_err()
+        };
+        let mut m = mock();
+        let err = checked(
+            &mut m,
+            &[
+                P {
+                    parameter: 0x9f,
+                    value: 1,
+                },
+                P {
+                    parameter: 0xa0,
+                    value: 9,
+                },
+            ],
+        );
+        assert!(matches!(
+            err,
+            Error::Prerequisite {
+                parameter: 0xa0,
+                expected: 9,
+                actual: 2
+            }
+        ));
+        assert!(m.log.iter().all(|e| e.0 == 0x3c));
+        let mut m = mock();
+        let twice = || P {
+            parameter: 0x9f,
+            value: 1,
+        };
+        assert!(matches!(
+            checked(&mut m, &[twice(), twice()]),
+            Error::ConflictingParameters
+        ));
+        assert!(m.log.is_empty());
+        let mut m = mock();
+        let outside = P {
+            parameter: 0x400,
+            value: 0,
+        };
+        assert!(matches!(
+            checked(&mut m, &[outside]),
+            Error::InvalidParameter(0x400)
+        ));
+        assert!(m.log.is_empty());
+    }
+
+    #[test]
+    fn flash_failure_reports_a_real_captured_word() {
+        let mut m = mock();
+        let err =
+            execute_many(&mut m, &[(0x9f, 1), (0xa0, 2)], |_| Err::<(), _>("policy")).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Flash {
+                original: 1,
+                target: 1,
+                ..
+            }
+        ));
+        let mut m = mock();
+        let err =
+            execute_many(&mut m, &[(0x9f, 1), (0xa0, 4)], |_| Err::<(), _>("policy")).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Flash {
+                original: 2,
+                target: 4,
+                ..
+            }
+        ));
     }
     #[test]
     fn uncertain_firmware_entry_forbids_any_rollback() {

@@ -261,7 +261,7 @@ pub(super) fn discover(normal: &[u8]) -> Observation<Evidence> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use alloc::vec;
 
@@ -273,7 +273,7 @@ mod tests {
         let displacement = i16::try_from(target as isize - at as isize - 1).unwrap();
         b[at + 1..at + 3].copy_from_slice(&displacement.to_le_bytes());
     }
-    fn fixture(descriptor: bool, old: bool, shift: usize, base: u32) -> Vec<u8> {
+    pub(crate) fn fixture(descriptor: bool, old: bool, shift: usize, base: u32) -> Vec<u8> {
         let mut b = vec![0xff; shift + 0x5000];
         let getter = shift + 0x1000;
         let shape = if descriptor {
@@ -471,6 +471,37 @@ mod tests {
             let mut disconnected = original;
             relative_call(&mut disconnected, e.getter_reader.offset + 6, 0x3900);
             assert!(!matches!(discover(&disconnected), Observation::Known(_)));
+        }
+    }
+
+    #[test]
+    fn every_rejection_form_caller_tail_and_ram_bound_is_exercised() {
+        let shapes = [REJECT_0, REJECT_1, REJECT_2, REJECT_3];
+        let longest = shapes.iter().map(|s| s.len()).max().unwrap();
+        for shape in shapes {
+            let mut b = fixture(false, false, 0, 0xf40000);
+            b[0x280..0x280 + longest].fill(0xff);
+            b[0x280..0x280 + shape.len()].copy_from_slice(shape);
+            assert_eq!(known(&b).reject.bytes, shape.len());
+        }
+        for tail in [
+            [0x00, 0xb6, 0xf1, 0x0e, 0x20, 0x3a],
+            [0x00, 0xb6, 0xf1, 0x0e, 0x20, 0x76],
+            [0x00, 0xb6, 0xf1, 0x0e, 0x20, 0x96],
+            [0x00, 0xb6, 0xf1, 0x0f, 0x20, 0x97],
+        ] {
+            let mut b = fixture(false, false, 0, 0xf40000);
+            b[0x10a..0x110].copy_from_slice(&tail);
+            assert_eq!(known(&b).startup_callers.len(), 1, "tail {tail:x?}");
+        }
+        for (ram, accepted) in [(0x1fffu16, false), (0x2000, true), (0x7fff, true), (0x8000, false)] {
+            let mut b = fixture(false, false, 0, 0xf40000);
+            b[0x105..0x107].copy_from_slice(&ram.to_le_bytes());
+            assert_eq!(
+                matches!(discover(&b), Observation::Known(_)),
+                accepted,
+                "caller RAM {ram:#x}"
+            );
         }
     }
 

@@ -324,6 +324,109 @@ mod tests {
         assert!(selection(&context).is_err());
         assert!(FILTER.parameters(&context).is_err());
     }
+    fn plan_between(
+        installed: &Context<'_>,
+        target: &Context<'_>,
+    ) -> Result<Option<Box<dyn Operation>>, Error> {
+        FILTER.plan(
+            &Transition { installed, target },
+            &inspect(installed),
+            &inspect(target),
+        )
+    }
+    fn ata<'a>(normal: &'a [u8], kernel: Option<&'a [u8]>) -> Context<'a> {
+        Context::new(Firmware {
+            hardware: "ATA 0007",
+            normal,
+            kernel,
+        })
+    }
+
+    #[test]
+    fn v850_plan_requires_the_paired_kernel_bytes() {
+        let (normal, kernel) = v850::tests::fixture(false);
+        let normal = crate::image::layout::encode_v850_bus(&normal).unwrap();
+        let bus = crate::image::layout::encode_v850_bus(&kernel).unwrap();
+        let target = ata(&normal, Some(&bus));
+        assert!(matches!(
+            inspect(&target).finding,
+            Finding::Known(Value::Variant(11, _))
+        ));
+        assert!(matches!(plan_between(&target, &target), Ok(None)));
+        let mut foreign = kernel;
+        foreign[0x1008] ^= 1;
+        let foreign = crate::image::layout::encode_v850_bus(&foreign).unwrap();
+        let target = ata(&normal, Some(&foreign));
+        assert!(matches!(
+            plan_between(&target, &target),
+            Err(Error::Incompatible)
+        ));
+    }
+
+    #[test]
+    fn scsi_plan_requires_the_resident_checksum_and_header() {
+        let (mut normal, kernel) = scsi::tests::fixture();
+        let scsi = |normal: &[u8]| match scsi::discover(normal, Some(&kernel)) {
+            Observation::Known(value) => value,
+            other => panic!("{other:?}"),
+        };
+        // Balance the checksummed Normal ranges to the required accumulator.
+        let missing = scsi(&normal).accumulator.1.wrapping_sub(scsi(&normal).normal_checksum);
+        normal[0x900..0x902].copy_from_slice(&missing.to_le_bytes());
+        assert_eq!(scsi(&normal).normal_checksum, scsi(&normal).accumulator.1);
+        let context = |normal| {
+            Context::new(Firmware {
+                hardware: "SCSI0001",
+                normal,
+                kernel: Some(&kernel),
+            })
+        };
+        let target = context(&normal);
+        assert!(matches!(
+            inspect(&target).finding,
+            Finding::Known(Value::Variant(20, _))
+        ));
+        assert!(matches!(plan_between(&target, &target), Ok(None)));
+        let mut checksum = normal.clone();
+        checksum[0x902] ^= 1;
+        let target = context(&checksum);
+        assert!(matches!(
+            plan_between(&target, &target),
+            Err(Error::Incompatible)
+        ));
+        let mut header = normal.clone();
+        header[0] ^= 1;
+        let target = context(&header);
+        assert!(matches!(
+            plan_between(&target, &target),
+            Err(Error::Incompatible)
+        ));
+    }
+
+    #[test]
+    fn m32c_plan_accepts_only_the_same_native_predicate() {
+        let m32c = m32c::tests::fixture(false, false, 0, 0xf40000);
+        let target = ata(&m32c, None);
+        assert!(matches!(
+            inspect(&target).finding,
+            Finding::Known(Value::Variant(10, _))
+        ));
+        assert!(matches!(plan_between(&target, &target), Ok(None)));
+        let (normal, kernel) = v850::tests::fixture(false);
+        let normal = crate::image::layout::encode_v850_bus(&normal).unwrap();
+        let kernel = crate::image::layout::encode_v850_bus(&kernel).unwrap();
+        let installed = ata(&normal, Some(&kernel));
+        assert!(matches!(
+            plan_between(&installed, &target),
+            Err(Error::Unsupported)
+        ));
+        let unresolved = ata(&[], None);
+        assert!(matches!(
+            plan_between(&unresolved, &target),
+            Err(Error::UnresolvedIdentity)
+        ));
+    }
+
     #[test]
     fn non_h8_contexts_do_not_receive_a_live_h8_parameter_action() {
         let mut normal = alloc::vec![0xff; 0x2000];

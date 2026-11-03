@@ -147,11 +147,11 @@ pub fn discover(normal: &[u8], kernel: Option<&[u8]>) -> Observation<Evidence> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use alloc::{vec, vec::Vec};
 
-    fn fixture() -> (Vec<u8>, Vec<u8>) {
+    pub(crate) fn fixture() -> (Vec<u8>, Vec<u8>) {
         let mut kernel = vec![0xff; 0x8000];
         for (at, bytes) in [
             (0x8010, RESET_PREFIX),

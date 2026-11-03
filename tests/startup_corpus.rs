@@ -471,6 +471,25 @@ fn local_argument_domains_match_the_independent_226_image_trace() {
         let Observation::Known(actual) = argument::discover(&raw) else {
             panic!("{component}: unresolved getter")
         };
+        // Recognizer -> manifest: no unaudited or duplicate direct (JSR)
+        // records. BSR-reached getter calls are outside this manifest.
+        let Observation::Known(refs) = pioneer_optical::startup::coverage::references(&raw) else {
+            panic!("{component}: unresolved references")
+        };
+        let direct: Vec<_> = actual
+            .iter()
+            .filter(|a| {
+                refs.calls.iter().any(|c| {
+                    c.offset == a.call
+                        && c.kind == pioneer_optical::startup::coverage::CallKind::Absolute
+                })
+            })
+            .collect();
+        assert_eq!(
+            direct.len(),
+            row["direct_calls"].as_array().unwrap().len(),
+            "{component}"
+        );
         for c in row["direct_calls"].as_array().unwrap() {
             let at =
                 usize::from_str_radix(c["site"].as_str().unwrap().trim_start_matches("0x"), 16)
@@ -852,8 +871,9 @@ fn direct_cache_call_coverage_retains_every_audited_site() {
         )
         .unwrap();
     }
-    assert_eq!(totals[0], 1578);
-    assert_eq!(totals[0], totals[1..].iter().sum::<usize>());
+    // Pinned buckets from the audited corpus run: a site moving between
+    // missing-boundary, CFG-issue, unknown and known index changes these.
+    assert_eq!(totals, [1578, 0, 0, 1015, 563]);
 }
 
 #[test]
@@ -961,6 +981,7 @@ fn rom_cache_helpers_bind_tables_selectors_and_preserving_validators() {
         usize::from_str_radix(v.as_str().unwrap().trim_start_matches("0x"), 16).unwrap() - 0x410000
     };
     let mut counts = [0; 3];
+    let mut resolved = std::collections::BTreeMap::new();
     for row in manifest["images"].as_array().unwrap() {
         let component = row["component"].as_str().unwrap();
         let raw = std::fs::read(corpus.join(format!("{component}.bin"))).unwrap();
@@ -996,6 +1017,17 @@ fn rom_cache_helpers_bind_tables_selectors_and_preserving_validators() {
                     .indices_for(a)
                     .expect("proven selector resolves ROM indices");
                 assert!(!indices.contains(&126) && !indices.contains(&127));
+                // The audit proves every caller's mode is within 0..=2, so the
+                // resolved bytes are pairs drawn from the audited first offsets.
+                assert!(b["mode0_1_2_proven"].as_bool().unwrap());
+                assert!(
+                    indices
+                        .iter()
+                        .all(|i| values.iter().any(|&f| *i == f || *i == f.wrapping_add(1))),
+                    "{component} {:x}: {indices:?}",
+                    a.offset
+                );
+                *resolved.entry(indices).or_insert(0usize) += 1;
                 counts[2] += 1;
             }
             counts[1] += 1;
@@ -1003,6 +1035,15 @@ fn rom_cache_helpers_bind_tables_selectors_and_preserving_validators() {
         counts[0] += 1;
     }
     assert_eq!(counts, [190, 190, 215]);
+    // Pinned per-caller resolutions from the audited corpus run: 190 callers
+    // select all three modes and 25 are bound to mode 2 only.
+    assert_eq!(
+        resolved.into_iter().collect::<Vec<_>>(),
+        [
+            (vec![112, 113], 25),
+            (vec![112, 113, 114, 115, 116, 117], 190)
+        ]
+    );
 }
 
 #[test]
@@ -1091,6 +1132,7 @@ fn combined_direct_cache_indices_resolve_all_1578_audited_calls() {
         serde_json::from_slice(&std::fs::read(audit.join("009f-cache-consumers.json")).unwrap())
             .unwrap();
     let mut count = 0;
+    let mut immediate = 0;
     for row in manifest["images"].as_array().unwrap() {
         let component = row["component"].as_str().unwrap();
         let raw = std::fs::read(corpus.join(format!("{component}.bin"))).unwrap();
@@ -1116,10 +1158,15 @@ fn combined_direct_cache_indices_resolve_all_1578_audited_calls() {
                 !values.contains(&126) && !values.contains(&127),
                 "{component} {offset:x}: {values:?}"
             );
+            if let Some(v) = call["immediate_byte_offset"].as_u64() {
+                assert_eq!(values, &[v as u8], "{component} {offset:x}");
+                immediate += 1;
+            }
             count += 1;
         }
     }
     assert_eq!(count, 1578);
+    assert!(immediate > 0);
 }
 
 #[test]

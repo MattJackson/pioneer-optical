@@ -98,7 +98,7 @@ pub fn discover(bytes: &[u8]) -> Option<NativeWordAccess> {
         }
     }
     let mut result = None;
-    for access in (0..bytes.len().saturating_sub(0x156)).step_by(2) {
+    for access in (0..(bytes.len() + 1).saturating_sub(0x156)).step_by(2) {
         if bytes.get(access..access + PREFIX.len()) != Some(PREFIX) {
             continue;
         }
@@ -250,6 +250,39 @@ mod tests {
                 setter: 0x410600,
             })
         );
+    }
+
+    #[test]
+    fn access_routine_ending_at_buffer_end_is_bound() {
+        let mut b = fixture();
+        let block = b[0x100..0x256].to_vec();
+        b[0x100..0x256].fill(0);
+        b.resize(0xc00, 0);
+        b[0xaaa..0xc00].copy_from_slice(&block);
+        b[0x519..0x51c].copy_from_slice(&[0x41, 0x0a, 0xaa]);
+        assert_eq!(
+            discover(&b),
+            Some(NativeWordAccess {
+                selector: 0x410480,
+                access: 0x410aaa,
+                getter: 0x410900,
+                setter: 0x410600,
+            })
+        );
+    }
+
+    #[test]
+    fn write_branch_needs_the_write_flag_and_excludes_argument_registers() {
+        // A whitelisted MOV.L in place of the write-flag load leaves a
+        // read-only handler, which must not bind the write selector.
+        let mut b = fixture();
+        b[0x50e..0x510].copy_from_slice(&[0x0f, 0x82]);
+        assert_eq!(discover(&b), None);
+        for (at, value) in [(0x513, 0x71), (0x50d, 0xf1)] {
+            let mut b = fixture();
+            b[at] = value;
+            assert_eq!(discover(&b), None, "register exclusion at {at:x}");
+        }
     }
 
     #[test]

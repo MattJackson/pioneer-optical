@@ -4,6 +4,8 @@
 const BASE: u32 = 0x410000;
 
 mod legacy;
+#[cfg(test)]
+mod tests;
 
 /// Persistent header locations extracted from the firmware's addressing code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

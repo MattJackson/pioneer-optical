@@ -44,6 +44,12 @@ struct Pair {
     writer: usize,
     assignment: Assignment,
 }
+/// Linear membership check; its comparisons are what the offset guard bounds.
+fn present<T: PartialEq>(found: &[T], value: &T) -> bool {
+    #[cfg(test)]
+    tests::COMPARISONS.with(|c| c.set(c.get() + found.len()));
+    found.contains(value)
+}
 fn pairs(normal: &[u8]) -> Vec<Pair> {
     let mut found = Vec::new();
     let mut offsets = BTreeSet::new();
@@ -80,12 +86,8 @@ fn pairs(normal: &[u8]) -> Vec<Pair> {
                 };
                 // Pairs at distinct offsets never compare equal; only a
                 // repeated offset (another shape at one site) needs comparison.
-                if !offsets.insert(at) {
-                    #[cfg(test)]
-                    tests::COMPARISONS.with(|c| c.set(c.get() + found.len()));
-                    if found.contains(&pair) {
-                        continue;
-                    }
+                if !offsets.insert(at) && present(&found, &pair) {
+                    continue;
                 }
                 found.push(pair);
             }

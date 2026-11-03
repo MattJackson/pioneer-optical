@@ -96,6 +96,12 @@ struct Binding {
     operands: Vec<usize>,
     phase: Phase,
 }
+/// Linear membership check; its comparisons are what the offset guard bounds.
+fn present<T: PartialEq>(found: &[T], value: &T) -> bool {
+    #[cfg(test)]
+    tests::COMPARISONS.with(|c| c.set(c.get() + found.len()));
+    found.contains(value)
+}
 fn bindings(normal: &[u8], normal_base: u32) -> Vec<Binding> {
     let mut found = Vec::new();
     let mut offsets = BTreeSet::new();
@@ -180,12 +186,8 @@ fn bindings(normal: &[u8], normal_base: u32) -> Vec<Binding> {
             };
             // Bindings at distinct offsets never compare equal; only repeated
             // offsets (different shapes at one site) need the full comparison.
-            if !offsets.insert(at) {
-                #[cfg(test)]
-                tests::COMPARISONS.with(|c| c.set(c.get() + found.len()));
-                if found.contains(&value) {
-                    continue;
-                }
+            if !offsets.insert(at) && present(&found, &value) {
+                continue;
             }
             found.push(value);
         }

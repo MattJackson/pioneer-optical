@@ -363,6 +363,32 @@ pub(super) mod tests {
         assert_eq!(found[0].callers[0].indices, Some(alloc::vec![5]));
     }
     #[test]
+    fn converter_offsets_follow_each_native_call_encoding() {
+        for (shape, expected) in SHAPES.iter().zip([0x6000, 0x4000 + 38 + 2 + 0x36]) {
+            let mut raw = fixture(shape);
+            let Observation::Known(found) = discover(&raw) else {
+                panic!("fixture")
+            };
+            assert_eq!(found[0].converter, expected);
+            if shape.kind == Kind::Byte {
+                // Odd and out-of-image absolute targets bind no helper.
+                for target in [0x416001u32, 0x410000 + raw.len() as u32] {
+                    raw[0x4011..0x4014].copy_from_slice(&target.to_be_bytes()[1..]);
+                    let Observation::Known(found) = discover(&raw) else {
+                        panic!("fixture")
+                    };
+                    assert!(found.is_empty(), "{target:x}");
+                }
+            } else {
+                raw[0x4000 + 39] = 0x37;
+                let Observation::Known(found) = discover(&raw) else {
+                    panic!("fixture")
+                };
+                assert!(found.is_empty());
+            }
+        }
+    }
+    #[test]
     fn caller_changes_cache_009f_bytes_wraparound_and_aliases_stay_visible() {
         for shape in SHAPES {
             let mut raw = alloc::vec![0xff;0x8000];

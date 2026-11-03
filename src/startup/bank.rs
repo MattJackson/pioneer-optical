@@ -226,7 +226,7 @@ pub struct BankAddresses {
 // Sorted (first, second) targets of every pair of adjacent native calls.
 fn call_pairs(normal: &[u8]) -> Vec<(u32, u32)> {
     #[cfg(test)]
-    tests::CALL_PAIR_SCANS.with(|c| c.set(c.get() + 1));
+    base_calculation_tests::CALL_PAIR_SCANS.with(|c| c.set(c.get() + 1));
     let mut pairs: Vec<(u32, u32)> = (0..normal.len().saturating_sub(7))
         .step_by(2)
         .filter_map(|p| call(normal, p).zip(call(normal, p + 4)))
@@ -388,7 +388,7 @@ pub fn discover(normal: &[u8]) -> Option<Requirement> {
 }
 
 #[cfg(test)]
-mod tests {
+mod base_calculation_tests {
     use super::*;
     use core::cell::Cell;
 

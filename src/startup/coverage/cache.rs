@@ -55,6 +55,7 @@ const R1: &[u8] = &[0x1a, 0x80, 0x0c, 0x98, 0x78, 0, 0x6a, 0x28];
 /// Recognize full fixed-count bulk loops and their byte accessors in stored
 /// Normal. All branch/count operands and both RAM destinations must match.
 /// This establishes data placement only, not startup-value acceptance.
+/// More than one bound loop is reported as conflicting.
 pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
     let refs = match super::references(normal) {
         Observation::Known(r) => r,
@@ -62,8 +63,7 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
         Observation::Conflicting => return Observation::Conflicting,
     };
     let regions = crate::image::regions(normal).expect("stored references");
-    let mut blocks = Vec::new();
-    let mut accessors: Option<BTreeMap<u32, Vec<Accessor>>> = None;
+    let mut bound = Vec::new();
     for call in refs.calls.iter().filter(|c| c.kind == CallKind::Absolute) {
         for shape in super::cache_shapes::SHAPES
             .iter()
@@ -84,23 +84,29 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
             }) {
                 continue;
             }
-            let accessors = accessors
-                .get_or_insert_with(|| scan_accessors(normal, &regions.stored))
-                .get(&ram_base)
-                .cloned()
-                .unwrap_or_default();
-            blocks.push(Block {
-                offset: at,
-                getter_call: call.offset,
-                ram_base,
-                accessors,
-            });
+            bound.push((at, call.offset, ram_base));
+            // Every audited image binds exactly one bulk loop. Several are a
+            // conflicting contract; stop before any per-block image pass.
+            if bound.len() > 1 {
+                return Observation::Conflicting;
+            }
         }
     }
+    let blocks = bound
+        .into_iter()
+        .map(|(offset, getter_call, ram_base)| Block {
+            offset,
+            getter_call,
+            ram_base,
+            accessors: scan_accessors(normal, &regions.stored)
+                .remove(&ram_base)
+                .unwrap_or_default(),
+        })
+        .collect();
     Observation::Known(blocks)
 }
 /// One pass over stored Normal collecting every accessor leaf keyed by the RAM
-/// base it reads, in physical order, so each bound loop reuses the same scan.
+/// base it reads, in physical order.
 fn scan_accessors(normal: &[u8], stored: &[&[u8]]) -> BTreeMap<u32, Vec<Accessor>> {
     #[cfg(test)]
     tests::ACCESSOR_SCANS.with(|c| c.set(c.get() + 1));
@@ -136,7 +142,7 @@ mod tests {
         pub(super) static ACCESSOR_SCANS: Cell<usize> = const { Cell::new(0) };
     }
     #[test]
-    fn repeated_loops_share_one_accessor_scan_per_ram_base() {
+    fn more_than_one_bound_loop_conflicts_before_any_accessor_scan() {
         let mut raw = alloc::vec![0xff;0x5000];
         crate::image::layout::install_test_layout(&mut raw, 0x1000);
         let shape = &super::super::cache_shapes::SHAPES[0];
@@ -152,23 +158,45 @@ mod tests {
         leaf.extend_from_slice(&[0x54, 0x70]);
         raw[0x3000..0x3000 + leaf.len()].copy_from_slice(&leaf);
         ACCESSOR_SCANS.with(|c| c.set(0));
+        assert!(matches!(discover(&raw), Observation::Conflicting));
+        assert_eq!(ACCESSOR_SCANS.with(Cell::get), 0);
+        // Downstream consumers stop before any per-block image pass.
+        assert!(matches!(
+            super::super::cache_helpers::discover(&raw),
+            Observation::Conflicting
+        ));
+        assert!(matches!(
+            super::super::cache_rom::discover(&raw),
+            Observation::Conflicting
+        ));
+        assert!(matches!(
+            super::super::cache_flow::discover_direct(&raw),
+            Observation::Conflicting
+        ));
+        assert!(matches!(
+            super::super::cache_indices::discover(&raw),
+            Observation::Conflicting
+        ));
+        // A single bound loop still binds its accessor with one scan.
+        raw[0x2400..0x2400 + shape.bytes.len()].fill(0xff);
+        ACCESSOR_SCANS.with(|c| c.set(0));
         let Observation::Known(blocks) = discover(&raw) else {
             panic!("fixture")
         };
         assert_eq!(ACCESSOR_SCANS.with(Cell::get), 1);
-        let expected = alloc::vec![Accessor {
-            offset: 0x3000,
-            argument_register: 0
-        }];
         assert_eq!(
             blocks
                 .iter()
                 .map(|b| (b.offset, b.ram_base, b.accessors.clone()))
                 .collect::<Vec<_>>(),
-            alloc::vec![
-                (0x2000, 0xa01000, expected.clone()),
-                (0x2400, 0xa01000, expected)
-            ]
+            alloc::vec![(
+                0x2000,
+                0xa01000,
+                alloc::vec![Accessor {
+                    offset: 0x3000,
+                    argument_register: 0
+                }]
+            )]
         );
     }
     #[test]

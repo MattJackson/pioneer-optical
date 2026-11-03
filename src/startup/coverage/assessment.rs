@@ -240,11 +240,23 @@ pub fn assess(normal: &[u8]) -> Assessment {
         Observation::Known(value) => value,
         _ => Vec::new(),
     };
-    for call in references.calls {
-        if covered_calls.contains(&call.offset) {
+    covered_calls.sort_unstable();
+    covered_calls.dedup();
+    // argument::discover emits one entry per getter call in the same order.
+    for (i, call) in references.calls.into_iter().enumerate() {
+        if covered_calls.binary_search(&call.offset).is_ok() {
             continue;
         }
-        if let Some(arg) = arguments.iter().find(|arg| arg.call == call.offset) {
+        let matches = |arg: &&argument::Argument| {
+            #[cfg(test)]
+            tests::PROBES.with(|c| c.set(c.get() + 1));
+            arg.call == call.offset
+        };
+        if let Some(arg) = arguments
+            .get(i)
+            .filter(matches)
+            .or_else(|| arguments.iter().find(matches))
+        {
             result.obligations.push(Obligation::GetterInput {
                 offset: call.offset,
                 domain: arg.domain,
@@ -289,6 +301,31 @@ pub fn assess(normal: &[u8]) -> Assessment {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::cell::Cell;
+    std::thread_local! {
+        pub(super) static PROBES: Cell<usize> = const { Cell::new(0) };
+    }
+
+    #[test]
+    fn getter_call_matching_is_not_quadratic() {
+        let mut normal = alloc::vec![0xff; 0x8000];
+        crate::image::layout::install_test_layout(&mut normal, 0x1000);
+        let n = 2000;
+        for i in 0..n {
+            normal[0x2000 + i * 4..0x2004 + i * 4].copy_from_slice(&[0x5e, 0x41, 0x10, 0]);
+        }
+        PROBES.with(|c| c.set(0));
+        let report = assess(&normal);
+        assert_eq!(report.getter_calls, n);
+        let inputs = report
+            .obligations
+            .iter()
+            .filter(|o| matches!(o, Obligation::GetterInput { .. }))
+            .count();
+        assert_eq!(inputs, n);
+        let probes = PROBES.with(Cell::get);
+        assert!(probes <= n * 32, "{probes} argument probes for {n} calls");
+    }
 
     #[test]
     fn missing_reader_retains_a_typed_unknown() {

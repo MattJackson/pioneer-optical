@@ -63,7 +63,31 @@ pub enum Error<E, F> {
     },
 }
 
+impl<E> Rollback<E> {
+    /// Restoration failed, so the startup setting may differ from its original value.
+    pub(crate) fn failed(&self) -> bool {
+        match self {
+            Self::Failed(_) => true,
+            Self::Settings(results) => results.iter().any(|(_, result)| result.failed()),
+            _ => false,
+        }
+    }
+}
+
 impl<E, F> crate::CodedError for Error<E, F> {
+    /// The flash cause is opaque here; only the rollback outcome is known.
+    fn kind(&self) -> crate::operation::IssueKind {
+        match self {
+            Self::Flash {
+                rollback: Rollback::UnsafeAfterFirmwareWrite,
+                ..
+            } => crate::operation::IssueKind::Update,
+            Self::Flash { rollback, .. } if rollback.failed() => {
+                crate::operation::IssueKind::Update
+            }
+            _ => crate::error_codes::kind_for_code(self.code()),
+        }
+    }
     fn code(&self) -> &'static str {
         match self {
             Self::Preflight(_) => "pioneer.startup.preflight_refused",

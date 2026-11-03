@@ -259,6 +259,36 @@ impl<E> ExecutionError<E> {
     }
 }
 impl<E> crate::CodedError for ExecutionError<E> {
+    /// Follows the typed cause, but never reports a pre-write category once
+    /// firmware may have been written.
+    fn kind(&self) -> crate::operation::IssueKind {
+        use crate::operation::IssueKind;
+        use crate::startup::migration::{Error as Migration, Rollback};
+        let mut written = self.firmware_write_started();
+        let kind = match self {
+            Self::AfterStage { source, .. } => source.kind(),
+            Self::IdentityRead { target: true, .. }
+            | Self::IdentityMismatch { target: true, .. } => IssueKind::Verification,
+            Self::Flash(error) => error.kind(),
+            Self::Startup(error) => match error.as_ref() {
+                Migration::Preflight(source) => source.kind(),
+                Migration::Flash { rollback, .. } if rollback.failed() => IssueKind::Update,
+                Migration::Flash {
+                    source, rollback, ..
+                } => {
+                    written |= matches!(rollback, Rollback::UnsafeAfterFirmwareWrite);
+                    source.kind()
+                }
+                other => other.kind(),
+            },
+            _ => crate::error_codes::kind_for_code(self.code()),
+        };
+        if written && !matches!(kind, IssueKind::Update | IssueKind::Verification) {
+            IssueKind::Update
+        } else {
+            kind
+        }
+    }
     fn code(&self) -> &'static str {
         match self {
             Self::AfterStage { source, .. } => source.code(),

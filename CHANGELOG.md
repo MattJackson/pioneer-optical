@@ -8,6 +8,7 @@
 - Unify native firmware corrections, reviewed mechanism contracts, startup selection, live prerequisites and ordered Kernel bridge planning. Replace production correction JSON with typed Rust while retaining all 1.5 hardware routes and calibration guards.
 - Make neutral startup selection explicit: use a bound native requirement when present, otherwise deliberately select 0x009F = 0xFFFF. Preserve native uncertainty, read/change/verify transactions, actual before-values and rollback boundaries.
 - Add corpus, bidirectional, malformed-input, composition and receiver regression coverage. No new live DVR transfer support or physical hardware qualification is implied.
+- Make host error categories follow the firmware write boundary. Failures after any firmware write report Update or Verification, including target startup identity failures and failures inside settings migration; refusals before any write no longer report Update. Previously unmapped firmware, layout, analysis and compatibility codes now carry explicit categories. Error codes are unchanged.
 
 ## [1.5.0] - 2026-11-02
 

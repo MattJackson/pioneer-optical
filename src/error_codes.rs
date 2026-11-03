@@ -2,7 +2,7 @@
 
 #[path = "issue_kind.rs"]
 mod issue_kind;
-use issue_kind::kind_for_code;
+pub(crate) use issue_kind::kind_for_code;
 
 /// Machine-readable error identity for diagnostics and translation catalogs.
 ///
@@ -198,6 +198,26 @@ impl CodedError for crate::receiver::PreparationError {
 
 #[cfg(all(feature = "envelope", feature = "drive"))]
 impl<E> CodedError for crate::receiver::FlashError<E> {
+    /// Refusals before entry follow earlier stages' writes; codes stay stage-independent.
+    fn kind(&self) -> crate::operation::IssueKind {
+        use crate::operation::IssueKind;
+        match self {
+            Self::Preflight { stage, .. }
+            | Self::DescriptorRead { stage, .. }
+            | Self::DescriptorChanged { stage }
+            | Self::DescriptorMismatch { stage }
+            | Self::UnsupportedTransport { stage }
+                if stage.completed_stages() > 0 =>
+            {
+                IssueKind::Update
+            }
+            Self::Update {
+                source: crate::drive::UpdateError::InvalidSpan { .. },
+                stage,
+            } if stage.completed_stages() == 0 => IssueKind::InvalidFirmware,
+            _ => kind_for_code(self.code()),
+        }
+    }
     fn code(&self) -> &'static str {
         match self {
             Self::Preflight { .. } => "pioneer.flash.preflight",

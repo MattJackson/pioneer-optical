@@ -414,4 +414,207 @@ mod tests {
             assert!(!variants[..i].contains(v));
         }
     }
+    fn hex(s: &str) -> Vec<u8> {
+        let mut out = b"PIONEER-FAMILY\0\x06".to_vec();
+        out.extend(
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()),
+        );
+        out
+    }
+    fn flash(
+        address: u32,
+        basis: AddressBasis,
+        allocation_bytes: Option<u32>,
+        (record_count, header_bytes, header_test): (u16, u16, HeaderTest),
+        encoding: WordEncoding,
+    ) -> ParameterLayout {
+        ParameterLayout::FlashRecords {
+            regions: alloc::vec![RecordRegion {
+                address,
+                basis,
+                allocation_bytes,
+                record_bytes: 320,
+                record_count,
+                header_bytes,
+                header_test,
+            }],
+            encoding,
+            domains: alloc::vec![LogicalDomain {
+                first: 0,
+                last: 159,
+                region: 0,
+            }],
+        }
+    }
+    #[test]
+    fn every_key_variant_matches_independent_byte_vectors() {
+        // Expected bytes built independently with Python struct (big endian).
+        let slots = [8, 10, 11, 9, 12, 0, 1, 2];
+        let sat = [
+            (
+                SatKey::Sat1 {
+                    geometry: geometry::Geometry::MarkerBanks {
+                        marker: 0xfedc4321,
+                        stride: 0x10000,
+                    },
+                    irq: irq::Value::Controller {
+                        and_mask: 0,
+                        or_mask: 0x20,
+                    },
+                    phase: Assignment::Direct,
+                    layout: flash(
+                        0x7f0000,
+                        AddressBasis::Absolute,
+                        None,
+                        (40, 80, HeaderTest::ByteFf),
+                        WordEncoding::LittleEndian,
+                    ),
+                },
+                "0101fedc43210001000001002001010100000001007f00000100000001400028005001000000010000009f00000000",
+            ),
+            (
+                SatKey::Sat9 {
+                    geometry: geometry::Geometry::NativeBanks {
+                        bases: [0x7d0000, 0x7e0000],
+                        stride: 0x10000,
+                    },
+                    host: 0x80,
+                    phase: Some(Assignment::Swapped),
+                    layout: flash(
+                        0x9984,
+                        AddressBasis::SelectedBank,
+                        Some(0x3400),
+                        (20, 40, HeaderTest::WordFfff),
+                        WordEncoding::DirectOrBusPermutedLittleEndian,
+                    ),
+                },
+                "0902007d0000007e000000010000800201020000000100009984020100003400000001400014002802000000010000009f00000000",
+            ),
+            (
+                SatKey::Sat8 {
+                    input_flags: 2,
+                    host: 0,
+                    irq: irq::Value::Input(inputs::Term {
+                        address: 0xff414000,
+                        encoding: inputs::Encoding::Absolute32,
+                        bit: 1,
+                        active: false,
+                    }),
+                    phase: None,
+                    layout: ParameterLayout::SerialSelected {
+                        address_bits: 10,
+                        bases: [0x220, 0x260],
+                        slots,
+                        selection: SerialSelection::Header(0x256),
+                        encoding: WordEncoding::SerialHighByteFirst,
+                    },
+                },
+                "0802000202ff414000010000030a02200260080a0b090c00010203010256",
+            ),
+        ];
+        for (key, expected) in sat {
+            assert_eq!(key.canonical_bytes().unwrap(), hex(expected), "{key:?}");
+        }
+        let host = |base: u32| peripheral::HostSignature {
+            coordinate: base,
+            signature_low: base,
+            signature_high: base + 1,
+            initial_one: [base + 2, base + 3],
+        };
+        let ata = [
+            (
+                AtaKey {
+                    geometry: geometry::PeripheralGeometry::SerialRecords {
+                        bases: [0x220, 0x260],
+                        slots,
+                    },
+                    layout: ParameterLayout::SerialSelected {
+                        address_bits: 10,
+                        bases: [0x220, 0x260],
+                        slots,
+                        selection: SerialSelection::FallbackWords([
+                            0x240, 0x242, 0x243, 0x241, 0x246, 0x247, 0x245, 0x244,
+                        ]),
+                        encoding: WordEncoding::SerialHighByteFirst,
+                    },
+                    host: host(0x2000d2),
+                    input: AtaInput::M32c(peripheral::Input::LoadingLimits {
+                        address: 385,
+                        closed_bit: 6,
+                        opened_bit: 7,
+                        active: false,
+                        open_first: true,
+                    }),
+                    phase: peripheral::Phase {
+                        assignment: Assignment::Direct,
+                        interface: peripheral::Interface::Indexed16 {
+                            window: 0x200100,
+                            channels: [0x8e, 0x8f],
+                        },
+                    },
+                },
+                "a00302200260080a0b090c000102030a02200260080a0b090c000102030202400242024302410246024702450244002000d2002000d2002000d3002000d4002000d5010100000181060700010102002001000000008e0000008f",
+            ),
+            (
+                AtaKey {
+                    geometry: geometry::PeripheralGeometry::FlashRecords(alloc::vec![
+                        (0x1000, 0x100),
+                        (0x2000, 0x100),
+                    ]),
+                    layout: ParameterLayout::SerialRange {
+                        address_bits: 10,
+                        first_word: 0xc0,
+                        word_count: 160,
+                        encoding: WordEncoding::SerialHighByteFirst,
+                    },
+                    host: host(0x56f9),
+                    input: AtaInput::V850(peripheral::KeyAlgorithm::TimerLow),
+                    phase: peripheral::Phase {
+                        assignment: Assignment::Swapped,
+                        interface: peripheral::Interface::Direct8 {
+                            channels: [0x118, 0x119],
+                        },
+                    },
+                },
+                "a0010000000200001000000001000000200000000100020a00c000a003000056f9000056f9000056fa000056fb000056fc020202010000011800000119",
+            ),
+            (
+                AtaKey {
+                    geometry: geometry::PeripheralGeometry::SerialWords {
+                        first: 0xc0,
+                        last: 0x15f,
+                    },
+                    layout: ParameterLayout::SerialRange {
+                        address_bits: 10,
+                        first_word: 0xc0,
+                        word_count: 160,
+                        encoding: WordEncoding::SerialHighByteFirst,
+                    },
+                    host: peripheral::HostSignature {
+                        coordinate: 1,
+                        signature_low: 2,
+                        signature_high: 3,
+                        initial_one: [4, 5],
+                    },
+                    input: AtaInput::M32c(peripheral::Input::KeyEvent {
+                        address: 420,
+                        mask: 0x10,
+                        required: 0,
+                    }),
+                    phase: peripheral::Phase {
+                        assignment: Assignment::Direct,
+                        interface: peripheral::Interface::Direct8 {
+                            channels: [0x54ca, 0x54cb],
+                        },
+                    },
+                },
+                "a00200c0015f020a00c000a00300000001000000020000000300000004000000050102000001a410000101000054ca000054cb",
+            ),
+        ];
+        for (key, expected) in ata {
+            assert_eq!(key.canonical_bytes().unwrap(), hex(expected), "{key:?}");
+        }
+    }
 }

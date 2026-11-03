@@ -509,6 +509,93 @@ mod tests {
         assert_eq!(calls.len(), 3);
     }
     #[test]
+    fn stack_sequence_overlaps_are_separated_from_literal_references() {
+        let h = &super::super::cache_rom_shapes::HELPERS[0];
+        for (entry, context, literal) in [
+            (
+                0x130a00usize,
+                &[0x6e, 0x70, 0, 0x54, 0x0a, 0, 0x6e, 0xf0, 0, 0x54][..],
+                2,
+            ),
+            (
+                0x131ac4,
+                &[
+                    0x6e, 0x7a, 0, 0x54, 0x70, 0x1a, 0x6e, 0xfa, 0, 0x54, 0x1a, 0xc4,
+                ],
+                8,
+            ),
+        ] {
+            let mut raw = fixture();
+            let body = raw[0x4000..0x4000 + h.pattern.bytes.len()].to_vec();
+            raw[0x4000..0x4000 + body.len()].fill(0xff);
+            raw.resize(0x140000, 0xff);
+            raw[entry..entry + body.len()].copy_from_slice(&body);
+            let s = &super::super::cache_rom_shapes::SELECTORS[0];
+            raw[0x801 + s.helper..0x804 + s.helper]
+                .copy_from_slice(&(0x410000 + entry as u32).to_be_bytes()[1..]);
+            let at = 0x700;
+            raw[at - literal..at - literal + context.len()].copy_from_slice(context);
+            assert_eq!(
+                raw[at..at + 4],
+                (0x410000 + entry as u32).to_be_bytes(),
+                "context embeds the entry literal"
+            );
+            let Observation::Known(found) = discover(&raw) else {
+                panic!("fixture")
+            };
+            assert_eq!(found.len(), 1);
+            assert_eq!(found[0].offset, entry);
+            assert_eq!(found[0].instruction_overlaps, alloc::vec![at]);
+            assert!(found[0].other_references.is_empty());
+            for k in (0..context.len()).filter(|k| !(literal..literal + 4).contains(k)) {
+                raw[at - literal + k] ^= 1;
+                let Observation::Known(found) = discover(&raw) else {
+                    panic!("fixture")
+                };
+                assert!(found[0].instruction_overlaps.is_empty(), "context byte {k}");
+                assert_eq!(
+                    found[0].other_references,
+                    alloc::vec![Reference::Stored(at)],
+                    "context byte {k}"
+                );
+                raw[at - literal + k] ^= 1;
+            }
+            // The same bytes at an odd offset are not an instruction sequence.
+            raw[at - literal..at - literal + context.len()].fill(0xff);
+            raw[at + 1 - literal..at + 1 - literal + context.len()].copy_from_slice(context);
+            let Observation::Known(found) = discover(&raw) else {
+                panic!("fixture")
+            };
+            assert!(found[0].instruction_overlaps.is_empty());
+            assert_eq!(
+                found[0].other_references,
+                alloc::vec![Reference::Stored(at + 1)]
+            );
+        }
+    }
+    #[test]
+    fn prefix_only_forms_are_marked_incomplete() {
+        let raw = fixture();
+        let Observation::Known(found) = discover(&raw) else {
+            panic!("fixture")
+        };
+        assert!(found[0].complete_body);
+        let mut raw = fixture();
+        let h = &super::super::cache_rom_shapes::HELPERS[2];
+        raw[0x4000..0x4028].fill(0xff);
+        raw[0x4000..0x4000 + h.pattern.bytes.len()].copy_from_slice(h.pattern.bytes);
+        raw[0x4000 + h.table..0x4004 + h.table].copy_from_slice(&0x415000u32.to_be_bytes());
+        for &c in h.reads {
+            raw[0x4001 + c..0x4004 + c].copy_from_slice(&[0x41, 0x28, 0]);
+        }
+        let Observation::Known(found) = discover(&raw) else {
+            panic!("fixture")
+        };
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].argument_register, 1);
+        assert!(!found[0].complete_body);
+    }
+    #[test]
     fn index_resolution_preserves_wrap_and_rejects_unknown_or_foreign_callers() {
         let Observation::Known(mut helpers) = discover(&fixture()) else {
             panic!("fixture")

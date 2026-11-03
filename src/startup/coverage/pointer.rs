@@ -195,17 +195,29 @@ fn near9f_tail(normal: &[u8], regions: &[&[u8]], start: usize) -> Option<usize> 
     Some(target)
 }
 
-fn callers(normal: &[u8], regions: &[&[u8]], entry: usize) -> Option<Vec<Caller>> {
+fn callers(
+    normal: &[u8],
+    regions: &[&[u8]],
+    expanded: &[Vec<u8>],
+    entry: usize,
+) -> Option<Vec<Caller>> {
     let target = 0x410000usize.checked_add(entry)? as u32;
+    // Any 32-bit literal of the entry (MOV.L immediate, function-pointer table,
+    // any alignment, stored or expanded) is an alias with unbounded callers.
+    let literal = target.to_be_bytes();
+    if regions
+        .iter()
+        .copied()
+        .chain(expanded.iter().map(Vec::as_slice))
+        .any(|r| r.windows(4).any(|w| w == literal))
+    {
+        return None;
+    }
     let mut result = Vec::new();
     for region in regions {
         let origin = region.as_ptr() as usize - normal.as_ptr() as usize;
         for local in (origin & 1..region.len()).step_by(2) {
             let bytes = &region[local..];
-            if bytes.len() >= 6 && bytes[0] == 0x7a && bytes[1] <= 7 && word(&bytes[2..6]) == target
-            {
-                return None;
-            }
             if bytes.len() >= 4 && bytes[0] == 0x5a && word(&bytes[1..4]) == target {
                 return None;
             }
@@ -288,7 +300,8 @@ fn bind(normal: &[u8], references: &References) -> Observation<Evidence> {
                     None
                 };
                 let clients = if shape.kind == Kind::FourWordOutput {
-                    let Some(clients) = callers(normal, &regions.stored, at) else {
+                    let Some(clients) = callers(normal, &regions.stored, &regions.expanded, at)
+                    else {
                         continue;
                     };
                     clients
@@ -326,7 +339,10 @@ mod tests {
     use super::*;
     fn fixture(shape: &Shape) -> Vec<u8> {
         let mut raw = alloc::vec![0xff;0x10000];
-        let at = 0x200;
+        place(shape, &mut raw, 0x200, 0x410100);
+        raw
+    }
+    fn place(shape: &Shape, raw: &mut [u8], at: usize, getter_address: u32) {
         raw[at..at + shape.bytes.len()].copy_from_slice(shape.bytes);
         for &(p, n, group) in shape.relocations {
             let getter = shape
@@ -349,7 +365,7 @@ mod tests {
                     .flatten()
             });
             let value = if getter {
-                0x410100u32
+                getter_address
             } else if let Some(delta) = local {
                 0x410000 + at as u32 + delta as u32
             } else if short {
@@ -359,7 +375,87 @@ mod tests {
             };
             raw[at + p..at + p + n].copy_from_slice(&value.to_be_bytes()[4 - n..]);
         }
-        raw
+    }
+    fn shape(form: &str) -> &'static Shape {
+        super::super::pointer_shapes::SHAPES
+            .iter()
+            .find(|s| s.form == form)
+            .unwrap()
+    }
+    #[test]
+    fn control_transfer_operands_must_be_even_and_inside_the_image() {
+        let mut checked = 0;
+        for shape in super::super::pointer_shapes::SHAPES {
+            let mut raw = fixture(shape);
+            let at = 0x200;
+            for &(p, n, group) in shape.relocations {
+                if n != 3 || p == 0 || !matches!(shape.bytes[p - 1], 0x5e | 0x5a) {
+                    continue;
+                }
+                let original = raw.clone();
+                for bad in [0x418001u32, 0x3ffffe, 0x420000] {
+                    for &(o, w, _) in shape.relocations.iter().filter(|r| r.2 == group) {
+                        raw[at + o..at + o + w].copy_from_slice(&bad.to_be_bytes()[4 - w..]);
+                    }
+                    assert!(
+                        !shape.matches(&raw, at, 0x410100),
+                        "{} operand {p} = {bad:#x}",
+                        shape.form
+                    );
+                    checked += 1;
+                }
+                raw = original;
+                assert!(shape.matches(&raw, at, 0x410100));
+            }
+        }
+        assert!(checked > 0);
+    }
+    #[test]
+    fn pointer_blocks_need_their_tail_or_callers_before_covering_the_pointer() {
+        for form in ["cal_compute", "four_words"] {
+            let shape = shape(form);
+            let mut raw = alloc::vec![0xff; 0x10000];
+            crate::image::layout::install_test_layout(&mut raw, 0x1000);
+            let at = 0x3000;
+            place(shape, &mut raw, at, 0x411000);
+            let pointers: Vec<usize> = shape.pointers.iter().map(|p| at + p).collect();
+            let Observation::Known(evidence) = discover(&raw) else {
+                panic!("fixture")
+            };
+            assert_eq!(evidence.uncovered, pointers, "{form} without its contract");
+            assert!(evidence.blocks.is_empty(), "{form}");
+            if shape.kind == Kind::CalibrationComputation {
+                let end = at + shape.bytes.len();
+                let tail = word(&raw[end - 3..end]) as usize - 0x410000;
+                raw[tail..tail + TAIL.len()].copy_from_slice(TAIL);
+            } else {
+                let entry = 0x410000 + at as u32;
+                raw[0x5000..0x5004].copy_from_slice(&[0x79, 1, 1, 0x20]);
+                raw[0x5004..0x5008].copy_from_slice(&entry.to_be_bytes());
+                raw[0x5004] = 0x5e;
+            }
+            let Observation::Known(evidence) = discover(&raw) else {
+                panic!("fixture")
+            };
+            assert!(evidence.uncovered.is_empty(), "{form} with its contract");
+            assert_eq!(evidence.blocks.len(), 1, "{form}");
+            let block = &evidence.blocks[0];
+            assert_eq!((block.offset, block.kind), (at, shape.kind));
+            assert_eq!(block.pointers, pointers);
+            if shape.kind == Kind::CalibrationComputation {
+                assert_eq!(block.lifetime_tail, Some(0x8040));
+                assert!(block.callers.is_empty());
+            } else {
+                assert_eq!(block.lifetime_tail, None);
+                assert_eq!(
+                    block.callers,
+                    alloc::vec![Caller {
+                        offset: 0x5004,
+                        index: 0x120
+                    }]
+                );
+            }
+        }
     }
     #[test]
     fn all_pointer_forms_bind_fixed_bytes_repeated_operands_and_local_targets() {
@@ -428,6 +524,37 @@ mod tests {
         raw[tail + 58..tail + 60].copy_from_slice(&[0x54, 0x70]);
         raw[start + 0x25] ^= 2;
         assert_eq!(near9f_tail(&raw, &[&raw], start), None);
+        raw[start + 0x25] ^= 2;
+        assert_eq!(near9f_tail(&raw, &[&raw], start), Some(tail));
+        raw[tail + 2] = 0xfd;
+        raw[tail + 31] = 0xf5;
+        assert_eq!(near9f_tail(&raw, &[&raw], start), None, "mismatched codes");
+        raw[tail + 2] = 0xf1;
+        raw[tail + 31] = 0xf1;
+        assert_eq!(near9f_tail(&raw, &[&raw], start), None, "unsupported code");
+        raw[tail + 2] = 0xf9;
+        raw[tail + 31] = 0xf9;
+        for p in [9, 15, 40] {
+            let n = if p == 40 { 4 } else { 3 };
+            let good = raw[tail + p..tail + p + n].to_vec();
+            raw[tail + p + n - 1] |= 1;
+            assert_eq!(near9f_tail(&raw, &[&raw], start), None, "odd target {p}");
+            raw[tail + p..tail + p + n].copy_from_slice(&good);
+        }
+        let third = start + 0x32;
+        raw[third + 2..third + 4].copy_from_slice(&((tail - third - 2) as i16).to_be_bytes());
+        assert_eq!(
+            near9f_tail(&raw, &[&raw], start),
+            None,
+            "third branch differs"
+        );
+        raw[third + 2..third + 4].copy_from_slice(&((tail - third - 4) as i16).to_be_bytes());
+        assert_eq!(near9f_tail(&raw, &[&raw], start), Some(tail));
+        assert_eq!(
+            near9f_tail(&raw, &[&raw[..0x320]], start),
+            None,
+            "tail not stored"
+        );
     }
     #[test]
     fn calibration_exit_requires_the_exact_arithmetic_and_register_restore_tail() {
@@ -435,6 +562,7 @@ mod tests {
         raw[0x200..0x204].copy_from_slice(&[0x5a, 0x41, 3, 0]);
         raw[0x300..0x300 + TAIL.len()].copy_from_slice(TAIL);
         assert_eq!(lifetime_tail(&raw, &[&raw], 0x204), Some(0x300));
+        assert_eq!(lifetime_tail(&raw, &[&raw[..0x300]], 0x204), None);
         for i in 0..TAIL.len() {
             raw[0x300 + i] ^= 1;
             assert_eq!(lifetime_tail(&raw, &[&raw], 0x204), None, "tail byte {i}");
@@ -447,16 +575,59 @@ mod tests {
         let mut raw = alloc::vec![0xff;0x600];
         raw[0x40..0x48].copy_from_slice(&[0x79, 1, 1, 0x20, 0x5e, 0x41, 3, 0]);
         assert_eq!(
-            callers(&raw, &[&raw], 0x300),
+            callers(&raw, &[&raw], &[], 0x300),
             Some(alloc::vec![Caller {
                 offset: 0x44,
                 index: 0x120
             }])
         );
         raw[0x42..0x44].copy_from_slice(&[0, 0x9f]);
-        assert_eq!(callers(&raw, &[&raw], 0x300), None);
+        assert_eq!(callers(&raw, &[&raw], &[], 0x300), None);
         raw[0x42..0x44].copy_from_slice(&[1, 0x20]);
         raw[0x80..0x86].copy_from_slice(&[0x7a, 5, 0, 0x41, 3, 0]);
-        assert_eq!(callers(&raw, &[&raw], 0x300), None);
+        assert_eq!(callers(&raw, &[&raw], &[], 0x300), None);
+        raw[0x80..0x86].fill(0xff);
+        raw[0x80..0x84].copy_from_slice(&[0x5a, 0x41, 3, 0]);
+        assert_eq!(
+            callers(&raw, &[&raw], &[], 0x300),
+            None,
+            "absolute jump alias"
+        );
+        raw[0x80..0x84].fill(0xff);
+        // A 32-bit literal of the entry at any alignment is an unbounded alias.
+        raw[0x101..0x105].copy_from_slice(&0x0041_0300u32.to_be_bytes());
+        assert_eq!(
+            callers(&raw, &[&raw], &[], 0x300),
+            None,
+            "odd literal alias"
+        );
+        raw[0x101..0x105].fill(0xff);
+        raw[0x40..0x42].copy_from_slice(&[0x79, 0]);
+        assert_eq!(callers(&raw, &[&raw], &[], 0x300), None, "index not in R1");
+        raw[0x40..0x42].copy_from_slice(&[0x79, 1]);
+        // BSR from 0x2fc reaches 0x300; its R1 index 0xa0 excludes 0x9f.
+        raw[0x2f8..0x2fe].copy_from_slice(&[0x79, 1, 0, 0xa0, 0x55, 0x02]);
+        assert_eq!(
+            callers(&raw, &[&raw], &[], 0x300),
+            Some(alloc::vec![
+                Caller {
+                    offset: 0x44,
+                    index: 0x120
+                },
+                Caller {
+                    offset: 0x2fc,
+                    index: 0xa0
+                }
+            ])
+        );
+        let mut stream = alloc::vec![0xffu8; 0x20];
+        stream[7..11].copy_from_slice(&0x0041_0300u32.to_be_bytes());
+        assert_eq!(
+            callers(&raw, &[&raw], &[stream], 0x300),
+            None,
+            "expanded literal alias"
+        );
+        let empty = alloc::vec![0xffu8; 0x600];
+        assert_eq!(callers(&empty, &[&empty], &[], 0x300), None, "no callers");
     }
 }

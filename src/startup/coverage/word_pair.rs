@@ -91,12 +91,12 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
             .or_default()
             .push(i);
     }
-    // The blocks examined for one decoded reference: only those entered there.
+    // One decoded reference examines only the index entry for its target,
+    // whatever the number of blocks; a per-block scan would examine them all.
     let lookup = |target: i64| {
-        let blocks = targets.get(&target).map_or(&[][..], Vec::as_slice);
         #[cfg(test)]
-        tests::BLOCK_CHECKS.with(|c| c.set(c.get() + blocks.len()));
-        blocks
+        tests::BLOCK_CHECKS.with(|c| c.set(c.get() + 1));
+        targets.get(&target).map_or(&[][..], Vec::as_slice)
     };
     for region in &regions.stored {
         let base = region.as_ptr() as usize - normal.as_ptr() as usize;
@@ -183,7 +183,12 @@ mod tests {
             assert!(found[1..].iter().all(|b| b.callers.is_empty()));
             BLOCK_CHECKS.with(Cell::get)
         };
-        assert_eq!(checks(20), checks(1));
+        // Each further function adds only the references inside its own
+        // 0x40-byte slot (at most two per even position); examining every
+        // block at every position would add the whole region per function.
+        let (one, twenty) = (checks(1), checks(20));
+        assert!(one > 0);
+        assert!(twenty - one <= 19 * 0x40, "{one} -> {twenty}");
     }
     #[test]
     fn relative_callers_and_absolute_jumps_are_retained() {

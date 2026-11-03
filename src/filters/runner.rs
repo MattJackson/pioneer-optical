@@ -388,6 +388,8 @@ mod tests {
         OtherId,
         OtherFields,
         InvalidFields,
+        OverlappingFields,
+        EmptyFields,
         BadRepair,
     }
     struct Owner {
@@ -399,6 +401,8 @@ mod tests {
         role: Role,
         error: Option<Error>,
         finding: Option<Finding>,
+        op_id: Option<&'static str>,
+        truncate: bool,
     }
     impl Owner {
         fn field(id: &'static str, offset: usize) -> Self {
@@ -411,6 +415,8 @@ mod tests {
                 role: Role::Hardware,
                 error: None,
                 finding: None,
+                op_id: None,
+                truncate: false,
             }
         }
     }
@@ -443,12 +449,13 @@ mod tests {
             match self.compare(installed, target) {
                 Comparison::Match => Ok(None),
                 Comparison::Different if self.correctable => Ok(Some(Box::new(Patch {
-                    id: self.id,
+                    id: self.op_id.unwrap_or(self.id),
                     original: transition.target.firmware.normal.to_vec(),
                     offset: self.offset,
                     value: transition.installed.firmware.normal[self.offset],
                     contract: self.contract,
                     extra: self.extra,
+                    truncate: self.truncate,
                 }))),
                 Comparison::Different => Err(Error::Incompatible),
                 _ => Err(Error::UnresolvedIdentity),
@@ -463,6 +470,7 @@ mod tests {
         value: u8,
         contract: Contract,
         extra: Option<(usize, u8)>,
+        truncate: bool,
     }
     impl core::fmt::Debug for Contract {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -482,6 +490,10 @@ mod tests {
             if let Some((offset, value)) = self.extra {
                 image[offset] = value;
             }
+            if self.truncate {
+                image.truncate(image.len() - 4);
+                return Ok(Some(image));
+            }
             if matches!(self.contract, Contract::DirtyOutput) {
                 return Ok(Some(image));
             }
@@ -496,6 +508,13 @@ mod tests {
                 Contract::OtherFields => integrity.fields = std::iter::once(12..16).collect(),
                 Contract::InvalidFields => {
                     integrity.fields = std::iter::once(16..usize::MAX).collect()
+                }
+                Contract::OverlappingFields => integrity.fields = vec![16..20, 18..22],
+                Contract::EmptyFields => {
+                    // A repair that accepts anything, so only the empty-field
+                    // check can refuse this contract.
+                    integrity.fields = std::iter::once(16..16).collect();
+                    integrity.repair = |_context, image| Ok(image.to_vec());
                 }
                 Contract::BadRepair => {
                     integrity.repair = |_context, image| {
@@ -828,6 +847,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plan.admit(), Err(Error::UnresolvedIdentity));
+    }
+
+    #[test]
+    fn foreign_operations_short_images_and_malformed_fields_refuse() {
+        let target = image();
+        let mut source = target.clone();
+        source[24] = 2;
+        source[25] = 3;
+        checksum(&mut source);
+        let (a, b) = (context(&source), context(&target));
+        let mut foreign = Owner::field("first", 24);
+        foreign.op_id = Some("other");
+        assert!(matches!(
+            plan_with(&a, &b, Policy::Strict, &[&foreign]),
+            Err(Error::VerificationFailed)
+        ));
+        let mut short = Owner::field("first", 24);
+        short.truncate = true;
+        let registry: &[&dyn Filter] = &[&short];
+        let plan = plan_with(&a, &b, Policy::Strict, registry).unwrap();
+        assert_eq!(
+            plan.prepare_with(&preparation(&b), registry),
+            Err(Error::Representation)
+        );
+        for contract in [Contract::OverlappingFields, Contract::EmptyFields] {
+            let mut first = Owner::field("first", 24);
+            let mut second = Owner::field("second", 25);
+            first.contract = contract;
+            second.contract = contract;
+            let registry: &[&dyn Filter] = &[&first, &second];
+            let plan = plan_with(&a, &b, Policy::Strict, registry).unwrap();
+            assert_eq!(
+                plan.prepare_with(&preparation(&b), registry),
+                Err(Error::Representation)
+            );
+        }
     }
 
     #[test]

@@ -233,7 +233,20 @@ fn analyse(
                 state = State([None; 32]);
             }
         } else if op == "BSR" {
-            state = State([None; 32]);
+            let O::Address(Ea::PcRelative { value, .. }) = a else {
+                issues.insert(Issue::Instruction(pc));
+                continue;
+            };
+            if next.checked_add_signed(value as isize) == Some(accessor) {
+                calls
+                    .entry(pc)
+                    .or_default()
+                    .insert(state.get(R::Byte(register + 8)).map(|v| v as u8));
+                state.set(R::Long(0), None);
+                state.set(R::Long(1), None);
+            } else {
+                state = State([None; 32]);
+            }
         } else if matches!(op, "CMP" | "BTST" | "NOP") {
         } else if op == "STM" {
             state.set(R::Long(7), None);
@@ -501,6 +514,26 @@ mod tests {
         let f = analyse(&raw, &[&raw[..]], 0x100, 0x10c, 0x300, 0);
         assert!(f.issues.is_empty(), "{:?}", f.issues);
         assert_eq!(crate::comp_streams::READS.with(|reads| reads.get()), 0);
+    }
+    #[test]
+    fn relative_accessor_calls_record_their_index_domain() {
+        let mut raw = alloc::vec![0xff;0x1000];
+        // MOV.B #0x7E,R0L; BSR accessor; RTS
+        raw[0x100..0x106].copy_from_slice(&[0xf8, 0x7e, 0x55, 0x1c, 0x54, 0x70]);
+        let f = analyse(&raw, &[&raw[..]], 0x100, 0x106, 0x120, 0);
+        assert!(f.issues.is_empty(), "{:?}", f.issues);
+        assert_eq!(
+            f.calls,
+            alloc::vec![Call {
+                offset: 0x102,
+                indices: alloc::vec![Some(0x7e)]
+            }]
+        );
+        // BSR.W reaches the same accessor.
+        raw[0x102..0x108].copy_from_slice(&[0x5c, 0, 0, 0x18, 0x54, 0x70]);
+        let f = analyse(&raw, &[&raw[..]], 0x100, 0x108, 0x11e, 0);
+        assert_eq!(f.calls.len(), 1, "{:?}", f);
+        assert_eq!(f.calls[0].offset, 0x102);
     }
     #[test]
     fn register_aliases_track_all_four_bytes_and_unknown_writes() {

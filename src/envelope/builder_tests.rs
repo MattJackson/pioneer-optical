@@ -1177,6 +1177,27 @@ fn kernel_behind_a_supplied_header_keeps_every_header_byte() {
 }
 
 #[test]
+fn comparison_reports_a_changed_destination_field() {
+    let k = front_kernel();
+    let header = opaque_header(ComponentKind::Kernel);
+    let mut other = header.clone();
+    other[0xf0..0xf8].copy_from_slice(b"OEMDEST ");
+    assert_eq!(
+        super::super::header_info(&other).unwrap().destination,
+        "OEMDEST"
+    );
+    let load = |header: &[u8]| {
+        let enc = encode_kernel_envelope_with_header(&k, header, KernelKeySource::Seed(1)).unwrap();
+        crate::envelope::Envelope::load(&enc).unwrap()
+    };
+    let (a, b) = (load(&header), load(&other));
+    let comparison = a.compare(&b);
+    assert_eq!(comparison.bytes, crate::envelope::ByteComparison::Equal);
+    assert!(comparison.destination_changed);
+    assert!(!a.compare(&a).destination_changed);
+}
+
+#[test]
 fn normal_for_kernel_keeps_the_header_and_accepts_a_raw_key() {
     let kernel = front_kernel();
     let n = normal_image(0x2000);

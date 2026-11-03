@@ -230,13 +230,7 @@ pub enum Correction {
     },
 }
 
-/// Immutable, component-bound firmware portion of a correction plan.
-///
-/// Planning never performs device I/O. This plan borrows the exact target bytes
-/// used for detection; callers cannot substitute another image at application.
-/// Envelope authentication and live setting prerequisites remain receiver gates.
-/// Address relocation additionally requires complete Normal program equivalence
-/// and the exact unchanged Kernel; published candidate keys retain layout.
+// Owned snapshot of the installed firmware.
 struct InstalledFirmware {
     hardware: alloc::string::String,
     normal: Vec<u8>,
@@ -253,6 +247,12 @@ impl InstalledFirmware {
 }
 
 /// Component-bound owner plan with an immutable installed-firmware snapshot.
+///
+/// Planning never performs device I/O. This plan borrows the exact target bytes
+/// used for detection; callers cannot substitute another image at application.
+/// Envelope authentication and live setting prerequisites remain receiver gates.
+/// Address relocation additionally requires complete Normal program equivalence
+/// and the exact unchanged Kernel; published candidate keys retain layout.
 pub struct CorrectionPlan<'a> {
     installed: InstalledFirmware,
     policy: crate::filters::runner::Policy,

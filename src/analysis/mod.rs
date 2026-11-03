@@ -19,7 +19,8 @@ use std::ops::Range;
 /// Limits for analysis of one envelope.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
-    /// Maximum total expanded stream bytes per component.
+    /// Maximum total expanded stream bytes per component. The same value
+    /// separately bounds the memory of derived direct-reference facts.
     pub expanded_bytes: usize,
 }
 impl Default for Options {
@@ -374,7 +375,7 @@ impl Envelope {
                 | envelope::Layout::KernelFront
                 | envelope::Layout::KernelDerived
         ) {
-            references::identify(&mut result);
+            references::identify(&mut result, options.expanded_bytes)?;
         }
         result.diagnostics.push(Diagnostic { code: "pioneer.analysis.semantic_coverage", message: "Unrecognized data and table fields are retained as bytes. String-table recognition does not establish write-strategy field meanings.".into() });
         check(

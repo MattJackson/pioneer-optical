@@ -78,10 +78,16 @@ fn target(bytes: &[u8], offset: usize, base: u32) -> Option<(Range<usize>, u32)>
     None
 }
 
-pub(super) fn identify(analysis: &mut FirmwareAnalysis<'_>) {
+// `limit` bounds the derived reference memory of the whole component; a
+// hostile run of 2-byte branches otherwise yields ~20 bytes per input byte.
+pub(super) fn identify(
+    analysis: &mut FirmwareAnalysis<'_>,
+    limit: usize,
+) -> Result<(), super::Error> {
     if analysis.identity.component != "Kernel" && analysis.identity.family.is_none() {
-        return;
+        return Ok(());
     }
+    let mut used = 0usize;
     // First establish body references, then analyze only expanded regions that
     // those direct transfers reach. Data-only overlays do not become code merely
     // because their bytes can be framed as instructions.
@@ -113,6 +119,10 @@ pub(super) fn identify(analysis: &mut FirmwareAnalysis<'_>) {
                     continue;
                 }
                 if let Some((operand, destination)) = target(region.bytes(), offset, base) {
+                    used = used
+                        .checked_add(std::mem::size_of::<Reference>())
+                        .filter(|&used| used <= limit)
+                        .ok_or(super::Error::ResourceLimit)?;
                     references.push(Reference {
                         instruction: offset
                             ..offset
@@ -129,4 +139,5 @@ pub(super) fn identify(analysis: &mut FirmwareAnalysis<'_>) {
             region.references = references;
         }
     }
+    Ok(())
 }

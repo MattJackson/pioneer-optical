@@ -116,6 +116,8 @@ mod tests {
             "BDR-ÜD02",
             "XYZ-UD02ABC",
             "DVR-MCC",
+            "BDR-ABC123",
+            "BDR-ABCD1",
             "SlimtypeEB1",
             "SBC-06D2X-U",
             "BDR-UD02🚗",

@@ -261,7 +261,7 @@ pub(super) fn discover(normal: &[u8]) -> Observation<Evidence> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use alloc::vec;
 
@@ -273,7 +273,7 @@ mod tests {
         let displacement = i16::try_from(target as isize - at as isize - 1).unwrap();
         b[at + 1..at + 3].copy_from_slice(&displacement.to_le_bytes());
     }
-    fn fixture(descriptor: bool, old: bool, shift: usize, base: u32) -> Vec<u8> {
+    pub(crate) fn fixture(descriptor: bool, old: bool, shift: usize, base: u32) -> Vec<u8> {
         let mut b = vec![0xff; shift + 0x5000];
         let getter = shift + 0x1000;
         let shape = if descriptor {

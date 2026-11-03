@@ -1,5 +1,6 @@
 //! Earlier fixed-bank code. Values and addresses are instruction operands.
 use super::{call, word, BASE};
+use alloc::vec::Vec;
 #[path = "legacy_patterns.rs"]
 mod patterns;
 
@@ -28,42 +29,109 @@ fn matches(b: &[u8], fragments: &[(usize, &[u8])]) -> bool {
         .all(|(at, op)| b.get(*at..*at + op.len()) == Some(*op))
 }
 
-fn called(normal: &[u8], at: usize) -> bool {
-    (0..normal.len().saturating_sub(3))
-        .step_by(2)
-        .any(|p| call(normal, p) == Some(BASE + at as u32))
+/// Every aligned direct call target in an image, collected once on first use
+/// so repeated candidates never rescan the whole image.
+struct Calls<'a> {
+    image: &'a [u8],
+    targets: Option<Vec<u32>>,
+}
+
+impl<'a> Calls<'a> {
+    fn new(image: &'a [u8]) -> Self {
+        Self {
+            image,
+            targets: None,
+        }
+    }
+
+    fn contains(&mut self, target: u32) -> bool {
+        let image = self.image;
+        self.targets
+            .get_or_insert_with(|| {
+                #[cfg(test)]
+                tests::SCANS.with(|c| c.set(c.get() + 1));
+                let mut targets: Vec<u32> = (0..image.len().saturating_sub(3))
+                    .step_by(2)
+                    .filter_map(|p| call(image, p))
+                    .collect();
+                targets.sort_unstable();
+                targets.dedup();
+                targets
+            })
+            .binary_search(&target)
+            .is_ok()
+    }
+}
+
+fn called(calls: &mut Calls<'_>, at: usize) -> bool {
+    calls.contains(BASE + at as u32)
 }
 
 // Common selector: prefer a matching header, compare sequence words when both
 // match, otherwise fall back to the other bank. Bind it to the initializer's
 // exact operands; a stand-alone magic literal never establishes a contract.
-fn selector(normal: &[u8], magic: u32, markers: [u32; 2]) -> bool {
-    (0..normal.len().saturating_sub(61)).step_by(2).any(|at| {
-        let b = &normal[at..];
-        matches(
-            b,
-            &[
-                (0, &[1, 0, 0x6b, 0x20]),
-                (8, &[0x7a, 1]),
-                (14, &[0x1f, 0x90, 0x46, 0x24, 1, 0, 0x6b, 0x20]),
-                (26, &[0x1f, 0x90, 0x46, 0x10, 0x6b, 0x28]),
-                (36, &[0x6b, 0x20]),
-                (42, &[0x1d, 8, 0x43, 8, 0x7a, 0]),
-                (52, &[0x40, 6, 0x7a, 0]),
-                (60, &[0x54, 0x70]),
-            ],
-        ) && word(b, 4) == Some(markers[0])
-            && word(b, 10) == Some(magic)
-            && word(b, 22) == Some(markers[1])
-            && word(b, 32) == markers[0].checked_add(4)
-            && word(b, 38) == markers[1].checked_add(4)
-            && word(b, 48).zip(word(b, 56)).is_some_and(|(a, z)| {
-                markers[0]
-                    .checked_sub(a)
-                    .zip(markers[1].checked_sub(z))
-                    .is_some_and(|(x, y)| x == y && a < z && z - a == markers[1] - markers[0])
+// Every selector-shaped site fixes its own (magic, markers), so the set of
+// accepted operands is collected once and looked up per candidate.
+struct Selectors<'a> {
+    image: &'a [u8],
+    accepted: Option<Vec<(u32, [u32; 2])>>,
+}
+
+impl<'a> Selectors<'a> {
+    fn new(image: &'a [u8]) -> Self {
+        Self {
+            image,
+            accepted: None,
+        }
+    }
+
+    fn contains(&mut self, magic: u32, markers: [u32; 2]) -> bool {
+        let image = self.image;
+        self.accepted
+            .get_or_insert_with(|| {
+                #[cfg(test)]
+                tests::SCANS.with(|c| c.set(c.get() + 1));
+                let mut accepted: Vec<(u32, [u32; 2])> = (0..image.len().saturating_sub(61))
+                    .step_by(2)
+                    .filter_map(|at| {
+                        let b = &image[at..];
+                        let site = (word(b, 10)?, [word(b, 4)?, word(b, 22)?]);
+                        selector(b, site.0, site.1).then_some(site)
+                    })
+                    .collect();
+                accepted.sort_unstable();
+                accepted.dedup();
+                accepted
             })
-    })
+            .binary_search(&(magic, markers))
+            .is_ok()
+    }
+}
+
+fn selector(b: &[u8], magic: u32, markers: [u32; 2]) -> bool {
+    matches(
+        b,
+        &[
+            (0, &[1, 0, 0x6b, 0x20]),
+            (8, &[0x7a, 1]),
+            (14, &[0x1f, 0x90, 0x46, 0x24, 1, 0, 0x6b, 0x20]),
+            (26, &[0x1f, 0x90, 0x46, 0x10, 0x6b, 0x28]),
+            (36, &[0x6b, 0x20]),
+            (42, &[0x1d, 8, 0x43, 8, 0x7a, 0]),
+            (52, &[0x40, 6, 0x7a, 0]),
+            (60, &[0x54, 0x70]),
+        ],
+    ) && word(b, 4) == Some(markers[0])
+        && word(b, 10) == Some(magic)
+        && word(b, 22) == Some(markers[1])
+        && word(b, 32) == markers[0].checked_add(4)
+        && word(b, 38) == markers[1].checked_add(4)
+        && word(b, 48).zip(word(b, 56)).is_some_and(|(a, z)| {
+            markers[0]
+                .checked_sub(a)
+                .zip(markers[1].checked_sub(z))
+                .is_some_and(|(x, y)| x == y && a < z && z - a == markers[1] - markers[0])
+        })
 }
 
 fn initialize(b: &[u8]) -> Option<(u32, [u32; 2])> {
@@ -176,6 +244,8 @@ fn rejecting(normal: &[u8], at: usize) -> Option<(u32, [u32; 2], usize)> {
 }
 
 pub(super) fn discover(normal: &[u8]) -> Option<Fixed> {
+    let mut calls = Calls::new(normal);
+    let mut selectors = Selectors::new(normal);
     let mut result = None;
     for at in (0..normal.len().saturating_sub(9)).step_by(2) {
         let (magic, markers, entry, rejects) = if let Some((m, a)) = initialize(&normal[at..]) {
@@ -187,8 +257,8 @@ pub(super) fn discover(normal: &[u8]) -> Option<Fixed> {
         };
         if magic == u32::MAX
             || markers[0] >= markers[1]
-            || !called(normal, entry)
-            || !selector(normal, magic, markers)
+            || !called(&mut calls, entry)
+            || !selectors.contains(magic, markers)
         {
             continue;
         }
@@ -206,6 +276,9 @@ pub(super) fn discover(normal: &[u8]) -> Option<Fixed> {
 }
 
 pub(super) fn state_banks(normal: &[u8]) -> Option<super::Storage> {
+    let mut calls = Calls::new(normal);
+    // The selector does not depend on the candidate, so it is evaluated once.
+    let mut selected = None;
     let mut result = None;
     for at in (0..normal
         .len()
@@ -213,7 +286,7 @@ pub(super) fn state_banks(normal: &[u8]) -> Option<super::Storage> {
         .step_by(2)
     {
         let b = &normal[at..];
-        if !grammar(b, patterns::STATE_NORMAL) || !called(normal, at) {
+        if !grammar(b, patterns::STATE_NORMAL) || !called(&mut calls, at) {
             continue;
         }
         let sequences = [word(b, 8)?, word(b, 18)?];
@@ -250,7 +323,7 @@ pub(super) fn state_banks(normal: &[u8]) -> Option<super::Storage> {
         {
             continue;
         }
-        let Some(candidate) = state_selector(normal, BASE) else {
+        let Some(candidate) = *selected.get_or_insert_with(|| state_selector(normal, BASE)) else {
             continue;
         };
         if !matches!(candidate,super::Storage::StateHeaders {headers:h,sequences:s,..} if h==headers && s==sequences)
@@ -265,6 +338,9 @@ pub(super) fn state_banks(normal: &[u8]) -> Option<super::Storage> {
 }
 
 pub(super) fn state_selector(image: &[u8], base: u32) -> Option<super::Storage> {
+    #[cfg(test)]
+    tests::SCANS.with(|c| c.set(c.get() + 1));
+    let mut calls = Calls::new(image);
     let mut result = None;
     for at in (0..image
         .len()
@@ -285,10 +361,7 @@ pub(super) fn state_selector(image: &[u8], base: u32) -> Option<super::Storage> 
         {
             continue;
         }
-        if !(0..image.len().saturating_sub(3))
-            .step_by(2)
-            .any(|p| call(image, p) == Some(base + at as u32))
-        {
+        if !calls.contains(base + at as u32) {
             continue;
         }
         let candidate = super::Storage::StateHeaders {
@@ -304,6 +377,7 @@ pub(super) fn state_selector(image: &[u8], base: u32) -> Option<super::Storage> 
 }
 
 pub(super) fn kernel_sequences(kernel: &[u8]) -> Option<super::Storage> {
+    let mut calls = Calls::new(kernel);
     let mut result = None;
     for at in (0..kernel.len().saturating_sub(43)).step_by(2) {
         let b = &kernel[at..];
@@ -337,10 +411,7 @@ pub(super) fn kernel_sequences(kernel: &[u8]) -> Option<super::Storage> {
             continue;
         }
         let entry = 0x400000 + at as u32;
-        if !(0..kernel.len().saturating_sub(3))
-            .step_by(2)
-            .any(|p| call(kernel, p) == Some(entry))
-        {
+        if !calls.contains(entry) {
             continue;
         }
         let candidate = super::Storage::KernelSequences { sequences, bases };
@@ -375,4 +446,34 @@ pub(super) fn fixture(normal: &mut [u8]) {
         0x40, 6, 0x7a, 0, 0, 0x7e, 0, 0, 0x54, 0x70,
     ]);
     normal[0x19e0..0x19e2].copy_from_slice(&[0x54, 0x70]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::cell::Cell;
+
+    std::thread_local! {
+        /// Full-image passes over call sites, selectors or state selectors.
+        pub(super) static SCANS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    #[test]
+    fn uncalled_initializer_copies_do_not_rescan_the_image() {
+        let mut single = std::vec![0; 0x40000];
+        fixture(&mut single);
+        let expected = super::super::analyze_pair(&single, None);
+        assert!(expected.is_some());
+        let mut copies = single.clone();
+        let len = patterns::INITIALIZE.code.len();
+        let initializer = single[0x1800..0x1800 + len].to_vec();
+        for n in 0..200 {
+            let at = 0x4000 + n * 0x100;
+            copies[at..at + len].copy_from_slice(&initializer);
+        }
+        SCANS.with(|c| c.set(0));
+        assert_eq!(super::super::analyze_pair(&copies, None), expected);
+        let scans = SCANS.with(Cell::get);
+        assert!(scans <= 4, "{scans} full-image scans");
+    }
 }

@@ -364,11 +364,18 @@ mod tests {
         assert!(source
             .check_resolving(&target, Some("ud02-mechanism-convention"))
             .is_ok());
-        target.hardware_family = Some("1111111111111111".into());
+        // A resolved adaptation never accepts missing family evidence.
+        target.hardware_family = None;
         assert_eq!(
             source.check_resolving(&target, Some("ud02-mechanism-convention")),
-            Ok(())
+            Err(Error::Unresolved)
         );
+        // Known different families are outside this issue's scope; that does
+        // not depend on the resolved issue (the family check is independent).
+        target.hardware_family = Some("1111111111111111".into());
+        for resolved in [None, Some("other-issue"), Some("ud02-mechanism-convention")] {
+            assert_eq!(source.check_resolving(&target, resolved), Ok(()));
+        }
     }
     #[test]
     fn known_other_families_do_not_require_this_mechanism_conversion() {

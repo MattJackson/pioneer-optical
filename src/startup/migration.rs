@@ -51,6 +51,9 @@ pub enum Error<E, F> {
         rollback: Rollback<E>,
     },
     /// Flash callback failed, with rollback limited to pre-transfer failures.
+    /// For multi-setting plans, `original` and `target` describe the first
+    /// changed setting, or the first setting when none changed (zero only for
+    /// an empty plan).
     Flash {
         /// Original captured word.
         original: u16,
@@ -309,11 +312,14 @@ where
                 restore(io.inner, &originals)
             };
             // Retain legacy mutation reporting: any changed word makes these
-            // unequal. Attempt-local originals are used only for safe restoration.
+            // unequal. When nothing changed, report the first captured word so
+            // the fields stay real (equal) values. Attempt-local originals are
+            // used only for safe restoration.
             let (_, original, target) = originals
                 .iter()
                 .copied()
                 .find(|(_, old, new)| old != new)
+                .or_else(|| originals.first().copied())
                 .unwrap_or((0, 0, 0));
             Err(Error::Flash {
                 original,
@@ -758,6 +764,31 @@ mod collection_tests {
         let mut m = mock();
         assert!(execute_many(&mut m, &[(0x9f, 3), (0xa0, 4)], |_| Err::<(), _>("policy")).is_err());
         assert_eq!(m.words, [1, 2]);
+    }
+    #[test]
+    fn flash_failure_reports_a_real_captured_word() {
+        let mut m = mock();
+        let err =
+            execute_many(&mut m, &[(0x9f, 1), (0xa0, 2)], |_| Err::<(), _>("policy")).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Flash {
+                original: 1,
+                target: 1,
+                ..
+            }
+        ));
+        let mut m = mock();
+        let err =
+            execute_many(&mut m, &[(0x9f, 1), (0xa0, 4)], |_| Err::<(), _>("policy")).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Flash {
+                original: 2,
+                target: 4,
+                ..
+            }
+        ));
     }
     #[test]
     fn uncertain_firmware_entry_forbids_any_rollback() {

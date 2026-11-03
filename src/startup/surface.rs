@@ -82,10 +82,10 @@ pub fn discover(bytes: &[u8]) -> Option<NativeWordAccess> {
         0x6f, 0xf0, 0, 4, 0x1a, 0x91, 0x0c, 0xe9, 0x10, 0x71, 0x0f, 0x95, 1, 0, 0x6f, 0x73, 0,
         0x1c, 0x0a, 0xa3, 0x7a, 4,
     ];
-    #[cfg(test)]
-    tests::SELECTOR_SCANS.with(|c| c.set(c.get() + 1));
     let mut writers: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for (selector, op) in bytes.windows(6).enumerate().step_by(2) {
+        #[cfg(test)]
+        tests::SELECTOR_WINDOWS.with(|c| c.set(c.get() + 1));
         if !(0xa0..=0xaf).contains(&op[0]) || op[1..4] != [0xa0, 0x58, 0x70] {
             continue;
         }
@@ -172,7 +172,7 @@ mod tests {
     use core::cell::Cell;
 
     std::thread_local! {
-        pub(super) static SELECTOR_SCANS: Cell<usize> = const { Cell::new(0) };
+        pub(super) static SELECTOR_WINDOWS: Cell<usize> = const { Cell::new(0) };
     }
 
     fn fixture() -> Vec<u8> {
@@ -292,8 +292,9 @@ mod tests {
         b[0x700..0x72c].copy_from_slice(&block[0x100..0x12c]);
         b[0x748..0x74e].copy_from_slice(&block[0x148..0x14e]);
         b[0x836..0x856].copy_from_slice(&block[0x236..0x256]);
-        SELECTOR_SCANS.with(|c| c.set(0));
+        SELECTOR_WINDOWS.with(|c| c.set(0));
         assert_eq!(discover(&b).map(|r| r.access), Some(0x410100));
-        assert_eq!(SELECTOR_SCANS.with(Cell::get), 1);
+        // One pass over the even 6-byte selector windows, not one per candidate.
+        assert!(SELECTOR_WINDOWS.with(Cell::get) <= b.len() / 2);
     }
 }

@@ -196,6 +196,7 @@ fn every_preparation_path_uses_the_receivers_startup_checks() {
 }
 
 #[test]
+#[ignore = "set PIONEER_SETTINGS_HOARD to the settings hoard root"]
 fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
     fn assert_reviewed_phase(current: &Update, target: &Update, recipe: &str, actual: &[u8]) {
         use crate::image::{layout::Observation, phase};
@@ -215,9 +216,7 @@ fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
         );
         assert!(matches!(phase::discover(actual), Observation::Known(after) if after == required));
     }
-    let Ok(root) = std::env::var("PIONEER_SETTINGS_HOARD") else {
-        return;
-    };
+    let root = std::env::var("PIONEER_SETTINGS_HOARD").expect("PIONEER_SETTINGS_HOARD");
     let root = std::path::Path::new(&root);
     let read = |path: &str| std::fs::read(root.join(path)).unwrap();
     let source_kernel = read("dump/pioneer/sat/8410/ID84/1.00/kernel/7e1104a2843825aea6d03bde6359d94254f3cea192e576450f3f94c4afcee824.enc");
@@ -772,10 +771,9 @@ fn normal_only_retains_typed_target_errors_and_rejects_kernel_tag_mismatch() {
 }
 
 #[test]
+#[ignore = "set PIONEER_SETTINGS_HOARD to the settings hoard root"]
 fn held_ud04_211m_recovery_does_not_invent_a_settings_requirement() {
-    let Ok(root) = std::env::var("PIONEER_SETTINGS_HOARD") else {
-        return;
-    };
+    let root = std::env::var("PIONEER_SETTINGS_HOARD").expect("PIONEER_SETTINGS_HOARD");
     let root = std::path::Path::new(&root);
     let read = |path: &str| std::fs::read(root.join(path)).unwrap();
     let ud04 = Update::load(

@@ -4,6 +4,7 @@ use alloc::boxed::Box;
 
 /// Evidence used to select a target startup word.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum Evidence {
     /// A complete native getter establishes an accepted comparison value.
     /// This does not establish the absence of additional startup requirements.
@@ -21,7 +22,18 @@ pub enum Evidence {
 
 /// How the startup word is selected. Native comparison evidence and neutral
 /// startup selection retain separate provenance.
+///
+/// ```compile_fail
+/// use pioneer_optical::compatibility::startup::StartupPolicy;
+/// fn exhaustive(p: StartupPolicy) {
+///     match p {
+///         StartupPolicy::NativeEvidenceOnly => (),
+///         StartupPolicy::NeutralSelection => (),
+///     }
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StartupPolicy {
     /// Select only an accepted comparison value bound to its native getter.
     NativeEvidenceOnly,
@@ -59,7 +71,18 @@ impl Plan {
 }
 
 /// A target startup decision could not be established uniquely.
+///
+/// ```compile_fail
+/// use pioneer_optical::compatibility::startup::Error;
+/// fn exhaustive(e: Error) {
+///     match e {
+///         Error::Ambiguous => (),
+///         Error::Unresolved => (),
+///     }
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     /// Multiple recognized comparisons prevent an automatic selection.
     Ambiguous,

@@ -4,7 +4,7 @@ use pioneer_optical::drive::{diagnostic_memory, Data, Error, Transport};
 #[derive(Default)]
 struct Mock {
     calls: Vec<(Vec<u8>, usize, bool)>,
-    short: bool,
+    extra: isize,
 }
 impl Transport for Mock {
     type Error = ();
@@ -21,7 +21,7 @@ impl Transport for Mock {
             Data::None => panic!("unexpected no-data command"),
         };
         self.calls.push((cdb.to_vec(), len, write));
-        Ok(if self.short { len - 1 } else { len })
+        Ok(len.checked_add_signed(self.extra).unwrap())
     }
     fn sense(&self) -> Option<(u8, u8, u8)> {
         None
@@ -65,16 +65,28 @@ fn rejects_whole_interval_before_any_write() {
 }
 #[test]
 fn short_transfer_stops_before_next_chunk() {
-    let mut t = Mock {
-        short: true,
-        ..Mock::default()
-    };
-    assert!(matches!(
-        diagnostic_memory(&mut t, 0xb0, 0, Data::Out(&[0xa5; 4097])),
-        Err(Error::Short {
-            expected: 4096,
-            actual: 4095
-        })
-    ));
-    assert_eq!(t.calls.len(), 1);
+    // Short and over-reported counts both refuse, in either direction.
+    for extra in [-1, 1] {
+        for write in [true, false] {
+            let mut t = Mock {
+                extra,
+                ..Mock::default()
+            };
+            let mut bytes = [0xa5; 4097];
+            let data = if write {
+                Data::Out(&bytes)
+            } else {
+                Data::In(&mut bytes)
+            };
+            let actual = 4096usize.checked_add_signed(extra).unwrap();
+            assert!(
+                matches!(
+                    diagnostic_memory(&mut t, 0xb0, 0, data),
+                    Err(Error::Short { expected: 4096, actual: a }) if a == actual
+                ),
+                "extra={extra} write={write}"
+            );
+            assert_eq!(t.calls.len(), 1);
+        }
+    }
 }

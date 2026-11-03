@@ -364,11 +364,18 @@ mod tests {
         assert!(source
             .check_resolving(&target, Some("ud02-mechanism-convention"))
             .is_ok());
-        target.hardware_family = Some("1111111111111111".into());
+        // A resolved adaptation never accepts missing family evidence.
+        target.hardware_family = None;
         assert_eq!(
             source.check_resolving(&target, Some("ud02-mechanism-convention")),
-            Ok(())
+            Err(Error::Unresolved)
         );
+        // Known different families are outside this issue's scope; that does
+        // not depend on the resolved issue (the family check is independent).
+        target.hardware_family = Some("1111111111111111".into());
+        for resolved in [None, Some("other-issue"), Some("ud02-mechanism-convention")] {
+            assert_eq!(source.check_resolving(&target, resolved), Ok(()));
+        }
     }
     #[test]
     fn known_other_families_do_not_require_this_mechanism_conversion() {
@@ -793,16 +800,19 @@ mod filter_action_tests {
             value: 0xfe34,
         };
         let actions = crate::filters::parameter_actions_with(&context, &[&startup]).unwrap();
-        assert!(Plan::target(
-            Some(crate::startup::Setting {
-                parameter: 0x9f,
-                value: 0xfe24,
-                explicit: true
-            }),
-            false
-        )
-        .with_filter_actions(actions)
-        .is_err());
+        assert!(
+            Plan::target(
+                Some(crate::startup::Setting {
+                    parameter: 0x9f,
+                    value: 0xfe24,
+                    explicit: true
+                }),
+                false
+            )
+            .with_filter_actions(actions)
+            .map(|_| ())
+                == Err(crate::compatibility::Error::VerificationFailed)
+        );
         let invalid = WordOwner {
             filter: "invalid",
             action: "pioneer.invalid",
@@ -810,6 +820,31 @@ mod filter_action_tests {
             value: 0,
         };
         let actions = crate::filters::parameter_actions_with(&context, &[&invalid]).unwrap();
-        assert!(Plan::default().with_filter_actions(actions).is_err());
+        assert!(refused(Plan::default().with_filter_actions(actions)));
+        let valid = WordOwner {
+            filter: "valid",
+            action: "pioneer.valid",
+            parameter: 0x9f,
+            value: 1,
+        };
+        let actions = crate::filters::parameter_actions_with(&context, &[&valid]).unwrap();
+        assert!(Plan::default().with_filter_actions(actions.clone()).is_ok());
+        let mutated = |change: fn(&mut crate::filters::ParameterAction)| {
+            let mut action = actions[0].clone();
+            change(&mut action);
+            Plan::default().with_filter_actions(vec![action])
+        };
+        // Each malformed owner field refuses alone, including another owner's
+        // native evidence carried under this owner's name.
+        assert!(refused(mutated(|a| a.id = "")));
+        assert!(refused(mutated(|a| {
+            a.filter = "";
+            a.assessment.id = "";
+        })));
+        assert!(refused(mutated(|a| a.assessment.id = "other")));
+    }
+
+    fn refused(result: Result<Plan, crate::compatibility::Error>) -> bool {
+        matches!(result, Err(crate::compatibility::Error::VerificationFailed))
     }
 }

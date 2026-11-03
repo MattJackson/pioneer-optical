@@ -561,6 +561,20 @@ fn arbitrary_oem_destination_has_identical_live_and_symbolic_policy_and_guard() 
         for model in ["Arbitrary OEM Name", "SBC-06D2X-U", "SlimtypeEB1"] {
             let live = registry.prepare_hardware(&source(), &target(), model, &original);
             let symbolic = registry.prepare_scope(&source(), &target(), model, scope);
+            // Platform/product matching ignores ASCII case for symbolic scopes too.
+            let lower = |v: &str| &*Box::leak(v.to_ascii_lowercase().into_boxed_str());
+            let lowercase = crate::settings::routing::ProductSelector {
+                platform: lower(scope.platform),
+                prefix: scope.prefix.map(lower),
+                suffix: scope.suffix.map(lower),
+            };
+            assert_eq!(
+                registry
+                    .prepare_scope(&source(), &target(), model, lowercase)
+                    .map(|p| p.is_none()),
+                symbolic.clone().map(|p| p.is_none()),
+                "{lowercase:?}"
+            );
             if restricted {
                 assert_eq!(live.unwrap_err(), Error::OriginalMismatch);
                 assert_eq!(symbolic.unwrap_err(), Error::OriginalMismatch);

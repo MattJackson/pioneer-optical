@@ -45,6 +45,8 @@ pub enum PreparationError {
     UnsupportedTransport,
     /// A patched Kernel could not be encoded in the required transfer format.
     PatchedRepresentation,
+    /// A patched bridge's owned Normal transfer copy could not be signed.
+    PatchedSigning(crate::envelope::Error),
 }
 
 impl core::fmt::Display for PreparationError {
@@ -79,6 +81,9 @@ impl core::fmt::Display for PreparationError {
             Self::PatchedRepresentation => {
                 f.write_str("temporarily patched Kernel cannot be represented for transfer")
             }
+            Self::PatchedSigning(error) => {
+                write!(f, "temporarily patched Kernel transfer cannot be signed: {error}")
+            }
         }
     }
 }
@@ -92,6 +97,7 @@ impl std::error::Error for PreparationError {
             Self::KernelHandoff(error) => Some(error),
             Self::Target(error) => Some(error),
             Self::Compatibility(error) | Self::FinalStageEntry(error) => Some(error),
+            Self::PatchedSigning(error) => Some(error),
             _ => None,
         }
     }
@@ -130,7 +136,7 @@ impl Receiver {
     ) -> Result<Self, crate::settings::adaptation::Error> {
         if !crate::settings::adaptation::hardware_rules()?
             .iter()
-            .any(|r| r.hardware == scope)
+            .any(|r| r.hardware.same(scope))
         {
             return Err(crate::settings::adaptation::Error::OriginalMismatch);
         }

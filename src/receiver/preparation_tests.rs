@@ -196,6 +196,7 @@ fn every_preparation_path_uses_the_receivers_startup_checks() {
 }
 
 #[test]
+#[ignore = "set PIONEER_SETTINGS_HOARD to the settings hoard root"]
 fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
     fn assert_reviewed_phase(current: &Update, target: &Update, recipe: &str, actual: &[u8]) {
         use crate::image::{layout::Observation, phase};
@@ -215,9 +216,7 @@ fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
         );
         assert!(matches!(phase::discover(actual), Observation::Known(after) if after == required));
     }
-    let Ok(root) = std::env::var("PIONEER_SETTINGS_HOARD") else {
-        return;
-    };
+    let root = std::env::var("PIONEER_SETTINGS_HOARD").expect("PIONEER_SETTINGS_HOARD");
     let root = std::path::Path::new(&root);
     let read = |path: &str| std::fs::read(root.join(path)).unwrap();
     let source_kernel = read("dump/pioneer/sat/8410/ID84/1.00/kernel/7e1104a2843825aea6d03bde6359d94254f3cea192e576450f3f94c4afcee824.enc");
@@ -636,6 +635,30 @@ fn captured_receiver_evidence_does_not_require_a_distribution_signature() {
             actual: crate::ComponentKind::Normal
         }
     );
+    let tag = |b: &[u8]| b[..0x200].windows(7).position(|s| s == b"GENERAL").unwrap();
+    let mut other_kernel_tag = bytes.clone();
+    let at = tag(&other_kernel_tag);
+    other_kernel_tag[at + 6] = b'X';
+    let other_kernel_tag =
+        Envelope::load_with_kernel(&other_kernel_tag, installed.kernel()).unwrap();
+    assert_eq!(
+        Receiver::detect_with_kernel(&other_kernel_tag, installed.kernel()).unwrap_err(),
+        Error::InstalledPairMismatch
+    );
+    let mut blank_normal = bytes.clone();
+    let at = tag(&blank_normal);
+    blank_normal[at..at + 7].fill(b' ');
+    let mut blank_kernel = installed.kernel_transfer().to_vec();
+    let at = tag(&blank_kernel);
+    blank_kernel[at..at + 7].fill(b' ');
+    let blank_kernel = Envelope::load(&blank_kernel).unwrap();
+    let blank_normal = Envelope::load_with_kernel(&blank_normal, &blank_kernel).unwrap();
+    assert_eq!(blank_normal.info().kernel_version, "");
+    assert_eq!(blank_kernel.info().kernel_version, "");
+    assert_eq!(
+        Receiver::detect_with_kernel(&blank_normal, &blank_kernel).unwrap_err(),
+        Error::InstalledPairMismatch
+    );
     let mut mismatched = bytes;
     let hardware = mismatched[..0x200]
         .windows(8)
@@ -748,10 +771,9 @@ fn normal_only_retains_typed_target_errors_and_rejects_kernel_tag_mismatch() {
 }
 
 #[test]
+#[ignore = "set PIONEER_SETTINGS_HOARD to the settings hoard root"]
 fn held_ud04_211m_recovery_does_not_invent_a_settings_requirement() {
-    let Ok(root) = std::env::var("PIONEER_SETTINGS_HOARD") else {
-        return;
-    };
+    let root = std::env::var("PIONEER_SETTINGS_HOARD").expect("PIONEER_SETTINGS_HOARD");
     let root = std::path::Path::new(&root);
     let read = |path: &str| std::fs::read(root.join(path)).unwrap();
     let ud04 = Update::load(
@@ -922,6 +944,70 @@ fn handoff_bridge_preserves_source_normal_and_finishes_with_exact_target() {
     );
     assert_eq!(final_stage.normal_transfer(), target.normal_transfer());
     assert_eq!(final_stage.kernel_image().unwrap(), target.kernel().image);
+}
+
+#[test]
+fn original_hardware_scope_ignores_ascii_case() {
+    let receiver = Receiver::from_installed(&update(false, 1, 0x12, true)).unwrap();
+    for rule in crate::settings::adaptation::hardware_rules().unwrap() {
+        let lower = |v: &str| &*Box::leak(v.to_ascii_lowercase().into_boxed_str());
+        let scope = crate::settings::routing::ProductSelector {
+            platform: lower(rule.hardware.platform),
+            prefix: rule.hardware.prefix.map(lower),
+            suffix: rule.hardware.suffix.map(lower),
+        };
+        assert!(
+            receiver.clone().with_original_hardware_scope(scope).is_ok(),
+            "{scope:?}"
+        );
+    }
+    assert!(receiver
+        .with_original_hardware_scope(crate::settings::routing::ProductSelector {
+            platform: "UD99",
+            prefix: None,
+            suffix: None,
+        })
+        .is_err());
+}
+
+#[test]
+fn handoff_bridge_mismatch_reports_the_incoming_kernel_startup() {
+    let shifted = |original: &Update| {
+        let mut kernel = original.kernel().image.clone();
+        kernel.copy_within(0x20..0x30, 0x2a);
+        kernel[0x20..0x2a].fill(0);
+        kernel[0x2107] = 0x2a;
+        fix_sum(&mut kernel);
+        Update::load(
+            &original.kernel().repack(&kernel).unwrap(),
+            &original.normal().repack(&original.normal().image).unwrap(),
+        )
+        .unwrap()
+    };
+    // An already-adapted source calls 0x40002a while its own startup stays
+    // at 0x400020; the incoming Kernel starts at 0x40002a.
+    let original = update(false, 1, 0x12, true);
+    let mut kernel = original.kernel().image.clone();
+    kernel[0x2107] = 0x2a;
+    fix_sum(&mut kernel);
+    let adapted = Update::load(
+        &original.kernel().repack(&kernel).unwrap(),
+        &original.normal().repack(&original.normal().image).unwrap(),
+    )
+    .unwrap();
+    let target = shifted(&update(false, 1, 0x12, true));
+    let receiver = Receiver::from_installed(&adapted).unwrap();
+    assert_eq!(
+        crate::receiver::handoff_bridge::prepare(&receiver, target.kernel()).unwrap_err(),
+        PreparationError::KernelHandoff(crate::image::KernelHandoffError::Mismatch {
+            installed: 0x40002a,
+            target: crate::image::kernel_startup_entry(&target.kernel().image).unwrap(),
+        })
+    );
+    assert_eq!(
+        crate::image::kernel_startup_entry(&target.kernel().image),
+        Some(0x40002a)
+    );
 }
 
 #[test]

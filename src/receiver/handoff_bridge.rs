@@ -23,7 +23,7 @@ pub(super) fn prepare(receiver: &Receiver, target: &Envelope) -> Result<Update, 
     if contract.entry != startup || startup == destination {
         return Err(refused(KernelHandoffError::Mismatch {
             installed: contract.entry,
-            target: startup,
+            target: destination,
         }));
     }
     let mut image = source.image.clone();
@@ -73,7 +73,7 @@ pub(super) fn prepare(receiver: &Receiver, target: &Envelope) -> Result<Update, 
             builder::{normal_authentication_from_kernel, NormalAuthentication},
             signature::SigningKey,
         };
-        let signer = SigningKey::random().map_err(|_| PreparationError::PatchedRepresentation)?;
+        let signer = SigningKey::random().map_err(signing_failure)?;
         match normal_authentication_from_kernel(&image) {
             Some(NormalAuthentication::KeyAndCiphertext) => signer.sign_normal(&mut normal_bytes),
             Some(NormalAuthentication::CiphertextOnly) => {
@@ -81,7 +81,7 @@ pub(super) fn prepare(receiver: &Receiver, target: &Envelope) -> Result<Update, 
             }
             _ => return Err(PreparationError::PatchedRepresentation),
         }
-        .map_err(|_| PreparationError::PatchedRepresentation)?;
+        .map_err(signing_failure)?;
         loaded = Update::load(&kernel, &normal_bytes);
     }
     let bridge = loaded.map_err(PreparationError::Target)?;
@@ -89,4 +89,31 @@ pub(super) fn prepare(receiver: &Receiver, target: &Envelope) -> Result<Update, 
         return Err(PreparationError::PatchedRepresentation);
     }
     Ok(bridge)
+}
+
+/// Keep the signing cause instead of reporting a bare representation failure.
+fn signing_failure(error: crate::envelope::Error) -> PreparationError {
+    PreparationError::PatchedSigning(error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error_codes::CodedError;
+
+    #[test]
+    fn signing_failure_preserves_the_envelope_cause() {
+        use crate::envelope::Error as E;
+        for cause in [E::EntropyUnavailable, E::Randomness, E::SelfVerification] {
+            let error = signing_failure(cause);
+            assert_ne!(error, PreparationError::PatchedRepresentation);
+            let source = std::error::Error::source(&error)
+                .and_then(|s| s.downcast_ref::<E>())
+                .copied();
+            assert_eq!(source, Some(cause));
+            // Pre-write refusal: code and host category are unchanged.
+            assert_eq!(error.code(), "pioneer.preparation.patched_representation");
+            assert_eq!(error.kind(), crate::operation::IssueKind::InvalidFirmware);
+        }
+    }
 }

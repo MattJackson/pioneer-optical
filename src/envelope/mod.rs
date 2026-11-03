@@ -1743,7 +1743,8 @@ impl DecodedEnvelope {
     /// Image bytes a spliced envelope does not carry and decoding could not
     /// prove (they are filled with 0xFF). None when every byte is carried or
     /// verified: a COMP image whose streams, including any recomputed Adler-32
-    /// trailer, all inflate exactly, with only erased padding after them.
+    /// trailer, all inflate exactly, and whose whole-image BE32 checksum proves
+    /// the erased padding after them.
     pub fn unrecovered_tail(&self) -> Option<std::ops::Range<usize>> {
         if self.splices.is_empty() {
             return None;
@@ -1753,7 +1754,8 @@ impl DecodedEnvelope {
             .len()
             .saturating_sub(SPLICE_LEN * self.splices.len());
         let verified = self.image.get(COMP_OFFSET..COMP_OFFSET + 4) == Some(b"COMP".as_slice())
-            && comp_layout(&self.image).is_some();
+            && comp_layout(&self.image).is_some()
+            && be32_sum_zero(&self.image);
         (!verified).then_some(kept_len..self.image.len())
     }
 }

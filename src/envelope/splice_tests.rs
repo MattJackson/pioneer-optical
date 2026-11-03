@@ -47,8 +47,16 @@ fn image_with(end2_delta: isize) -> Vec<u8> {
     for (i, v) in [start1, end1, start2, end2].into_iter().enumerate() {
         image[0x1004 + 4 * i..0x1008 + 4 * i].copy_from_slice(&(base + v as u32).to_be_bytes());
     }
+    balance(&mut image);
     assert!(comp_streams(&image).is_some());
     image
+}
+
+// Make the whole-image BE32 sum zero, as in OEM Normal images.
+fn balance(image: &mut [u8]) {
+    image[16..20].fill(0);
+    let sum = be32_sum(image);
+    image[16..20].copy_from_slice(&0u32.wrapping_sub(sum).to_be_bytes());
 }
 
 // Encrypt as the OEM envelope does, then splice blocks at three of the four
@@ -246,6 +254,22 @@ fn unrecovered_tail_reports_exactly_the_unproven_range() {
     let decoded = decode_envelope(&env).unwrap();
     assert_eq!(decoded.image, plain);
     assert_eq!(decoded.unrecovered_tail(), Some(tail));
+}
+
+#[test]
+fn fabricated_erased_tail_is_not_verified_by_the_comp_layout_alone() {
+    // Streams end before the lost tail, whose original bytes were not erased.
+    let mut img = image_with(-8);
+    img[KEPT..].fill(0x5a);
+    balance(&mut img);
+    let decoded = decode_envelope(&envelope(&img, &SPLICES)).unwrap();
+    assert_eq!(decoded.spliced_blocks().len(), 3);
+    assert!(comp_streams(&decoded.image).is_some());
+    assert_eq!(decoded.unrecovered_tail(), Some(KEPT..LEN));
+    // The same layout with a genuinely erased tail stays verified.
+    let erased = image_with(-8);
+    let decoded = decode_envelope(&envelope(&erased, &SPLICES)).unwrap();
+    assert_eq!(decoded.unrecovered_tail(), None);
 }
 
 #[test]

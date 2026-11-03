@@ -62,9 +62,12 @@ fn family_gate_preserves_both_ids_and_distinguishes_missing_evidence() {
     let second = [0xf6, 0x13, 0x6a, 0x86, 0xe4, 0x36, 0, 0];
     let mut installed = image();
     installed.extend_from_slice(&first);
-    let receiver = Receiver::from_image(&installed).unwrap();
-    let a = family(&first).unwrap();
-    let b = family(&second).unwrap();
+    let mut receiver = Receiver::from_image(&installed).unwrap();
+    let a = legacy_family(&first).unwrap();
+    let b = legacy_family(&second).unwrap();
+    // Isolate comparison/error behavior; raw receiver bytes lack platform context.
+    assert_eq!(receiver.family(), None);
+    receiver.family = Some(a);
     assert_eq!(receiver.family(), Some(a));
     assert_eq!(receiver.compare_family(Some(a)), Ok(a));
     assert_eq!(

@@ -4,7 +4,9 @@
 //! hardware compatibility, component acceptance, or a complete flash plan.
 
 use crate::envelope::Envelope;
-use crate::image::{family, receiver_control, Family, ReceiverControl};
+#[cfg(test)]
+use crate::image::legacy_family;
+use crate::image::{receiver_control, Family, ReceiverControl};
 use crate::{cdb, ComponentKind};
 
 mod preparation;
@@ -105,7 +107,7 @@ pub struct Receiver {
     original_scope: Option<crate::settings::routing::ProductSelector<'static>>,
     startup: crate::startup::checks::Checks,
     #[cfg(test)]
-    adaptation_profiles: Option<Vec<String>>,
+    correction_contracts: Option<Vec<String>>,
     kernel_policy: Option<crate::image::KernelMarkerPolicy>,
     installed_kernel: Option<Envelope>,
     installed_normal: Option<Envelope>,
@@ -152,6 +154,7 @@ impl Receiver {
             });
         }
         let mut receiver = Self::from_image(&normal.image)?;
+        receiver.family = normal.family();
         receiver.installed_normal = Some(normal.clone());
         Ok(receiver)
     }
@@ -180,13 +183,13 @@ impl Receiver {
         Ok(Self {
             descriptor,
             policy,
-            family: family(image),
+            family: None,
             settings_contract: crate::settings::update::Contract::discover(image),
             original_product: None,
             original_scope: None,
             startup: crate::startup::checks::Checks::discover(image, None),
             #[cfg(test)]
-            adaptation_profiles: None,
+            correction_contracts: None,
             kernel_policy: None,
             installed_kernel: None,
             installed_normal: None,
@@ -229,6 +232,7 @@ impl Receiver {
         receiver.kernel_policy = crate::image::kernel_marker_policy(&kernel.image);
         receiver.startup =
             crate::startup::checks::Checks::discover(&normal.image, Some(&kernel.image));
+        receiver.family = normal.family_with_kernel(kernel);
         receiver.installed_kernel = Some(kernel.clone());
         Ok(receiver)
     }
@@ -266,7 +270,26 @@ impl Receiver {
                 actual: target.info().kind,
             });
         }
-        self.compare_family(target.family())
+        self.compare_family(target.family().or_else(|| {
+            self.installed_kernel
+                .as_ref()
+                .and_then(|k| target.family_with_kernel(k))
+        }))
+    }
+
+    /// Compare against a target Normal using its exact associated Kernel.
+    /// This is required for target identity evidence implemented in resident code.
+    pub fn check_family_with_kernel(
+        &self,
+        target: &Envelope,
+        kernel: &Envelope,
+    ) -> Result<Family, Error> {
+        if target.info().kind != ComponentKind::Normal {
+            return Err(Error::Component {
+                actual: target.info().kind,
+            });
+        }
+        self.compare_family(target.family_with_kernel(kernel))
     }
 
     fn compare_family(&self, target: Option<Family>) -> Result<Family, Error> {

@@ -170,6 +170,12 @@ impl CodedError for crate::receiver::PreparationError {
             Self::Settings(error) => error.code(),
             Self::Adaptation(error) => error.code(),
             Self::Startup(error) => error.code(),
+            Self::PhaseCorrection(
+                error @ (crate::compatibility::Error::PersistentLayoutOverlap { .. }
+                | crate::compatibility::Error::PersistentLayout(_)),
+            ) => error.code(),
+            Self::PhaseCorrection(_) => "pioneer.phase.correction_unproven",
+            Self::UnresolvedStartup => "pioneer.preparation.unresolved_startup",
             Self::AmbiguousStartup => "pioneer.preparation.ambiguous_startup",
             Self::UnknownStartupAccess => "pioneer.preparation.unknown_startup_access",
             Self::Target(..) => "pioneer.preparation.target",

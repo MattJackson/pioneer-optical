@@ -48,6 +48,8 @@ struct State {
     kernels: Vec<Vec<u8>>,
     parameter: u16,
     parameter_writes: Vec<u16>,
+    mechanism_parameter: u16,
+    mechanism_parameter_reads: usize,
     entries: usize,
     finishes: usize,
     writes: usize,
@@ -118,6 +120,9 @@ impl Transport for Port {
         }
         match data {
             Data::Out(bytes) => {
+                if command == cdb::write_parameter_word(0x28f).unwrap() {
+                    return Err("a read-only mechanism prerequisite was written");
+                }
                 s.writes += 1;
                 if s.fail_write == Some(s.writes) {
                     return Err("write failed");
@@ -152,6 +157,9 @@ impl Transport for Port {
                 }
                 if command == cdb::read_parameter_word(0x9f).unwrap() {
                     bytes.copy_from_slice(&s.parameter.to_be_bytes());
+                } else if command == cdb::read_parameter_word(0x28f).unwrap() {
+                    s.mechanism_parameter_reads += 1;
+                    bytes.copy_from_slice(&s.mechanism_parameter.to_be_bytes());
                 } else if command[0] == 0x12 || command == cdb::vendor_identity() {
                     let identity = if s.finishes == 0 {
                         s.installed_id.as_ref().unwrap()
@@ -328,14 +336,12 @@ fn final_stage_mechanism_prerequisite_is_checked_before_the_first_bridge_write()
         for mode in [ExecutionMode::Flash, ExecutionMode::Recovery] {
             let (mut plan, state) = setup(restore);
             let last = plan.stages.last_mut().unwrap();
-            last.settings = last.settings.clone().with_adaptation(Some(
-                crate::settings::adaptation::Adapted::test_requirements(vec![
-                    crate::settings::adaptation::Requirement {
-                        parameter: 0x28f,
-                        value: 1,
-                    },
-                ]),
-            ));
+            let mut correction = crate::compatibility::PreparedCorrection::native(Vec::new(), &[]);
+            correction.requirements = vec![crate::compatibility::ParameterPrerequisite {
+                parameter: 0x28f,
+                value: 1,
+            }];
+            last.settings = last.settings.clone().with_correction(Some(correction));
             let error = plan
                 .execute(
                     FlashTransport {
@@ -881,7 +887,7 @@ fn setup_handoff_bridge(marker: bool) -> (PreparedUpdate, Rc<RefCell<State>>) {
     kernel[0x2107] = 0x2a;
     checksum(&mut kernel);
     let mut normal = original.normal().image.clone();
-    normal[0x700] ^= 1; // Distinguish source and destination readback.
+    normal[0x620] ^= 1; // Distinguish readback without damaging native filters.
     checksum(&mut normal);
     let mut normal_wire = original.normal().repack(&normal).unwrap();
     let mut key = [0; 20];
@@ -1012,4 +1018,202 @@ fn later_stage_settings_roll_back_locally_without_erasing_earlier_completion() {
             ..
         }
     ));
+}
+
+fn workflow_repack(pair: &Update, mut kernel: Vec<u8>, mut normal: Vec<u8>) -> Update {
+    checksum(&mut kernel);
+    checksum(&mut normal);
+    let mut bytes = pair.normal().repack(&normal).unwrap();
+    let mut key = [0; 20];
+    key[19] = 5;
+    crate::envelope::signature::SigningKey::from_bytes(key)
+        .unwrap()
+        .sign_normal(&mut bytes)
+        .unwrap();
+    Update::load(&pair.kernel().repack(&kernel).unwrap(), &bytes).unwrap()
+}
+
+fn workflow_startup_gate(normal: &mut [u8], value: u16) {
+    normal[0x740..0x754].copy_from_slice(&[
+        0x79,
+        0,
+        0,
+        0x9f,
+        0x5e,
+        0x41,
+        0x10,
+        0,
+        0x79,
+        0x20,
+        (value >> 8) as u8,
+        value as u8,
+        0x47,
+        6,
+        0xf8,
+        1,
+        0x5e,
+        0x41,
+        7,
+        0x80,
+    ]);
+    normal[0x780..0x786].copy_from_slice(&[0x5e, 0x40, 0x0a, 0x1a, 0x54, 0x70]);
+}
+
+fn workflow_mechanism_bridge() -> (PreparedUpdate, Rc<RefCell<State>>) {
+    let base = fixture(false, 1);
+    let mut source_normal = base.normal().image.clone();
+    workflow_startup_gate(&mut source_normal, 0xfe24);
+    let source = workflow_repack(&base, base.kernel().image.clone(), source_normal);
+
+    let mut target_kernel = base.kernel().image.clone();
+    target_kernel.copy_within(0x20..0x30, 0x2a);
+    target_kernel[0x20..0x2a].fill(0);
+    target_kernel[0x2107] = 0x2a;
+    let mut target_normal = base.normal().image.clone();
+    workflow_startup_gate(&mut target_normal, 0xfe34);
+    target_normal[0x620] ^= 1;
+    let target = workflow_repack(&base, target_kernel, target_normal);
+    let mut expected = target.normal().image.clone();
+    expected[0x624] ^= 1;
+    checksum(&mut expected);
+    let document = serde_json::json!({
+        "schema_version": 1,
+        "id": "test.workflow-mechanism",
+        "hardware_scheme": crate::image::FAMILY_SCHEME,
+        "hardware_family": crate::image::legacy_family(&source.normal().image).unwrap().to_string(),
+        "source_normal_sha256": [crate::compatibility::mechanism::digest(&source.normal().image)],
+        "mode": "adapt",
+        "resolves_issue": "ud02-mechanism-convention",
+        "target_normal_sha256": crate::compatibility::mechanism::digest(&target.normal().image),
+        "target_model": target.normal().info().model,
+        "input_length": target.normal().image.len(),
+        "required_parameters": [{"parameter": 0x28f, "value": 1}],
+        "replacements": [{
+            "offset": 0x624,
+            "expected_hex": format!("{:02x}", target.normal().image[0x624]),
+            "replacement_hex": format!("{:02x}", expected[0x624]),
+        }],
+        "checksum_offset": expected.len() - 4,
+        "output_sha256": crate::compatibility::mechanism::digest(&expected),
+    })
+    .to_string();
+    let mut receiver = Receiver::from_installed(&source).unwrap();
+    receiver.correction_contracts = Some(vec![document]);
+    let plan = receiver.prepare(target.clone()).unwrap();
+    assert_eq!(plan.stages().len(), 2);
+    assert_eq!(plan.target.normal().image, expected);
+    let state = Rc::new(RefCell::new(State {
+        installed_id: Some(id(source.normal())),
+        target_id: Some(id(target.normal())),
+        descriptor: source.normal().image[..16].to_vec(),
+        normal: expected,
+        stage_normals: plan
+            .stages()
+            .iter()
+            .map(|s| s.normal_image().to_vec())
+            .collect(),
+        kernels: plan
+            .stages()
+            .iter()
+            .map(|s| s.kernel_image().unwrap().to_vec())
+            .collect(),
+        parameter: 0xfe20,
+        ..State::default()
+    }));
+    (plan, state)
+}
+
+#[test]
+fn final_mechanism_prerequisite_is_checked_before_source_bridge_mutation() {
+    let (plan, state) = workflow_mechanism_bridge();
+    let first = &plan.stages()[0];
+    assert_eq!(
+        first.bridge(),
+        Some(crate::receiver::BridgeKind::KernelHandoff)
+    );
+    assert!(first.settings().requires_normal_runtime());
+    assert_eq!(
+        first.settings().requirements(),
+        plan.settings().requirements()
+    );
+    assert!(first.settings().firmware_corrections().is_empty());
+    assert_eq!(first.settings().startup_setting().unwrap().value, 0xfe24);
+    assert_eq!(plan.settings().startup_setting().unwrap().value, 0xfe34);
+    let error = run(&plan, &state, ExecutionMode::Flash).unwrap_err();
+    assert!(
+        matches!(error,
+            ExecutionError::Startup(ref source)
+            if matches!(source.as_ref(), crate::startup::migration::Error::Prerequisite {
+                parameter: 0x28f, expected: 1, actual: 0,
+            })
+        ),
+        "unexpected failure: {error:?}"
+    );
+    let state = state.borrow();
+    assert_eq!(state.mechanism_parameter_reads, 1);
+    assert_eq!(state.parameter, 0xfe20);
+    assert!(state.parameter_writes.is_empty());
+    assert_eq!((state.entries, state.finishes, state.writes), (0, 0, 0));
+    assert!(!error.write_started());
+}
+
+#[test]
+fn mechanism_bridge_keeps_distinct_source_and_target_settings_in_execution_order() {
+    let (plan, state) = workflow_mechanism_bridge();
+    state.borrow_mut().mechanism_parameter = 1;
+    let outcome = run(&plan, &state, ExecutionMode::Flash).unwrap();
+    assert_eq!(outcome.completed_stages, 2);
+    assert!(outcome.kernel_verified && outcome.normal_verified);
+    let state = state.borrow();
+    assert_eq!(state.mechanism_parameter_reads, 3);
+    assert_eq!(state.mechanism_parameter, 1);
+    assert_eq!(state.parameter_writes, [0xfe24, 0xfe34]);
+    assert_eq!(state.finishes, 2);
+}
+
+#[test]
+fn inherited_mechanism_runtime_requirement_blocks_recovery_before_bridge_write() {
+    let (plan, state) = workflow_mechanism_bridge();
+    state.borrow_mut().loader = true;
+    state.borrow_mut().mechanism_parameter = 1;
+    let error = run(&plan, &state, ExecutionMode::Recovery).unwrap_err();
+    assert!(
+        matches!(error, ExecutionError::Plan(_)),
+        "unexpected failure: {error:?}"
+    );
+    let state = state.borrow();
+    assert_eq!(state.writes, 0);
+    assert_eq!(state.entries, 0);
+    assert_eq!(state.mechanism_parameter_reads, 1);
+}
+
+#[test]
+fn native_phase_correction_can_recover_without_mechanism_runtime_checks() {
+    use crate::compatibility::Correction;
+    use crate::image::phase::{correct_normal, Assignment};
+    let source = fixture(false, 1);
+    let swapped = correct_normal(&source.normal().image, Assignment::Swapped).unwrap();
+    let target = workflow_repack(&source, source.kernel().image.clone(), swapped);
+    let (plan, state) = setup_updates(source.clone(), target);
+    assert!(!plan.settings().requires_normal_runtime());
+    assert!(plan.settings().requirements().is_empty());
+    assert_eq!(
+        plan.settings().firmware_corrections(),
+        &[Correction::Phase {
+            from: Assignment::Swapped,
+            to: Assignment::Direct,
+        }]
+    );
+    assert_eq!(plan.target.normal().image, source.normal().image);
+    {
+        let mut state = state.borrow_mut();
+        state.loader = true;
+        state.normal = plan.target.normal().image.clone();
+    }
+    let result = run(&plan, &state, ExecutionMode::Recovery).unwrap();
+    assert_eq!(result.completed_stages, 1);
+    assert!(result.normal_verified && result.kernel_verified);
+    let state = state.borrow();
+    assert!(state.parameter_writes.is_empty());
+    assert_eq!(state.mechanism_parameter_reads, 0);
 }

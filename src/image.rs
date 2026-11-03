@@ -8,11 +8,20 @@
 
 mod abi;
 mod control;
+mod edits;
 #[path = "image_evidence.rs"]
 mod evidence;
+pub mod geometry;
 pub(crate) mod h8;
 mod handoff;
+pub mod inputs;
+pub mod irq;
+pub mod layout;
+pub mod matrix;
+pub mod peripheral;
+pub mod phase;
 mod receiver;
+pub mod registers;
 pub use abi::{provided_abi, required_abi, Abi};
 pub use control::{receiver_control, ReceiverControl};
 pub use evidence::{
@@ -53,8 +62,10 @@ const BOARD_REGS: [u16; 3] = [0xFFC5, 0xEDCC, 0xEDCD];
 const SERVO_ROW: [u8; 10] = [0x7f, 0x97, 0x7f, 0x51, 0x7f, 0x51, 0x7f, 0x51, 0x7f, 0x51];
 /// Number of distinct servo rows that form the version-stable base.
 const SERVO_BASE: usize = 7;
-/// Version 5 excludes FEC0 bit 6 from hardware identity, retaining raw evidence.
+/// Legacy diagnostic fingerprint scheme. Not the matrix admission identity.
 pub const FAMILY_SCHEME: &str = "pioneer.hardware.v5";
+/// Typed matrix scheme used by context-aware, Envelope and receiver identities.
+pub const MATRIX_FAMILY_SCHEME: &str = "pioneer.hardware.v6";
 
 /// Full servo coefficient row width.
 const SERVO_ROW_LEN: usize = 40;
@@ -335,13 +346,30 @@ fn fmt_board(ints: Option<&BTreeSet<u8>>, strs: Option<&BTreeSet<String>>) -> St
     }
 }
 
-/// The hardware family of a body, or `None` when the body carries no front-end
-/// configuration (a Kernel, an undecodable body, or unrelated data).
+/// Legacy v5 diagnostic identity. Not suitable for hardware admission.
+/// Raw bytes lack the platform and exact Kernel context required by the matrix.
+#[deprecated(
+    note = "use family_with_context or Envelope::family; legacy_family is for historical profile lookup only"
+)]
 pub fn family(body: &[u8]) -> Option<Family> {
-    family_fingerprint(body).map(|f| f.family)
+    legacy_family(body)
 }
 
-/// Exact configuration inputs used to calculate a hardware family.
+/// Historical v5 fingerprint retained for exact legacy profile lookups.
+/// Never authorizes an update or replaces the matrix family comparison.
+pub fn legacy_family(body: &[u8]) -> Option<Family> {
+    legacy_family_fingerprint(body).map(|f| f.family)
+}
+
+/// Matrix hardware family from structured platform metadata and native code.
+/// Every required filter, including persistent layout, must be known. Supply
+/// the exact associated Kernel for resident readers and V850 base bindings.
+/// This returns the as-is identity; candidate normalization never authorizes a write.
+pub fn family_with_context(body: &[u8], hardware: &str, kernel: Option<&[u8]>) -> Option<Family> {
+    matrix::discover(hardware, body, kernel)?.as_is.family()
+}
+
+/// Historical v5 register/servo diagnostics, not the typed matrix contract.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FamilyFingerprint {
     /// Calculated hardware-family identifier.
@@ -360,22 +388,23 @@ pub struct FamilyFingerprint {
     pub servo: String,
 }
 
-/// Extract the configuration evidence used by [`family`].
+/// Extract historical v5 diagnostic evidence; not a matrix identity.
+#[deprecated(
+    note = "use matrix::discover for typed family evidence; legacy_family_fingerprint is diagnostic only"
+)]
 pub fn family_fingerprint(body: &[u8]) -> Option<FamilyFingerprint> {
-    family_evidence(body).map(|e| e.fingerprint)
+    legacy_family_fingerprint(body)
 }
 
-/// Collect register observations alongside the current family policy inputs.
-/// Unrecognized images retain the same admission behavior as [`family`].
+/// Collect historical register observations independently of matrix admission.
 pub fn family_evidence(body: &[u8]) -> Option<FamilyEvidence> {
     let regions = regions(body)?;
     evidence_regions(&regions.slices(), body)
 }
 
-/// Already-decoded regions supplied by the analysis pipeline.
-#[cfg(feature = "analysis")]
-pub(crate) fn family_regions(regions: &[&[u8]], body: &[u8]) -> Option<Family> {
-    evidence_regions(regions, body).map(|e| e.fingerprint.family)
+/// Historical v5 register/servo diagnostics for reviewed recipe lookup.
+pub fn legacy_family_fingerprint(body: &[u8]) -> Option<FamilyFingerprint> {
+    family_evidence(body).map(|e| e.fingerprint)
 }
 
 fn evidence_regions(regions: &[&[u8]], body: &[u8]) -> Option<FamilyEvidence> {

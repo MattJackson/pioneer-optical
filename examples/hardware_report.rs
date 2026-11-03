@@ -1,8 +1,5 @@
 //! Export hardware fingerprint evidence from a local hoard as JSON.
-use pioneer_optical::{
-    envelope::{decode_envelope, decode_envelope_with_kernel},
-    image,
-};
+use pioneer_optical::{envelope::Envelope, image};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, path::Path};
 
@@ -58,15 +55,15 @@ fn main() {
                 let files = members(&tar);
                 let get = |role| p["components"].as_array()?.iter().find(|c| c["role"] == role)?.get("member")?.as_str().and_then(|m| files.get(m).copied());
                 let n = get("normal").ok_or("no Normal component")?;
-                let k = get("kernel").and_then(decode_envelope);
-                let decoded = if let Some(k) = k.as_ref() { decode_envelope_with_kernel(n, k) } else { decode_envelope(n) }.ok_or("Normal decode failed")?;
+                let k = get("kernel").and_then(|bytes| Envelope::load(bytes).ok());
+                let decoded = if let Some(k) = k.as_ref() { Envelope::load_with_kernel(n, k) } else { Envelope::load(n) }.map_err(|e| e.to_string())?;
                 if let Some(dir)=&body_dir {
                     let sha=p["normal_sha256"].as_str().ok_or("missing Normal SHA")?;
                     std::fs::write(Path::new(dir).join(format!("{sha}.bin")),&decoded.image).map_err(|e|e.to_string())?;
                 }
-                let f = image::family_fingerprint(&decoded.image).ok_or("no hardware fingerprint")?;
-                assert_eq!(Some(f.family), image::family(&decoded.image));
-                Ok(json!({"family":f.family.to_string(),"asic":f.asic,"board":f.board,"pins":f.pins,"raw_pins":f.raw_pins,"servo":f.servo,"uhd":image::is_uhd(&decoded.image),"decode_basis":if k.is_some(){"paired Kernel"}else{"standalone Normal"}}))
+                let family = k.as_ref().map_or_else(|| decoded.family(), |k| decoded.family_with_kernel(k));
+                let legacy = image::legacy_family_fingerprint(&decoded.image).map(|f| json!({"family_scheme":image::FAMILY_SCHEME,"family":f.family.to_string(),"asic":f.asic,"board":f.board,"pins":f.pins,"raw_pins":f.raw_pins,"servo":f.servo}));
+                Ok(json!({"family_scheme":image::MATRIX_FAMILY_SCHEME,"family":family.map(|f|f.to_string()),"legacy_diagnostics":legacy,"uhd":image::is_uhd(&decoded.image),"decode_basis":if k.is_some(){"paired Kernel"}else{"standalone Normal"}}))
             })();
             match result { Ok(v) => v, Err(e) => json!({"error":e}) }
         });

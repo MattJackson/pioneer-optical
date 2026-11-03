@@ -80,6 +80,23 @@ impl EnvelopeCodec for TailKey {
         Ok(())
     }
 
+    fn repair_decoded(&self, original: &[u8], image: &[u8]) -> Option<Vec<u8>> {
+        if original.len() != PAYLOAD_SIZE
+            || image.len() != PAYLOAD_SIZE
+            || original.get(CHECKSUM..CHECKSUM + WORD)? != image.get(CHECKSUM..CHECKSUM + WORD)?
+        {
+            return None;
+        }
+        let old = u32::from_le_bytes(original[CHECKSUM..CHECKSUM + WORD].try_into().ok()?);
+        if payload_checksum(original)? != old {
+            return None;
+        }
+        let mut corrected = image.to_vec();
+        corrected[CHECKSUM..CHECKSUM + WORD]
+            .copy_from_slice(&payload_checksum(image)?.to_le_bytes());
+        Some(corrected)
+    }
+
     fn transform(&self, bytes: &[u8], key: &[u8], encode: bool, _: &[u32]) -> Option<Vec<u8>> {
         transform_with_policy(bytes, key, encode, false, XOR_EXCEPTIONS)
     }

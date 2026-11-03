@@ -209,7 +209,7 @@ impl Envelope {
         let mut result = FirmwareAnalysis {
             identity: Identity {
                 family: None,
-                family_scheme: crate::image::FAMILY_SCHEME,
+                family_scheme: crate::image::MATRIX_FAMILY_SCHEME,
                 model: info.model.clone(),
                 component: info.kind.to_string(),
                 revision: info.revision.clone(),
@@ -260,8 +260,7 @@ impl Envelope {
         };
         // Only non-COMP images may be scanned without decoded streams.
         if streams.is_none() && self.image.get(0x1000..0x1004) != Some(b"COMP") {
-            result.identity.family =
-                crate::image::family_regions(&[&self.image], &self.image).map(|f| f.to_string());
+            result.identity.family = self.family().map(|f| f.to_string());
             if info.kind == crate::ComponentKind::Normal {
                 result.identity.uhd = Some(crate::image::uhd_regions(&[&self.image]));
             }
@@ -281,8 +280,7 @@ impl Envelope {
                 .collect();
             if let Some(mut regions) = crate::image::stored_regions(&self.image, &spans) {
                 regions.extend(ordered.iter().map(|s| s.expanded.as_slice()));
-                result.identity.family =
-                    crate::image::family_regions(&regions, &self.image).map(|f| f.to_string());
+                result.identity.family = self.family().map(|f| f.to_string());
                 if info.kind == crate::ComponentKind::Normal {
                     result.identity.uhd = Some(crate::image::uhd_regions(&regions));
                 }

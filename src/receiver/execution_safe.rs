@@ -759,14 +759,14 @@ impl PreparedStage {
             return self.transfer_stage(io, runtime, false, recovery, stage, previous);
         }
         let (updating, _) = self.bind_stage(io.reads, runtime, mode, stage, previous)?;
-        if updating && self.settings.adaptation_id().is_some() {
+        if updating && self.settings.requires_normal_runtime() {
             return Err(ExecutionError::Plan(
                 "mechanism conversion requires live original-hardware checks in normal runtime",
             ));
         }
         if !updating
             && apply_settings
-            && (!self.settings.entries().is_empty() || self.settings.adaptation_id().is_some())
+            && (!self.settings.entries().is_empty() || !self.settings.requirements().is_empty())
         {
             return self
                 .settings

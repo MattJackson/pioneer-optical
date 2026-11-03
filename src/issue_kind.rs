@@ -54,6 +54,13 @@ pub(super) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         | "pioneer.settings.codec.unsupported"
         | "pioneer.settings.compatibility_unresolved"
         | "pioneer.settings.conversion_unavailable"
+        | "pioneer.phase.correction_unproven"
+        | "pioneer.compatibility.unresolved_identity"
+        | "pioneer.compatibility.unsupported_correction"
+        | "pioneer.compatibility.phase_correction"
+        | "pioneer.compatibility.persistent_layout_correction"
+        | "pioneer.compatibility.unresolved_startup"
+        | "pioneer.preparation.unresolved_startup"
         | "pioneer.normal_layout.unsupported"
         | "pioneer.envelope.unknown_rotation"
         | "pioneer.envelope.unknown_authentication"
@@ -71,6 +78,10 @@ pub(super) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         | "pioneer.flash.unsupported_transport"
         | "pioneer.drive.unknown_class" => IssueKind::UnsupportedFirmware,
         "pioneer.device.malformed"
+        | "pioneer.compatibility.component_mismatch"
+        | "pioneer.compatibility.representation_failed"
+        | "pioneer.compatibility.authentication_failed"
+        | "pioneer.compatibility.ambiguous_startup"
         | "pioneer.startup.ambiguous"
         | "pioneer.startup.parameter_out_of_range"
         | "pioneer.kernel_handoff.mismatch"
@@ -152,9 +163,10 @@ pub(super) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         | "pioneer.identity.no_model"
         | "pioneer.identity.incomplete_identity"
         | "pioneer.identity.ambiguous" => IssueKind::InvalidFirmware,
-        "pioneer.settings.original_hardware_mismatch" | "pioneer.receiver.family_mismatch" => {
-            IssueKind::HardwareMismatch
-        }
+        "pioneer.settings.original_hardware_mismatch"
+        | "pioneer.receiver.family_mismatch"
+        | "pioneer.compatibility.incompatible"
+        | "pioneer.compatibility.persistent_layout_overlap" => IssueKind::HardwareMismatch,
         _ => IssueKind::Unexpected,
     }
 }

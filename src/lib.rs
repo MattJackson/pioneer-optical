@@ -65,6 +65,9 @@ mod product_identity;
 pub use product_identity::ProductIdentity;
 
 pub mod cdb;
+/// Firmware compatibility planner and component-bound correction plans.
+#[cfg(feature = "image")]
+pub mod compatibility;
 /// Typed live device information and settings over a caller-owned transport.
 #[cfg(feature = "drive")]
 pub mod device;

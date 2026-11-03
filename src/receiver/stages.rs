@@ -125,9 +125,15 @@ impl PreparedStage {
 pub struct PreparedUpdate {
     pub(super) stages: Vec<PreparedStage>,
     pub(super) target: Update,
+    pub(super) kernel_steps: Vec<crate::compatibility::KernelStep>,
 }
 
 impl PreparedUpdate {
+    /// Native Kernel actions selected for this exact A-to-B transition.
+    /// These correspond in order to `stages()` and end in the pristine target.
+    pub fn kernel_steps(&self) -> &[crate::compatibility::KernelStep] {
+        &self.kernel_steps
+    }
     /// Ordered transitions, including any temporary bridge and final OEM pass.
     pub fn stages(&self) -> &[PreparedStage] {
         &self.stages

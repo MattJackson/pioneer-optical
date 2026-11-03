@@ -1204,6 +1204,12 @@ fn decode_selected(
 pub type Envelope = DecodedEnvelope;
 
 impl DecodedEnvelope {
+    /// Structured fields from the original file header, independent of payload edits.
+    pub fn header_info(&self) -> HeaderInfo {
+        // Construction validates this immutable header before decoding.
+        header_info(&self.header).expect("decoded envelope has a valid header")
+    }
+
     /// Detect the file codec and decode its payload without using a model table.
     ///
     /// Normal payloads still require the installed Kernel's receiver policy for
@@ -1293,9 +1299,34 @@ impl DecodedEnvelope {
         )
     }
 
-    /// Hardware family of the decoded image; see [`crate::image::family`].
+    /// Audited matrix family of this Normal, using its structured hardware tag.
+    /// Returns None when required evidence resides in an associated Kernel;
+    /// use [`Self::family_with_kernel`] for that case. Kernels have no family.
     pub fn family(&self) -> Option<crate::image::Family> {
-        crate::image::family(&self.image)
+        if self.info.kind != ComponentKind::Normal {
+            return None;
+        }
+        crate::image::family_with_context(&self.image, &self.info.hardware_version, None)
+    }
+
+    /// Matrix family with the exact associated Kernel. Both component kinds,
+    /// hardware tags and Kernel-version tags must agree before resident evidence
+    /// can participate. Header agreement alone does not prove a live capture.
+    pub fn family_with_kernel(&self, kernel: &Self) -> Option<crate::image::Family> {
+        if self.info.kind != ComponentKind::Normal
+            || kernel.info.kind != ComponentKind::Kernel
+            || self.info.hardware_version.is_empty()
+            || self.info.hardware_version != kernel.info.hardware_version
+            || self.info.kernel_version.is_empty()
+            || self.info.kernel_version != kernel.info.kernel_version
+        {
+            return None;
+        }
+        crate::image::family_with_context(
+            &self.image,
+            &self.info.hardware_version,
+            Some(&kernel.image),
+        )
     }
 
     /// True when the decoded image is UHD-capable; see [`crate::image::is_uhd`].
@@ -1359,6 +1390,19 @@ impl DecodedEnvelope {
         out.extend_from_slice(&self.suffix);
         codecs::for_layout(self.info.layout).finish_repack(&mut out)?;
         Some(out)
+    }
+
+    /// Rebuild a same-length modified image using this codec's proven checksum
+    /// rule. The original checksum must be valid and the caller must leave the
+    /// checksum field untouched. Unsupported checksum formats return None.
+    /// Does not validate hardware semantics, authentication or receiver support.
+    pub fn repack_with_checksum(&self, image: &[u8]) -> Option<Vec<u8>> {
+        let corrected = self.repair_image_checksum(image)?;
+        self.repack(&corrected)
+    }
+
+    pub(crate) fn repair_image_checksum(&self, image: &[u8]) -> Option<Vec<u8>> {
+        codecs::for_layout(self.info.layout).repair_decoded(&self.image, image)
     }
 
     /// Encode a complete Normal image of a different length using this envelope's

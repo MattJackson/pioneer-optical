@@ -1,8 +1,8 @@
 use super::*;
 const FIXTURE: &str = include_str!("fixture.json");
 
-fn source() -> super::super::update::Contract {
-    let mut contract = super::super::update::Contract::discover(b"fixture-ud02");
+fn source() -> Contract {
+    let mut contract = Contract::discover(b"fixture-ud02");
     contract.hardware_family = Some("1111111111111111".into());
     contract
 }
@@ -15,13 +15,13 @@ fn target() -> Vec<u8> {
 fn value() -> serde_json::Value {
     serde_json::from_str(FIXTURE).unwrap()
 }
-fn registry(v: &serde_json::Value) -> Result<Registry, Error> {
-    Registry::parse(&[&v.to_string()])
+fn registry(v: &serde_json::Value) -> Result<Contracts, Error> {
+    Contracts::parse(&[&v.to_string()])
 }
 
 #[test]
 fn production_profiles_do_not_change_unrelated_images_or_routes() {
-    assert!(has_profiles());
+    assert!(has_corrections());
     assert!(prepare(&source(), &target(), "TEST-UD03")
         .unwrap()
         .is_none());
@@ -29,7 +29,7 @@ fn production_profiles_do_not_change_unrelated_images_or_routes() {
 
 #[test]
 fn production_routes_are_valid_unique_and_bound_to_exact_firmware_pairs() {
-    let registry = Registry::parse(PROFILES).unwrap();
+    let registry = Contracts::parse(PROFILES).unwrap();
     assert_eq!(registry.0.len(), 11);
     for p in &registry.0 {
         if p.id.starts_with("pioneer.ud02-to-") {
@@ -47,7 +47,7 @@ fn production_routes_are_valid_unique_and_bound_to_exact_firmware_pairs() {
 
 #[test]
 fn ud02_original_hardware_routes_do_not_inherit_installed_firmware_permissions() {
-    use super::super::routing::Decision;
+    use crate::settings::routing::Decision;
     for original in ["BDR-UD02TBD", "BDU-UD02ABC", "bdr ud02fan"] {
         assert_eq!(
             hardware_route(original, "BDR-UD04"),
@@ -90,7 +90,7 @@ fn catalogue_scopes_are_the_same_compiled_hardware_rules() {
 
 #[test]
 fn inverse_exceptions_do_not_remove_native_oem_routes() {
-    use super::super::routing::Decision;
+    use crate::settings::routing::Decision;
     for destination in ["SlimtypeEB1", "SBW-06D2X-U", "SBC-06D2X-U"] {
         assert_eq!(
             hardware_route("BDR-UD02TBD", destination),
@@ -108,7 +108,7 @@ fn inverse_exceptions_do_not_remove_native_oem_routes() {
 #[test]
 fn central_registry_rejects_missing_policies_and_ambiguous_hardware_before_use() {
     let base: serde_json::Value = serde_json::from_str(PROFILES[0]).unwrap();
-    let parse = |v: &serde_json::Value| Registry::parse(&[&v.to_string()]);
+    let parse = |v: &serde_json::Value| Contracts::parse(&[&v.to_string()]);
     assert!(parse(&base).is_ok());
     for change in 0..5 {
         let mut value = base.clone();
@@ -145,20 +145,15 @@ fn held_original_hardware_current_firmware_destination_matrix() {
     let ud02 = std::fs::read(original_path).unwrap();
     let ud04 = std::fs::read(std::env::var("PIONEER_UD04_NORMAL").unwrap()).unwrap();
     let ud03 = std::fs::read(std::env::var("PIONEER_UD03_NORMAL").unwrap()).unwrap();
-    let registry = Registry::parse(PROFILES).unwrap();
+    let registry = Contracts::parse(PROFILES).unwrap();
     let converted = registry
-        .prepare_hardware(
-            &super::super::update::Contract::discover(&ud02),
-            &ud04,
-            "BDR-UD04",
-            "BDR-UD02TBD",
-        )
+        .prepare_hardware(&Contract::discover(&ud02), &ud04, "BDR-UD04", "BDR-UD02TBD")
         .unwrap()
         .unwrap()
         .image;
     let inverse = registry
         .prepare_hardware(
-            &super::super::update::Contract::discover(&ud04),
+            &Contract::discover(&ud04),
             &ud02,
             "BDR-UD02D",
             "BDR-UD04ABC",
@@ -168,7 +163,7 @@ fn held_original_hardware_current_firmware_destination_matrix() {
         .image;
     let inverse_whole = registry
         .prepare_hardware(
-            &super::super::update::Contract::discover(&ud03),
+            &Contract::discover(&ud03),
             &ud02,
             "BDR-UD02D",
             "BDR-UD03FAL",
@@ -177,129 +172,152 @@ fn held_original_hardware_current_firmware_destination_matrix() {
         .unwrap()
         .image;
     let converted03 = registry
-        .prepare_hardware(
-            &super::super::update::Contract::discover(&ud02),
-            &ud03,
-            "BDR-UD03",
-            "BDR-UD02TBD",
-        )
+        .prepare_hardware(&Contract::discover(&ud02), &ud03, "BDR-UD03", "BDR-UD02TBD")
         .unwrap()
         .unwrap()
         .image;
     // Running firmware is deliberately varied independently of factory hardware.
-    for (current_name, current) in [
-        ("UD02 OEM", &ud02),
-        ("UD03 OEM", &ud03),
-        ("UD04 OEM", &ud04),
-        ("UD03 on UD02", &converted03),
-        ("UD04 on UD02", &converted),
-        ("UD02 on UD03/UD04", &inverse),
-    ] {
-        let source = super::super::update::Contract::discover(current);
-        for original in [
-            "BDR-UD02TBD",
-            "BDU-UD02ABC",
-            "bdr ud02fan",
-            "BDR-UD03FAL",
-            "BDU-UD03ABC",
-            "BDR-UD04ABC",
-            "BDU-UD04TBD",
+    std::thread::scope(|threads| {
+        let registry = &registry;
+        let (ud02, ud03, ud04, converted03, converted, inverse, inverse_whole) = (
+            &ud02,
+            &ud03,
+            &ud04,
+            &converted03,
+            &converted,
+            &inverse,
+            &inverse_whole,
+        );
+        for (current_name, current) in [
+            ("UD02 OEM", ud02),
+            ("UD03 OEM", ud03),
+            ("UD04 OEM", ud04),
+            ("UD03 on UD02", converted03),
+            ("UD04 on UD02", converted),
+            ("UD02 on UD03/UD04", inverse),
         ] {
-            for (model, target) in [
-                ("BDR-UD02D", &ud02),
-                ("BDR-UD03", &ud03),
-                ("BDR-UD04", &ud04),
-            ] {
-                let prepared = registry
-                    .prepare_hardware(&source, target, model, original)
-                    .unwrap()
-                    .unwrap();
-                let scope = hardware_rules()
-                    .unwrap()
-                    .iter()
-                    .find(|r| {
-                        r.hardware
-                            .matches(crate::production::ProductCode::parse(original).unwrap())
-                    })
-                    .unwrap()
-                    .hardware;
-                let symbolic = registry
-                    .prepare_scope(&source, target, model, scope)
-                    .unwrap()
-                    .unwrap();
-                assert_eq!(
-                    symbolic.image, prepared.image,
-                    "symbolic and factory evidence select the same exact profile"
-                );
-                let original02 = crate::production::ProductCode::parse(original)
-                    .unwrap()
-                    .platform_is("UD02");
-                let expected = match (original02, model) {
-                    (true, "BDR-UD03") => &converted03,
-                    (true, "BDR-UD04") => &converted,
-                    (false, "BDR-UD02D")
-                        if crate::production::ProductCode::parse(original)
+            threads.spawn(move || {
+                let source = Contract::discover(current);
+                for original in [
+                    "BDR-UD02TBD",
+                    "BDU-UD02ABC",
+                    "bdr ud02fan",
+                    "BDR-UD03FAL",
+                    "BDU-UD03ABC",
+                    "BDR-UD04ABC",
+                    "BDU-UD04TBD",
+                ] {
+                    for (model, target) in [
+                        ("BDR-UD02D", ud02.as_slice()),
+                        ("BDR-UD03", ud03.as_slice()),
+                        ("BDR-UD04", ud04.as_slice()),
+                    ] {
+                        let prepared = registry
+                            .prepare_hardware(&source, target, model, original)
                             .unwrap()
-                            .platform_is("UD03")
-                            && source.calibration
-                                == Some(super::super::update::Calibration::WholeWord) =>
-                    {
-                        &inverse_whole
+                            .unwrap();
+                        let scope = hardware_rules()
+                            .unwrap()
+                            .iter()
+                            .find(|r| {
+                                r.hardware.matches(
+                                    crate::production::ProductCode::parse(original).unwrap(),
+                                )
+                            })
+                            .unwrap()
+                            .hardware;
+                        let symbolic = registry
+                            .prepare_scope(&source, target, model, scope)
+                            .unwrap()
+                            .unwrap();
+                        assert_eq!(
+                            digest(&symbolic.image),
+                            digest(&prepared.image),
+                            "symbolic and factory evidence select the same exact profile"
+                        );
+                        let original02 = crate::production::ProductCode::parse(original)
+                            .unwrap()
+                            .platform_is("UD02");
+                        let expected = match (original02, model) {
+                            (true, "BDR-UD03") => converted03.as_slice(),
+                            (true, "BDR-UD04") => converted.as_slice(),
+                            (false, "BDR-UD02D")
+                                if crate::production::ProductCode::parse(original)
+                                    .unwrap()
+                                    .platform_is("UD03")
+                                    && source.calibration
+                                        == Some(requirements::Calibration::WholeWord) =>
+                            {
+                                inverse_whole.as_slice()
+                            }
+                            (false, "BDR-UD02D") => inverse.as_slice(),
+                            _ => target,
+                        };
+                        // The reviewed mechanism image is then aligned to the actual
+                        // installed output assignment by the independent native codec.
+                        let expected = source.native_phase().map_or_else(
+                            || expected.to_vec(),
+                            |native| {
+                                crate::image::phase::correct_normal(expected, native.assignment)
+                                    .unwrap()
+                            },
+                        );
+                        assert_eq!(
+                            digest(&prepared.image),
+                            digest(&expected),
+                            "{current_name}, original {original}, destination {model}"
+                        );
+                        source
+                            .check_resolving(
+                                &Contract::discover(&prepared.image),
+                                Some(&prepared.resolves_issue),
+                            )
+                            .unwrap();
+                        HardwareGuard::new(model, &prepared.image, Some(&prepared.id))
+                            .check(&factory_code(original))
+                            .unwrap();
+                        let repeated = registry
+                            .prepare_hardware(&source, &prepared.image, model, original)
+                            .unwrap()
+                            .unwrap();
+                        assert_eq!(
+                            digest(&repeated.image),
+                            digest(&prepared.image),
+                            "reapplying must be idempotent"
+                        );
+                        if original02 && model != "BDR-UD02D" {
+                            assert_eq!(
+                                prepared.requirements,
+                                [Requirement {
+                                    parameter: 0x28f,
+                                    value: 1
+                                }]
+                            );
+                        } else {
+                            assert!(prepared.requirements.is_empty());
+                        }
                     }
-                    (false, "BDR-UD02D") => &inverse,
-                    _ => target,
-                };
-                assert_eq!(
-                    &prepared.image, expected,
-                    "{current_name}, original {original}, destination {model}"
-                );
-                source
-                    .check_resolving(
-                        &super::super::update::Contract::discover(&prepared.image),
-                        Some(&prepared.resolves_issue),
-                    )
-                    .unwrap();
-                HardwareGuard::new(model, &prepared.image, Some(&prepared.id))
-                    .check(&factory_code(original))
-                    .unwrap();
-                let repeated = registry
-                    .prepare_hardware(&source, &prepared.image, model, original)
-                    .unwrap()
-                    .unwrap();
-                assert_eq!(
-                    repeated.image, prepared.image,
-                    "reapplying must be idempotent"
-                );
-                if original02 && model != "BDR-UD02D" {
-                    assert_eq!(
-                        prepared.requirements,
-                        [Requirement {
-                            parameter: 0x28f,
-                            value: 1
-                        }]
-                    );
-                } else {
-                    assert!(prepared.requirements.is_empty());
+                    if crate::production::ProductCode::parse(original)
+                        .unwrap()
+                        .platform_is("UD02")
+                    {
+                        assert_eq!(
+                            registry
+                                .prepare_hardware(&source, ud04.as_slice(), "BDR-209", original)
+                                .unwrap_err(),
+                            Error::OriginalMismatch
+                        );
+                    } else {
+                        assert_eq!(
+                            hardware_route(original, "BDR-209"),
+                            Ok(crate::settings::routing::Decision::Unscoped)
+                        );
+                    }
                 }
-            }
-            if crate::production::ProductCode::parse(original)
-                .unwrap()
-                .platform_is("UD02")
-            {
-                assert_eq!(
-                    registry
-                        .prepare_hardware(&source, &ud04, "BDR-209", original)
-                        .unwrap_err(),
-                    Error::OriginalMismatch
-                );
-            } else {
-                assert_eq!(
-                    hardware_route(original, "BDR-209"),
-                    Ok(super::super::routing::Decision::Unscoped)
-                );
-            }
+                println!("matrix {current_name}: all 21 factory/destination cases passed");
+            });
         }
-    }
+    });
 }
 
 fn factory_code(code: &str) -> Vec<u8> {
@@ -331,7 +349,7 @@ fn held_execution_guard_binds_original_hardware_adaptation_and_pristine_return()
     };
     let ud02 = std::fs::read(path).unwrap();
     let ud04 = std::fs::read(std::env::var("PIONEER_UD04_NORMAL").unwrap()).unwrap();
-    let source = super::super::update::Contract::discover(&ud02);
+    let source = Contract::discover(&ud02);
     let prepared = prepare_hardware(&source, &ud04, "BDR-UD04", "BDR-UD02TBD")
         .unwrap()
         .unwrap();
@@ -363,7 +381,7 @@ fn held_ud02_ud04_images_reproduce_the_tested_output_and_pristine_return() {
     };
     let ud02 = std::fs::read(original).unwrap();
     let ud04 = std::fs::read(std::env::var("PIONEER_UD04_NORMAL").unwrap()).unwrap();
-    let from = super::super::update::Contract::discover(&ud02);
+    let from = Contract::discover(&ud02);
     assert_eq!(
         digest(&ud02),
         "84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750"
@@ -378,16 +396,16 @@ fn held_ud02_ud04_images_reproduce_the_tested_output_and_pristine_return() {
         "ca09032288c62b8b26bb983431af11b52aaeec8da9bd0e80afcccdf3b07f0815"
     );
     from.check_resolving(
-        &super::super::update::Contract::discover(&adapted.image),
+        &Contract::discover(&adapted.image),
         Some(&adapted.resolves_issue),
     )
     .unwrap();
-    let back = super::super::update::Contract::discover(&adapted.image);
+    let back = Contract::discover(&adapted.image);
     let returned = prepare(&back, &ud02, "BDR-UD02D").unwrap().unwrap();
     assert!(returned.stock_return());
     assert_eq!(returned.image, ud02);
     // Native UD04 uses the inverse mechanism recipe, never UD02's pristine return.
-    let native = super::super::update::Contract::discover(&ud04);
+    let native = Contract::discover(&ud04);
     let inverse = prepare(&native, &ud02, "BDR-UD02D").unwrap().unwrap();
     assert!(!inverse.stock_return());
     assert_ne!(inverse.image, ud02);
@@ -399,7 +417,7 @@ fn held_ud02_ud04_images_reproduce_the_tested_output_and_pristine_return() {
 
 #[test]
 fn one_compiled_test_json_matches_exactly_one_direction_and_image() {
-    let registry = Registry::parse(&[FIXTURE]).unwrap();
+    let registry = Contracts::parse(&[FIXTURE]).unwrap();
     let from = source();
     let before = target();
     let adapted = registry
@@ -443,7 +461,7 @@ fn one_compiled_test_json_matches_exactly_one_direction_and_image() {
 
 #[test]
 fn certified_pair_requires_no_factory_sku_record() {
-    let registry = Registry::parse(&[FIXTURE]).unwrap();
+    let registry = Contracts::parse(&[FIXTURE]).unwrap();
     assert!(registry
         .prepare(&source(), &target(), "TEST-UD03")
         .unwrap()
@@ -489,7 +507,7 @@ fn malformed_conflicting_or_overlapping_profiles_are_rejected_before_use() {
         );
     }
     assert!(matches!(
-        Registry::parse(&[FIXTURE, FIXTURE]),
+        Contracts::parse(&[FIXTURE, FIXTURE]),
         Err(Error::Registry)
     ));
 }
@@ -520,14 +538,14 @@ fn compiled_routes_reject_overlapping_broad_and_specific_hardware_scopes() {
     let mut document: serde_json::Value = serde_json::from_str(PROFILES[0]).unwrap();
     document["hardware_rules"][1]["hardware"]["prefix"] = serde_json::json!("BDR");
     assert!(matches!(
-        Registry::parse(&[&document.to_string()]),
+        Contracts::parse(&[&document.to_string()]),
         Err(Error::Registry)
     ));
 }
 
 #[test]
 fn arbitrary_oem_destination_has_identical_live_and_symbolic_policy_and_guard() {
-    let registry = Registry::parse(PROFILES).unwrap();
+    let registry = Contracts::parse(PROFILES).unwrap();
     let rules = hardware_rules().unwrap();
     let mut scopes = Vec::new();
     for rule in rules {

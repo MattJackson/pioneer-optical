@@ -4,6 +4,9 @@
 
 const BASE: usize = 0x410000;
 
+/// Enumerated native getter references for bounded startup coverage analysis.
+pub mod coverage;
+
 /// Read-only binding of the audited direct native parameter surface.
 pub mod surface;
 
@@ -43,6 +46,75 @@ pub fn setting(normal: &[u8]) -> Result<Setting, Ambiguous> {
     })
 }
 
+/// An accepted word at a recognized startup gate, bound to its actual getter.
+/// This is positive evidence only: it neither proves absence of other gates
+/// nor says every other value is rejected. Conditional alternatives may exist.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoundSelection {
+    /// Native comparison and called getter coordinates.
+    pub requirement: Requirement,
+    /// Complete primary-parameter reader layout for this exact getter.
+    pub layout: crate::image::layout::ParameterLayout,
+}
+
+/// Establish an accepted startup selection from its native comparison.
+/// Missing, malformed, conflicting or unbound code yields no known selection.
+/// Only stored code is considered; compressed payload bytes are not code.
+/// A caller must separately establish full startup coverage and write access.
+pub fn bound_selection(normal: &[u8]) -> crate::image::layout::Observation<BoundSelection> {
+    use crate::image::layout::{self, Observation, Unresolved};
+    let Some(regions) = crate::image::regions(normal) else {
+        return Observation::Unresolved(Unresolved::ReaderNotRecognized);
+    };
+    let mut stored = alloc::vec![0xff; normal.len()];
+    for region in regions.stored {
+        let start = region.as_ptr() as usize - normal.as_ptr() as usize;
+        stored[start..start + region.len()].copy_from_slice(region);
+    }
+    let requirement = match discover(&stored) {
+        Ok(Some(requirement)) if requirement.parameter == 0x9f => requirement,
+        Err(_) => return Observation::Conflicting,
+        _ => return Observation::Unresolved(Unresolved::ReaderNotRecognized),
+    };
+    match layout::normal_reader_binding(
+        normal,
+        requirement.getter_address,
+        requirement.argument_register,
+    ) {
+        Observation::Known(layout) => Observation::Known(BoundSelection {
+            requirement,
+            layout,
+        }),
+        Observation::Unresolved(reason) => Observation::Unresolved(reason),
+        Observation::Conflicting => Observation::Conflicting,
+    }
+}
+
+/// Native startup decision with unresolved evidence retained as structured data.
+/// A missing comparison remains unresolved.
+#[derive(Clone, Debug)]
+pub enum NativeSelection {
+    /// A supported comparison selects an accepted value and binds its getter.
+    BoundComparison(BoundSelection),
+    /// Native startup coverage is incomplete within the stated Normal boundary.
+    Unresolved(coverage::assessment::Assessment),
+    /// Multiple recognized comparisons prevent a unique automatic selection.
+    Conflicting,
+}
+
+/// Inspect native startup acceptance separately from neutral FFFF selection.
+/// Local consumer matches do not prove absence of other startup requirements;
+/// unresolved caller, cache, queue and startup-path obligations stay explicit.
+pub fn native_selection(normal: &[u8]) -> NativeSelection {
+    match bound_selection(normal) {
+        crate::image::layout::Observation::Known(bound) => NativeSelection::BoundComparison(bound),
+        crate::image::layout::Observation::Conflicting => NativeSelection::Conflicting,
+        crate::image::layout::Observation::Unresolved(_) => {
+            NativeSelection::Unresolved(coverage::assessment::assess(normal))
+        }
+    }
+}
+
 /// Attempt-local read/change/verify/flash transaction over a strict transport.
 #[cfg(feature = "drive")]
 pub mod migration;
@@ -78,7 +150,7 @@ pub enum Analysis {
     Unknown,
 }
 
-/// Analyze a target without choosing a fallback value or authorizing a write.
+/// Analyze native target requirements without selecting an update value.
 pub fn analyze(normal: &[u8]) -> Result<Analysis, Ambiguous> {
     Ok(match discover(normal)? {
         Some(requirement) => Analysis::Required(requirement),
@@ -145,6 +217,43 @@ fn calls_loader_flag(tail: &[u8], normal: &[u8]) -> bool {
     path(tail, normal, 0, false, 64)
 }
 
+// Full mismatch arm of the audited conditional gate. FE23 skips this arm;
+// FE09 is accepted only when the predicate call returns true. Its conditional
+// acceptance must not erase FE23's unconditional equal-branch selection.
+const CONDITIONAL_MISMATCH: &[u8] = &[
+    0x19, 0x66, 0x79, 0x20, 0xfe, 0x09, 0x46, 0x0c, 0x5e, 0, 0, 0, 0x0c, 0x88, 0x47, 0x04, 0x79,
+    0x06, 0, 1, 0x0d, 0x66, 0x46, 0x16, 0x0c, 0xcc, 0x47, 0x06, 0xf8, 1, 0x5e, 0, 0, 0, 0xf8, 1,
+    0x5e, 0, 0, 0, 0x18, 0x88, 0x5e, 0, 0, 0,
+];
+fn conditional_loader_flag(tail: &[u8], normal: &[u8]) -> bool {
+    const OPERANDS: &[usize] = &[9, 31, 37, 43];
+    if tail.len() != CONDITIONAL_MISMATCH.len()
+        || !tail
+            .iter()
+            .zip(CONDITIONAL_MISMATCH)
+            .enumerate()
+            .all(|(i, (a, b))| a == b || OPERANDS.iter().any(|&at| (at..at + 3).contains(&i)))
+    {
+        return false;
+    }
+    let target = |at: usize| {
+        address(&tail[at..at + 3])
+            .checked_sub(BASE)
+            .filter(|offset| offset & 1 == 0 && normal.get(*offset..*offset + 6).is_some())
+    };
+    // The conditional predicate and post-rejection continuation remain actual
+    // Normal callees. Their results are not needed to select the FE23 equal
+    // branch, and no unconditional FE09 acceptance is inferred from them.
+    if target(9).is_none() || target(43).is_none() {
+        return false;
+    }
+    let wrapper = |at, service| {
+        target(at).and_then(|offset| normal.get(offset..offset + 6))
+            == Some(&[0x5e, 0x40, 0x0a, service, 0x54, 0x70][..])
+    };
+    wrapper(31, 0x14) && wrapper(37, 0x1a)
+}
+
 /// Inspect a decoded Normal body loaded at CPU 0x410000.
 ///
 /// Recognizes immediate word index -> JSR -> immediate word comparison ->
@@ -186,7 +295,11 @@ pub fn discover(normal: &[u8]) -> Result<Option<Requirement>, Ambiguous> {
         if getter.checked_sub(BASE).map_or(true, |i| i >= normal.len()) {
             continue;
         }
-        if !calls_loader_flag(tail, normal) {
+        let conditional = w[1] == 0
+            && w[2..4] == [0, 0x9f]
+            && cmp[2..4] == [0xfe, 0x23]
+            && conditional_loader_flag(tail, normal);
+        if !calls_loader_flag(tail, normal) && !conditional {
             continue;
         }
         let candidate = Requirement {
@@ -294,6 +407,80 @@ mod tests {
         b[0x2e..0x30].copy_from_slice(&[0x40, 4]); // BRA skips the wrapper call.
         assert_eq!(analyze(&b), Ok(Analysis::Unknown));
     }
+    #[test]
+    fn conditional_alternative_preserves_only_the_unconditional_fe23_selection() {
+        use crate::image::layout::{install_test_layout, Observation};
+        let mut normal = alloc::vec![0xff; 0x6000];
+        install_test_layout(&mut normal, 0x1000);
+        normal[0x80..0x8e].copy_from_slice(&[
+            0x79, 0, 0, 0x9f, 0x5e, 0x41, 0x10, 0, 0x79, 0x20, 0xfe, 0x23, 0x47, 0x2e,
+        ]);
+        let mut tail = CONDITIONAL_MISMATCH.to_vec();
+        for (at, address) in [
+            (9, 0x414000u32),
+            (31, 0x414100),
+            (37, 0x414110),
+            (43, 0x414020),
+        ] {
+            tail[at..at + 3].copy_from_slice(&address.to_be_bytes()[1..]);
+        }
+        normal[0x8e..0x8e + tail.len()].copy_from_slice(&tail);
+        normal[0x4100..0x4106].copy_from_slice(&[0x5e, 0x40, 0x0a, 0x14, 0x54, 0x70]);
+        normal[0x4110..0x4116].copy_from_slice(&[0x5e, 0x40, 0x0a, 0x1a, 0x54, 0x70]);
+        assert!(conditional_loader_flag(&tail, &normal));
+        assert_eq!(setting(&normal).unwrap().value, 0xfe23);
+        assert!(matches!(bound_selection(&normal), Observation::Known(_)));
+        for value in [0x09, 0x24] {
+            normal[0x8b] = value;
+            assert_eq!(analyze(&normal), Ok(Analysis::Unknown));
+        }
+        normal[0x8b] = 0x23;
+        for at in 0..tail.len() {
+            if [9usize, 31, 37, 43]
+                .iter()
+                .any(|p| (*p..*p + 3).contains(&at))
+            {
+                continue;
+            }
+            tail[at] ^= 1;
+            assert!(
+                !conditional_loader_flag(&tail, &normal),
+                "conditional byte {at}"
+            );
+            tail[at] ^= 1;
+        }
+        for at in [0x4103, 0x4113] {
+            normal[at] ^= 1;
+            assert!(!conditional_loader_flag(&tail, &normal));
+            assert_eq!(analyze(&normal), Ok(Analysis::Unknown));
+            normal[at] ^= 1;
+        }
+    }
+
+    #[test]
+    fn bound_selection_requires_real_getter_and_matching_argument_convention() {
+        use crate::image::layout::{install_test_layout, Observation};
+        let mut raw = fixture(0, 0xfe24);
+        raw.resize(0x2000, 0xff);
+        install_test_layout(&mut raw, 0x1000);
+        raw[0x25..0x28].copy_from_slice(&[0x41, 0x10, 0]);
+        assert!(matches!(bound_selection(&raw), Observation::Known(_)));
+        let original = raw.clone();
+        for offset in [0x21, 0x27, 0x180, 0x1000] {
+            raw[offset] ^= 1;
+            assert!(
+                !matches!(bound_selection(&raw), Observation::Known(_)),
+                "offset {offset}"
+            );
+            raw.copy_from_slice(&original);
+        }
+        assert!(!matches!(bound_selection(&[]), Observation::Known(_)));
+        assert!(!matches!(
+            bound_selection(&fixture(0, 0xfe24)),
+            Observation::Known(_)
+        ));
+    }
+
     #[test]
     fn both_argument_conventions_preserve_the_observed_value() {
         for (reg, value) in [(0, 0xfe24), (1, 0xff01)] {

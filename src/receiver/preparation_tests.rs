@@ -31,6 +31,13 @@ fn startup_selection_uses_target_even_when_installed_surface_is_unknown() {
         1, 0x80,
     ]);
     normal[0x180..0x186].copy_from_slice(&[0x5e, 0x40, 0x0a, 0x1a, 0x54, 0x70]);
+    assert_eq!(
+        receiver.startup_setting_for(&normal),
+        Err(PreparationError::UnresolvedStartup)
+    );
+    normal.resize(0x2000, 0xff);
+    crate::image::layout::install_test_layout(&mut normal, 0x1000);
+    normal[0x25..0x28].copy_from_slice(&[0x41, 0x10, 0]);
     let setting = receiver.startup_setting_for(&normal).unwrap().unwrap();
     assert_eq!(
         (setting.parameter, setting.value, setting.explicit),
@@ -63,6 +70,8 @@ pub(in crate::receiver) fn update(gated: bool, marker: u8, family: u8, entry: bo
     fix_sum(&mut kernel);
     let mut normal = normal_image(0x2000);
     crate::startup::bank::fixture(&mut normal);
+    normal[8..16].fill(b' ');
+    crate::image::matrix::install_test_contract(&mut normal, family);
     normal[0x400..0x408].copy_from_slice(&[0xf6, family, 0x6a, 0x86, 0xe4, 0x36, 0, 0]);
     if entry {
         normal[0x500..0x510].copy_from_slice(&[
@@ -103,8 +112,37 @@ fn every_preparation_path_uses_the_receivers_startup_checks() {
     let installed = update(false, 1, 0x12, true);
     let receiver = Receiver::from_installed(&installed).unwrap();
     let baseline = receiver.prepare(installed.clone()).unwrap();
-    assert!(baseline.settings().startup_plan().is_some());
+    let startup_plan = baseline.settings().startup_plan().unwrap();
+    assert_eq!(
+        startup_plan.target_checks(),
+        checks::Checks::discover(&installed.normal().image, Some(&installed.kernel().image))
+    );
+    let selection = baseline.settings().startup_selection().unwrap();
+    assert_eq!(selection.setting(), startup_plan.word_setting());
+    assert!(matches!(
+        selection.evidence(),
+        crate::compatibility::startup::Evidence::NeutralSelection { .. }
+    ));
     assert_eq!(receiver.startup_checks().iter().count(), 2);
+    let normal_only = receiver
+        .prepare_normal(installed.normal_transfer())
+        .unwrap();
+    assert_eq!(
+        normal_only
+            .settings()
+            .startup_plan()
+            .unwrap()
+            .target_checks(),
+        startup_plan.target_checks()
+    );
+    assert!(matches!(
+        normal_only
+            .settings()
+            .startup_selection()
+            .unwrap()
+            .evidence(),
+        crate::compatibility::startup::Evidence::NeutralSelection { .. }
+    ));
 
     let mut normal = installed.normal().image.clone();
     for at in [0x180a, 0x190a] {
@@ -137,6 +175,24 @@ fn every_preparation_path_uses_the_receivers_startup_checks() {
 
 #[test]
 fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
+    fn assert_reviewed_phase(current: &Update, target: &Update, recipe: &str, actual: &[u8]) {
+        use crate::image::{layout::Observation, phase};
+        let Observation::Known(required) = phase::discover(&current.normal().image) else {
+            panic!("installed native phase is unresolved")
+        };
+        let reviewed =
+            crate::compatibility::mechanism::reviewed_recipe_image(recipe, &target.normal().image)
+                .unwrap();
+        let expected = phase::correct_normal(&reviewed, required.assignment).unwrap();
+        let first_difference = actual.iter().zip(&expected).position(|(a, b)| a != b);
+        assert!(
+            actual == expected,
+            "{recipe}: actual={}, expected={}, first difference={first_difference:?}",
+            crate::compatibility::mechanism::digest(actual),
+            crate::compatibility::mechanism::digest(&expected),
+        );
+        assert!(matches!(phase::discover(actual), Observation::Known(after) if after == required));
+    }
     let Ok(root) = std::env::var("PIONEER_SETTINGS_HOARD") else {
         return;
     };
@@ -169,7 +225,23 @@ fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
         &read("oem/pioneer/sat/8A10/GENERAL/1.14/normal/8e02ed7244d8de7564f6e0606ba803f8614a6e2b87b5e24f7ee344cdcea71141.enc"),
     ).unwrap();
     let receiver = Receiver::from_installed(&installed).unwrap();
-    assert!(receiver.prepare(target.clone()).is_ok());
+    if let Err(error) = receiver.prepare(target.clone()) {
+        panic!("held UD02 preparation: {error:?}");
+    }
+    let forced = receiver
+        .prepare_without_family_check(target.clone())
+        .unwrap();
+    assert_eq!(
+        forced.settings().adaptation_id(),
+        Some("pioneer.ud02-to-ud04-1.14")
+    );
+    assert_eq!(
+        forced.settings().requirements(),
+        &[crate::compatibility::mechanism::Requirement {
+            parameter: 0x28f,
+            value: 1
+        }]
+    );
     let mut parameters = factory_parameters("BDR-UD02TBD");
     parameters[0x84..0x88].fill(0xff);
     parameters[0xc0..0xc0 + 90].fill(b'0');
@@ -184,13 +256,13 @@ fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
     );
     assert_eq!(
         prepared.settings().requirements(),
-        &[crate::settings::adaptation::Requirement {
+        &[crate::compatibility::mechanism::Requirement {
             parameter: 0x28f,
             value: 1
         }]
     );
     assert_eq!(
-        crate::settings::adaptation::digest(&prepared.target.normal().image),
+        crate::compatibility::mechanism::digest(&prepared.target.normal().image),
         "ca09032288c62b8b26bb983431af11b52aaeec8da9bd0e80afcccdf3b07f0815"
     );
     let back = Receiver::from_installed(&prepared.target)
@@ -209,35 +281,64 @@ fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
         &read("oem/pioneer/sat/8510/ID19/1.03/kernel/36d0e3542a34a653250295f86d489d5e1e4f7931043351d856f27e57477d72ae.enc"),
         &read("oem/pioneer/sat/8510/ID19/1.03/normal/6042da6069fec90d0e8052613f3f2d6e8ebb7e0d41dc770a5cf4c601f3960d4e.enc"),
     ).unwrap();
-    for current in [&installed, &target, &prepared.target, &ud03] {
-        for factory in ["BDR-UD02TBD", "BDU-UD02ABC", "BDR-UD02FAN"] {
-            let receiver = Receiver::from_installed(current)
-                .unwrap()
-                .with_original_parameters(&factory_parameters(factory));
-            let to_ud04 = receiver.prepare(target.clone()).unwrap();
-            assert_eq!(
-                to_ud04.target.normal().image,
-                prepared.target.normal().image
-            );
-            let to_ud02 = receiver.prepare(installed.clone()).unwrap();
-            assert_eq!(to_ud02.target.normal().image, installed.normal().image);
-            for bypass in [false, true] {
-                let result = if bypass {
-                    receiver.prepare_without_family_check(ud03.clone())
-                } else {
-                    receiver.prepare(ud03.clone())
-                }
-                .unwrap();
-                assert_eq!(
-                    result.settings().adaptation_id(),
-                    Some("pioneer.ud02-to-ud03-1.03")
-                );
-                assert_eq!(
-                    crate::settings::adaptation::digest(&result.target.normal().image),
-                    "f78a48ea604d36663f1da13b5eaad63396e8a0c4ccc6c18fb7f38547f1816a56"
-                );
+    let cohorts = [&installed, &target, &prepared.target, &ud03]
+        .into_iter()
+        .flat_map(|current| {
+            ["BDR-UD02TBD", "BDU-UD02ABC", "BDR-UD02FAN"].map(move |factory| (current, factory))
+        })
+        .collect::<Vec<_>>();
+    for cohort in cohorts.chunks(8) {
+        std::thread::scope(|scope| {
+            let mut routes = Vec::new();
+            for &(current, factory) in cohort {
+                let target = &target;
+                let installed = &installed;
+                let ud03 = &ud03;
+                routes.push(scope.spawn(move || {
+                    let receiver = Receiver::from_installed(current)
+                        .unwrap()
+                        .with_original_parameters(&factory_parameters(factory));
+                    let to_ud04 = receiver.prepare(target.clone()).unwrap();
+                    assert_reviewed_phase(
+                        current,
+                        target,
+                        "pioneer.ud02-to-ud04-1.14",
+                        &to_ud04.target.normal().image,
+                    );
+                    assert_eq!(to_ud04.target.kernel().image, target.kernel().image);
+                    let to_ud02 = receiver.prepare(installed.clone()).unwrap();
+                    assert_reviewed_phase(
+                        current,
+                        installed,
+                        "pioneer.ud02-stock-return-1.00",
+                        &to_ud02.target.normal().image,
+                    );
+                    assert_eq!(to_ud02.target.kernel().image, installed.kernel().image);
+                    for bypass in [false, true] {
+                        let result = if bypass {
+                            receiver.prepare_without_family_check(ud03.clone())
+                        } else {
+                            receiver.prepare(ud03.clone())
+                        }
+                        .unwrap();
+                        assert_eq!(
+                            result.settings().adaptation_id(),
+                            Some("pioneer.ud02-to-ud03-1.03")
+                        );
+                        assert_reviewed_phase(
+                            current,
+                            ud03,
+                            "pioneer.ud02-to-ud03-1.03",
+                            &result.target.normal().image,
+                        );
+                        assert_eq!(result.target.kernel().image, ud03.kernel().image);
+                    }
+                }));
             }
-        }
+            for route in routes {
+                route.join().unwrap();
+            }
+        });
     }
     let ud03_latest = Update::load(
         &read("oem/pioneer/sat/8511/GENERAL/1.14/kernel/77432fcd9cf4d32e711458015e01c995ee780706d1f9cb4800ff77f4b371e224.enc"),
@@ -249,12 +350,13 @@ fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
         .prepare(ud03_latest.clone())
         .unwrap();
     assert_eq!(
-        crate::settings::adaptation::digest(&forward_latest.target.normal().image),
+        crate::compatibility::mechanism::digest(&forward_latest.target.normal().image),
         "57d0be1d40c2c8bba7f71bd7b84e66fd4394eb56924fb385610ba92c62797f32"
     );
     // Native mechanisms select the shared inverse, while original UD02 on the
-    // very same firmware selects pristine OEM return. Decode/authentication and
-    // receiver readback cover the relocated routines in the Normal header too.
+    // same firmware selects the OEM mechanism program. Both independently align
+    // output phase to the installed firmware. Authentication and receiver
+    // readback cover the relocated routines in the Normal header too.
     for (current, original) in [
         (&ud03, "BDR-UD03FAL"),
         (&ud03_latest, "BDR-UD03ABC"),
@@ -277,13 +379,11 @@ fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
             })
         );
         assert!(inverse.settings().requirements().is_empty());
-        assert_eq!(
-            crate::settings::adaptation::digest(&inverse.target.normal().image),
-            if original == "BDR-UD03FAL" {
-                "95e5a7a5c841a5b1b66895ac299285c869c43222f134044280ffbf8971426305"
-            } else {
-                "33d04b3d4f1d432f00f3498706fbb04369cdac0e29253ba5ead8f6b749905995"
-            }
+        assert_reviewed_phase(
+            current,
+            &installed,
+            inverse.settings().adaptation_id().unwrap(),
+            &inverse.target.normal().image,
         );
         assert_eq!(inverse.target.kernel().image, installed.kernel().image);
         let returned = Receiver::from_installed(&inverse.target)
@@ -314,16 +414,16 @@ fn adding_one_test_profile_changes_only_the_matching_prepared_image() {
     let profile = serde_json::json!({
         "schema_version": 1, "id": "test.single-image",
         "hardware_scheme": crate::image::FAMILY_SCHEME,
-        "hardware_family": installed.family().unwrap().to_string(),
-        "source_normal_sha256": [crate::settings::adaptation::digest(&installed.normal().image)],
+        "hardware_family": crate::image::legacy_family(&installed.normal().image).unwrap().to_string(),
+        "source_normal_sha256": [crate::compatibility::mechanism::digest(&installed.normal().image)],
         "mode": "adapt",
         "resolves_issue": "ud02-mechanism-convention",
-        "target_normal_sha256": crate::settings::adaptation::digest(&target_normal),
+        "target_normal_sha256": crate::compatibility::mechanism::digest(&target_normal),
         "target_model": target.normal().info().model,
         "input_length": target_normal.len(), "required_parameters": [],
         "replacements": [{ "offset": 0x600, "expected_hex": "0000", "replacement_hex": "0102" }],
         "checksum_offset": target_normal.len() - 4,
-        "output_sha256": crate::settings::adaptation::digest(&expected),
+        "output_sha256": crate::compatibility::mechanism::digest(&expected),
     })
     .to_string();
     let receiver = Receiver::from_installed(&installed).unwrap();
@@ -332,7 +432,7 @@ fn adding_one_test_profile_changes_only_the_matching_prepared_image() {
     assert_eq!(baseline.settings().adaptation_id(), None);
 
     let mut receiver = receiver.with_original_parameters(&factory_parameters("BDR-UD02TBD"));
-    receiver.adaptation_profiles = Some(vec![profile]);
+    receiver.correction_contracts = Some(vec![profile]);
     let prepared = receiver.prepare(target.clone()).unwrap();
     assert_eq!(prepared.target.normal().image, expected);
     assert_eq!(
@@ -702,6 +802,18 @@ fn hardware_override_never_waives_required_settings() {
     setup.extend([0x7f, 0xc5, 0x72, 0x50]);
     normal[0x400..0x480].fill(0);
     normal[0x400..0x400 + setup.len()].copy_from_slice(&setup);
+    // Match the historical mechanism cohort while retaining complete v6
+    // observations. The short native phase form does not establish the separate
+    // mechanism convention required by this cohort.
+    normal[0x700..0x716].fill(0xff);
+    normal[0x700..0x706].copy_from_slice(&[0x6a, 0x18, 0xff, 0xc5, 0x72, 0x50]);
+    let mut phase = crate::image::phase::tests::fixture(true);
+    for at in (0..phase.len() - 3).step_by(2) {
+        if phase[at..at + 4] == [0x5e, 0x41, 1, 0x90] {
+            phase[at..at + 4].copy_from_slice(&[0x5e, 0x41, 0x0e, 0x90]);
+        }
+    }
+    normal[0xd00..0xf00].copy_from_slice(&phase);
     fix_sum(&mut normal);
     let mut bytes = installed.normal().repack(&normal).unwrap();
     SigningKey::random()
@@ -710,18 +822,26 @@ fn hardware_override_never_waives_required_settings() {
         .unwrap();
     let installed = Update::load(installed.kernel_transfer(), &bytes).unwrap();
     let receiver = Receiver::from_installed(&installed).unwrap();
-    assert_eq!(receiver.family().unwrap().to_string(), "e4f1f98dcdf4c06b");
-    // No phase evidence is supplied, so the required settings remain unresolved.
+    assert_eq!(
+        crate::image::legacy_family(&installed.normal().image)
+            .unwrap()
+            .to_string(),
+        "e4f1f98dcdf4c06b"
+    );
+    // Native phase evidence does not authorize the unresolved mechanism convention.
     for result in [
         receiver.prepare(installed.clone()),
         receiver.prepare_without_family_check(installed.clone()),
     ] {
-        assert!(matches!(
-            result,
-            Err(PreparationError::Settings(
-                crate::settings::update::Error::Unresolved
-            ))
-        ));
+        assert!(
+            matches!(
+                result,
+                Err(PreparationError::Settings(
+                    crate::settings::update::Error::Unresolved
+                ))
+            ),
+            "unexpected preparation result: {result:?}"
+        );
     }
     assert!(matches!(
         receiver.prepare_normal(installed.normal_transfer()),
@@ -841,6 +961,191 @@ fn handoff_bridge_signs_unsigned_capture_without_accepting_invalid_signatures() 
                 stage.normal_transfer(),
                 stage.kernel_image().unwrap()
             ));
+        }
+    }
+}
+
+#[test]
+fn native_phase_preparation_is_bidirectional_for_full_and_normal_only_updates() {
+    use crate::image::phase::{correct_normal, Assignment};
+    let direct = update(false, 1, 0x12, true);
+    let swapped_image = correct_normal(&direct.normal().image, Assignment::Swapped).unwrap();
+    let mut bytes = direct.normal().repack(&swapped_image).unwrap();
+    SigningKey::random()
+        .unwrap()
+        .sign_normal(&mut bytes)
+        .unwrap();
+    let kernel_bytes = direct.kernel().repack(&direct.kernel().image).unwrap();
+    let swapped = Update::load(&kernel_bytes, &bytes).unwrap();
+    assert_ne!(direct.family(), swapped.family());
+    for (installed, target) in [(&direct, &swapped), (&swapped, &direct)] {
+        fn context(pair: &Update) -> crate::compatibility::Firmware<'_> {
+            crate::compatibility::Firmware {
+                hardware: &pair.normal().info().hardware_version,
+                normal: &pair.normal().image,
+                kernel: Some(&pair.kernel().image),
+            }
+        }
+        let plan = crate::compatibility::plan(context(installed), context(target)).unwrap();
+        let prepared_file = plan
+            .prepare_file(target.normal(), Some(target.kernel()))
+            .unwrap()
+            .unwrap();
+        let prepared_pair = Update::load(&kernel_bytes, &prepared_file).unwrap();
+        assert_eq!(prepared_pair.normal().image, installed.normal().image);
+        assert_eq!(
+            plan.prepare_file(installed.normal(), Some(target.kernel())),
+            Err(crate::compatibility::Error::ComponentMismatch)
+        );
+        let receiver = Receiver::from_installed(installed).unwrap();
+        let full = receiver.prepare(target.clone()).unwrap();
+        assert_eq!(
+            full.settings().adaptation_id(),
+            Some("pioneer.native-correction.v1")
+        );
+        assert!(full.settings().requirements().is_empty());
+        assert_eq!(full.target.normal().image, installed.normal().image);
+        assert_eq!(full.target.kernel().image, target.kernel().image);
+        assert_eq!(full.target.family(), installed.family());
+        let forced = receiver
+            .prepare_without_family_check(target.clone())
+            .unwrap();
+        assert_eq!(forced.target.normal().image, installed.normal().image);
+        assert_eq!(forced.target.kernel().image, target.kernel().image);
+        assert_eq!(
+            forced.settings().firmware_corrections(),
+            full.settings().firmware_corrections()
+        );
+        let target_bytes = target.normal().repack(&target.normal().image).unwrap();
+        let normal = receiver.prepare_normal(&target_bytes).unwrap();
+        let forced_normal = receiver
+            .prepare_normal_without_family_check(&target_bytes)
+            .unwrap();
+        assert_eq!(forced_normal.normal_image(), installed.normal().image);
+        assert_eq!(
+            forced_normal.settings().firmware_corrections(),
+            normal.settings().firmware_corrections()
+        );
+        assert_eq!(normal.normal_image(), installed.normal().image);
+        assert_eq!(
+            normal.settings().adaptation_id(),
+            Some("pioneer.native-correction.v1")
+        );
+    }
+    let receiver = Receiver::from_installed(&update(false, 1, 0x13, true)).unwrap();
+    assert!(matches!(
+        receiver.prepare(swapped),
+        Err(PreparationError::Compatibility(
+            Error::FamilyMismatch { .. }
+        ))
+    ));
+}
+
+#[test]
+fn generic_kernel_steps_materialize_only_the_agreed_edits_in_both_directions() {
+    use crate::compatibility::KernelStep;
+    fn at_entry(pair: Update, entry: u32) -> Update {
+        let mut image = pair.kernel().image.clone();
+        if entry != 0x400020 {
+            let offset = (entry - 0x400000) as usize;
+            image.copy_within(0x20..0x30, offset);
+            image[0x20..offset].fill(0);
+        }
+        image[0x2105..0x2108].copy_from_slice(&entry.to_be_bytes()[1..]);
+        fix_sum(&mut image);
+        Update::load(
+            &pair.kernel().repack(&image).unwrap(),
+            &pair.normal().repack(&pair.normal().image).unwrap(),
+        )
+        .unwrap()
+    }
+    fn sum(image: &[u8]) -> u32 {
+        image.chunks_exact(4).fold(0u32, |s, w| {
+            s.wrapping_add(u32::from_be_bytes(w.try_into().unwrap()))
+        })
+    }
+    for (source_entry, target_entry) in [
+        (0x400020, 0x400020),
+        (0x400020, 0x40002a),
+        (0x40002a, 0x400020),
+    ] {
+        for (gated, marker) in [(false, 1), (true, 0), (true, 0xff)] {
+            let source = at_entry(update(gated, 1, 0x12, true), source_entry);
+            let target = at_entry(update(false, marker, 0x12, true), target_entry);
+            let plan = Receiver::from_installed(&source)
+                .unwrap()
+                .prepare(target.clone())
+                .unwrap();
+            let mut expected = Vec::new();
+            if source_entry != target_entry {
+                expected.push(KernelStep::Handoff {
+                    from: source_entry,
+                    to: target_entry,
+                });
+            }
+            if gated && marker != 1 {
+                expected.push(KernelStep::ReceiverMarker {
+                    from: marker,
+                    to: 1,
+                });
+            }
+            expected.push(KernelStep::Target);
+            assert_eq!(plan.kernel_steps(), expected);
+            assert_eq!(plan.stages().len(), expected.len());
+            for (step, stage) in expected.iter().zip(plan.stages()) {
+                let image = stage.kernel_image().unwrap();
+                assert_eq!(
+                    stage.settings().startup_plan().unwrap().target_checks(),
+                    crate::startup::checks::Checks::discover(stage.normal_image(), Some(image))
+                );
+                assert_eq!(sum(image), 0);
+                crate::image::check_kernel_handoff(
+                    &stage.receiver.installed_kernel().unwrap().image,
+                    image,
+                )
+                .unwrap();
+                let (original, allowed) = match step {
+                    KernelStep::Handoff { to, .. } => {
+                        assert_eq!(stage.bridge(), Some(BridgeKind::KernelHandoff));
+                        assert_eq!(stage.normal_image(), source.normal().image);
+                        assert_eq!(
+                            crate::image::kernel_startup_entry(image),
+                            Some(source_entry)
+                        );
+                        assert_eq!(crate::image::kernel_handoff_entry(image), Some(*to));
+                        let operands =
+                            crate::image::kernel_handoff_contract(&source.kernel().image)
+                                .unwrap()
+                                .operands;
+                        let allowed: Vec<usize> =
+                            operands.into_iter().flat_map(|at| at..at + 3).collect();
+                        (source.kernel().image.as_slice(), allowed)
+                    }
+                    KernelStep::ReceiverMarker { to, .. } => {
+                        assert_eq!(stage.bridge(), Some(BridgeKind::ReceiverMarker));
+                        assert_eq!(image[KERNEL_MARKER_OFFSET], *to);
+                        (target.kernel().image.as_slice(), vec![KERNEL_MARKER_OFFSET])
+                    }
+                    KernelStep::Target => {
+                        assert_eq!(stage.bridge(), None);
+                        assert_eq!(image, target.kernel().image);
+                        (target.kernel().image.as_slice(), Vec::new())
+                    }
+                };
+                for (offset, (before, after)) in original.iter().zip(image).enumerate() {
+                    if before != after {
+                        assert!(
+                            allowed.contains(&offset)
+                                || (crate::envelope::KERNEL_CHECKSUM_WORD_OFFSET
+                                    ..crate::envelope::KERNEL_CHECKSUM_WORD_OFFSET + 4)
+                                    .contains(&offset),
+                            "unexpected Kernel edit at {offset:#x}"
+                        );
+                    }
+                }
+            }
+            assert_eq!(plan.final_kernel_image(), target.kernel().image);
+            assert_eq!(plan.target.normal().image, target.normal().image);
         }
     }
 }

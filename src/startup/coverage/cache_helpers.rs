@@ -1,0 +1,287 @@
+//! R0 byte and paired-byte cache consumers, with exact native bodies and local
+//! caller inputs. Conversion calls occur after the cache reads; their effects
+//! and arbitrary computed aliases remain separate coverage obligations.
+use super::{cache_flow::Reference, CallKind};
+use crate::image::layout::Observation;
+use alloc::vec::Vec;
+/// Number of cache bytes read from the caller-supplied low-byte index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// One byte.
+    Byte,
+    /// The input byte and the following byte, wrapping at 256.
+    Pair,
+}
+/// Native caller and its contiguous argument definition, if recognized.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Caller {
+    /// Decoded Normal call offset.
+    pub offset: usize,
+    /// Absolute or relative native encoding.
+    pub kind: CallKind,
+    /// Actual byte indices; None means the input still needs dataflow analysis.
+    pub indices: Option<Vec<u8>>,
+}
+/// Exact wrapper and its incoming-reference observations.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Helper {
+    /// Decoded Normal entry offset.
+    pub offset: usize,
+    /// Native cache-read operation.
+    pub kind: Kind,
+    /// Exact cache-accessor call offsets.
+    pub reads: Vec<usize>,
+    /// Helper called after all cache reads; its own behavior is a separate audit.
+    pub converter: usize,
+    /// Incoming call observations; absence does not establish unreachability.
+    pub callers: Vec<Caller>,
+    /// Literal pointers and absolute jumps still requiring interpretation.
+    pub other_references: Vec<Reference>,
+}
+struct Shape {
+    kind: Kind,
+    bytes: &'static [u8],
+    reads: &'static [usize],
+    converter: usize,
+}
+const SHAPES: &[Shape] = &[
+    Shape {
+        kind: Kind::Byte,
+        bytes: &[
+            0x01, 0x00, 0x6d, 0xf3, 0x0f, 0x93, 0x5e, 0x54, 0xde, 0x38, 0xa8, 0xff, 0x47, 0x0e,
+            0x0f, 0xb1, 0x5e, 0x54, 0xeb, 0x0e, 0x0c, 0x88, 0x47, 0x04, 0xf8, 0x01, 0x40, 0x04,
+            0x18, 0x88, 0x68, 0xb8, 0x01, 0x00, 0x6d, 0x73, 0x54, 0x70,
+        ],
+        reads: &[6],
+        converter: 16,
+    },
+    Shape {
+        kind: Kind::Pair,
+        bytes: &[
+            0x01, 0x20, 0x6d, 0xf4, 0x0f, 0x95, 0x0c, 0x8e, 0x5e, 0x54, 0xde, 0x38, 0x0c, 0x86,
+            0x0c, 0x8c, 0x0a, 0x0e, 0x0c, 0xe8, 0x5e, 0x54, 0xde, 0x38, 0x0c, 0x80, 0xa6, 0xff,
+            0x46, 0x04, 0xa0, 0xff, 0x47, 0x0e, 0x0f, 0xd1, 0x0c, 0xc8, 0x55, 0x36, 0x0c, 0x88,
+            0x47, 0x04, 0xf8, 0x01, 0x40, 0x04, 0x18, 0x88, 0x68, 0xd8, 0x01, 0x20, 0x6d, 0x76,
+            0x54, 0x70,
+        ],
+        reads: &[8, 20],
+        converter: 38,
+    },
+];
+impl Shape {
+    fn bind(&self, bytes: &[u8], accessor: u32, at: usize) -> Option<usize> {
+        if bytes.len() != self.bytes.len() {
+            return None;
+        }
+        if bytes[..4] != self.bytes[..4] {
+            return None;
+        }
+        if !bytes.iter().zip(self.bytes).enumerate().all(|(i, (a, b))| {
+            if let Some(&call) = self.reads.iter().find(|&&c| (c + 1..c + 4).contains(&i)) {
+                *a == accessor.to_be_bytes()[i - call]
+            } else if (self.kind == Kind::Byte
+                && (self.converter + 1..self.converter + 4).contains(&i))
+                || (self.kind == Kind::Pair && i == self.converter + 1)
+            {
+                true
+            } else {
+                a == b
+            }
+        }) {
+            return None;
+        }
+        if self.kind == Kind::Byte {
+            let c = self.converter;
+            let target = u32::from_be_bytes([0, bytes[c + 1], bytes[c + 2], bytes[c + 3]]);
+            if target & 1 != 0 {
+                return None;
+            }
+            (target as usize).checked_sub(0x410000)
+        } else {
+            let target = at.checked_add_signed(
+                self.converter as isize + 2 + bytes[self.converter + 1] as i8 as isize,
+            )?;
+            (target & 1 == 0).then_some(target)
+        }
+    }
+}
+/// Bind R0 byte/pair helper inputs through complete stored bodies and the exact
+/// proven cache accessor. R1 helpers require additional initializer contracts.
+pub fn discover(normal: &[u8]) -> Observation<Vec<Helper>> {
+    let caches = match super::cache::discover(normal) {
+        Observation::Known(v) => v,
+        Observation::Unresolved(r) => return Observation::Unresolved(r),
+        Observation::Conflicting => return Observation::Conflicting,
+    };
+    let regions = crate::image::regions(normal).expect("bound cache");
+    let mut helpers = Vec::new();
+    for cache in caches {
+        for accessor in cache.accessors.iter().filter(|a| a.argument_register == 0) {
+            for region in &regions.stored {
+                let base = region.as_ptr() as usize - normal.as_ptr() as usize;
+                for local in (base & 1..region.len()).step_by(2) {
+                    for shape in SHAPES {
+                        let Some(bytes) = region.get(local..local + shape.bytes.len()) else {
+                            continue;
+                        };
+                        let Some(converter) =
+                            shape.bind(bytes, 0x410000 + accessor.offset as u32, base + local)
+                        else {
+                            continue;
+                        };
+                        if converter >= normal.len() {
+                            continue;
+                        }
+                        helpers.push(Helper {
+                            offset: base + local,
+                            kind: shape.kind,
+                            reads: shape.reads.iter().map(|o| base + local + o).collect(),
+                            converter,
+                            callers: Vec::new(),
+                            other_references: Vec::new(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    for helper in &mut helpers {
+        let target = 0x410000 + helper.offset as i64;
+        for region in &regions.stored {
+            let base = region.as_ptr() as usize - normal.as_ptr() as usize;
+            for local in (base & 1..region.len()).step_by(2) {
+                let b = &region[local..];
+                let at = base + local;
+                let absolute = |b: &[u8]| u32::from_be_bytes([0, b[1], b[2], b[3]]) as i64;
+                let call = if b.len() >= 4 && b[0] == 0x5e {
+                    Some((CallKind::Absolute, absolute(b)))
+                } else if b.len() >= 2 && b[0] == 0x55 {
+                    Some((
+                        CallKind::Relative8,
+                        0x410000 + at as i64 + 2 + i64::from(b[1] as i8),
+                    ))
+                } else if b.len() >= 4 && b[..2] == [0x5c, 0] {
+                    Some((
+                        CallKind::Relative16,
+                        0x410000 + at as i64 + 4 + i64::from(i16::from_be_bytes([b[2], b[3]])),
+                    ))
+                } else {
+                    None
+                };
+                if let Some((kind, _)) = call.filter(|(_, t)| *t == target) {
+                    let index = if (local >= 4 && region[local - 4..local - 2] == [0x79, 0])
+                        || (local >= 2 && region[local - 2] == 0xf8)
+                    {
+                        Some(region[local - 1])
+                    } else {
+                        None
+                    };
+                    let indices = index.map(|i| {
+                        if helper.kind == Kind::Pair {
+                            alloc::vec![i, i.wrapping_add(1)]
+                        } else {
+                            alloc::vec![i]
+                        }
+                    });
+                    helper.callers.push(Caller {
+                        offset: at,
+                        kind,
+                        indices,
+                    });
+                }
+                if b.len() >= 4 && b[0] == 0x5a && absolute(b) == target {
+                    helper.other_references.push(Reference::Stored(at));
+                }
+            }
+            for (i, b) in region.windows(4).enumerate() {
+                if b == (target as u32).to_be_bytes() {
+                    helper.other_references.push(Reference::Stored(base + i));
+                }
+            }
+        }
+        for (stream, bytes) in regions.expanded.iter().enumerate() {
+            for (offset, b) in bytes.windows(4).enumerate() {
+                if b == (target as u32).to_be_bytes() {
+                    helper
+                        .other_references
+                        .push(Reference::Expanded { stream, offset });
+                }
+            }
+        }
+    }
+    Observation::Known(helpers)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn caller_changes_cache_009f_bytes_wraparound_and_aliases_stay_visible() {
+        for shape in SHAPES {
+            let mut raw = alloc::vec![0xff;0x8000];
+            crate::image::layout::install_test_layout(&mut raw, 0x1000);
+            let bulk = &super::super::cache_shapes::SHAPES[0];
+            raw[0x2000..0x2000 + bulk.bytes.len()].copy_from_slice(bulk.bytes);
+            raw[0x2000 + bulk.call + 1..0x2000 + bulk.call + 4].copy_from_slice(&[0x41, 0x10, 0]);
+            for p in bulk.ram {
+                raw[0x2000 + p..0x2000 + p + 4].copy_from_slice(&0xa01000u32.to_be_bytes());
+            }
+            raw[0x3000..0x3010].copy_from_slice(&[
+                0x0c, 0x89, 0x1a, 0x80, 0x0c, 0x98, 0x78, 0, 0x6a, 0x28, 0, 0xa0, 0x10, 0, 0x54,
+                0x70,
+            ]);
+            raw[0x4000..0x4000 + shape.bytes.len()].copy_from_slice(shape.bytes);
+            for &call in shape.reads {
+                raw[0x4000 + call + 1..0x4000 + call + 4].copy_from_slice(&[0x41, 0x30, 0]);
+            }
+            if shape.kind == Kind::Byte {
+                raw[0x4011..0x4014].copy_from_slice(&[0x41, 0x60, 0]);
+            }
+            raw[0x80..0x88].copy_from_slice(&[0x79, 0, 1, 126, 0x5e, 0x41, 0x40, 0]);
+            for index in [126, 127, 255] {
+                raw[0x83] = index;
+                let Observation::Known(found) = discover(&raw) else {
+                    panic!("fixture")
+                };
+                assert_eq!(found.len(), 1);
+                let expected = if shape.kind == Kind::Pair {
+                    alloc::vec![index, index.wrapping_add(1)]
+                } else {
+                    alloc::vec![index]
+                };
+                assert_eq!(found[0].callers[0].indices, Some(expected));
+            }
+            raw[0x81] = 1;
+            raw[0x91..0x95].copy_from_slice(&0x414000u32.to_be_bytes());
+            let Observation::Known(found) = discover(&raw) else {
+                panic!("fixture")
+            };
+            assert_eq!(found[0].callers[0].indices, None);
+            assert_eq!(
+                found[0].other_references,
+                alloc::vec![Reference::Stored(0x91)]
+            );
+        }
+    }
+    #[test]
+    fn every_body_byte_except_relocated_converter_is_bound() {
+        for shape in SHAPES {
+            let mut b = shape.bytes.to_vec();
+            let accessor = 0x411000u32;
+            for &c in shape.reads {
+                b[c + 1..c + 4].copy_from_slice(&accessor.to_be_bytes()[1..]);
+            }
+            assert!(shape.bind(&b, accessor, 0x2000).is_some());
+            for i in 0..b.len() {
+                if (shape.kind == Kind::Byte
+                    && (shape.converter + 1..shape.converter + 4).contains(&i))
+                    || (shape.kind == Kind::Pair && i == shape.converter + 1)
+                {
+                    continue;
+                }
+                b[i] ^= 1;
+                assert!(shape.bind(&b, accessor, 0x2000).is_none(), "{i}");
+                b[i] ^= 1;
+            }
+        }
+    }
+}

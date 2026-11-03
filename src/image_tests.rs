@@ -3,12 +3,12 @@ use super::*;
 #[test]
 fn shared_fe94_constant_is_observed_without_rekeying_v5() {
     let mut code = vec![0xf8, 0x0d, 0x6a, 0x88, 0xe4, 0x36];
-    let legacy = family_fingerprint(&code).unwrap();
+    let legacy = legacy_family_fingerprint(&code).unwrap();
     code.extend_from_slice(&[
         0xf9, 0x40, 0x6a, 0x89, 0xfe, 0x9d, 0xf8, 0x01, 0x6a, 0x88, 0xfe, 0x9f, 0x6a, 0x89, 0xfe,
         0x94,
     ]);
-    let actual = family_fingerprint(&code).unwrap();
+    let actual = legacy_family_fingerprint(&code).unwrap();
     assert_eq!(actual.raw_pins, "fe94=40 fec0=-");
     assert_eq!(actual.family, legacy.family);
     assert_eq!(actual.pins, legacy.pins);
@@ -132,8 +132,8 @@ fn criterion_comparison_retains_only_the_existing_fec0_mask() {
 
 #[test]
 fn empty_and_junk_bodies_have_no_family() {
-    assert_eq!(family(&[]), None);
-    assert_eq!(family(&[0u8; 64]), None);
+    assert_eq!(legacy_family(&[]), None);
+    assert_eq!(legacy_family(&[0u8; 64]), None);
     assert!(!is_uhd(&[]));
 }
 
@@ -162,10 +162,10 @@ fn is_uhd_finds_the_signature_anywhere() {
 fn asic_write_yields_a_stable_family() {
     // MOV.B #0x12,R6 ; MOV.B R6,@0xE436:16
     let body = [0xF6u8, 0x12, 0x6A, 0x86, 0xE4, 0x36, 0x00, 0x00];
-    let a = family(&body).unwrap();
-    assert_eq!(family(&body), Some(a));
+    let a = legacy_family(&body).unwrap();
+    assert_eq!(legacy_family(&body), Some(a));
     let other = [0xF6u8, 0x13, 0x6A, 0x86, 0xE4, 0x36, 0x00, 0x00];
-    assert_ne!(family(&other), Some(a));
+    assert_ne!(legacy_family(&other), Some(a));
 }
 
 // ---- mutation-kill tests -------------------------------------------
@@ -508,19 +508,19 @@ fn ffc5_high_boards_still_compare_servo_tables() {
     let mut body = vec![
         0xF6, 0x12, 0x6A, 0x86, 0xE4, 0x36, 0xF6, 0x20, 0x6A, 0x86, 0xFF, 0xC5,
     ];
-    let missing = family_fingerprint(&body).unwrap();
+    let missing = legacy_family_fingerprint(&body).unwrap();
     assert_eq!(missing.board, "ffc5=20 edcc=- edcd=-");
     assert_eq!(missing.servo, "none");
     let first = servo_row(0x11);
     body.extend_from_slice(&first);
-    let found = family_fingerprint(&body).unwrap();
+    let found = legacy_family_fingerprint(&body).unwrap();
     assert_ne!(found.family, missing.family);
     assert_eq!(found.servo, servo_hash(&[&first]));
-    assert_eq!(Some(found.family), family(&body));
+    assert_eq!(Some(found.family), legacy_family(&body));
     let mut changed = body.clone();
     *changed.last_mut().unwrap() ^= 1;
-    assert_ne!(family(&changed), family(&body));
-    assert_eq!(family_fingerprint(&[]), None);
+    assert_ne!(legacy_family(&changed), legacy_family(&body));
+    assert_eq!(legacy_family_fingerprint(&[]), None);
 }
 
 #[test]
@@ -531,10 +531,10 @@ fn ffc5_high_servo_base_is_stable_across_duplicates_and_later_rows() {
     for i in 0..7 {
         body.extend_from_slice(&servo_row(i));
     }
-    let before = family(&body);
+    let before = legacy_family(&body);
     body.extend_from_slice(&servo_row(0));
     body.extend_from_slice(&servo_row(8));
-    assert_eq!(family(&body), before);
+    assert_eq!(legacy_family(&body), before);
 }
 
 #[test]
@@ -562,17 +562,23 @@ fn decoded_regions_make_compression_and_base_row_order_irrelevant() {
         &directory,
         &[(o0 as usize, stream0), (o1 as usize, stream1)],
     );
-    assert_eq!(family_fingerprint(&plain), family_fingerprint(&packed));
+    assert_eq!(
+        legacy_family_fingerprint(&plain),
+        legacy_family_fingerprint(&packed)
+    );
     assert!(is_uhd(&packed));
     let mut reversed = packed.clone();
     reversed[0x1004..0x100c].copy_from_slice(&packed[0x100c..0x1014]);
     reversed[0x100c..0x1014].copy_from_slice(&packed[0x1004..0x100c]);
-    assert_eq!(family_fingerprint(&plain), family_fingerprint(&reversed));
+    assert_eq!(
+        legacy_family_fingerprint(&plain),
+        legacy_family_fingerprint(&reversed)
+    );
     let mut corrupt = packed;
     corrupt[0x1204] = 0;
     // Invalid compression must not become apparent hardware evidence from the head.
     corrupt[..data.len()].copy_from_slice(&data);
-    assert!(family_fingerprint(&corrupt).is_none());
+    assert!(legacy_family_fingerprint(&corrupt).is_none());
     assert!(!is_uhd(&corrupt));
 }
 
@@ -590,14 +596,14 @@ fn stored_code_regions_preserve_image_alignment() {
     assert_eq!(aligned_code_region(&body[1..], &body), &body[2..]);
     assert_eq!(
         fingerprint_regions(&[&body[1..]], &body),
-        family_fingerprint(&body)
+        legacy_family_fingerprint(&body)
     );
 }
 
 #[test]
 fn excluded_interface_registers_do_not_change_hardware_family() {
     let setup = [0xf8, 0x0d, 0x6a, 0x88, 0xe4, 0x36];
-    let expected = family(&setup);
+    let expected = legacy_family(&setup);
     assert!(expected.is_some());
     for register in [0xfe8fu16, 0xfe9d, 0xfe9f] {
         for value in [0, 0x18, 0x70, 0x93, 0xa0, 0xff] {
@@ -610,7 +616,7 @@ fn excluded_interface_registers_do_not_change_hardware_family() {
                 (register >> 8) as u8,
                 register as u8,
             ]);
-            assert_eq!(family(&body), expected);
+            assert_eq!(legacy_family(&body), expected);
         }
     }
 }
@@ -623,26 +629,26 @@ fn fec0_bit6_is_not_family_identity_but_raw_values_survive() {
         ]
     };
     for value in 0u8..=255 {
-        let a = family_fingerprint(&body(value)).unwrap();
-        let b = family_fingerprint(&body(value ^ 0x40)).unwrap();
+        let a = legacy_family_fingerprint(&body(value)).unwrap();
+        let b = legacy_family_fingerprint(&body(value ^ 0x40)).unwrap();
         assert_eq!(a.family, b.family);
         assert_eq!(a.pins, b.pins);
         assert_ne!(a.raw_pins, b.raw_pins);
         for bit in [0, 1, 2, 3, 4, 5, 7] {
-            assert_ne!(a.family, family(&body(value ^ (1 << bit))).unwrap());
+            assert_ne!(a.family, legacy_family(&body(value ^ (1 << bit))).unwrap());
         }
     }
-    let a = family_fingerprint(&body(0xc7)).unwrap();
+    let a = legacy_family_fingerprint(&body(0xc7)).unwrap();
     assert_eq!(a.pins, "fe94=- fec0=87");
     assert_eq!(a.raw_pins, "fe94=- fec0=c7");
     let mut both = body(0xc7);
     both.extend_from_slice(&body(0x87)[6..]);
-    assert_eq!(family(&both), Some(a.family));
+    assert_eq!(legacy_family(&both), Some(a.family));
     assert_eq!(
-        family_fingerprint(&both).unwrap().raw_pins,
+        legacy_family_fingerprint(&both).unwrap().raw_pins,
         "fe94=- fec0=87.c7"
     );
     let mut fe94 = body(0xc7);
     fe94.extend_from_slice(&[0xf8, 0x40, 0x6a, 0x88, 0xfe, 0x94]);
-    assert_ne!(family(&fe94), Some(a.family));
+    assert_ne!(legacy_family(&fe94), Some(a.family));
 }

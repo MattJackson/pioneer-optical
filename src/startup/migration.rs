@@ -331,7 +331,7 @@ where
 pub fn execute_many_checked<T, F, R, X>(
     io: &mut T,
     settings: &[(u16, u16)],
-    requirements: &[crate::settings::adaptation::Requirement],
+    requirements: &[crate::compatibility::ParameterPrerequisite],
     original_product_code: Option<&str>,
     flash: F,
 ) -> Result<R, Error<T::Error, X>>
@@ -453,7 +453,7 @@ mod tests {
         let error = execute_many_checked(
             &mut io,
             &[(0x9f, 7)],
-            &[crate::settings::adaptation::Requirement {
+            &[crate::compatibility::ParameterPrerequisite {
                 parameter: 0x9f,
                 value: 1,
             }],

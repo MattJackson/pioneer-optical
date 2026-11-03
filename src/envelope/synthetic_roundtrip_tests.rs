@@ -1609,8 +1609,9 @@ fn decoded_envelope_image_queries_delegate_to_the_decoded_image() {
     let abi = d.required_abi().unwrap();
     assert_eq!(abi.entries(), &[0x40_0102]);
     assert_eq!(Some(abi), crate::image::required_abi(&image));
-    let family = d.family().unwrap();
-    assert_eq!(Some(family), crate::image::family(&image));
+    // One old ASIC write is insufficient: layout and all required native
+    // matrix consumers must be established before a family can be returned.
+    assert!(d.family().is_none());
     assert!(!d.is_uhd());
     assert!(d.provided_abi().is_none());
 
@@ -1638,6 +1639,27 @@ fn decoded_envelope_image_queries_delegate_to_the_decoded_image() {
     );
     assert!(kernel.provided_abi().is_some());
     assert!(kernel.required_abi().is_none());
+}
+
+#[test]
+fn envelope_matrix_family_requires_native_filters_and_consistent_kernel_context() {
+    let mut image = normal_image(0x2000);
+    crate::image::matrix::install_test_contract(&mut image, 0x20);
+    let normal = decoded_with("SAT 8A10", "ID40", &image);
+    let expected = crate::image::family_with_context(&image, "SAT 8A10", None).unwrap();
+    assert_eq!(normal.family(), Some(expected));
+    let mut kernel = decoded_with("SAT 8A10", "ID40", &image);
+    kernel.info.kind = ComponentKind::Kernel;
+    assert!(kernel.family().is_none());
+    assert_eq!(normal.family_with_kernel(&kernel), Some(expected));
+    kernel.info.hardware_version = "SAT 8A11".into();
+    assert!(normal.family_with_kernel(&kernel).is_none());
+    kernel.info.hardware_version = "SAT 8A10".into();
+    kernel.info.kernel_version = "ID41".into();
+    assert!(normal.family_with_kernel(&kernel).is_none());
+    let mut broken = image;
+    broken[0x1000] ^= 1;
+    assert!(decoded_with("SAT 8A10", "ID40", &broken).family().is_none());
 }
 
 #[test]

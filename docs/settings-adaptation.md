@@ -1,4 +1,18 @@
-# Embedded settings adaptations
+# Mechanism correction contracts
+
+Mechanism correction belongs to `compatibility`, alongside native phase and
+startup planning. Production recipes and hardware selectors are typed Rust data
+in `compatibility/mechanism/contracts.rs`; production neither loads JSON nor
+accepts host-supplied patch recipes. The eleven reviewed definitions and six
+hardware routing rules retain the dev 1.5 hardware, calibration and byte guards.
+`settings::adaptation` remains a forwarding API alias.
+
+Native firmware corrections and guarded mechanism recipes share the
+`PreparedCorrection` handoff. Firmware bytes pass through codec-bound checksum,
+encoding, authentication and decode checks. `ParameterPrerequisite` values are
+read-only admission conditions checked before settings or firmware writes;
+startup selection is a separate writable effect. A prerequisite is never
+satisfied by writing its expected value.
 
 ## Original hardware selects the route
 
@@ -36,13 +50,16 @@ Recovery override. Missing family evidence remains unresolved when the other
 image is in the issue's scope. Original-hardware destination restrictions and
 required adaptations remain enforced independently of a family override.
 
-## One declarative settings file
+## Typed reviewed contracts
 
-`src/settings/adaptation/settings.json` contains the hardware selectors and
-version-bound firmware recipes. Rules reference a policy; multiple recipes can
+`compatibility/mechanism/contracts.rs` contains version-bound firmware recipes
+and original-hardware selectors. Rules reference a policy; multiple recipes can
 implement that policy for different firmware versions or calibration formats.
-All directions use the same preparation and execution code. There is no runtime
-JSON loading or host-supplied patch interface.
+All directions use the same preparation and execution code. Model tokens are
+corroborating guards alongside factory identity, native calibration format,
+exact firmware digests and expected bytes; a model name alone selects no patch.
+JSON documents are retained only as test fixtures for registry equivalence,
+malformed contracts and overlap rejection.
 
 Reviewed adaptation targets:
 
@@ -115,7 +132,7 @@ return leaves the mechanism parameters untouched.
 
 ## Catalogue and website
 
-`adaptation::hardware_rules()` exposes the same compiled selectors as a
+`compatibility::mechanism::hardware_rules()` exposes the same compiled selectors as a
 fallible API. A selector alone grants nothing: the app prepares each candidate
 with explicit original-hardware evidence and all independent flash gates.
 Additional admitted routes are published separately from ordinary crossflashes.
@@ -127,6 +144,12 @@ specific duplicate is omitted. An empty section is hidden. A listed ordinary
 route still requires the live app to select settings for the actual hardware.
 
 ## Validation and limits
+
+All eleven typed definitions and six hardware rules match the retained dev 1.5
+reference fixture field for field. The migrated mechanism proof passes 35
+distinct tests, all eleven output digests, 40 mixed-phase cases, 40 idempotence
+cases and 126 routing cases. The following proof scopes retain their software
+and physical limits; see [correction validation](correction-completion.md).
 
 The original UD04 adaptation reproduces the owner-tested `ca090322...` Normal.
 New UD03 and native inverse outputs are software-validated candidates; this does

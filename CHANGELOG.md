@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.6.0] - Unreleased
+
+- Introduce typed v6 family filters for persistent parameter layout, storage geometry, startup inputs, host setup, interrupts and phase assignment. Required unresolved evidence produces no identity; historical v5 diagnostics remain available separately.
+- Select bidirectional native phase corrections from the installed and target firmware, including supported SAT1, SAT8, SAT9, M32C and V850 forms. Bind edits, native checksums, envelope authentication and complete identity verification to exact components.
+- Add Normal-only persistent-address correction for whole-program-equivalent variants with an unchanged Kernel. Preserve independent geometry and format gates; held SAT1/SAT9 layout groups and SAT8000 format changes remain separated.
+- Unify native firmware corrections, reviewed mechanism contracts, startup selection, live prerequisites and ordered Kernel bridge planning. Replace production correction JSON with typed Rust while retaining all 1.5 hardware routes and calibration guards.
+- Make neutral startup selection explicit: use a bound native requirement when present, otherwise deliberately select 0x009F = 0xFFFF. Preserve native uncertainty, read/change/verify transactions, actual before-values and rollback boundaries.
+- Add corpus, bidirectional, malformed-input, composition and receiver regression coverage. No new live DVR transfer support or physical hardware qualification is implied.
+
 ## [1.5.0] - 2026-11-02
 
 - Scope the UD02 mechanism-convention settings refusal to its identified family. Explicit Recovery family overrides no longer invent a settings requirement for known different families; original-hardware routes and required adaptations remain enforced.

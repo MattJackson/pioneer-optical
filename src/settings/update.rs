@@ -786,16 +786,19 @@ mod filter_action_tests {
             value: 0xfe34,
         };
         let actions = crate::filters::parameter_actions_with(&context, &[&startup]).unwrap();
-        assert!(Plan::target(
-            Some(crate::startup::Setting {
-                parameter: 0x9f,
-                value: 0xfe24,
-                explicit: true
-            }),
-            false
-        )
-        .with_filter_actions(actions)
-        .is_err());
+        assert!(
+            Plan::target(
+                Some(crate::startup::Setting {
+                    parameter: 0x9f,
+                    value: 0xfe24,
+                    explicit: true
+                }),
+                false
+            )
+            .with_filter_actions(actions)
+            .map(|_| ())
+                == Err(crate::compatibility::Error::VerificationFailed)
+        );
         let invalid = WordOwner {
             filter: "invalid",
             action: "pioneer.invalid",
@@ -803,6 +806,31 @@ mod filter_action_tests {
             value: 0,
         };
         let actions = crate::filters::parameter_actions_with(&context, &[&invalid]).unwrap();
-        assert!(Plan::default().with_filter_actions(actions).is_err());
+        assert!(refused(Plan::default().with_filter_actions(actions)));
+        let valid = WordOwner {
+            filter: "valid",
+            action: "pioneer.valid",
+            parameter: 0x9f,
+            value: 1,
+        };
+        let actions = crate::filters::parameter_actions_with(&context, &[&valid]).unwrap();
+        assert!(Plan::default().with_filter_actions(actions.clone()).is_ok());
+        let mutated = |change: fn(&mut crate::filters::ParameterAction)| {
+            let mut action = actions[0].clone();
+            change(&mut action);
+            Plan::default().with_filter_actions(vec![action])
+        };
+        // Each malformed owner field refuses alone, including another owner's
+        // native evidence carried under this owner's name.
+        assert!(refused(mutated(|a| a.id = "")));
+        assert!(refused(mutated(|a| {
+            a.filter = "";
+            a.assessment.id = "";
+        })));
+        assert!(refused(mutated(|a| a.assessment.id = "other")));
+    }
+
+    fn refused(result: Result<Plan, crate::compatibility::Error>) -> bool {
+        matches!(result, Err(crate::compatibility::Error::VerificationFailed))
     }
 }

@@ -132,6 +132,28 @@ pub(super) fn compensate(normal: &mut [u8], kernel: &[u8], proof: &Contract) -> 
     (flash_sum(normal, kernel)? == 0).then_some(())
 }
 
+/// Install the startup stub, initializer, metadata table (with `length` data
+/// bytes) and the first boot check; returns the contract they describe. The
+/// checksum is not compensated.
+#[cfg(test)]
+pub(super) fn install(normal: &mut [u8], kernel: &mut [u8], length: u32) -> Contract {
+    let shape = shapes::BOOT_CHECKS[0];
+    kernel[0x1000..0x1000 + shape.len()].copy_from_slice(shape);
+    normal[0x100..0x108].copy_from_slice(&[0x26, 6, 0, 4, 1, 0, 0x1f, 0x3a]);
+    normal[0x108..0x10c].copy_from_slice(&[0x80, 0xff, 0xf8, 0]);
+    normal[0x200..0x200 + shapes::INITIALIZER.len()].copy_from_slice(shapes::INITIALIZER);
+    let fields = [0x00504d52u32, 1, 0x03ff8000, 0x03ff8000, length, 24];
+    for (i, v) in fields.iter().enumerate() {
+        normal[0x400 + 4 * i..0x404 + 4 * i].copy_from_slice(&v.to_le_bytes());
+    }
+    Contract {
+        checksum: ((0x418 + length as usize + 259) & !255) - 4,
+        initializer: 0x200,
+        table: 0x400,
+        boot: 0x1000,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

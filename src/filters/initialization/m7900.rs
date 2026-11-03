@@ -115,6 +115,18 @@ mod tests {
             assert!(!matches!(discover(&normal), Observation::Known(_)));
             normal[ENTRY - BASE + at] = 0;
         }
+        normal[ENTRY - BASE + 6] = 0x7d;
+        assert!(
+            !matches!(discover(&normal), Observation::Known(_)),
+            "duplicate port"
+        );
+        normal[ENTRY - BASE + 6] = 0x7e;
+        normal[ENTRY - BASE + 2] = 0x7c;
+        assert!(
+            !matches!(discover(&normal), Observation::Known(_)),
+            "port below 7d"
+        );
+        normal[ENTRY - BASE + 2] = 0x7d;
         assert!(matches!(discover(&[]), Observation::Unresolved(_)));
         for end in ENTRY - BASE..normal.len() {
             assert!(!matches!(discover(&normal[..end]), Observation::Known(_)));

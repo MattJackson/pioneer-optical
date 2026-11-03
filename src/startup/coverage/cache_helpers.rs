@@ -254,7 +254,7 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Helper>> {
     Observation::Known(helpers)
 }
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use core::cell::Cell;
     std::thread_local! {
@@ -274,6 +274,14 @@ mod tests {
             0x0c, 0x89, 0x1a, 0x80, 0x0c, 0x98, 0x78, 0, 0x6a, 0x28, 0, 0xa0, 0x10, 0, 0x54, 0x70,
         ]);
         install(&mut raw, shape, 0x4000);
+        raw
+    }
+    /// Byte-helper fixture whose caller at 0x84 loads `index` with MOV.W. A
+    /// preceding RTS bounds the helper as a direct accessor-reading function.
+    pub(in super::super) fn byte_helper_fixture(index: u8) -> Vec<u8> {
+        let mut raw = fixture(&SHAPES[0]);
+        raw[0x3ffe..0x4000].copy_from_slice(&[0x54, 0x70]);
+        raw[0x80..0x88].copy_from_slice(&[0x79, 0, 0, index, 0x5e, 0x41, 0x40, 0]);
         raw
     }
     fn install(raw: &mut [u8], shape: &Shape, at: usize) {

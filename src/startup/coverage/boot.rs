@@ -657,7 +657,7 @@ pub fn bind(normal: &[u8]) -> Observation<BootChain> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::super::boot_shapes as shapes;
     use super::*;
     fn put_address(normal: &mut [u8], at: usize, opcode: u8, target: u32) {
@@ -677,7 +677,7 @@ mod tests {
             normal[at + offset..at + offset + len].copy_from_slice(&value.to_be_bytes()[4 - len..]);
         }
     }
-    fn fixture() -> Vec<u8> {
+    pub(in super::super) fn fixture() -> Vec<u8> {
         let mut normal = alloc::vec![0xff;0x10000];
         crate::image::layout::install_test_layout(&mut normal, 0x1000);
         install(&mut normal, 0x3000, &shapes::C_STARTUP[0]);
@@ -760,6 +760,17 @@ mod tests {
             .iter()
             .flat_map(|p| &p.edges)
             .any(|edge| matches!(edge, Edge::Branch { .. })));
+    }
+    #[test]
+    fn two_complete_chains_conflict_instead_of_selecting_one() {
+        let mut normal = fixture();
+        assert!(matches!(bind(&normal), Observation::Known(_)));
+        // The initializer's second call reaches another complete bulk wrapper
+        // calling the same reader, so two rooted chains bind.
+        install(&mut normal, 0x7000, &shapes::BULK_WRAPPER[0]);
+        put_address(&mut normal, 0x7000, 0x5e, BASE + 0x8000);
+        put_address(&mut normal, 0x6006, 0x5e, BASE + 0x7000);
+        assert!(matches!(bind(&normal), Observation::Conflicting));
     }
     #[test]
     fn normal_dispatch_targets_remain_opaque_normal_dependencies() {

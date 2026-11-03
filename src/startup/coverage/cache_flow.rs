@@ -110,15 +110,21 @@ impl State {
         }
     }
 }
-fn stored(normal: &[u8], start: usize, end: usize) -> bool {
-    crate::image::regions(normal).is_some_and(|r| {
-        r.stored.iter().any(|b| {
-            let at = b.as_ptr() as usize - normal.as_ptr() as usize;
-            start >= at && end <= at + b.len()
-        })
+fn stored(normal: &[u8], regions: &[&[u8]], start: usize, end: usize) -> bool {
+    regions.iter().any(|b| {
+        let at = b.as_ptr() as usize - normal.as_ptr() as usize;
+        start >= at && end <= at + b.len()
     })
 }
-fn analyse(normal: &[u8], start: usize, end: usize, accessor: usize, register: u8) -> Function {
+/// `regions` are the stored slices of `normal` from one `image::regions` decode.
+fn analyse(
+    normal: &[u8],
+    regions: &[&[u8]],
+    start: usize,
+    end: usize,
+    accessor: usize,
+    register: u8,
+) -> Function {
     let mut result = Function {
         start,
         end,
@@ -214,7 +220,7 @@ fn analyse(normal: &[u8], start: usize, end: usize, accessor: usize, register: u
                 .is_some_and(|offset| {
                     let at = offset as usize;
                     normal.get(at..at.saturating_add(CONVERTER.len())) == Some(CONVERTER)
-                        && stored(normal, at, at + CONVERTER.len())
+                        && stored(normal, regions, at, at + CONVERTER.len())
                 })
             {
                 for r in 0..3 {
@@ -227,7 +233,20 @@ fn analyse(normal: &[u8], start: usize, end: usize, accessor: usize, register: u
                 state = State([None; 32]);
             }
         } else if op == "BSR" {
-            state = State([None; 32]);
+            let O::Address(Ea::PcRelative { value, .. }) = a else {
+                issues.insert(Issue::Instruction(pc));
+                continue;
+            };
+            if next.checked_add_signed(value as isize) == Some(accessor) {
+                calls
+                    .entry(pc)
+                    .or_default()
+                    .insert(state.get(R::Byte(register + 8)).map(|v| v as u8));
+                state.set(R::Long(0), None);
+                state.set(R::Long(1), None);
+            } else {
+                state = State([None; 32]);
+            }
         } else if matches!(op, "CMP" | "BTST" | "NOP") {
         } else if op == "STM" {
             state.set(R::Long(7), None);
@@ -397,6 +416,7 @@ fn discover_kind(normal: &[u8], direct: bool) -> Observation<Vec<Evidence>> {
                 .map(|(start, end)| {
                     analyse(
                         normal,
+                        &regions.stored,
                         start,
                         end,
                         accessor.offset,
@@ -441,7 +461,7 @@ mod tests {
             0x7a, 5, 0, 0x41, 3, 0, 0x47, 4, 0xf8, 0x78, 0x40, 2, 0xf8, 0x7e, 0x5d, 0x50, 0x54,
             0x70,
         ]);
-        let f = analyse(&raw, 0x100, 0x112, 0x300, 0);
+        let f = analyse(&raw, &[&raw[..]], 0x100, 0x112, 0x300, 0);
         assert!(f.issues.is_empty(), "{:?}", f.issues);
         assert_eq!(
             f.calls,
@@ -452,10 +472,10 @@ mod tests {
         );
         raw[0x10c] = 0;
         raw[0x10d] = 0; // NOP leaves R0L unknown on this path.
-        let f = analyse(&raw, 0x100, 0x112, 0x300, 0);
+        let f = analyse(&raw, &[&raw[..]], 0x100, 0x112, 0x300, 0);
         assert!(f.calls[0].indices.contains(&None));
         raw[0x107] = 1; // Branch into an instruction operand is never decoded as a new path.
-        let f = analyse(&raw, 0x100, 0x112, 0x300, 0);
+        let f = analyse(&raw, &[&raw[..]], 0x100, 0x112, 0x300, 0);
         assert!(f
             .issues
             .iter()
@@ -469,18 +489,51 @@ mod tests {
         ]);
         raw[0x10e..0x110].copy_from_slice(&[0x54, 0x70]);
         raw[0x400..0x400 + CONVERTER.len()].copy_from_slice(CONVERTER);
-        let f = analyse(&raw, 0x100, 0x110, 0x300, 0);
+        let f = analyse(&raw, &[&raw[..]], 0x100, 0x110, 0x300, 0);
         assert!(f.issues.is_empty());
         assert_eq!(f.calls[0].indices, alloc::vec![Some(120)]);
         for i in 0..CONVERTER.len() {
             raw[0x400 + i] ^= 1;
-            let f = analyse(&raw, 0x100, 0x110, 0x300, 0);
+            let f = analyse(&raw, &[&raw[..]], 0x100, 0x110, 0x300, 0);
             assert!(
                 f.issues.contains(&Issue::IndirectTarget(0x10c)),
                 "converter byte {i}"
             );
             raw[0x400 + i] ^= 1;
         }
+    }
+    #[test]
+    fn converter_checks_reuse_supplied_regions_for_every_state() {
+        let mut raw = alloc::vec![0xff;0x1000];
+        // MOV.B #0,R3L; loop: INC.B R3L; JSR @converter; BRA loop; RTS
+        raw[0x100..0x10c].copy_from_slice(&[
+            0xfb, 0, 0x0a, 0x0b, 0x5e, 0x41, 4, 0, 0x40, 0xf8, 0x54, 0x70,
+        ]);
+        raw[0x400..0x400 + CONVERTER.len()].copy_from_slice(CONVERTER);
+        crate::comp_streams::READS.with(|reads| reads.set(0));
+        let f = analyse(&raw, &[&raw[..]], 0x100, 0x10c, 0x300, 0);
+        assert!(f.issues.is_empty(), "{:?}", f.issues);
+        assert_eq!(crate::comp_streams::READS.with(|reads| reads.get()), 0);
+    }
+    #[test]
+    fn relative_accessor_calls_record_their_index_domain() {
+        let mut raw = alloc::vec![0xff;0x1000];
+        // MOV.B #0x7E,R0L; BSR accessor; RTS
+        raw[0x100..0x106].copy_from_slice(&[0xf8, 0x7e, 0x55, 0x1c, 0x54, 0x70]);
+        let f = analyse(&raw, &[&raw[..]], 0x100, 0x106, 0x120, 0);
+        assert!(f.issues.is_empty(), "{:?}", f.issues);
+        assert_eq!(
+            f.calls,
+            alloc::vec![Call {
+                offset: 0x102,
+                indices: alloc::vec![Some(0x7e)]
+            }]
+        );
+        // BSR.W reaches the same accessor.
+        raw[0x102..0x108].copy_from_slice(&[0x5c, 0, 0, 0x18, 0x54, 0x70]);
+        let f = analyse(&raw, &[&raw[..]], 0x100, 0x108, 0x11e, 0);
+        assert_eq!(f.calls.len(), 1, "{:?}", f);
+        assert_eq!(f.calls[0].offset, 0x102);
     }
     #[test]
     fn register_aliases_track_all_four_bytes_and_unknown_writes() {

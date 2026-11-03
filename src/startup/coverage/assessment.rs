@@ -240,11 +240,23 @@ pub fn assess(normal: &[u8]) -> Assessment {
         Observation::Known(value) => value,
         _ => Vec::new(),
     };
-    for call in references.calls {
-        if covered_calls.contains(&call.offset) {
+    covered_calls.sort_unstable();
+    covered_calls.dedup();
+    // argument::discover emits one entry per getter call in the same order.
+    for (i, call) in references.calls.into_iter().enumerate() {
+        if covered_calls.binary_search(&call.offset).is_ok() {
             continue;
         }
-        if let Some(arg) = arguments.iter().find(|arg| arg.call == call.offset) {
+        let matches = |arg: &&argument::Argument| {
+            #[cfg(test)]
+            tests::PROBES.with(|c| c.set(c.get() + 1));
+            arg.call == call.offset
+        };
+        if let Some(arg) = arguments
+            .get(i)
+            .filter(matches)
+            .or_else(|| arguments.iter().find(matches))
+        {
             result.obligations.push(Obligation::GetterInput {
                 offset: call.offset,
                 domain: arg.domain,
@@ -289,6 +301,97 @@ pub fn assess(normal: &[u8]) -> Assessment {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::cell::Cell;
+    std::thread_local! {
+        pub(super) static PROBES: Cell<usize> = const { Cell::new(0) };
+    }
+
+    #[test]
+    fn getter_call_matching_is_not_quadratic() {
+        let mut normal = alloc::vec![0xff; 0x8000];
+        crate::image::layout::install_test_layout(&mut normal, 0x1000);
+        let n = 2000;
+        for i in 0..n {
+            normal[0x2000 + i * 4..0x2004 + i * 4].copy_from_slice(&[0x5e, 0x41, 0x10, 0]);
+        }
+        PROBES.with(|c| c.set(0));
+        let report = assess(&normal);
+        assert_eq!(report.getter_calls, n);
+        let inputs = report
+            .obligations
+            .iter()
+            .filter(|o| matches!(o, Obligation::GetterInput { .. }))
+            .count();
+        assert_eq!(inputs, n);
+        let probes = PROBES.with(Cell::get);
+        assert!(probes <= n * 32, "{probes} argument probes for {n} calls");
+    }
+
+    fn getter_obligation_at(report: &Assessment, at: usize) -> bool {
+        report.obligations.iter().any(|o| {
+            matches!(o, Obligation::GetterInput { offset, .. } | Obligation::GetterCall(offset) if *offset == at)
+        })
+    }
+
+    #[test]
+    fn table_loop_covers_its_calls_unless_a_table_word_is_009f() {
+        use super::super::table_shape::{BYTES, RELOCATIONS};
+        let mut normal = alloc::vec![0xff; 0x6000];
+        crate::image::layout::install_test_layout(&mut normal, 0x1000);
+        normal[0x2000..0x2000 + BYTES.len()].copy_from_slice(BYTES);
+        for &(i, n, g) in RELOCATIONS {
+            let v = match i {
+                13 | 59 => 0x411000u32,
+                32 => 0x414000,
+                _ => 0x415000 + g as u32 * 32,
+            };
+            normal[0x2000 + i..0x2000 + i + n].copy_from_slice(&v.to_be_bytes()[4 - n..]);
+        }
+        normal[0x4000..0x400e].copy_from_slice(&[
+            0, 0x50, 0, 0x51, 0, 0x52, 0, 0x54, 0, 0x53, 0, 0x55, 1, 0x10,
+        ]);
+        let report = assess(&normal);
+        assert_eq!(report.getter_calls, 2);
+        assert!(!getter_obligation_at(&report, 0x200c));
+        assert!(!getter_obligation_at(&report, 0x203a));
+        normal[0x4006..0x4008].copy_from_slice(&[0, 0x9f]);
+        let report = assess(&normal);
+        assert!(getter_obligation_at(&report, 0x200c));
+        assert!(getter_obligation_at(&report, 0x203a));
+    }
+
+    #[test]
+    fn cache_reads_of_the_final_two_bytes_remain_inputs() {
+        let read = 0x4006;
+        let report = assess(&super::super::cache_helpers::tests::byte_helper_fixture(5));
+        assert!(!report.obligations.contains(&Obligation::CacheInput(read)));
+        assert!(report.cache_calls_with_domains >= 1);
+        for index in [126, 127] {
+            let report = assess(&super::super::cache_helpers::tests::byte_helper_fixture(
+                index,
+            ));
+            assert!(
+                report.obligations.contains(&Obligation::CacheInput(read)),
+                "index {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn startup_callees_exclude_only_the_bound_getter() {
+        let report = assess(&super::super::boot::tests::fixture());
+        assert!(report.boot.is_some());
+        let callees: Vec<_> = report
+            .obligations
+            .iter()
+            .filter_map(|o| match o {
+                Obligation::StartupCallee(d) => Some(d.target),
+                _ => None,
+            })
+            .collect();
+        assert!(!callees.is_empty());
+        assert!(!callees.contains(&super::super::boot::TargetAddress::Normal(0x411000)));
+    }
 
     #[test]
     fn missing_reader_retains_a_typed_unknown() {

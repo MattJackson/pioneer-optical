@@ -1008,6 +1008,31 @@ pub mod callbacks {
                 }
                 image[2048 + offset..2052 + offset].copy_from_slice(&original);
             }
+            for adjustment in [0x14, 0x1e] {
+                image[2048 + adjustment] = 1;
+                assert_eq!(
+                    opcode_site(&image, base, 0x3c).unwrap_err(),
+                    Error::Unsupported {
+                        context: "unsupported object adjustments"
+                    }
+                );
+                image[2048 + adjustment] = 0;
+            }
+            opcode_site(&image, base, 0x3c).unwrap();
+            for (from, len, to, context) in [
+                (1200, 14, 1300, "object initializer"),
+                (0, 256, 3200, "opcode registry"),
+            ] {
+                let mut duplicate = image.clone();
+                duplicate.copy_within(from..from + len, to);
+                assert_eq!(
+                    opcode_site(&duplicate, base, 0x3c).unwrap_err(),
+                    Error::Ambiguous {
+                        context,
+                        candidates: 2
+                    }
+                );
+            }
             for slot in [0u32, 1, 0x7ffe, 0x8000] {
                 image[0xad * 4..0xad * 4 + 4].copy_from_slice(&slot.to_be_bytes());
                 assert!(opcode_site(&image, base, 0xad).is_err());

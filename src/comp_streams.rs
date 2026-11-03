@@ -45,6 +45,10 @@ pub(crate) fn read(
     let min_base = first.saturating_sub(len);
     let mut valid = None;
     let mut limit_seen = false;
+    let cap = total_limit.min(crate::comp::MAX_TOTAL_EXPANDED);
+    // Inflated bytes of candidate bases that did not resolve. One base is
+    // bounded by `cap`; this bounds the work spent on all the others.
+    let mut wasted = 0usize;
     for base in ((min_base & !(BASE_ALIGNMENT - 1))..=(first & !(BASE_ALIGNMENT - 1)))
         .step_by(BASE_ALIGNMENT as usize)
     {
@@ -53,6 +57,7 @@ pub(crate) fn read(
         }
         let mut streams = Vec::new();
         let mut total_expanded = 0usize;
+        let mut work = 0usize;
         for &(start, end) in &pairs {
             if !proceed() {
                 return Err(StreamError::Cancelled);
@@ -85,19 +90,19 @@ pub(crate) fn read(
             total_expanded = total_expanded
                 .checked_add(expanded_size)
                 .ok_or(StreamError::Limit)?;
-            if expanded_size > crate::comp::MAX_EXPANDED
-                || total_expanded > total_limit.min(crate::comp::MAX_TOTAL_EXPANDED)
-            {
+            if expanded_size > crate::comp::MAX_EXPANDED || total_expanded > cap {
                 limit_seen = true;
                 break;
             }
             let mut decoder = flate2::read::ZlibDecoder::new(compressed);
             let mut expanded = Vec::new();
-            if decoder
+            let failed = decoder
                 .by_ref()
                 .take((expanded_size + 1) as u64)
                 .read_to_end(&mut expanded)
-                .is_err()
+                .is_err();
+            work = work.saturating_add(expanded.len());
+            if failed
                 || expanded.len() != expanded_size
                 || decoder.total_in() as usize != compressed.len()
             {
@@ -118,6 +123,11 @@ pub(crate) fn read(
                 return Err(StreamError::Ambiguous);
             }
             valid = Some((base, streams));
+        } else {
+            wasted = wasted.saturating_add(work);
+            if wasted > cap {
+                return Err(StreamError::Limit);
+            }
         }
     }
     valid.map(Some).ok_or(if limit_seen {

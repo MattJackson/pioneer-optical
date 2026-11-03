@@ -39,7 +39,8 @@ pub enum Error<E, F> {
         /// Observed value.
         actual: u16,
     },
-    /// Initial read failed; no parameter or firmware write was attempted.
+    /// Initial A0 word or factory production-record read failed; no parameter
+    /// or firmware write was attempted.
     Read(drive::Error<E>),
     /// Parameter change or verification failed; flash was never invoked.
     Change {
@@ -109,7 +110,7 @@ impl<E: core::fmt::Debug, F: core::fmt::Display> core::fmt::Display for Error<E,
             Self::OriginalHardware => f.write_str("the drive’s original hardware could not be confirmed for this transition; no settings or firmware were written"),
             Self::ConflictingParameters => f.write_str("conflicting settings plan; no command was sent"),
             Self::InvalidParameter(p)=>write!(f,"startup parameter {p:#x} is outside the supported parameter surface; no command was sent"),
-            Self::Read(e)=>write!(f,"A0 startup parameter read failed; no firmware was written. The drive may not implement this command in its current mode: {e}"),
+            Self::Read(e)=>write!(f,"initial drive read (A0 startup parameter or factory production record) failed; no settings or firmware were written. The drive may not implement this command in its current mode: {e}"),
             Self::Change{source,rollback,..}=>write!(f,"A0 startup parameter write or verification failed; no firmware was written: {source}; {rollback}"),
             Self::Flash{source,rollback,..}=>write!(f,"firmware update failed: {source}; {rollback}"),
         }
@@ -483,6 +484,52 @@ mod tests {
         assert_eq!(checked.writes, original.writes);
     }
 
+    /// Factory production-record transport: `None` fails the read, otherwise
+    /// the whole record is filled with the given byte.
+    #[cfg(feature = "envelope")]
+    struct Record {
+        inner: Mock,
+        fill: Option<u8>,
+    }
+    #[cfg(feature = "envelope")]
+    impl Transport for Record {
+        type Error = &'static str;
+        fn exec(&mut self, cdb: &[u8], data: Data<'_>) -> Result<usize, Self::Error> {
+            if cdb == crate::production::parameters() {
+                let (Some(fill), Data::In(bytes)) = (self.fill, data) else {
+                    return Err("factory record read failed");
+                };
+                bytes.fill(fill);
+                return Ok(bytes.len());
+            }
+            self.inner.exec(cdb, data)
+        }
+        fn sense(&self) -> Option<(u8, u8, u8)> {
+            None
+        }
+    }
+
+    #[cfg(feature = "envelope")]
+    #[test]
+    fn failed_factory_record_read_is_reported_as_an_initial_read() {
+        let mut t = Record {
+            inner: mock(0xffff),
+            fill: None,
+        };
+        let err = execute_many_checked(
+            &mut t,
+            &[(0x9f, 7)],
+            &[],
+            Some("BDR-UD02TBD"),
+            |_| -> Result<(), &str> { panic!("must not flash") },
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Read(_)));
+        assert!(format!("{err}").contains("factory production record"));
+        assert!(t.inner.writes.is_empty());
+        assert_eq!(t.inner.reads, 0);
+    }
+
     #[cfg(feature = "envelope")]
     #[test]
     fn live_factory_identity_is_rechecked_before_any_mutation() {
@@ -616,7 +663,7 @@ mod tests {
             panic!("flash must not run without original state")
         })
         .unwrap_err();
-        assert!(format!("{err}").contains("A0 startup parameter read failed"));
+        assert!(format!("{err}").contains("initial drive read (A0 startup parameter"));
         assert!(matches!(err, Error::Read(_)));
         assert!(t.writes.is_empty());
         assert_eq!(t.firmware_attempts, 0);

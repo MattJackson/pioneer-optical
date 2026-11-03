@@ -47,8 +47,16 @@ fn image_with(end2_delta: isize) -> Vec<u8> {
     for (i, v) in [start1, end1, start2, end2].into_iter().enumerate() {
         image[0x1004 + 4 * i..0x1008 + 4 * i].copy_from_slice(&(base + v as u32).to_be_bytes());
     }
+    balance(&mut image);
     assert!(comp_streams(&image).is_some());
     image
+}
+
+// Make the whole-image BE32 sum zero, as in OEM Normal images.
+fn balance(image: &mut [u8]) {
+    image[16..20].fill(0);
+    let sum = be32_sum(image);
+    image[16..20].copy_from_slice(&0u32.wrapping_sub(sum).to_be_bytes());
 }
 
 // Encrypt as the OEM envelope does, then splice blocks at three of the four
@@ -249,6 +257,22 @@ fn unrecovered_tail_reports_exactly_the_unproven_range() {
 }
 
 #[test]
+fn fabricated_erased_tail_is_not_verified_by_the_comp_layout_alone() {
+    // Streams end before the lost tail, whose original bytes were not erased.
+    let mut img = image_with(-8);
+    img[KEPT..].fill(0x5a);
+    balance(&mut img);
+    let decoded = decode_envelope(&envelope(&img, &SPLICES)).unwrap();
+    assert_eq!(decoded.spliced_blocks().len(), 3);
+    assert!(comp_streams(&decoded.image).is_some());
+    assert_eq!(decoded.unrecovered_tail(), Some(KEPT..LEN));
+    // The same layout with a genuinely erased tail stays verified.
+    let erased = image_with(-8);
+    let decoded = decode_envelope(&envelope(&erased, &SPLICES)).unwrap();
+    assert_eq!(decoded.unrecovered_tail(), None);
+}
+
+#[test]
 fn find_splices_accepts_a_boundary_exactly_one_window_in() {
     // payload offset 0xf000 puts the first boundary at image offset 0x1000,
     // where the clean-before window starts at image offset 0.
@@ -289,6 +313,54 @@ fn internal_structural_checks_use_the_lean_comp_parser() {
     let _ = d.repack_resized_normal(&img);
     let _ = spliced_normal(&env[PAYLOAD..], PAYLOAD, &splice_key(), false, &[]);
     assert_eq!(streams::RICH_READS.with(|count| count.get()), 0);
+}
+
+#[cfg(feature = "analysis")]
+#[test]
+fn analysis_uses_the_lean_comp_parser() {
+    let img = image();
+    let d = decode_envelope(&envelope(&img, &SPLICES)).unwrap();
+    streams::RICH_READS.with(|count| count.set(0));
+    let analysis = d
+        .analyze(crate::analysis::Options::default(), &mut ())
+        .unwrap();
+    assert_eq!(streams::RICH_READS.with(|count| count.get()), 0);
+    let expanded: Vec<_> = analysis
+        .regions
+        .iter()
+        .filter(|r| r.stream.is_some())
+        .collect();
+    assert!(!expanded.is_empty());
+    for region in expanded {
+        assert_eq!(region.sha256, sha(region.bytes()));
+    }
+}
+
+#[cfg(feature = "analysis")]
+#[test]
+fn analysis_reports_stream_progress_as_position_over_count() {
+    struct Recorder(Vec<(usize, usize)>);
+    impl crate::analysis::Observer for Recorder {
+        fn proceed(&mut self, stage: &'static str, done: usize, total: usize) -> bool {
+            if stage == "Inspecting streams" {
+                self.0.push((done, total));
+            }
+            true
+        }
+    }
+    // Directory order (second stream first) differs from storage order.
+    let mut img = image();
+    let directory = img[0x1004..0x1014].to_vec();
+    img[0x1004..0x100c].copy_from_slice(&directory[8..]);
+    img[0x100c..0x1014].copy_from_slice(&directory[..8]);
+    let d = decode_envelope(&envelope(&img, &[])).unwrap();
+    let mut recorder = Recorder(Vec::new());
+    let analysis = d
+        .analyze(crate::analysis::Options::default(), &mut recorder)
+        .unwrap();
+    assert_eq!(recorder.0, [(0, 2), (1, 2)]);
+    let names: Vec<_> = analysis.regions.iter().filter_map(|r| r.stream).collect();
+    assert_eq!(names, [1, 0]);
 }
 
 #[test]

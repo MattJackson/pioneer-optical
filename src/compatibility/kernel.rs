@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 
 /// One required step in a complete Kernel replacement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum KernelStep {
     /// Install the source Kernel with its programmer restart redirected to the
     /// target startup. The source Kernel's own startup is preserved.
@@ -26,6 +27,7 @@ pub enum KernelStep {
 
 /// A Kernel transition lacks the native evidence required to build its stages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum KernelPlanningError {
     /// The installed Kernel's incoming-marker policy is unknown.
     UnknownInstalledPolicy,

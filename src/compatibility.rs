@@ -121,6 +121,7 @@ pub struct Firmware<'a> {
 
 /// A required proof for a firmware correction failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     /// A required identity input could not be established.
     UnresolvedIdentity,
@@ -229,13 +230,7 @@ pub enum Correction {
     },
 }
 
-/// Immutable, component-bound firmware portion of a correction plan.
-///
-/// Planning never performs device I/O. This plan borrows the exact target bytes
-/// used for detection; callers cannot substitute another image at application.
-/// Envelope authentication and live setting prerequisites remain receiver gates.
-/// Address relocation additionally requires complete Normal program equivalence
-/// and the exact unchanged Kernel; published candidate keys retain layout.
+// Owned snapshot of the installed firmware.
 struct InstalledFirmware {
     hardware: alloc::string::String,
     normal: Vec<u8>,
@@ -252,6 +247,12 @@ impl InstalledFirmware {
 }
 
 /// Component-bound owner plan with an immutable installed-firmware snapshot.
+///
+/// Planning never performs device I/O. This plan borrows the exact target bytes
+/// used for detection; callers cannot substitute another image at application.
+/// Envelope authentication and live setting prerequisites remain receiver gates.
+/// Address relocation additionally requires complete Normal program equivalence
+/// and the exact unchanged Kernel; published candidate keys retain layout.
 pub struct CorrectionPlan<'a> {
     installed: InstalledFirmware,
     policy: crate::filters::runner::Policy,
@@ -447,6 +448,66 @@ pub fn prepare_phase(
     plan(installed, target)?.prepare_normal()
 }
 
+// Public enums stay non-exhaustive: downstream matches need a wildcard arm.
+/// ```compile_fail
+/// use pioneer_optical::compatibility;
+/// fn f(e: compatibility::Error) -> u8 {
+///     use compatibility::Error::*;
+///     match e {
+///         UnresolvedIdentity | Incompatible | PersistentLayoutOverlap { .. } | Unsupported => 0,
+///         Phase(_) | PersistentLayout(_) | VerificationFailed | ComponentMismatch => 1,
+///         Representation | Authentication => 2,
+///     }
+/// }
+/// ```
+/// ```compile_fail
+/// use pioneer_optical::compatibility;
+/// fn f(e: compatibility::KernelPlanningError) -> u8 {
+///     use compatibility::KernelPlanningError::*;
+///     match e {
+///         UnknownInstalledPolicy | Handoff(_) | RejectedBridgeMarker | UnsupportedRestoration => 0,
+///     }
+/// }
+/// ```
+/// ```compile_fail
+/// use pioneer_optical::compatibility;
+/// fn f(e: compatibility::KernelStep) -> u8 {
+///     use compatibility::KernelStep::*;
+///     match e {
+///         Handoff { .. } | ReceiverMarker { .. } | Target => 0,
+///     }
+/// }
+/// ```
+/// ```compile_fail
+/// use pioneer_optical::compatibility;
+/// fn f(e: compatibility::startup::Evidence) -> u8 {
+///     use compatibility::startup::Evidence::*;
+///     match e {
+///         BoundComparison(_) | NeutralSelection { .. } => 0,
+///     }
+/// }
+/// ```
+/// ```compile_fail
+/// use pioneer_optical::compatibility;
+/// fn f(e: compatibility::startup::StartupPolicy) -> u8 {
+///     use compatibility::startup::StartupPolicy::*;
+///     match e {
+///         NativeEvidenceOnly | NeutralSelection => 0,
+///     }
+/// }
+/// ```
+/// ```compile_fail
+/// use pioneer_optical::compatibility;
+/// fn f(e: compatibility::startup::Error) -> u8 {
+///     use compatibility::startup::Error::*;
+///     match e {
+///         Ambiguous | Unresolved => 0,
+///     }
+/// }
+/// ```
+#[cfg(doctest)]
+struct NonExhaustiveEnums;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,5 +674,25 @@ mod tests {
             prepare_phase(context(&direct), context(&corrupt)),
             Err(Error::Phase(phase::CorrectionError::InvalidNormal))
         );
+    }
+
+    #[test]
+    fn verification_refuses_images_without_the_expected_identity() {
+        let direct = normal(0);
+        let swapped = phase::correct_normal(&direct, phase::Assignment::Swapped).unwrap();
+        let planned = plan(context(&direct), context(&swapped)).unwrap();
+        // Rediscovered identity differs from the expected one.
+        assert_eq!(
+            planned.verify_image(&normal(1)),
+            Err(Error::VerificationFailed)
+        );
+        // No identity can be rediscovered at all.
+        let mut garbage = direct.clone();
+        garbage[0x1000..].fill(0xff);
+        assert_eq!(
+            planned.verify_image(&garbage),
+            Err(Error::VerificationFailed)
+        );
+        assert_eq!(planned.verify_image(&direct), Ok(()));
     }
 }

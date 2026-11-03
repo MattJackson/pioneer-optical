@@ -272,9 +272,22 @@ mod tests {
         }
         let conflicting = candidate(Observation::Conflicting);
         assert!(matches!(
-            FILTER.inspect(&context(vec![a, conflicting])).finding,
+            FILTER.inspect(&context(vec![a.clone(), conflicting])).finding,
             Finding::Conflicting(_)
         ));
+        assert!(matches!(
+            FILTER.inspect(&context(vec![a.clone(), a.clone()])).finding,
+            Finding::Known(_)
+        ));
+        let unresolved = candidate(Observation::Unresolved(
+            crate::image::layout::Unresolved::ReaderNotRecognized,
+        ));
+        for candidates in [vec![unresolved.clone(), a.clone()], vec![a, unresolved]] {
+            assert!(matches!(
+                FILTER.inspect(&context(candidates)).finding,
+                Finding::Known(_)
+            ));
+        }
     }
     #[test]
     fn physical_coordinates_roles_and_architecture_remain_distinct() {

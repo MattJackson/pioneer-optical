@@ -62,16 +62,17 @@ pub fn discover(normal: &[u8]) -> Observation<Evidence> {
     })
 }
 
+/// Decoded Normal holding only the reviewed block at its native entry.
+#[cfg(test)]
+pub(super) fn fixture() -> alloc::vec::Vec<u8> {
+    let mut normal = alloc::vec![0xff; ENTRY - BASE + BLOCK.len()];
+    normal[ENTRY - BASE..].copy_from_slice(BLOCK);
+    normal
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::{vec, vec::Vec};
-
-    fn fixture() -> Vec<u8> {
-        let mut normal = vec![0xff; ENTRY - BASE + BLOCK.len()];
-        normal[ENTRY - BASE..].copy_from_slice(BLOCK);
-        normal
-    }
 
     #[test]
     fn native_io_values_are_preserved_without_claiming_reset_reachability() {
@@ -115,6 +116,18 @@ mod tests {
             assert!(!matches!(discover(&normal), Observation::Known(_)));
             normal[ENTRY - BASE + at] = 0;
         }
+        normal[ENTRY - BASE + 6] = 0x7d;
+        assert!(
+            !matches!(discover(&normal), Observation::Known(_)),
+            "duplicate port"
+        );
+        normal[ENTRY - BASE + 6] = 0x7e;
+        normal[ENTRY - BASE + 2] = 0x7c;
+        assert!(
+            !matches!(discover(&normal), Observation::Known(_)),
+            "port below 7d"
+        );
+        normal[ENTRY - BASE + 2] = 0x7d;
         assert!(matches!(discover(&[]), Observation::Unresolved(_)));
         for end in ENTRY - BASE..normal.len() {
             assert!(!matches!(discover(&normal[..end]), Observation::Known(_)));

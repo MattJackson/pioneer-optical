@@ -156,7 +156,7 @@ pub(crate) fn phase(body: &[u8]) -> Option<bool> {
     let regions = crate::image::regions(body)?;
     let mut found = Vec::new();
     for region in regions.slices() {
-        for start in (0..region.len().saturating_sub(48)).step_by(2) {
+        for start in (0..=region.len().saturating_sub(44)).step_by(2) {
             if let Some(m) = phase_at(region.get(start..)?) {
                 found.push(m);
             }

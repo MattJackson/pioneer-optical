@@ -138,10 +138,9 @@ fn central_registry_rejects_missing_policies_and_ambiguous_hardware_before_use()
 }
 
 #[test]
+#[ignore = "requires PIONEER_UD02_NORMAL, PIONEER_UD03_NORMAL and PIONEER_UD04_NORMAL"]
 fn held_original_hardware_current_firmware_destination_matrix() {
-    let Ok(original_path) = std::env::var("PIONEER_UD02_NORMAL") else {
-        return;
-    };
+    let original_path = std::env::var("PIONEER_UD02_NORMAL").expect("PIONEER_UD02_NORMAL");
     let ud02 = std::fs::read(original_path).unwrap();
     let ud04 = std::fs::read(std::env::var("PIONEER_UD04_NORMAL").unwrap()).unwrap();
     let ud03 = std::fs::read(std::env::var("PIONEER_UD03_NORMAL").unwrap()).unwrap();
@@ -343,10 +342,9 @@ fn execution_guard_rejects_unreviewed_bytes_in_every_scoped_platform() {
 }
 
 #[test]
+#[ignore = "requires PIONEER_UD02_NORMAL and PIONEER_UD04_NORMAL"]
 fn held_execution_guard_binds_original_hardware_adaptation_and_pristine_return() {
-    let Ok(path) = std::env::var("PIONEER_UD02_NORMAL") else {
-        return;
-    };
+    let path = std::env::var("PIONEER_UD02_NORMAL").expect("PIONEER_UD02_NORMAL");
     let ud02 = std::fs::read(path).unwrap();
     let ud04 = std::fs::read(std::env::var("PIONEER_UD04_NORMAL").unwrap()).unwrap();
     let source = Contract::discover(&ud02);
@@ -375,10 +373,9 @@ fn held_execution_guard_binds_original_hardware_adaptation_and_pristine_return()
 }
 
 #[test]
+#[ignore = "requires PIONEER_UD02_NORMAL and PIONEER_UD04_NORMAL"]
 fn held_ud02_ud04_images_reproduce_the_tested_output_and_pristine_return() {
-    let Ok(original) = std::env::var("PIONEER_UD02_NORMAL") else {
-        return;
-    };
+    let original = std::env::var("PIONEER_UD02_NORMAL").expect("PIONEER_UD02_NORMAL");
     let ud02 = std::fs::read(original).unwrap();
     let ud04 = std::fs::read(std::env::var("PIONEER_UD04_NORMAL").unwrap()).unwrap();
     let from = Contract::discover(&ud02);

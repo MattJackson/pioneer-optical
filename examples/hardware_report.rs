@@ -3,7 +3,7 @@ use pioneer_optical::{envelope::Envelope, image};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, path::Path};
 
-fn members(bytes: &[u8]) -> BTreeMap<String, &[u8]> {
+fn members(bytes: &[u8]) -> Result<BTreeMap<String, &[u8]>, String> {
     let mut out = BTreeMap::new();
     let mut at = 0;
     let text = |v: &[u8]| {
@@ -14,20 +14,24 @@ fn members(bytes: &[u8]) -> BTreeMap<String, &[u8]> {
         if h.iter().all(|b| *b == 0) {
             break;
         }
-        let size = usize::from_str_radix(text(&h[124..136]).trim(), 8).expect("tar size");
+        let size = usize::from_str_radix(text(&h[124..136]).trim(), 8).map_err(|_| "tar size")?;
         let prefix = text(&h[345..500]);
         let name = if prefix.is_empty() {
             text(&h[..100])
         } else {
             format!("{prefix}/{}", text(&h[..100]))
         };
-        let data = bytes.get(at + 512..at + 512 + size).expect("truncated tar");
+        let data = at
+            .checked_add(512)
+            .and_then(|start| Some(start..start.checked_add(size)?))
+            .and_then(|range| bytes.get(range))
+            .ok_or("truncated tar")?;
         if h[156] == b'0' || h[156] == 0 {
             out.insert(name, data);
         }
         at += 512 + size.div_ceil(512) * 512;
     }
-    out
+    Ok(out)
 }
 
 fn main() {
@@ -52,7 +56,7 @@ fn main() {
         let evidence = cache.entry(key).or_insert_with(|| {
             let result = (|| -> Result<Value, String> {
                 let tar = std::fs::read(root.join(p["path"].as_str().ok_or("missing path")?)).map_err(|e| e.to_string())?;
-                let files = members(&tar);
+                let files = members(&tar)?;
                 let get = |role| p["components"].as_array()?.iter().find(|c| c["role"] == role)?.get("member")?.as_str().and_then(|m| files.get(m).copied());
                 let n = get("normal").ok_or("no Normal component")?;
                 let k = get("kernel").and_then(|bytes| Envelope::load(bytes).ok());

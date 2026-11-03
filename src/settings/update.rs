@@ -487,6 +487,13 @@ mod tests {
         assert_eq!(phase(&malformed), None);
     }
     #[test]
+    fn phase_helper_ending_at_region_end_is_recognized() {
+        for reverse in [false, true] {
+            let b = body(reverse);
+            assert_eq!(phase(&b[..b.len() - 50]), Some(reverse));
+        }
+    }
+    #[test]
     fn excluded_register_changes_do_not_create_settings_requirements() {
         let a = body(false);
         let mut b = body(false);

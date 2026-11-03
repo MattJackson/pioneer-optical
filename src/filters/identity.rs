@@ -196,6 +196,8 @@ mod tests {
         role: Role,
         finding: Finding,
         projected: Option<Finding>,
+        /// Assessment id reported by inspect, when it differs from the registration.
+        reported: Option<&'static str>,
     }
     impl Fake {
         fn known(id: &'static str, value: Value) -> Self {
@@ -204,6 +206,7 @@ mod tests {
                 role: Role::Hardware,
                 finding: Finding::Known(value),
                 projected: None,
+                reported: None,
             }
         }
     }
@@ -216,7 +219,7 @@ mod tests {
         }
         fn inspect(&self, _context: &Context<'_>) -> Assessment {
             Assessment {
-                id: self.id,
+                id: self.reported.unwrap_or(self.id),
                 role: self.role,
                 finding: self.finding.clone(),
                 evidence: "relocated native evidence".into(),
@@ -280,6 +283,7 @@ mod tests {
                 evidence: "complete native contract excludes this input".into(),
             },
             projected: None,
+            reported: None,
         };
         let key = discover_with(&context, &[&excluded]).unwrap().as_is;
         assert!(!bytes.contains(&key.canonical_bytes()));
@@ -356,10 +360,41 @@ mod tests {
                 role: Role::Hardware,
                 finding,
                 projected: Some(Finding::Known(Value::U8(0))),
+                reported: None,
             };
             assert!(discover_with(&context, &[&fake]).is_none());
         }
         assert!(discover_with(&context, &[]).is_none());
+    }
+
+    #[test]
+    fn unknown_conflicting_and_unproved_projections_never_form_a_key() {
+        let context = context("SAT 1000");
+        for projected in [
+            Finding::Unresolved("x".into()),
+            Finding::Conflicting("y".into()),
+            Finding::NotApplicable {
+                proof: 9,
+                evidence: String::new(),
+            },
+        ] {
+            let fake = Fake {
+                projected: Some(projected),
+                ..Fake::known("required", Value::U8(0))
+            };
+            assert!(discover_with(&context, &[&fake]).is_none());
+        }
+    }
+
+    #[test]
+    fn mislabelled_and_unnamed_owners_never_form_a_key() {
+        let context = context("SAT 1000");
+        let mislabelled = Fake {
+            reported: Some("other"),
+            ..Fake::known("owner", Value::U8(0))
+        };
+        assert!(discover_with(&context, &[&mislabelled]).is_none());
+        assert!(discover_with(&context, &[&Fake::known("", Value::U8(0))]).is_none());
     }
 
     #[test]
@@ -371,6 +406,7 @@ mod tests {
             role: Role::Operational,
             finding: Finding::Unresolved("requires an explicit startup policy".into()),
             projected: None,
+            reported: None,
         };
         assert!(matches!(
             operational.inspect(&context).finding,
@@ -391,12 +427,14 @@ mod tests {
             role: Role::Hardware,
             finding: Finding::Known(Value::U8(0)),
             projected: Some(Finding::Known(Value::U8(0))),
+            reported: None,
         };
         let swapped = Fake {
             id: "phase",
             role: Role::Hardware,
             finding: Finding::Known(Value::U8(1)),
             projected: Some(Finding::Known(Value::U8(0))),
+            reported: None,
         };
         let a = discover_with(&context, &[&direct]).unwrap();
         let b = discover_with(&context, &[&swapped]).unwrap();
@@ -410,6 +448,7 @@ mod tests {
                 evidence: "native proof at offset100".into(),
             },
             projected: None,
+            reported: None,
         };
         let b = Fake {
             id: "irrelevant",
@@ -419,6 +458,7 @@ mod tests {
                 evidence: "same proof relocated to900".into(),
             },
             projected: None,
+            reported: None,
         };
         assert_eq!(
             discover_with(&context, &[&a]),

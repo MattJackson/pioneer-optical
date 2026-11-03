@@ -47,6 +47,12 @@ pub(super) fn discover(normal: &[u8]) -> Observation<Evidence> {
     }
 }
 
+/// First reviewed initialization block shape.
+#[cfg(test)]
+pub(super) fn fixture() -> &'static Shape {
+    &shapes::SHAPES[0]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

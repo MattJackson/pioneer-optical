@@ -214,6 +214,47 @@ mod tests {
         );
     }
     #[test]
+    fn ata_m32c_contracts_are_tagged_and_conflicts_never_collapse() {
+        let m32c = [
+            0xf6, 0xa1, 0xd4, 0, 0x10, 0x97, 0xaf, 0xd2, 0, 0x10, 0x14, 0xeb, 0xf6, 0xa1, 0xd5, 0,
+            0x10,
+        ];
+        let host = peripheral::HostSignature {
+            coordinate: 0x1000d2,
+            signature_low: 0x1000d2,
+            signature_high: 0x1000d3,
+            initial_one: [0x1000d4, 0x1000d5],
+        };
+        assert_eq!(
+            inspect(&m32c, "ATA 0005").finding,
+            Finding::Known(signature(3, host))
+        );
+        assert!(matches!(
+            inspect(&m32c, "ATA 00z5").finding,
+            Finding::Unresolved(_)
+        ));
+        let mut conflicting = m32c.to_vec();
+        conflicting.extend([
+            0xf6, 0xe1, 0xd4, 0x50, 0x15, 0xd2, 0x50, 0x14, 0xeb, 0xf6, 0xe1, 0xd5, 0x50,
+        ]);
+        assert!(matches!(
+            inspect(&conflicting, "ATA 0005").finding,
+            Finding::Conflicting(_)
+        ));
+        let other = peripheral::HostSignature {
+            signature_high: 0x1000d4,
+            ..host
+        };
+        assert!(matches!(
+            finish(vec![signature(3, host), signature(3, other)], "e".into()).finding,
+            Finding::Conflicting(_)
+        ));
+        assert_eq!(
+            finish(vec![signature(3, host), signature(3, host)], "e".into()).finding,
+            Finding::Known(signature(3, host))
+        );
+    }
+    #[test]
     #[ignore = "requires PIONEER_NORMAL_CORPUS; all nine audited older host parents"]
     fn all_nine_audited_older_host_parents_keep_one_positive_native_contract() {
         let corpus = std::path::PathBuf::from(std::env::var("PIONEER_NORMAL_CORPUS").unwrap());

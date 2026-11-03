@@ -91,7 +91,13 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
             .or_default()
             .push(i);
     }
-    let lookup = |target: i64| targets.get(&target).map_or(&[][..], Vec::as_slice);
+    // The blocks examined for one decoded reference: only those entered there.
+    let lookup = |target: i64| {
+        let blocks = targets.get(&target).map_or(&[][..], Vec::as_slice);
+        #[cfg(test)]
+        tests::BLOCK_CHECKS.with(|c| c.set(c.get() + blocks.len()));
+        blocks
+    };
     for region in &regions.stored {
         let base = region.as_ptr() as usize - normal.as_ptr() as usize;
         for local in (base & 1..region.len()).step_by(2) {
@@ -127,8 +133,6 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
                 if !matched.is_empty() {
                     let (start, domain) = argument::suffix(region, local, 1);
                     for &i in matched {
-                        #[cfg(test)]
-                        tests::BLOCK_CHECKS.with(|c| c.set(c.get() + 1));
                         result[i].callers.push(Caller {
                             offset: at,
                             kind,
@@ -140,8 +144,6 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
             }
             if let Some(target) = other {
                 for &i in lookup(target) {
-                    #[cfg(test)]
-                    tests::BLOCK_CHECKS.with(|c| c.set(c.get() + 1));
                     result[i].other_references.push(at);
                 }
             }

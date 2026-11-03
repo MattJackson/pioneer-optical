@@ -5,7 +5,6 @@ use super::{cache_flow::Reference, CallKind};
 use crate::image::layout::Observation;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
-use h8_asm::{isa::decode_insn, Mode, Target};
 /// Number of cache bytes read from the caller-supplied low-byte index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -107,18 +106,6 @@ impl Shape {
         }
     }
 }
-/// Whether `region[at..at + len]` may be read as its own instruction: no
-/// aligned start in the preceding eight bytes decodes to an instruction that
-/// extends past `at`. Otherwise the bytes may be another instruction's operand.
-pub(super) fn immediate_at(region: &[u8], at: usize, len: usize) -> bool {
-    region.len() >= at + len
-        && (at.saturating_sub(8)..at)
-            .filter(|s| (at - s) & 1 == 0)
-            .all(|s| {
-                decode_insn(&region[s..], Target::H8S2000, Mode::Advanced)
-                    .map_or(true, |d| s + d.len <= at)
-            })
-}
 /// Bind R0 byte/pair helper inputs through complete stored bodies and the exact
 /// proven cache accessor. R1 helpers require additional initializer contracts.
 pub fn discover(normal: &[u8]) -> Observation<Vec<Helper>> {
@@ -203,12 +190,8 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Helper>> {
             if let Some((kind, target)) = call {
                 for &h in lookup(target) {
                     let helper = &mut helpers[h];
-                    let index = if (local >= 4
-                        && region[local - 4..local - 2] == [0x79, 0]
-                        && immediate_at(region, local - 4, 4))
-                        || (local >= 2
-                            && region[local - 2] == 0xf8
-                            && immediate_at(region, local - 2, 2))
+                    let index = if (local >= 4 && region[local - 4..local - 2] == [0x79, 0])
+                        || (local >= 2 && region[local - 2] == 0xf8)
                     {
                         Some(region[local - 1])
                     } else {
@@ -337,30 +320,28 @@ pub(super) mod tests {
         assert!(REFERENCE_SCANS.with(Cell::get) <= 1);
     }
     #[test]
-    fn index_bytes_inside_a_longer_instruction_stay_unknown() {
-        let mut raw = fixture(&SHAPES[0]);
-        // JSR @0x41f805: "f8 05" is its operand, not MOV.B #5,R0L.
-        raw[0x80..0x88].copy_from_slice(&[0x5e, 0x41, 0xf8, 0x05, 0x5e, 0x41, 0x40, 0]);
-        let Observation::Known(found) = discover(&raw) else {
-            panic!("fixture")
-        };
-        assert_eq!(found[0].callers[0].offset, 0x84);
-        assert_eq!(found[0].callers[0].indices, None);
-        // MOV.W #0x9F,R0 inside MOV.L #0x7900009F,ER1 (7a 01 79 00 00 9f).
-        raw[0x7e..0x8c].copy_from_slice(&[
-            0x7a, 0x01, 0x79, 0, 0, 0x9f, 0x5e, 0x41, 0x40, 0, 0xff, 0xff, 0xff, 0xff,
-        ]);
-        let Observation::Known(found) = discover(&raw) else {
-            panic!("fixture")
-        };
-        assert_eq!(found[0].callers[0].offset, 0x84);
-        assert_eq!(found[0].callers[0].indices, None);
-        // A genuine preceding MOV.B still binds.
-        raw[0x7e..0x84].copy_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xf8, 0x05]);
-        let Observation::Known(found) = discover(&raw) else {
-            panic!("fixture")
-        };
-        assert_eq!(found[0].callers[0].indices, Some(alloc::vec![5]));
+    fn index_loads_after_longer_instructions_resolve() {
+        // Genuine streams whose preceding operand bytes happen to begin a
+        // longer instruction; the index load itself is a real boundary.
+        for prefix in [
+            &[0x5e, 0x41, 0x6e, 0x12, 0xf8, 0x05][..], // JSR @0x416e12; MOV.B #5,R0L
+            &[0x5e, 0x41, 0x5e, 0, 0x79, 0, 0, 0x05],  // JSR @0x415e00; MOV.W #5,R0
+            &[0x7a, 0x01, 0, 0xa0, 0x7a, 0, 0xf8, 0x05], // MOV.L #0xa07a00,ER1; MOV.B #5,R0L
+        ] {
+            let mut raw = fixture(&SHAPES[0]);
+            let call = 0x84;
+            raw[call - prefix.len()..call].copy_from_slice(prefix);
+            raw[call..call + 4].copy_from_slice(&[0x5e, 0x41, 0x40, 0]);
+            let Observation::Known(found) = discover(&raw) else {
+                panic!("fixture")
+            };
+            assert_eq!(found[0].callers[0].offset, call);
+            assert_eq!(
+                found[0].callers[0].indices,
+                Some(alloc::vec![5]),
+                "{prefix:02x?}"
+            );
+        }
     }
     #[test]
     fn converter_offsets_follow_each_native_call_encoding() {

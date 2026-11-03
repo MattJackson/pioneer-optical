@@ -232,7 +232,7 @@ impl Contracts {
         let rules = hardware_rules()?;
         let route = destination_route(
             model,
-            rules.iter().any(|r| r.restricted && r.hardware == scope),
+            rules.iter().any(|r| r.restricted && r.hardware.same(scope)),
             |target| crate::settings::routing::Table::new(rules).resolve_scope(scope, target),
         )?;
         self.prepare_route(source, target, model, route)

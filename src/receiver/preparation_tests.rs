@@ -947,6 +947,30 @@ fn handoff_bridge_preserves_source_normal_and_finishes_with_exact_target() {
 }
 
 #[test]
+fn original_hardware_scope_ignores_ascii_case() {
+    let receiver = Receiver::from_installed(&update(false, 1, 0x12, true)).unwrap();
+    for rule in crate::settings::adaptation::hardware_rules().unwrap() {
+        let lower = |v: &str| &*Box::leak(v.to_ascii_lowercase().into_boxed_str());
+        let scope = crate::settings::routing::ProductSelector {
+            platform: lower(rule.hardware.platform),
+            prefix: rule.hardware.prefix.map(lower),
+            suffix: rule.hardware.suffix.map(lower),
+        };
+        assert!(
+            receiver.clone().with_original_hardware_scope(scope).is_ok(),
+            "{scope:?}"
+        );
+    }
+    assert!(receiver
+        .with_original_hardware_scope(crate::settings::routing::ProductSelector {
+            platform: "UD99",
+            prefix: None,
+            suffix: None,
+        })
+        .is_err());
+}
+
+#[test]
 fn handoff_bridge_mismatch_reports_the_incoming_kernel_startup() {
     let shifted = |original: &Update| {
         let mut kernel = original.kernel().image.clone();

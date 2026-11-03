@@ -15,6 +15,18 @@ pub struct ProductSelector<'a> {
 }
 
 impl ProductSelector<'_> {
+    /// The same selector, compared like `matches` without ASCII case distinctions.
+    pub(crate) fn same(&self, other: ProductSelector<'_>) -> bool {
+        let same = |a: Option<&str>, b: Option<&str>| match (a, b) {
+            (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+            (None, None) => true,
+            _ => false,
+        };
+        self.platform.eq_ignore_ascii_case(other.platform)
+            && same(self.prefix, other.prefix)
+            && same(self.suffix, other.suffix)
+    }
+
     fn overlaps(&self, other: Self) -> bool {
         let compatible = |a: Option<&str>, b: Option<&str>| match (a, b) {
             (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
@@ -92,7 +104,7 @@ impl<'a> Table<'a> {
         if self
             .rules
             .iter()
-            .any(|r| r.hardware != original && r.hardware.overlaps(original))
+            .any(|r| !r.hardware.same(original) && r.hardware.overlaps(original))
         {
             return Decision::Ambiguous;
         }
@@ -100,7 +112,7 @@ impl<'a> Table<'a> {
         let mut restricted = false;
         let mut selected = None;
         for rule in self.rules {
-            if rule.hardware != original {
+            if !rule.hardware.same(original) {
                 continue;
             }
             scoped = true;
@@ -306,6 +318,40 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn symbolic_scopes_ignore_ascii_case_like_live_routing() {
+        let specific = Rule {
+            hardware: ProductSelector {
+                prefix: Some("BDR"),
+                suffix: Some("TBD"),
+                ..platform("UD02")
+            },
+            ..RULES[0]
+        };
+        let lower = ProductSelector {
+            platform: "ud02",
+            prefix: Some("bdr"),
+            suffix: Some("tbd"),
+        };
+        for destination in ["BDR-UD02D", "BDR-UD03", "BDR-UD04"] {
+            assert_eq!(
+                Table::new(RULES).resolve_scope(platform("ud02"), code(destination)),
+                Table::new(RULES).resolve_scope(platform("UD02"), code(destination)),
+            );
+            assert_eq!(
+                Table::new(&[specific]).resolve_scope(lower, code(destination)),
+                Table::new(&[specific]).resolve_scope(specific.hardware, code(destination)),
+            );
+        }
+        assert_eq!(
+            Table::new(RULES).resolve_scope(platform("ud02"), code("BDR-UD04")),
+            Decision::Profile("a-to-b")
+        );
+        // A specified field never equals an unspecified one.
+        assert!(!platform("UD02").same(specific.hardware));
+        assert!(!specific.hardware.same(platform("UD02")));
     }
 
     #[test]

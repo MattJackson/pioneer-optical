@@ -136,7 +136,7 @@ impl Receiver {
     ) -> Result<Self, crate::settings::adaptation::Error> {
         if !crate::settings::adaptation::hardware_rules()?
             .iter()
-            .any(|r| r.hardware == scope)
+            .any(|r| r.hardware.same(scope))
         {
             return Err(crate::settings::adaptation::Error::OriginalMismatch);
         }

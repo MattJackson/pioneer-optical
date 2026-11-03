@@ -19,22 +19,21 @@ pub struct Block {
     /// Actual source indices, not inferred from a model name.
     pub indices: [u16; 7],
 }
-fn stored(normal: &[u8], offset: usize, len: usize) -> bool {
-    crate::image::regions(normal).is_some_and(|r| {
-        r.stored.iter().any(|region| {
-            let start = region.as_ptr() as usize - normal.as_ptr() as usize;
-            offset >= start && offset.saturating_add(len) <= start + region.len()
-        })
+/// `regions` must be `image::regions(normal)`'s stored regions, decoded once.
+fn stored(normal: &[u8], regions: &[&[u8]], offset: usize, len: usize) -> bool {
+    regions.iter().any(|region| {
+        let start = region.as_ptr() as usize - normal.as_ptr() as usize;
+        offset >= start && offset.saturating_add(len) <= start + region.len()
     })
 }
-fn bind(normal: &[u8], offset: usize, getter: u32) -> Option<Block> {
+fn bind(normal: &[u8], regions: &[&[u8]], offset: usize, getter: u32) -> Option<Block> {
     let bytes = normal.get(offset..offset.checked_add(BYTES.len())?)?;
     if !bytes
         .iter()
         .zip(BYTES)
         .enumerate()
         .all(|(k, (a, b))| a == b || RELOCATIONS.iter().any(|&(i, n, _)| (i..i + n).contains(&k)))
-        || !stored(normal, offset, BYTES.len())
+        || !stored(normal, regions, offset, BYTES.len())
     {
         return None;
     }
@@ -64,7 +63,7 @@ fn bind(normal: &[u8], offset: usize, getter: u32) -> Option<Block> {
         return None;
     }
     let table_offset = (value(32, 4) as usize).checked_sub(0x410000)?;
-    if table_offset & 1 != 0 || !stored(normal, table_offset, 14) {
+    if table_offset & 1 != 0 || !stored(normal, regions, table_offset, 14) {
         return None;
     }
     let table = normal.get(table_offset..table_offset.checked_add(14)?)?;
@@ -91,6 +90,9 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
     if references.argument_register != 0 {
         return Observation::Unresolved(Unresolved::ReaderNotRecognized);
     }
+    // Undecodable regions store nothing, so no loop binds.
+    let regions = crate::image::regions(normal);
+    let stored = regions.as_ref().map_or(&[][..], |r| r.stored.as_slice());
     let mut blocks = Vec::new();
     for call in references
         .calls
@@ -100,7 +102,7 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
         if let Some(block) = call
             .offset
             .checked_sub(58)
-            .and_then(|at| bind(normal, at, references.getter))
+            .and_then(|at| bind(normal, stored, at, references.getter))
         {
             blocks.push(block);
         }
@@ -132,24 +134,39 @@ mod tests {
     #[test]
     fn complete_code_and_operand_relationships_are_required() {
         let mut raw = fixture();
-        assert!(bind(&raw, 0x2000, 0x411000).is_some());
+        assert!(bind(&raw, &[&raw], 0x2000, 0x411000).is_some());
         for k in 0..BYTES.len() {
             if RELOCATIONS.iter().any(|&(i, n, _)| (i..i + n).contains(&k)) {
                 continue;
             }
             raw[0x2000 + k] ^= 1;
-            assert!(bind(&raw, 0x2000, 0x411000).is_none(), "byte {k}");
+            assert!(bind(&raw, &[&raw], 0x2000, 0x411000).is_none(), "byte {k}");
             raw[0x2000 + k] ^= 1;
         }
         for &(i, n, g) in RELOCATIONS {
             if RELOCATIONS.iter().filter(|&&(_, _, h)| h == g).count() > 1 {
                 raw[0x2000 + i + n - 1] ^= 2;
-                assert!(bind(&raw, 0x2000, 0x411000).is_none());
+                assert!(bind(&raw, &[&raw], 0x2000, 0x411000).is_none());
                 raw[0x2000 + i + n - 1] ^= 2;
             }
         }
+        assert!(
+            bind(&raw, &[&raw], 0x2000, 0x411100).is_none(),
+            "other getter"
+        );
+        assert!(
+            bind(&raw, &[&raw[..0x4000]], 0x2000, 0x411000).is_none(),
+            "table outside stored code"
+        );
+        assert!(
+            bind(&raw, &[&raw[0x2010..]], 0x2000, 0x411000).is_none(),
+            "loop outside stored code"
+        );
+        raw[0x2020..0x2024].copy_from_slice(&0x414001u32.to_be_bytes());
+        raw[0x4001..0x400f].copy_from_slice(&[0; 14]);
+        assert!(bind(&raw, &[&raw], 0x2000, 0x411000).is_none(), "odd table");
         raw[0x2020..0x2024].copy_from_slice(&0x40fff0u32.to_be_bytes());
-        assert!(bind(&raw, 0x2000, 0x411000).is_none());
+        assert!(bind(&raw, &[&raw], 0x2000, 0x411000).is_none());
     }
     #[test]
     fn every_source_word_is_read_including_a_new_009f() {
@@ -164,5 +181,23 @@ mod tests {
             assert_eq!(blocks[0].indices[i], 0x9f);
             raw[0x4000 + 2 * i..0x4002 + 2 * i].copy_from_slice(&old);
         }
+    }
+    #[test]
+    fn replicated_loops_decode_the_image_regions_a_fixed_number_of_times() {
+        let reads = |copies: usize| {
+            let mut raw = fixture();
+            let loop_bytes = raw[0x2000..0x2000 + BYTES.len()].to_vec();
+            for k in 1..copies {
+                let at = 0x2000 + k * 0xc0;
+                raw[at..at + BYTES.len()].copy_from_slice(&loop_bytes);
+            }
+            crate::comp_streams::READS.with(|c| c.set(0));
+            let Observation::Known(blocks) = discover(&raw) else {
+                panic!("fixture")
+            };
+            assert_eq!(blocks.len(), copies);
+            crate::comp_streams::READS.with(|c| c.get())
+        };
+        assert_eq!(reads(10), reads(1));
     }
 }

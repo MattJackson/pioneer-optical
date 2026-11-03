@@ -51,7 +51,7 @@ impl Contract {
     /// Inspect independently decoded firmware; no model names or fixed offsets.
     pub fn discover(normal: &[u8]) -> Self {
         let hardware_family = crate::image::legacy_family(normal).map(|f| f.to_string());
-        let normal_sha256 = crate::compatibility::mechanism::digest(normal);
+        let normal_sha256 = super::digest(normal);
         // Most firmware is outside this narrow reviewed mechanism scope. Do
         // not normalize or broaden its historical refusal contract.
         let phase_evidence = ISSUES

@@ -8,7 +8,7 @@
 
 mod abi;
 mod control;
-mod edits;
+pub(crate) mod edits;
 #[path = "image_evidence.rs"]
 mod evidence;
 pub mod geometry;
@@ -65,7 +65,7 @@ const SERVO_BASE: usize = 7;
 /// Legacy diagnostic fingerprint scheme. Not the matrix admission identity.
 pub const FAMILY_SCHEME: &str = "pioneer.hardware.v5";
 /// Typed matrix scheme used by context-aware, Envelope and receiver identities.
-pub const MATRIX_FAMILY_SCHEME: &str = "pioneer.hardware.v6";
+pub const MATRIX_FAMILY_SCHEME: &str = "pioneer.hardware.v7";
 
 /// Full servo coefficient row width.
 const SERVO_ROW_LEN: usize = 40;

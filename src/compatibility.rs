@@ -9,7 +9,6 @@ pub mod mechanism;
 
 #[cfg(feature = "envelope")]
 mod kernel;
-mod layout;
 #[cfg(feature = "envelope")]
 pub use kernel::{plan_kernel, KernelPlanningError, KernelStep, KernelTransitionPlan};
 /// Target startup selection and the evidence retained with that decision.
@@ -24,7 +23,9 @@ mod preparation;
 #[cfg(feature = "envelope")]
 pub(crate) use preparation::{prepare as prepare_corrections, PreparationError};
 
-use crate::image::matrix::{discover, AtaInput, Key, SatKey};
+use crate::image::matrix::{discover, Key};
+#[cfg(test)]
+use crate::image::matrix::{AtaInput, SatKey};
 use crate::image::phase;
 use alloc::vec::Vec;
 
@@ -43,13 +44,22 @@ pub struct ParameterPrerequisite {
 #[cfg(feature = "envelope")]
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedCorrection {
+    pub verification: Verification,
     pub id: String,
     pub image: Vec<u8>,
     pub corrections: Vec<Correction>,
     pub requirements: Vec<ParameterPrerequisite>,
-    requires_normal_runtime: bool,
-    stock_return: bool,
+    pub(crate) requires_normal_runtime: bool,
+    pub(crate) stock_return: bool,
     pub resolves_issue: String,
+}
+
+#[cfg(feature = "envelope")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Verification {
+    RegisteredFilters,
+    ReviewedMechanism,
+    ReviewedMechanismAndRegisteredFilters,
 }
 
 #[cfg(feature = "envelope")]
@@ -77,6 +87,7 @@ impl From<PreparedCorrection> for CorrectionRequirements {
 impl PreparedCorrection {
     pub(crate) fn native(image: Vec<u8>, corrections: &[Correction]) -> Self {
         Self {
+            verification: Verification::RegisteredFilters,
             id: "pioneer.native-correction.v1".into(),
             image,
             corrections: corrections.to_vec(),
@@ -88,6 +99,12 @@ impl PreparedCorrection {
     }
     pub(crate) fn stock_return(&self) -> bool {
         self.stock_return
+    }
+    pub(crate) fn verified_by_filters(&self) -> bool {
+        matches!(
+            self.verification,
+            Verification::RegisteredFilters | Verification::ReviewedMechanismAndRegisteredFilters
+        )
     }
 }
 
@@ -184,9 +201,18 @@ impl crate::CodedError for Error {
 }
 
 /// A native firmware difference with a supported correction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Correction {
+    /// A correction supplied by a registered filter without central dispatch.
+    Registered {
+        /// Stable identifier of the owner authorizing the correction.
+        filter: &'static str,
+        /// Native facts in the requested firmware before correction.
+        from: crate::filters::Finding,
+        /// Required native facts after correction.
+        to: crate::filters::Finding,
+    },
     /// Change target output assignment to the installed hardware assignment.
     Phase {
         /// Assignment currently encoded in target Normal.
@@ -210,24 +236,50 @@ pub enum Correction {
 /// Envelope authentication and live setting prerequisites remain receiver gates.
 /// Address relocation additionally requires complete Normal program equivalence
 /// and the exact unchanged Kernel; published candidate keys retain layout.
+struct InstalledFirmware {
+    hardware: alloc::string::String,
+    normal: Vec<u8>,
+    kernel: Option<Vec<u8>>,
+}
+impl InstalledFirmware {
+    fn as_firmware(&self) -> Firmware<'_> {
+        Firmware {
+            hardware: &self.hardware,
+            normal: &self.normal,
+            kernel: self.kernel.as_deref(),
+        }
+    }
+}
+
+/// Component-bound owner plan with an immutable installed-firmware snapshot.
 pub struct CorrectionPlan<'a> {
+    installed: InstalledFirmware,
+    policy: crate::filters::runner::Policy,
     target: Firmware<'a>,
-    expected: Key,
-    candidate: Key,
+    expected: Option<Key>,
+    runner: crate::filters::runner::Plan<'a>,
     corrections: Vec<Correction>,
-    prepared: Option<Vec<u8>>,
 }
 impl CorrectionPlan<'_> {
-    /// Ordered native corrections; an empty list means the identities match.
+    /// Re-evaluate every registered owner after a reviewed whole-program effect.
+    /// The installed snapshot and explicit family policy remain unchanged.
+    pub fn replan<'a>(&self, target: Firmware<'a>) -> Result<CorrectionPlan<'a>, Error> {
+        plan_with_policy(self.installed.as_firmware(), target, self.policy)
+    }
+
+    /// Native corrections selected by their registered owners.
     pub fn corrections(&self) -> &[Correction] {
         &self.corrections
     }
 
-    /// Prepare a corrected Normal file bound to the plan's exact components.
-    /// Rebuilds checksums, signs when required, decodes and verifies the result.
-    /// A Kernel is optional only for codecs with sufficient standalone evidence.
-    /// This proves file preparation only; live prerequisites, receiver protocol
-    /// and transfer representation still gate flashing independently.
+    /// Every registered owner result, including operational requirements and
+    /// explicit family waivers. No platform-specific field list is applied.
+    pub fn filters(&self) -> &[crate::filters::runner::Decision] {
+        self.runner.decisions()
+    }
+
+    /// Prepare a complete corrected file using the original codec and Kernel.
+    /// Authentication and live execution prerequisites remain independent gates.
     #[cfg(feature = "envelope")]
     pub fn prepare_file(
         &self,
@@ -238,130 +290,65 @@ impl CorrectionPlan<'_> {
             return Ok(None);
         };
         let bytes = rebuild_normal(normal, kernel, &image, false)?;
-        self.verify_image(&image)?;
         Ok(Some(bytes))
     }
 
-    /// Prepare decoded Normal bytes using the exact file codec and Kernel.
-    /// Checks native sums and re-extracts every required identity field. The
-    /// caller must still rebuild and authenticate the file before transfer.
-    /// Receiver preparation uses this stage to compose corrections before the
-    /// shared file rebuild, so authentication is performed only once.
+    /// Prepare exact decoded components with native codec authority. Each owner
+    /// supplies its effect and verifier; the coordinator composes disjoint edits.
     #[cfg(feature = "envelope")]
     pub fn prepare_image(
         &self,
         normal: &crate::envelope::Envelope,
         kernel: Option<&crate::envelope::Envelope>,
     ) -> Result<Option<Vec<u8>>, Error> {
-        use crate::envelope::Layout;
         if !representation::matching_components(normal, kernel)
             || normal.image != self.target.normal
             || self.target.kernel != kernel.map(|k| k.image.as_slice())
             || normal.info().hardware_version != self.target.hardware
-            || kernel.is_some_and(|k| {
-                k.info().kind != crate::ComponentKind::Kernel
-                    || k.info().hardware_version != self.target.hardware
-            })
         {
             return Err(Error::ComponentMismatch);
         }
-        let m32c = matches!(&self.expected,Key::Ata(k)if matches!(k.input,AtaInput::M32c(_)));
-        let legacy_sat1 = matches!(&self.expected, Key::Sat(SatKey::Sat1 { .. }))
-            && normal.info().layout == Layout::NormalScaledKey;
-        let image = if let Some(prepared) = &self.prepared {
-            prepared.clone()
-        } else if m32c || legacy_sat1 {
-            let [Correction::Phase { to, .. }] = self.corrections.as_slice() else {
-                if self.corrections.is_empty() {
-                    return Ok(None);
-                }
-                return Err(Error::Unsupported);
-            };
-            let modified = if m32c {
-                let base = match normal.info().layout {
-                    Layout::NormalTailKey => 0xf40000,
-                    Layout::NormalBootKey if kernel.is_some() => 0xf80000,
-                    _ => return Err(Error::Unsupported),
-                };
-                crate::image::peripheral::correct_m32c_phase_pair(self.target.normal, base, *to)
-                    .map_err(Error::Phase)?
-            } else {
-                phase::correct_legacy(self.target.normal, *to).map_err(Error::Phase)?
-            };
-            let image = normal
-                .repair_image_checksum(&modified)
-                .ok_or(Error::Representation)?;
-            self.verify_image(&image)?;
-            image
-        } else {
-            let Some(image) = self.prepare_normal()? else {
-                return Ok(None);
-            };
-            image
+        let context = crate::filters::Preparation {
+            target: self.target,
+            normal: Some(normal),
+            kernel,
         };
-        self.verify_image(&image)?;
-        Ok(Some(image))
+        let result = self.runner.prepare(&context)?;
+        self.verify_image(result.as_deref().unwrap_or(self.target.normal))?;
+        Ok(result)
     }
 
-    /// Apply supported firmware effects and re-extract the entire identity.
-    /// None means no firmware changes are needed. This does not authorize flash.
-    /// M32C checksum rules require codec evidence; use `prepare_file` instead.
+    /// Apply supported decoded-image effects without inventing codec authority.
+    /// A filter that needs a file or exact Kernel refuses this raw path.
     pub fn prepare_normal(&self) -> Result<Option<Vec<u8>>, Error> {
-        if let Some(prepared) = &self.prepared {
-            self.verify_image(prepared)?;
-            return Ok(Some(prepared.clone()));
-        }
-        let corrected = match self.corrections.as_slice() {
-            [] => return Ok(None),
-            [Correction::Phase { to, .. }] => match &self.expected {
-                Key::Ata(key) if matches!(key.input, AtaInput::V850(_)) => {
-                    let kernel = self.target.kernel.ok_or(Error::UnresolvedIdentity)?;
-                    crate::image::peripheral::correct_v850_normal_phase(
-                        self.target.normal,
-                        kernel,
-                        *to,
-                    )
-                    .map_err(Error::Phase)?
-                }
-                Key::Ata(_) => return Err(Error::Unsupported),
-                _ => phase::correct_normal(self.target.normal, *to).map_err(Error::Phase)?,
-            },
-            _ => return Err(Error::Unsupported),
+        let context = crate::filters::Preparation {
+            target: self.target,
+            #[cfg(feature = "envelope")]
+            normal: None,
+            #[cfg(feature = "envelope")]
+            kernel: None,
         };
-        self.verify_image(&corrected)?;
-        Ok(Some(corrected))
+        let result = self.runner.prepare(&context)?;
+        self.verify_image(result.as_deref().unwrap_or(self.target.normal))?;
+        Ok(result)
     }
 
     fn verify_image(&self, image: &[u8]) -> Result<(), Error> {
-        let after = discover(self.target.hardware, image, self.target.kernel)
-            .ok_or(Error::VerificationFailed)?;
-        if after.as_is != self.expected || !compatible_candidates(&after.candidate, &self.candidate)
-        {
-            return Err(Error::VerificationFailed);
+        if let Some(expected) = &self.expected {
+            let after = discover(self.target.hardware, image, self.target.kernel)
+                .ok_or(Error::VerificationFailed)?;
+            if &after.as_is != expected {
+                return Err(Error::VerificationFailed);
+            }
         }
         Ok(())
-    }
-}
-
-fn paired_assignment(key: &Key) -> Option<phase::Assignment> {
-    match key {
-        Key::Sat(
-            SatKey::Sat8 {
-                phase: Some(value), ..
-            }
-            | SatKey::Sat9 {
-                phase: Some(value), ..
-            },
-        ) => Some(*value),
-        Key::Sat(SatKey::Sat1 { phase, .. }) => Some(*phase),
-        Key::Ata(key) => Some(key.phase.assignment),
-        _ => None,
     }
 }
 
 // ATA transition support is checked per exact target by codec/checksum proof
 // during preparation. Its published candidate identity still retains phase.
 // Admit a potential plan only when every other typed field is exactly equal.
+#[cfg(test)]
 fn compatible_candidates(source: &Key, target: &Key) -> bool {
     if source == target {
         return true;
@@ -394,79 +381,61 @@ pub fn plan<'a>(
     installed: Firmware<'_>,
     target: Firmware<'a>,
 ) -> Result<CorrectionPlan<'a>, Error> {
-    let source = discover(installed.hardware, installed.normal, installed.kernel)
-        .ok_or(Error::UnresolvedIdentity)?;
-    let destination =
-        discover(target.hardware, target.normal, target.kernel).ok_or(Error::UnresolvedIdentity)?;
-    let mut address_change = None;
-    if !compatible_candidates(&source.candidate, &destination.candidate) {
-        if let Some((start, end)) =
-            layout::relocation_overlap(&source.as_is, &destination.as_is, target.normal)
-        {
-            return Err(Error::PersistentLayoutOverlap { start, end });
-        }
-        let Some((adjusted, from, to)) =
-            layout::address_only_candidate(&source.candidate, &destination.candidate)
-        else {
-            return Err(Error::Incompatible);
-        };
-        if !compatible_candidates(&source.candidate, &adjusted) {
-            return Err(Error::Incompatible);
-        }
-        address_change = Some((from, to));
-    }
-    let mut corrections = Vec::new();
-    let source_phase = paired_assignment(&source.as_is);
-    let target_phase = paired_assignment(&destination.as_is);
-    let phase_change = if source_phase != target_phase {
-        let from = target_phase.ok_or(Error::Unsupported)?;
-        let to = source_phase.ok_or(Error::Unsupported)?;
-        if matches!(source.as_is, Key::Sat(SatKey::Sat1 { .. })) {
-            use crate::image::layout::Observation;
-            match (
-                phase::discover(installed.normal),
-                phase::discover(target.normal),
-            ) {
-                (Observation::Known(a), Observation::Known(b)) if a.interface == b.interface => {}
-                (Observation::Known(_), Observation::Known(_)) => return Err(Error::Incompatible),
-                _ => return Err(Error::UnresolvedIdentity),
-            }
-        }
-        corrections.push(Correction::Phase { from, to });
-        Some(to)
+    plan_with_policy(installed, target, crate::filters::runner::Policy::Strict)
+}
+
+/// Build the same complete owner plan under an explicit family override.
+/// Operational requirements and selected correction proofs are never waived.
+pub fn plan_with_policy<'a>(
+    installed: Firmware<'_>,
+    target: Firmware<'a>,
+    policy: crate::filters::runner::Policy,
+) -> Result<CorrectionPlan<'a>, Error> {
+    use crate::filters::{Context, Finding};
+    let source = Context::new(installed);
+    let destination = Context::new(target);
+    let runner = crate::filters::runner::plan(&source, &destination, policy)?;
+    let expected = if policy == crate::filters::runner::Policy::Strict {
+        Some(Key::Registered(
+            crate::filters::identity::discover(&source)
+                .ok_or(Error::UnresolvedIdentity)?
+                .as_is,
+        ))
     } else {
         None
     };
-    let prepared = if let Some((from, to)) = address_change {
-        let native = crate::image::layout::plan_h8_relocation(
-            installed.normal,
-            installed.kernel.ok_or(Error::UnresolvedIdentity)?,
-            target.normal,
-            target.kernel.ok_or(Error::UnresolvedIdentity)?,
-        )
-        .map_err(Error::PersistentLayout)?;
-        if (native.from(), native.to()) != (from, to) {
-            return Err(Error::VerificationFailed);
-        }
-        let prepared = native
-            .prepare_with_phase(phase_change)
-            .map_err(Error::PersistentLayout)?;
-        corrections.push(Correction::PersistentParameterLayout { from, to });
-        Some(prepared)
-    } else {
-        None
-    };
-    let plan = CorrectionPlan {
+    let corrections = runner
+        .decisions()
+        .iter()
+        .filter_map(|decision| {
+            decision.operation().map(|operation| {
+                operation
+                    .description()
+                    .unwrap_or_else(|| Correction::Registered {
+                        filter: decision.id,
+                        from: decision.target.finding.clone(),
+                        to: match &decision.installed.finding {
+                            Finding::Known(_) | Finding::NotApplicable { .. } => {
+                                decision.installed.finding.clone()
+                            }
+                            _ => decision.target.finding.clone(),
+                        },
+                    })
+            })
+        })
+        .collect();
+    Ok(CorrectionPlan {
+        installed: InstalledFirmware {
+            hardware: installed.hardware.into(),
+            normal: installed.normal.to_vec(),
+            kernel: installed.kernel.map(<[u8]>::to_vec),
+        },
+        policy,
         target,
-        expected: source.as_is,
-        candidate: source.candidate,
+        expected,
+        runner,
         corrections,
-        prepared,
-    };
-    if let Some(prepared) = &plan.prepared {
-        plan.verify_image(prepared)?;
-    }
-    Ok(plan)
+    })
 }
 
 /// Convenience entry point for the existing phase-only preparation API.

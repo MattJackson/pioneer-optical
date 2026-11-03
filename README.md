@@ -125,13 +125,13 @@ retains the source Normal and startup code while adapting its recognized RAM
 programmer restart operand for the target. Independent requirements may compose
 into three stages; unknown contracts refuse preparation.
 
-The `compatibility` planner compares typed v6 hardware filters and selects
+The `compatibility` planner compares registered v7 hardware filters and selects
 supported native corrections automatically from the installed and requested
 firmware. Phase output assignment is checked on every preparation; it changes
 only when required. Persistent parameter layout and storage geometry remain
 independent required filters. A narrowly proven address-only Normal variant
 can be corrected without moving retained data; different record formats and
-unproven variants refuse preparation. See [family identity](docs/family-v6.md)
+unproven variants refuse preparation. See [family identity](docs/family-v7.md)
 and [correction workflow](docs/correction-completion.md).
 
 `PreparedUpdate::flash` uses one stage executor, with live receiver binding,

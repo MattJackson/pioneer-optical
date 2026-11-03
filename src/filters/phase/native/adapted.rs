@@ -75,7 +75,7 @@ pub(super) fn observe(normal: &[u8], at: usize, stored: &[&[u8]]) -> Option<Phas
 }
 
 pub(super) fn correct(normal: &[u8], target: Assignment) -> Result<Vec<u8>, CorrectionError> {
-    let regions = super::super::regions(normal).ok_or(CorrectionError::Unresolved)?;
+    let regions = crate::image::regions(normal).ok_or(CorrectionError::Unresolved)?;
     let mut bindings = Vec::new();
     for region in &regions.stored {
         let start = region.as_ptr() as usize - normal.as_ptr() as usize;
@@ -98,7 +98,7 @@ pub(super) fn correct(normal: &[u8], target: Assignment) -> Result<Vec<u8>, Corr
             corrected[before.at + offset] ^= 1;
         }
     }
-    let regions = super::super::regions(&corrected).ok_or(CorrectionError::VerificationFailed)?;
+    let regions = crate::image::regions(&corrected).ok_or(CorrectionError::VerificationFailed)?;
     let after =
         bind(&corrected, before.at, &regions.stored).ok_or(CorrectionError::VerificationFailed)?;
     if after.at != before.at

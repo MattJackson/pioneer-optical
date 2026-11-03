@@ -131,7 +131,7 @@ pub(super) fn observe(t: &Template, normal: &[u8], at: usize, regions: &[&[u8]])
     })
 }
 fn bindings(normal: &[u8]) -> Option<Vec<Binding>> {
-    let regions = super::super::regions(normal)?;
+    let regions = crate::image::regions(normal)?;
     let mut result = Vec::new();
     for region in regions.stored {
         let start = region.as_ptr() as usize - normal.as_ptr() as usize;

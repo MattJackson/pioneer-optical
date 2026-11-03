@@ -20,7 +20,14 @@ fn startup_selection_uses_target_even_when_installed_surface_is_unknown() {
     let installed = update(false, 1, 0x12, true);
     assert!(crate::startup::surface::discover(&installed.normal().image).is_none());
     let receiver = Receiver::from_installed(&installed).unwrap();
-    let neutral = receiver.startup_setting_for(&[]).unwrap().unwrap();
+    assert_eq!(
+        receiver.startup_setting_for(&[]),
+        Err(PreparationError::UnresolvedStartup)
+    );
+    let neutral = receiver
+        .startup_setting_for(&installed.normal().image)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         (neutral.parameter, neutral.value, neutral.explicit),
         (0x9f, 0xffff, false)
@@ -43,7 +50,12 @@ fn startup_selection_uses_target_even_when_installed_surface_is_unknown() {
         (setting.parameter, setting.value, setting.explicit),
         (0x9f, 0xfe24, true)
     );
-    assert_eq!(receiver.startup_setting_for(&[]).unwrap(), Some(neutral));
+    assert_eq!(
+        receiver
+            .startup_setting_for(&installed.normal().image)
+            .unwrap(),
+        Some(neutral)
+    );
     assert_eq!(
         receiver.startup_setting_for(&normal).unwrap(),
         Some(setting)
@@ -163,9 +175,19 @@ fn every_preparation_path_uses_the_receivers_startup_checks() {
             PreparationError::Startup(checks::Error::Banks(bank::Error::ConversionRequired { .. }))
         ))
     };
-    refused(receiver.prepare(target.clone()).unwrap_err());
+    // Geometry is now a registered SAT8 hardware input. Strict preparation
+    // rejects that native difference; a family override still cannot waive the
+    // independent retained-bank startup contract.
+    for error in [
+        receiver.prepare(target.clone()).unwrap_err(),
+        receiver.prepare_normal(&bytes).unwrap_err(),
+    ] {
+        assert!(matches!(
+            error,
+            PreparationError::Compatibility(Error::FamilyMismatch { .. })
+        ));
+    }
     refused(receiver.prepare_without_family_check(target).unwrap_err());
-    refused(receiver.prepare_normal(&bytes).unwrap_err());
     refused(
         receiver
             .prepare_normal_without_family_check(&bytes)
@@ -1147,5 +1169,209 @@ fn generic_kernel_steps_materialize_only_the_agreed_edits_in_both_directions() {
             assert_eq!(plan.final_kernel_image(), target.kernel().image);
             assert_eq!(plan.target.normal().image, target.normal().image);
         }
+    }
+}
+
+#[test]
+fn registry_native_planning_runs_every_owner_even_when_family_hashes_match() {
+    let installed = update(false, 1, 0x12, true);
+    let receiver = Receiver::from_installed(&installed).unwrap();
+    assert_eq!(
+        receiver.check_family_with_kernel(installed.normal(), installed.kernel()),
+        installed.family().ok_or(Error::UnknownTargetFamily)
+    );
+    for check_family in [true, false] {
+        let native = receiver
+            .plan_native_correction(installed.normal(), installed.kernel(), check_family)
+            .unwrap()
+            .unwrap();
+        let expected: Vec<_> = crate::filters::filters()
+            .iter()
+            .map(|owner| owner.id())
+            .collect();
+        assert_eq!(
+            native
+                .filters()
+                .iter()
+                .map(|decision| decision.id)
+                .collect::<Vec<_>>(),
+            expected
+        );
+        let startup = native
+            .filters()
+            .iter()
+            .find(|decision| decision.id == "startup-prerequisite")
+            .unwrap();
+        assert_eq!(startup.target.role, crate::filters::Role::Operational);
+        assert!(matches!(
+            startup.target.finding,
+            crate::filters::Finding::Unresolved(_)
+        ));
+        assert!(!startup.waived);
+    }
+}
+
+#[test]
+fn startup_selection_uses_exact_architecture_and_never_gives_ata_or_scsi_h8_actions() {
+    let installed = update(false, 1, 0x12, true);
+    let receiver = Receiver::from_installed(&installed).unwrap();
+    for hardware in ["ATA 0005", "SCSI0001"] {
+        assert!(receiver
+            .startup_plan_for(crate::compatibility::Firmware {
+                hardware,
+                normal: &installed.normal().image,
+                kernel: Some(&installed.kernel().image),
+            })
+            .unwrap()
+            .is_none());
+    }
+}
+
+#[test]
+fn forced_full_and_normal_only_keep_declared_native_layout_and_phase_effects() {
+    use crate::image::{layout, phase};
+    fn file(base: &Update, image: &[u8]) -> Update {
+        let mut key = [0; 20];
+        key[19] = 5;
+        let signer = SigningKey::from_bytes(key).unwrap();
+        let pair = encode_encrypted_pair(
+            &BuildInputs {
+                kernel_image: &base.kernel().image,
+                normal_image: image,
+                envelope_id: "PIONEER BDR-TEST",
+                normal_revision: "1.00",
+                normal_date: "00/00/00",
+                kernel: KernelBuild::from_seed(0x123456),
+                normal_key_seed: 0x47d001,
+            },
+            NormalSignature::Sign(&signer),
+        )
+        .unwrap();
+        Update::load(&pair.kernel, &pair.normal).unwrap()
+    }
+    fn normal_checksum(image: &mut [u8]) {
+        image[16..20].fill(0);
+        let sum = image.chunks_exact(4).fold(0u32, |sum, word| {
+            sum.wrapping_add(u32::from_be_bytes(word.try_into().unwrap()))
+        });
+        image[16..20].copy_from_slice(&sum.wrapping_neg().to_be_bytes());
+    }
+    let original = update(false, 1, 0x12, true);
+    let mut kernel = original.kernel().image.clone();
+    let selector = [
+        0x6b, 0x28, 0, 0x5c, 0xff, 0xfe, 0x6b, 0x20, 0, 0x5d, 0xff, 0xfe, 0x79, 0x28, 0xff, 0xff,
+        0x47, 0x12, 0x79, 0x20, 0xff, 0xff, 0x47, 4, 0x1d, 8, 0x43, 8, 0x7a, 0, 0, 0x5c, 0, 0,
+        0x40, 6, 0x7a, 0, 0, 0x5d, 0, 0, 0x54, 0x70,
+    ];
+    kernel[0x46fa..0x46fa + selector.len()].copy_from_slice(&selector);
+    kernel[0x4800..0x4806].copy_from_slice(&[0x5e, 0x40, 0x46, 0xfa, 0x54, 0x70]);
+    fix_sum(&mut kernel);
+    let base = Update::load(
+        &original.kernel().repack(&kernel).unwrap(),
+        original.normal_transfer(),
+    )
+    .unwrap();
+    let mut image = normal_image(0x10000);
+    image[0x500..0x510].copy_from_slice(&original.normal().image[0x500..0x510]);
+    image[8..16].fill(b' ');
+    crate::image::matrix::install_test_contract(&mut image, 0x12);
+    layout::install_test_layout_variant(&mut image, 0x1000, 8);
+    let calculation = [
+        0x5d, 0x60, 0x7a, 2, 0, 0x5d, 0x51, 0x60, 0x7a, 0x20, 0, 0x5c, 0, 0, 0x46, 4, 0x79, 0x0a,
+        0, 0x5c, 0x0f, 0xa0, 0x69, 0x21,
+    ];
+    image[0x7000..0x7000 + calculation.len()].copy_from_slice(&calculation);
+    normal_checksum(&mut image);
+    let installed = file(&base, &image);
+    let mut shifted = image.clone();
+    for at in (34..image.len() - 3).step_by(2) {
+        if image[at - 2] == 0x7a && image[at..at + 4] == 0x9984u32.to_be_bytes() {
+            shifted[at..at + 4].copy_from_slice(&0x5984u32.to_be_bytes());
+        }
+    }
+    normal_checksum(&mut shifted);
+    let shifted = phase::correct_normal(&shifted, phase::Assignment::Swapped).unwrap();
+    let target = file(&base, &shifted);
+    let candidate = |pair: &Update| {
+        crate::image::matrix::discover(
+            &pair.normal().info().hardware_version,
+            &pair.normal().image,
+            Some(&pair.kernel().image),
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "required fields: {:?}",
+                crate::filters::inspect(crate::compatibility::Firmware {
+                    hardware: &pair.normal().info().hardware_version,
+                    normal: &pair.normal().image,
+                    kernel: Some(&pair.kernel().image),
+                })
+            )
+        })
+        .candidate
+    };
+    assert_ne!(candidate(&installed), candidate(&target));
+    for (installed, target) in [(&installed, &target), (&target, &installed)] {
+        let receiver = Receiver::from_installed(installed).unwrap();
+        let full = receiver
+            .prepare_without_family_check(target.clone())
+            .unwrap();
+        let normal = receiver
+            .prepare_normal_without_family_check(target.normal_transfer())
+            .unwrap();
+        assert_eq!(full.target.normal().image, installed.normal().image);
+        assert_eq!(normal.normal_image(), installed.normal().image);
+        assert_eq!(full.target.kernel().image, target.kernel().image);
+        assert!(full
+            .settings()
+            .firmware_corrections()
+            .iter()
+            .any(|effect| matches!(
+                effect,
+                crate::compatibility::Correction::PersistentParameterLayout { .. }
+            )));
+        assert_eq!(
+            full.settings().firmware_corrections(),
+            normal.settings().firmware_corrections()
+        );
+    }
+}
+
+#[test]
+fn reviewed_mechanism_cannot_change_an_unrelated_family_fact_under_either_force_api() {
+    let installed = update(false, 1, 0x12, true);
+    let target = update(false, 1, 0x12, true);
+    let mut output = target.normal().image.clone();
+    output[0x701] = 0x13;
+    fix_sum(&mut output);
+    let profile = serde_json::json!({
+        "schema_version": 1, "id": "test.unrelated-native-field",
+        "hardware_scheme": crate::image::FAMILY_SCHEME,
+        "hardware_family": crate::image::legacy_family(&installed.normal().image).unwrap().to_string(),
+        "source_normal_sha256": [crate::compatibility::mechanism::digest(&installed.normal().image)],
+        "mode": "adapt", "resolves_issue": "ud02-mechanism-convention",
+        "target_normal_sha256": crate::compatibility::mechanism::digest(&target.normal().image),
+        "target_model": target.normal().info().model,
+        "input_length": output.len(), "required_parameters": [],
+        "replacements": [{"offset": 0x701, "expected_hex": "12", "replacement_hex": "13"}],
+        "checksum_offset": output.len()-4,
+        "output_sha256": crate::compatibility::mechanism::digest(&output),
+    }).to_string();
+    let mut receiver = Receiver::from_installed(&installed).unwrap();
+    receiver.correction_contracts = Some(vec![profile]);
+    for error in [
+        receiver
+            .prepare_without_family_check(target.clone())
+            .map(|_| ())
+            .unwrap_err(),
+        receiver
+            .prepare_normal_without_family_check(target.normal_transfer())
+            .map(|_| ())
+            .unwrap_err(),
+    ] {
+        assert_eq!(
+            error,
+            PreparationError::Adaptation(crate::compatibility::mechanism::Error::Guard)
+        );
     }
 }

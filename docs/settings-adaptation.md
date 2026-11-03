@@ -1,8 +1,8 @@
 # Mechanism correction contracts
 
-Mechanism correction belongs to `compatibility`, alongside native phase and
-startup planning. Production recipes and hardware selectors are typed Rust data
-in `compatibility/mechanism/contracts.rs`; production neither loads JSON nor
+Mechanism correction belongs to the `filters::phase` owner, alongside native
+phase recognition, comparison and correction planning. Production recipes and hardware selectors are typed Rust data
+in `filters/phase/mechanism/contracts.rs`; production neither loads JSON nor
 accepts host-supplied patch recipes. The eleven reviewed definitions and six
 hardware routing rules retain the dev 1.5 hardware, calibration and byte guards.
 `settings::adaptation` remains a forwarding API alias.
@@ -52,7 +52,7 @@ required adaptations remain enforced independently of a family override.
 
 ## Typed reviewed contracts
 
-`compatibility/mechanism/contracts.rs` contains version-bound firmware recipes
+`filters/phase/mechanism/contracts.rs` contains version-bound firmware recipes
 and original-hardware selectors. Rules reference a policy; multiple recipes can
 implement that policy for different firmware versions or calibration formats.
 All directions use the same preparation and execution code. Model tokens are

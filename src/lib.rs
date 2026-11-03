@@ -77,6 +77,9 @@ pub mod diagnostic;
 pub mod drive;
 #[cfg(feature = "envelope")]
 pub mod envelope;
+/// Registered native filters, their observations and correction owners.
+#[cfg(feature = "image")]
+pub mod filters;
 #[cfg(feature = "image")]
 pub mod ident;
 #[cfg(feature = "image")]

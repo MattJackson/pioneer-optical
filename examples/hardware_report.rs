@@ -63,7 +63,8 @@ fn main() {
                 }
                 let family = k.as_ref().map_or_else(|| decoded.family(), |k| decoded.family_with_kernel(k));
                 let legacy = image::legacy_family_fingerprint(&decoded.image).map(|f| json!({"family_scheme":image::FAMILY_SCHEME,"family":f.family.to_string(),"asic":f.asic,"board":f.board,"pins":f.pins,"raw_pins":f.raw_pins,"servo":f.servo}));
-                Ok(json!({"family_scheme":image::MATRIX_FAMILY_SCHEME,"family":family.map(|f|f.to_string()),"legacy_diagnostics":legacy,"uhd":image::is_uhd(&decoded.image),"decode_basis":if k.is_some(){"paired Kernel"}else{"standalone Normal"}}))
+                let filters = pioneer_optical::compatibility::Firmware { hardware: &decoded.info().hardware_version, normal: &decoded.image, kernel: k.as_ref().map(|k| k.image.as_slice()) }.filters();
+                Ok(json!({"family_scheme":image::MATRIX_FAMILY_SCHEME,"family":family.map(|f|f.to_string()),"filters":filters,"legacy_diagnostics":legacy,"uhd":image::is_uhd(&decoded.image),"decode_basis":if k.is_some(){"paired Kernel"}else{"standalone Normal"}}))
             })();
             match result { Ok(v) => v, Err(e) => json!({"error":e}) }
         });

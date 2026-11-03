@@ -81,6 +81,7 @@ fn direct_reference_facts_are_extracted_from_one_image() {
             size: bytes.len(),
             uhd: None,
             encoding_seed: None,
+            filters: Vec::new(),
         },
         regions: vec![region.clone()],
         diagnostics: Vec::new(),

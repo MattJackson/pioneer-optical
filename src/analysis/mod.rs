@@ -102,6 +102,9 @@ pub struct Identity {
     pub uhd: Option<bool>,
     /// Encoding seed where recoverable.
     pub encoding_seed: Option<u32>,
+    /// Every registered filter result, including unresolved operational facts.
+    /// New registrations appear here without a second analysis field list.
+    pub filters: Vec<crate::filters::Assessment>,
 }
 
 /// One disjoint decoded-body extent or one expanded COMP stream.
@@ -219,6 +222,16 @@ impl Envelope {
                 size: self.image.len(),
                 uhd: None,
                 encoding_seed: self.encoding_seed(),
+                filters: if info.kind == crate::ComponentKind::Normal {
+                    crate::compatibility::Firmware {
+                        hardware: &info.hardware_version,
+                        normal: &self.image,
+                        kernel: None,
+                    }
+                    .filters()
+                } else {
+                    Vec::new()
+                },
             },
             regions: Vec::new(),
             startup_requirement: None,

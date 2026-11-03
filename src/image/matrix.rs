@@ -16,6 +16,8 @@ pub use ata::{AtaEvidence, AtaInput, AtaKey};
 /// An established typed family identity. Variant tags preserve platform boundaries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Key {
+    /// Complete version-seven identity supplied by the shared filter registry.
+    Registered(crate::filters::identity::Key),
     /// SAT identity with the platform-specific required filters.
     Sat(SatKey),
     /// ATA identity with native architecture and interface retained.
@@ -25,6 +27,7 @@ impl Key {
     /// Versioned binary identity; never serializes presentation text.
     pub fn canonical_bytes(&self) -> Option<alloc::vec::Vec<u8>> {
         match self {
+            Self::Registered(k) => Some(k.canonical_bytes()),
             Self::Sat(k) => k.canonical_bytes(),
             Self::Ata(k) => k.canonical_bytes(),
         }
@@ -32,6 +35,7 @@ impl Key {
     /// Opaque digest of the canonical identity.
     pub fn family(&self) -> Option<super::Family> {
         match self {
+            Self::Registered(k) => Some(super::Family(k.fingerprint())),
             Self::Sat(k) => k.family(),
             Self::Ata(k) => k.family(),
         }
@@ -43,7 +47,7 @@ impl Key {
 pub struct Identity {
     /// Identity without applying corrections.
     pub as_is: Key,
-    /// Identity after only supported phase normalization (SAT8/SAT9).
+    /// Identity after each registered owner's explicitly supported projection.
     pub candidate: Key,
 }
 
@@ -53,6 +57,21 @@ pub struct Identity {
 /// ATA architecture/load base must be established by complete native consumers.
 /// Unsupported tags, missing required fields and conflicting keys return None.
 pub fn discover(hardware: &str, normal: &[u8], kernel: Option<&[u8]>) -> Option<Identity> {
+    let context = crate::filters::Context::new(crate::compatibility::Firmware {
+        hardware,
+        normal,
+        kernel,
+    });
+    let identity = crate::filters::identity::discover(&context)?;
+    Some(Identity {
+        as_is: Key::Registered(identity.as_is),
+        candidate: Key::Registered(identity.candidate),
+    })
+}
+
+/// Historical version-six projection for reference comparisons and migration.
+/// Current update admission uses the complete registered identity in [`discover`].
+pub fn legacy_discover(hardware: &str, normal: &[u8], kernel: Option<&[u8]>) -> Option<Identity> {
     if let Some(platform) = SatPlatform::from_hardware(hardware) {
         let evidence = SatEvidence::discover(platform, normal, kernel);
         return Some(Identity {

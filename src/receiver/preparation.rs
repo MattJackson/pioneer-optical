@@ -145,14 +145,7 @@ impl Receiver {
         kernel: &Envelope,
         check_family: bool,
     ) -> Result<Option<crate::compatibility::PreparedCorrection>, PreparationError> {
-        let native = if check_family {
-            self.plan_native_correction(normal, kernel)?
-        } else {
-            // A family override still applies every proven native correction.
-            // Unsupported pairs retain the explicit family-gate escape; their
-            // independent mechanism, startup and transfer checks remain required.
-            self.plan_native_correction(normal, kernel).ok().flatten()
-        };
+        let native = self.plan_native_correction(normal, kernel, check_family)?;
         let original = if self.settings_contract.hardware_sensitive() {
             match &self.original_product {
                 Some(Ok(original)) => Some(original.as_str()),
@@ -189,18 +182,21 @@ impl Receiver {
         &self,
         target: &'a Envelope,
         kernel: &'a Envelope,
+        check_family: bool,
     ) -> Result<Option<crate::compatibility::CorrectionPlan<'a>>, PreparationError> {
         use crate::compatibility::{self as correction, Firmware};
-        let mismatch = match self.check_family_with_kernel(target, kernel) {
-            Ok(_) => return Ok(None),
-            Err(error @ Error::FamilyMismatch { .. }) => error,
-            Err(error) => return Err(PreparationError::Compatibility(error)),
-        };
         let installed = self
             .installed_normal
             .as_ref()
-            .ok_or_else(|| PreparationError::Compatibility(mismatch.clone()))?;
-        let result = correction::plan(
+            .ok_or(PreparationError::Compatibility(
+                Error::UnknownInstalledFamily,
+            ))?;
+        let policy = if check_family {
+            crate::filters::runner::Policy::Strict
+        } else {
+            crate::filters::runner::Policy::FamilyOverride
+        };
+        correction::plan_with_policy(
             Firmware {
                 hardware: &installed.info().hardware_version,
                 normal: &installed.image,
@@ -211,11 +207,50 @@ impl Receiver {
                 normal: &target.image,
                 kernel: Some(&kernel.image),
             },
-        );
-        match result {
-            Err(correction::Error::Incompatible) => Err(PreparationError::Compatibility(mismatch)),
-            other => other.map(Some).map_err(PreparationError::PhaseCorrection),
+            policy,
+        )
+        .map(Some)
+        .map_err(|error| {
+            if check_family
+                && matches!(
+                    error,
+                    correction::Error::Incompatible | correction::Error::UnresolvedIdentity
+                )
+            {
+                if let Err(family_error) = self.check_family_with_kernel(target, kernel) {
+                    return PreparationError::Compatibility(family_error);
+                }
+            }
+            PreparationError::PhaseCorrection(error)
+        })
+    }
+
+    fn verify_correction_identity(
+        requested: &Update,
+        prepared: &Update,
+        corrected: &crate::compatibility::PreparedCorrection,
+        check_family: bool,
+    ) -> Result<(), PreparationError> {
+        if check_family || corrected.verified_by_filters() {
+            return Ok(());
         }
+        // Reviewed mechanism recipes retain their existing independent family
+        // guard until their complete postconditions are registry-owned too.
+        let candidate = |pair: &Update| {
+            crate::image::matrix::discover(
+                &pair.normal().info().hardware_version,
+                &pair.normal().image,
+                Some(&pair.kernel().image),
+            )
+            .map(|identity| identity.candidate)
+        };
+        let before = candidate(requested);
+        if before.is_none() || candidate(prepared) != before {
+            return Err(PreparationError::Adaptation(
+                crate::compatibility::mechanism::Error::Guard,
+            ));
+        }
+        Ok(())
     }
 
     fn encode_correction(
@@ -241,27 +276,62 @@ impl Receiver {
             .check(&crate::settings::update::Contract::discover(normal))
             .map_err(PreparationError::Settings)
     }
+    fn startup_selection_for(
+        context: &crate::filters::Context<'_>,
+    ) -> Result<Option<crate::compatibility::startup::Plan>, PreparationError> {
+        crate::filters::startup::selection(context).map_err(|_| {
+            match crate::filters::startup::inspect(context).finding {
+                crate::filters::Finding::Conflicting(_) => PreparationError::AmbiguousStartup,
+                _ => PreparationError::UnresolvedStartup,
+            }
+        })
+    }
+
+    #[cfg(test)]
     fn startup_plan_for(
         &self,
-        normal: &[u8],
+        firmware: crate::compatibility::Firmware<'_>,
     ) -> Result<Option<crate::compatibility::startup::Plan>, PreparationError> {
-        crate::compatibility::startup::plan_with_policy(
-            normal,
-            crate::compatibility::startup::StartupPolicy::NeutralSelection,
-        )
-        .map(Some)
-        .map_err(|error| match error {
-            crate::compatibility::startup::Error::Ambiguous => PreparationError::AmbiguousStartup,
-            crate::compatibility::startup::Error::Unresolved => PreparationError::UnresolvedStartup,
-        })
+        Self::startup_selection_for(&crate::filters::Context::new(firmware))
+    }
+
+    fn settings_plan_for(
+        &self,
+        normal: &Envelope,
+        kernel: &Envelope,
+        restore: bool,
+    ) -> Result<crate::settings::update::Plan, PreparationError> {
+        let info = normal.info();
+        let context = crate::filters::Context::new(crate::compatibility::Firmware {
+            hardware: &info.hardware_version,
+            normal: &normal.image,
+            kernel: Some(&kernel.image),
+        });
+        let selection = Self::startup_selection_for(&context)?;
+        let actions = crate::filters::parameter_actions(&context)
+            .map_err(PreparationError::PhaseCorrection)?;
+        crate::settings::update::Plan::from_startup(selection, restore)
+            .with_filter_actions(actions)
+            .map_err(PreparationError::PhaseCorrection)
     }
     #[cfg(test)]
     fn startup_setting_for(
         &self,
         normal: &[u8],
     ) -> Result<Option<crate::startup::Setting>, PreparationError> {
-        self.startup_plan_for(normal)
-            .map(|plan| plan.map(|plan| plan.setting()))
+        let installed = self
+            .installed_normal
+            .as_ref()
+            .ok_or(PreparationError::UnresolvedStartup)?;
+        self.startup_plan_for(crate::compatibility::Firmware {
+            hardware: &installed.info().hardware_version,
+            normal,
+            kernel: self
+                .installed_kernel
+                .as_ref()
+                .map(|kernel| kernel.image.as_slice()),
+        })
+        .map(|plan| plan.map(|plan| plan.setting()))
     }
     /// Prepare a Normal-only update using captured installed Kernel evidence.
     pub fn prepare_normal(&self, target: &[u8]) -> Result<PreparedNormal, PreparationError> {
@@ -295,24 +365,25 @@ impl Receiver {
         let correction = self.prepare_corrections(pair.normal(), pair.kernel(), check_family)?;
         if let Some(corrected) = &correction {
             let normal = self.encode_correction(pair.normal(), corrected, kernel)?;
-            pair = Update::load(&kernel_bytes, &normal).map_err(PreparationError::Target)?;
+            let prepared =
+                Update::load(&kernel_bytes, &normal).map_err(PreparationError::Target)?;
+            Self::verify_correction_identity(&pair, &prepared, corrected, check_family)?;
+            pair = prepared;
             if check_family {
                 self.check_family_with_kernel(pair.normal(), pair.kernel())
                     .map_err(PreparationError::Compatibility)?;
             }
         }
         let startup_checks = self.prepare_startup(&pair.normal().image, Some(&kernel.image))?;
-        let settings = crate::settings::update::Plan::from_startup(
-            self.startup_plan_for(&pair.normal().image)?,
-            false,
-        )
-        .with_startup_checks(startup_checks)
-        .with_correction(correction)
-        .with_hardware_guard(
-            pair.normal(),
-            self.requires_original_hardware(),
-            self.original_scope,
-        );
+        let settings = self
+            .settings_plan_for(pair.normal(), kernel, false)?
+            .with_startup_checks(startup_checks)
+            .with_correction(correction)
+            .with_hardware_guard(
+                pair.normal(),
+                self.requires_original_hardware(),
+                self.original_scope,
+            );
         let (normal, normal_bytes) = pair.into_normal();
         Ok(PreparedNormal {
             stage: PreparedStage {
@@ -366,21 +437,9 @@ impl Receiver {
                 .kernel()
                 .repack(&target.kernel().image)
                 .ok_or(PreparationError::InstalledKernelRepresentation)?;
-            let candidate = |pair: &Update| {
-                crate::image::matrix::discover(
-                    &pair.normal().info().hardware_version,
-                    &pair.normal().image,
-                    Some(&pair.kernel().image),
-                )
-                .map(|identity| identity.candidate)
-            };
-            let before = candidate(&target);
-            target = Update::load(&kernel, &normal).map_err(PreparationError::Target)?;
-            if !check_family && (before.is_none() || candidate(&target) != before) {
-                return Err(PreparationError::Adaptation(
-                    crate::compatibility::mechanism::Error::Guard,
-                ));
-            }
+            let prepared = Update::load(&kernel, &normal).map_err(PreparationError::Target)?;
+            Self::verify_correction_identity(&target, &prepared, corrected, check_family)?;
+            target = prepared;
         }
         if check_family {
             self.check_family_with_kernel(target.normal(), target.kernel())
@@ -408,17 +467,19 @@ impl Receiver {
             return Err(PreparationError::PatchedRepresentation);
         }
         let kernel_steps = transition.steps().to_vec();
-        let settings = crate::settings::update::Plan::from_startup(
-            self.startup_plan_for(&target.normal().image)?,
-            transition.restores_marker(),
-        )
-        .with_startup_checks(startup_checks)
-        .with_correction(correction)
-        .with_hardware_guard(
-            target.normal(),
-            self.requires_original_hardware(),
-            self.original_scope,
-        );
+        let settings = self
+            .settings_plan_for(
+                target.normal(),
+                target.kernel(),
+                transition.restores_marker(),
+            )?
+            .with_startup_checks(startup_checks)
+            .with_correction(correction)
+            .with_hardware_guard(
+                target.normal(),
+                self.requires_original_hardware(),
+                self.original_scope,
+            );
         let mut stages = Vec::new();
         let mut receiver = self.clone();
         for step in transition.into_steps() {
@@ -428,14 +489,13 @@ impl Receiver {
                     // This stage retains the source Normal's startup decision,
                     // but must check the final correction's live prerequisites
                     // before installing any bridge firmware.
-                    let bridge_settings = crate::settings::update::Plan::from_startup(
-                        self.startup_plan_for(&bridge.normal().image)?,
-                        false,
-                    )
-                    .with_startup_checks(
-                        self.prepare_startup(&bridge.normal().image, Some(&bridge.kernel().image))?,
-                    )
-                    .with_requirements_from(&settings);
+                    let bridge_settings = self
+                        .settings_plan_for(bridge.normal(), bridge.kernel(), false)?
+                        .with_startup_checks(self.prepare_startup(
+                            &bridge.normal().image,
+                            Some(&bridge.kernel().image),
+                        )?)
+                        .with_requirements_from(&settings);
                     stages.push(PreparedStage::pair(
                         receiver.clone(),
                         &bridge,

@@ -7,14 +7,16 @@ routes or transfer representations.
 
 ## Admission and effects
 
-Native observers live with their filters under `image`. They return typed
+Native recognition, comparison and correction live with each registered owner
+under `filters`; lower-level decoders remain under `image`. They return typed
 Known, Unresolved or Conflicting observations bound to decoded components and,
 where required, the exact associated Kernel. An unresolved required observation
 produces no family key. Display labels and model names do not select native
 patches. Matching candidate identities alone do not authorize an update.
 
-`compatibility` compares installed and requested firmware, enumerates supported
-effects, and produces component-bound plans. Every unrelated required filter
+`compatibility` invokes the registered owners for installed and requested
+firmware. Each owner enumerates its own supported effects, and the shared runner
+produces component-bound plans. Every unrelated required filter
 must match. Firmware operands, startup selections and read-only mechanism
 prerequisites remain distinct effects within that workflow. The receiver owns
 execution and rechecks each stage's hardware and live requirements before
@@ -99,39 +101,30 @@ and generation marker plus checksum. Every sequence ends with the unmodified
 target Kernel. The receiver checks the materialized stage count and final bytes.
 These existing bridges do not authorize new persistent-layout Kernel edits.
 
-## Validation and limits
+## Registry validation and limits
 
-The frozen release all-target suite passes 756 tests (715 library and 41 other
-tests). Private corpus suites are also run explicitly; their ignored-by-default
-status in the ordinary Cargo run does not replace that verification.
+The registered v7 corpus replay passes over all 722 distinct Normal images:
+626 have complete identities and 96 retain required unresolved findings. All
+seven owners report on every image; hardware entries are sorted by stable ID,
+and operational startup evidence is retained separately. Two previous SAT1
+groups split through additional initialization facts; 49 previously identified
+V850 images are deferred by unsupported initialization. These are native
+contract and coverage results, not physical failure claims.
 
-| Verification | Result |
-| --- | --- |
-| Feature matrix | 16 configurations; 7,119 passing test instances |
-| Documentation and portability | 16 documentation builds, 16 MSRV configurations plus all features, four thumb builds, six doctests |
-| Existing OEM, held-image and analysis regressions | 849 passing tests: 845 OEM, three held-image tests and one analysis test over 614 inputs |
-| Required filters | 18 passing corpus tests, including 11 persistent-layout tests |
-| ATA native and file correction | Nine passing corpus tests; 98 M32C files and 49 Kernel-bound V850 pairs; missing exact Kernels refuse |
-| Startup | 107 distinct tests, including 722 Normal images and 3,212 boot-chain mutations |
-| Mechanism contracts | 35 distinct tests; all 11 output digests, 40 phase compositions, 40 idempotence cases and 126 routing cases |
-| Receiver workflow | 89 workflow tests, four Kernel cases, 48 synthetic combinations and 48 preparations over an actual-image grid |
+Native filter, identity, runner and layout tests verify recognition, complete
+owner registration, typed comparison and refusal boundaries. Three SAT1003
+layouts require the unavailable exact resident reader at 0x404622; their other
+five hardware findings are recognized, and no layout mismatch is established.
+The independent phase operation proofs retain their exact scope: 58 SAT1 file
+plans, 346 paired SAT8/SAT9 signed file plans, 98 M32C files and 49 exact-Kernel
+V850 pairs. A file-operation proof does not override a required unknown field
+or grant full update admission. Invalid files and missing exact Kernels refuse.
 
-SAT1 independently proves all 73 native operand contracts across 13 forms:
-58 original files pass complete plans and codec reversal; 15 invalid standalone
-files refuse, including all three unresolved exact-Kernel identities. SAT8/SAT9
-prove all 457 native programs and original wrappers: 346 complete signed file
-plans pass both directions and idempotence; the other 111 invalid-sum files
-without their exact Kernel refuse. Independent decoded-image oracles and exact
-signature-block-only wrapper changes are checked. M32C and V850 retain their
-architecture-specific checksum and missing-Kernel gates.
+The startup owner independently recognizes 85 M32C `0x00D9 == 0xFFFF`
+comparisons. H8's deliberate neutral `0x009F = 0xFFFF` choice uses its own
+transaction; ATA/SCSI never inherit it. A native requirement is not fabricated
+from a missing pattern. Actual SAT1/SAT9 layout pairs and SAT8 format conversion
+remain blocked; file preparation does not expand receiver transport support.
 
-Formatting, warnings-denied Clippy, documentation, doctests and packaging checks
-pass. The reference inventory remains 723 package records, 722 distinct Normal
-images, 675 known v6 identities and 47 required deferrals. The desktop Hardware
-Matrix and review copy retain identical historical source data, all platform
-filters, four complete green correctable sections and working PDF export;
-browser checks confirm unchanged published grouping keys and no script errors.
-
-No new physical flash, media trial or full-drive emulation is claimed. Actual
-SAT1/SAT9 layout pairs and SAT8 format conversion remain blocked as described
-above. File preparation does not expand live receiver transport support.
+See [filter ownership](filter-registry.md) and [v7 family identity](family-v7.md).
+No new physical flash, media trial or full-drive emulation is claimed.

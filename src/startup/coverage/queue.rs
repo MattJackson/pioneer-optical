@@ -33,8 +33,14 @@ pub fn bind_initial_zero(
     clearer: u32,
 ) -> Option<InitialZero> {
     let start = call.checked_sub(14)?;
-    let bytes =
-        cache_writers::stored_at(normal, 0x410000u32.checked_add(start.try_into().ok()?)?, 16)?;
+    let regions = crate::image::regions(normal)?;
+    let stored = &regions.stored;
+    let bytes = cache_writers::stored_at(
+        normal,
+        stored,
+        0x410000u32.checked_add(start.try_into().ok()?)?,
+        16,
+    )?;
     if bytes[..2] != [0x7a, 0] || bytes[6..8] != [0x7a, 1] || bytes[12..15] != [0x19, 0x22, 0x5d] {
         return None;
     }
@@ -49,7 +55,7 @@ pub fn bind_initial_zero(
     if lo > count || count.checked_add(202)? > hi {
         return None;
     }
-    let leaf = cache_writers::stored_at(normal, clearer, 18)?;
+    let leaf = cache_writers::stored_at(normal, stored, clearer, 18)?;
     const CLEAR: &[u8] = &[
         0x6d, 0xf4, 0x0d, 0x24, 0x0f, 0x92, 0x1a, 0x82, 0x0d, 0x41, 0x5e, 0, 0, 0, 0x6d, 0x74,
         0x54, 0x70,
@@ -63,7 +69,7 @@ pub fn bind_initial_zero(
         return None;
     }
     let memset = u32::from_be_bytes([0, leaf[11], leaf[12], leaf[13]]);
-    if !cache_writers::is_memset(normal, memset) {
+    if !cache_writers::is_memset(normal, stored, memset) {
         return None;
     }
     Some(InitialZero {

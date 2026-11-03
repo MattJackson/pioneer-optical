@@ -66,12 +66,16 @@ pub(super) const MEMSET: &[u8] = &[
     0x1b, 0x72, 0x46, 0xf8, 0xeb, 0x03, 0x47, 0x06, 0x6c, 0x89, 0x1a, 0x0b, 0x46, 0xfa, 0x6d, 0x73,
     0x54, 0x70,
 ];
-pub(super) fn stored_at(normal: &[u8], address: u32, len: usize) -> Option<&[u8]> {
+/// `stored` must be `image::regions(normal)?.stored`, decoded once by the caller.
+pub(super) fn stored_at<'a>(
+    normal: &'a [u8],
+    stored: &[&[u8]],
+    address: u32,
+    len: usize,
+) -> Option<&'a [u8]> {
     let at = address.checked_sub(0x410000)? as usize;
     let end = at.checked_add(len)?;
-    let regions = crate::image::regions(normal)?;
-    regions
-        .stored
+    stored
         .iter()
         .any(|r| {
             let start = r.as_ptr() as usize - normal.as_ptr() as usize;
@@ -80,8 +84,8 @@ pub(super) fn stored_at(normal: &[u8], address: u32, len: usize) -> Option<&[u8]
         .then(|| &normal[at..end])
 }
 /// Bind the entire native memset routine, including its register-save contract.
-pub(super) fn is_memset(normal: &[u8], address: u32) -> bool {
-    stored_at(normal, address, MEMSET.len()) == Some(MEMSET)
+pub(super) fn is_memset(normal: &[u8], stored: &[&[u8]], address: u32) -> bool {
+    stored_at(normal, stored, address, MEMSET.len()) == Some(MEMSET)
 }
 impl Shape {
     fn bind(&self, bytes: &[u8], at: usize, ram: u32) -> Option<(Option<u32>, Vec<u32>)> {
@@ -238,7 +242,7 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Evidence>> {
                     else {
                         continue;
                     };
-                    if memset.is_some_and(|target| !is_memset(normal, target)) {
+                    if memset.is_some_and(|target| !is_memset(normal, &regions.stored, target)) {
                         continue;
                     }
                     writers.push(Writer {
@@ -378,6 +382,131 @@ mod tests {
             assert!(shape.bind(&bytes, 0x1000, 0xa01000).is_none());
         }
     }
+    const RAM: u32 = 0xa01000;
+    fn zero_writer(shape: &Shape, at: usize, memset: u32) -> Vec<u8> {
+        let mut bytes = instantiated(shape, at, RAM);
+        let g = shape.memset_group.unwrap();
+        for &(p, n, _) in shape.relocations.iter().filter(|r| r.2 == g) {
+            bytes[p..p + n].copy_from_slice(&memset.to_be_bytes()[4 - n..]);
+        }
+        bytes
+    }
+    /// Bulk loop at 0x2000, Update at 0x3000, branched Update at 0x3100,
+    /// R0 accessor at 0x3800, MEMSET at 0x5000 and `zeros` Zero writers from 0x6000.
+    fn writers_fixture(zeros: usize) -> Vec<u8> {
+        let mut raw = alloc::vec![0xff; 0x8000];
+        crate::image::layout::install_test_layout(&mut raw, 0x1000);
+        let bulk = &super::super::cache_shapes::SHAPES[0];
+        let at = 0x2000;
+        raw[at..at + bulk.bytes.len()].copy_from_slice(bulk.bytes);
+        raw[at + bulk.call + 1..at + bulk.call + 4].copy_from_slice(&[0x41, 0x10, 0]);
+        for p in bulk.ram {
+            raw[at + p..at + p + 4].copy_from_slice(&RAM.to_be_bytes());
+        }
+        for (shape, at) in [(&SHAPES[0], 0x3000), (&SHAPES[2], 0x3100)] {
+            let code = instantiated(shape, at, RAM);
+            raw[at..at + code.len()].copy_from_slice(&code);
+        }
+        // Native R0 byte accessor leaf (cache.rs R0 head, RAM base, RTS).
+        let mut leaf = alloc::vec![0x0c, 0x89, 0x1a, 0x80, 0x0c, 0x98, 0x78, 0, 0x6a, 0x28];
+        leaf.extend_from_slice(&RAM.to_be_bytes());
+        leaf.extend_from_slice(&[0x54, 0x70]);
+        raw[0x3800..0x3800 + leaf.len()].copy_from_slice(&leaf);
+        raw[0x5000..0x5000 + MEMSET.len()].copy_from_slice(MEMSET);
+        for k in 0..zeros {
+            let at = 0x6000 + k * 0x50;
+            let code = zero_writer(&SHAPES[1], at, 0x415000);
+            raw[at..at + code.len()].copy_from_slice(&code);
+        }
+        raw
+    }
+    fn evidence(raw: &[u8]) -> Evidence {
+        let Observation::Known(mut found) = discover(raw) else {
+            panic!("fixture")
+        };
+        assert_eq!(found.len(), 1);
+        found.remove(0)
+    }
+    fn alias_kind(evidence: &Evidence, at: usize) -> Option<Kind> {
+        evidence
+            .aliases
+            .iter()
+            .find(|a| a.reference == Reference::Stored(at))
+            .unwrap_or_else(|| panic!("alias at {at:#x}"))
+            .kind
+    }
+    #[test]
+    fn repeated_zero_writers_decode_the_image_regions_a_fixed_number_of_times() {
+        let reads = |zeros| {
+            let raw = writers_fixture(zeros);
+            crate::comp_streams::READS.with(|reads| reads.set(0));
+            assert_eq!(
+                evidence(&raw)
+                    .writers
+                    .iter()
+                    .filter(|w| w.kind == Kind::Zero)
+                    .count(),
+                zeros
+            );
+            crate::comp_streams::READS.with(|reads| reads.get())
+        };
+        assert_eq!(reads(40), reads(1));
+    }
+    #[test]
+    fn zero_writer_requires_the_exact_memset_callee() {
+        let mut raw = writers_fixture(1);
+        let found = evidence(&raw);
+        let zero: Vec<_> = found
+            .writers
+            .iter()
+            .filter(|w| w.kind == Kind::Zero)
+            .collect();
+        assert_eq!(zero.len(), 1);
+        assert_eq!((zero[0].offset, zero[0].memset), (0x6000, Some(0x415000)));
+        assert_eq!(alias_kind(&found, 0x6000 + 59), Some(Kind::Zero));
+        let branched = found.writers.iter().find(|w| w.offset == 0x3100).unwrap();
+        assert_eq!(branched.kind, Kind::Update);
+        assert_eq!(branched.memset, None);
+        assert_eq!(
+            branched.continuation_targets,
+            alloc::vec![0x410000 + 0x3100 - 20; 3]
+        );
+        for i in 0..MEMSET.len() {
+            raw[0x5000 + i] ^= 1;
+            let found = evidence(&raw);
+            assert!(
+                !found.writers.iter().any(|w| w.kind == Kind::Zero),
+                "memset byte {i}"
+            );
+            assert_eq!(alias_kind(&found, 0x6000 + 59), None);
+            raw[0x5000 + i] ^= 1;
+        }
+    }
+    #[test]
+    fn alias_kinds_follow_the_bound_operand_and_cache_range_is_exact() {
+        let mut raw = writers_fixture(0);
+        raw[0x4000..0x4006].copy_from_slice(&[0xa0, 0x10, 0x7f, 0xa0, 0x10, 0x00]);
+        raw[0x4010..0x4013].copy_from_slice(&[0xa0, 0x10, 0x80]);
+        raw[0x4020..0x4023].copy_from_slice(&[0xa0, 0x0f, 0xff]);
+        let found = evidence(&raw);
+        assert_eq!(alias_kind(&found, 0x2000 + 29), Some(Kind::BulkStore));
+        assert_eq!(alias_kind(&found, 0x2000 + 43), Some(Kind::BulkStore));
+        assert_eq!(alias_kind(&found, 0x3000 + 29), Some(Kind::Update));
+        assert_eq!(alias_kind(&found, 0x3100 + 33), Some(Kind::Update));
+        assert_eq!(alias_kind(&found, 0x3800 + 11), Some(Kind::Accessor));
+        assert_eq!(alias_kind(&found, 0x4000), None);
+        assert_eq!(alias_kind(&found, 0x4003), None);
+        let a = |at| {
+            found
+                .aliases
+                .iter()
+                .find(|a| a.reference == Reference::Stored(at))
+        };
+        assert_eq!(a(0x4000).unwrap().cache_offset, 127);
+        assert_eq!(a(0x4003).unwrap().cache_offset, 0);
+        assert!(a(0x4010).is_none(), "ram_base + 128 is outside the cache");
+        assert!(a(0x4020).is_none(), "ram_base - 1 is outside the cache");
+    }
     #[test]
     fn all_cache_byte_aliases_stay_visible_and_memset_body_is_required() {
         let mut raw = alloc::vec![0xff;0x8000];
@@ -406,10 +535,10 @@ mod tests {
             .iter()
             .any(|a| a.cache_offset == 127 && a.kind.is_none()));
         raw[0x5000..0x5000 + MEMSET.len()].copy_from_slice(MEMSET);
-        assert!(is_memset(&raw, 0x415000));
+        assert!(is_memset(&raw, &[&raw], 0x415000));
         for i in 0..MEMSET.len() {
             raw[0x5000 + i] ^= 1;
-            assert!(!is_memset(&raw, 0x415000));
+            assert!(!is_memset(&raw, &[&raw], 0x415000));
             raw[0x5000 + i] ^= 1;
         }
     }

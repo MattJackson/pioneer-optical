@@ -133,6 +133,25 @@ pub fn discover(raw: &[u8], base: u32) -> Observation<Input> {
     for positions in diagnostics.values_mut() {
         positions.sort_unstable();
     }
+    // Arrival positions per (register, closed, opened, action, open role), in
+    // hit order, so each startup looks up only its compatible arrivals.
+    type ArrivalKey = (u32, u8, u8, Option<u32>, bool);
+    let mut arrivals: BTreeMap<ArrivalKey, Vec<usize>> = BTreeMap::new();
+    for a in &hits {
+        let s = a.shape;
+        if matches!(s.kind, Kind::Closed | Kind::Opened) {
+            arrivals
+                .entry((
+                    s.register,
+                    s.closed,
+                    s.opened,
+                    a.action,
+                    s.kind == Kind::Opened,
+                ))
+                .or_default()
+                .push(a.at);
+        }
+    }
     let mut found = Vec::new();
     let mut evaluated = BTreeSet::new();
     for h in &hits {
@@ -150,34 +169,27 @@ pub fn discover(raw: &[u8], base: u32) -> Observation<Input> {
         {
             continue;
         }
-        let compatible = |other: &&Hit<'_>| {
-            other.shape.register == s.register
-                && other.shape.closed == s.closed
-                && other.shape.opened == s.opened
-                && other.action == h.action
-        };
         let mut roles = [false; 2];
-        for (i, (role, open)) in [(Kind::Closed, false), (Kind::Opened, true)]
-            .into_iter()
-            .enumerate()
-        {
+        for (i, open) in [false, true].into_iter().enumerate() {
             let nearby = diagnostics.get(&(open, s.register, s.closed, s.opened));
-            roles[i] = hits
-                .iter()
-                .filter(compatible)
-                .filter(|p| p.shape.kind == role)
-                .any(|arrival| {
-                    // A diagnostic d with d < arrival and arrival - d < 512.
-                    s.register == 0x56f9
-                        || nearby.is_some_and(|d| {
-                            let lo = arrival.at.saturating_sub(511);
-                            let i = d.partition_point(|&d| {
-                                #[cfg(test)]
-                                tests::DIAGNOSTIC_CHECKS.with(|c| c.set(c.get() + 1));
-                                d < lo
-                            });
-                            d.get(i).is_some_and(|&d| d < arrival.at)
-                        })
+            roles[i] = arrivals
+                .get(&(s.register, s.closed, s.opened, h.action, open))
+                .is_some_and(|group| {
+                    group.iter().any(|&arrival| {
+                        #[cfg(test)]
+                        tests::HITS_EXAMINED.with(|c| c.set(c.get() + 1));
+                        // A diagnostic d with d < arrival and arrival - d < 512.
+                        s.register == 0x56f9
+                            || nearby.is_some_and(|d| {
+                                let lo = arrival.saturating_sub(511);
+                                let i = d.partition_point(|&d| {
+                                    #[cfg(test)]
+                                    tests::DIAGNOSTIC_CHECKS.with(|c| c.set(c.get() + 1));
+                                    d < lo
+                                });
+                                d.get(i).is_some_and(|&d| d < arrival)
+                            })
+                    })
                 });
         }
         if roles == [true, true] {
@@ -231,6 +243,7 @@ mod tests {
 
     std::thread_local! {
         pub(super) static DIAGNOSTIC_CHECKS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        pub(super) static HITS_EXAMINED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
     }
     const BASE: u32 = 0xf40000;
     fn loading(o: Observation<Input>) -> bool {
@@ -302,6 +315,30 @@ mod tests {
         DIAGNOSTIC_CHECKS.with(|c| c.set(0));
         assert!(loading(discover(&raw, BASE)));
         assert!(DIAGNOSTIC_CHECKS.with(core::cell::Cell::get) < 20_000);
+    }
+    #[test]
+    fn startups_with_distinct_actions_examine_only_their_own_arrivals() {
+        let s = shape(Kind::Startup);
+        let examined = |startups: usize| {
+            let mut raw = loading_fixture();
+            for k in 1..20 {
+                place_set(&mut raw, 0x1000 + k * 0x600);
+            }
+            for k in 0..startups {
+                let at = 0x90000 + k * 0x80;
+                place(&mut raw, at, Kind::Startup);
+                let action = (BASE + 0x10000 + k as u32 * 2).to_le_bytes();
+                for &p in s.actions {
+                    raw[at + p..at + p + 3].copy_from_slice(&action[..3]);
+                }
+            }
+            HITS_EXAMINED.with(|c| c.set(0));
+            assert!(loading(discover(&raw, BASE)));
+            HITS_EXAMINED.with(core::cell::Cell::get)
+        };
+        let base = examined(0);
+        assert!(base > 0);
+        assert_eq!(examined(200), base);
     }
     #[test]
     fn isolated_startup_or_input_read_is_not_a_complete_loading_contract() {

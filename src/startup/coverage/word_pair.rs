@@ -5,7 +5,7 @@ use super::{
     CallKind,
 };
 use crate::image::layout::{Observation, Unresolved};
-use alloc::vec::Vec;
+use alloc::{collections::BTreeMap, vec::Vec};
 const BODY: &[u8] = &[
     0x01, 0x20, 0x6d, 0xf4, 0x0d, 0x1e, 0x0f, 0x85, 0x0d, 0x10, 0x5e, 0, 0, 0, 0x0d, 0x06, 0x0b,
     0x5e, 0x0d, 0xe0, 0x5e, 0, 0, 0, 0x0d, 0x04, 0x0c, 0x68, 0x55, 0x20, 0x68, 0xd8, 0x0c, 0xe8,
@@ -84,6 +84,14 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
             other_references: Vec::new(),
         });
     }
+    let mut targets: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+    for (i, block) in result.iter().enumerate() {
+        targets
+            .entry(0x410000 + block.offset as i64)
+            .or_default()
+            .push(i);
+    }
+    let lookup = |target: i64| targets.get(&target).map_or(&[][..], Vec::as_slice);
     for region in &regions.stored {
         let base = region.as_ptr() as usize - normal.as_ptr() as usize;
         for local in (base & 1..region.len()).step_by(2) {
@@ -112,19 +120,29 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
             } else {
                 None
             };
-            for block in &mut result {
-                let target = 0x410000 + block.offset as i64;
-                if let Some((kind, _)) = incoming.filter(|(_, t)| *t == target) {
+            // Only blocks whose entry is the decoded target are updated, so
+            // many functions cost one scan; per-block order is unchanged.
+            if let Some((kind, target)) = incoming {
+                let matched = lookup(target);
+                if !matched.is_empty() {
                     let (start, domain) = argument::suffix(region, local, 1);
-                    block.callers.push(Caller {
-                        offset: at,
-                        kind,
-                        suffix_start: base + start,
-                        first_index: domain,
-                    });
+                    for &i in matched {
+                        #[cfg(test)]
+                        tests::BLOCK_CHECKS.with(|c| c.set(c.get() + 1));
+                        result[i].callers.push(Caller {
+                            offset: at,
+                            kind,
+                            suffix_start: base + start,
+                            first_index: domain,
+                        });
+                    }
                 }
-                if other == Some(target) {
-                    block.other_references.push(at);
+            }
+            if let Some(target) = other {
+                for &i in lookup(target) {
+                    #[cfg(test)]
+                    tests::BLOCK_CHECKS.with(|c| c.set(c.get() + 1));
+                    result[i].other_references.push(at);
                 }
             }
         }
@@ -134,6 +152,64 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::cell::Cell;
+    std::thread_local! {
+        pub(super) static BLOCK_CHECKS: Cell<usize> = const { Cell::new(0) };
+    }
+    fn fixture(copies: usize) -> Vec<u8> {
+        let mut raw = alloc::vec![0xff; 0x6000];
+        crate::image::layout::install_test_layout(&mut raw, 0x1000);
+        for k in 0..copies {
+            let at = 0x2000 + k * 0x40;
+            raw[at..at + BODY.len()].copy_from_slice(BODY);
+            raw[at + 11..at + 14].copy_from_slice(&[0x41, 0x10, 0]);
+            raw[at + 21..at + 24].copy_from_slice(&[0x41, 0x10, 0]);
+        }
+        raw[0x80..0x88].copy_from_slice(&[0x79, 1, 0, 0x9e, 0x5e, 0x41, 0x20, 0]);
+        raw
+    }
+    #[test]
+    fn many_functions_share_one_reference_scan_with_unchanged_callers() {
+        let checks = |copies| {
+            let raw = fixture(copies);
+            BLOCK_CHECKS.with(|c| c.set(0));
+            let Observation::Known(found) = discover(&raw) else {
+                panic!("fixture")
+            };
+            assert_eq!(found.len(), copies);
+            assert_eq!(found[0].callers.len(), 1);
+            assert!(found[1..].iter().all(|b| b.callers.is_empty()));
+            BLOCK_CHECKS.with(Cell::get)
+        };
+        assert_eq!(checks(20), checks(1));
+    }
+    #[test]
+    fn relative_callers_and_absolute_jumps_are_retained() {
+        let mut raw = fixture(2);
+        raw[0x1ff0..0x1ff2].copy_from_slice(&[0x55, 0x0e]);
+        raw[0x2100..0x2104].copy_from_slice(&[0x5c, 0, 0xfe, 0xfc]);
+        raw[0x2110..0x2114].copy_from_slice(&[0x5a, 0x41, 0x20, 0]);
+        raw[0x2120..0x2126].copy_from_slice(&[0x7a, 3, 0, 0x41, 0x20, 0x40]);
+        let Observation::Known(found) = discover(&raw) else {
+            panic!("fixture")
+        };
+        let calls: Vec<_> = found[0]
+            .callers
+            .iter()
+            .map(|c| (c.offset, c.kind))
+            .collect();
+        assert_eq!(
+            calls,
+            alloc::vec![
+                (0x84, CallKind::Absolute),
+                (0x1ff0, CallKind::Relative8),
+                (0x2100, CallKind::Relative16)
+            ]
+        );
+        assert_eq!(found[0].other_references, alloc::vec![0x2110]);
+        assert!(found[1].callers.is_empty());
+        assert_eq!(found[1].other_references, alloc::vec![0x2120]);
+    }
     #[test]
     fn every_instruction_output_and_getter_target_is_bound() {
         let getter = 0x411000u32;

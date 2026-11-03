@@ -9,6 +9,7 @@ struct Mock {
     reads: VecDeque<Result<Vec<u8>, ()>>,
     calls: Vec<(Vec<u8>, Vec<u8>)>,
     fail_writes: bool,
+    short_writes: bool,
 }
 impl Mock {
     fn new(reads: Vec<Vec<u8>>) -> Self {
@@ -16,6 +17,7 @@ impl Mock {
             reads: reads.into_iter().map(Ok).collect(),
             calls: Vec::new(),
             fail_writes: false,
+            short_writes: false,
         }
     }
 }
@@ -35,7 +37,7 @@ impl Transport for Mock {
                 if self.fail_writes {
                     return Err(());
                 }
-                Ok(b.len())
+                Ok(b.len() - usize::from(self.short_writes))
             }
             Data::None => {
                 self.calls.push((cdb.to_vec(), vec![]));
@@ -227,6 +229,23 @@ fn exhausted_regions_are_not_written_and_valid_changes_are_verified() {
             vec![0, 6, 0, 0, 0xfe, 0, 0, 0]
         )
     );
+    // A readable readback with another prohibited mask is a mismatch.
+    let mut t = Mock::new(vec![
+        vec![0, 6, 0, 0, 0x64, 0xfd, 1, 0],
+        vec![0, 6, 0, 0, 0x63, 0xfd, 1, 0],
+    ]);
+    assert!(matches!(
+        Device::new(&mut t).set(DvdRegion, Region::new(1).unwrap(), Persistent),
+        Ok(WriteOutcome::Mismatch(_))
+    ));
+    // A short data-out transfer is unverified and is not read back.
+    let mut t = Mock::new(vec![vec![0, 6, 0, 0, 0x64, 0xfd, 1, 0]]);
+    t.short_writes = true;
+    assert!(matches!(
+        Device::new(&mut t).set(DvdRegion, Region::new(1).unwrap(), Persistent),
+        Ok(WriteOutcome::Unverified(Error::Malformed))
+    ));
+    assert_eq!(t.calls.len(), 2);
 }
 #[test]
 fn feature_lengths_and_code_must_agree() {

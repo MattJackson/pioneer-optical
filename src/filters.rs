@@ -466,6 +466,72 @@ mod tests {
         assert_eq!(filter.compare(&absent, &absent), Comparison::Unresolved);
     }
     #[test]
+    fn default_compare_requires_matching_owners_and_evidence() {
+        struct Minimal;
+        impl Filter for Minimal {
+            fn id(&self) -> &'static str {
+                "minimal"
+            }
+            fn name(&self) -> &'static str {
+                "Minimal default-compare owner"
+            }
+            fn inspect(&self, _context: &Context<'_>) -> Assessment {
+                Assessment::unresolved("minimal", Role::Hardware, "unused")
+            }
+        }
+        let at = |finding| Assessment {
+            id: "minimal",
+            role: Role::Hardware,
+            finding,
+            evidence: "native evidence".into(),
+        };
+        let excluded = |proof, evidence: &str| {
+            at(Finding::NotApplicable {
+                proof,
+                evidence: evidence.into(),
+            })
+        };
+        let known = |value| at(Finding::Known(Value::U8(value)));
+        let compare = |a: &Assessment, b: &Assessment| Minimal.compare(a, b);
+        assert_eq!(
+            compare(&excluded(5, "e"), &excluded(5, "f")),
+            Comparison::Match
+        );
+        assert_eq!(
+            compare(&excluded(5, ""), &excluded(5, "e")),
+            Comparison::Unresolved
+        );
+        assert_eq!(
+            compare(&excluded(5, "e"), &excluded(5, " ")),
+            Comparison::Unresolved
+        );
+        assert_eq!(
+            compare(&excluded(5, "e"), &excluded(6, "e")),
+            Comparison::Different
+        );
+        assert_eq!(
+            compare(&known(1), &at(Finding::Conflicting("two".into()))),
+            Comparison::Conflicting
+        );
+        assert_eq!(
+            compare(&known(1), &at(Finding::Unresolved("missing".into()))),
+            Comparison::Unresolved
+        );
+        assert_eq!(compare(&known(1), &known(1)), Comparison::Match);
+        assert_eq!(compare(&known(1), &known(2)), Comparison::Different);
+        let operational = Assessment {
+            role: Role::Operational,
+            ..known(1)
+        };
+        assert_eq!(compare(&known(1), &operational), Comparison::Conflicting);
+        let foreign = Assessment {
+            id: "other",
+            ..known(1)
+        };
+        assert_eq!(compare(&known(1), &foreign), Comparison::Conflicting);
+        assert_eq!(compare(&foreign, &known(1)), Comparison::Conflicting);
+    }
+    #[test]
     fn every_platform_receives_every_registered_filter_without_duplicate_ids() {
         let ids: Vec<_> = filters().iter().map(|filter| filter.id()).collect();
         let unique: alloc::collections::BTreeSet<_> = ids.iter().copied().collect();

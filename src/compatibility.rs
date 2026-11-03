@@ -614,4 +614,24 @@ mod tests {
             Err(Error::Phase(phase::CorrectionError::InvalidNormal))
         );
     }
+
+    #[test]
+    fn verification_refuses_images_without_the_expected_identity() {
+        let direct = normal(0);
+        let swapped = phase::correct_normal(&direct, phase::Assignment::Swapped).unwrap();
+        let planned = plan(context(&direct), context(&swapped)).unwrap();
+        // Rediscovered identity differs from the expected one.
+        assert_eq!(
+            planned.verify_image(&normal(1)),
+            Err(Error::VerificationFailed)
+        );
+        // No identity can be rediscovered at all.
+        let mut garbage = direct.clone();
+        garbage[0x1000..].fill(0xff);
+        assert_eq!(
+            planned.verify_image(&garbage),
+            Err(Error::VerificationFailed)
+        );
+        assert_eq!(planned.verify_image(&direct), Ok(()));
+    }
 }

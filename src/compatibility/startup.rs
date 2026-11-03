@@ -171,6 +171,18 @@ mod tests {
     }
 
     #[test]
+    fn strict_planning_reports_conflicting_comparisons_as_ambiguous() {
+        let mut normal = comparison_fixture();
+        crate::image::layout::install_test_layout(&mut normal, 0x1000);
+        normal.copy_within(0x20..0x34, 0x60);
+        assert!(matches!(plan(&normal), Err(Error::Ambiguous)));
+        assert!(matches!(
+            plan_with_policy(&normal, StartupPolicy::NativeEvidenceOnly),
+            Err(Error::Ambiguous)
+        ));
+    }
+
+    #[test]
     fn strict_native_evidence_refuses_a_missing_comparison() {
         assert!(matches!(plan(&[]), Err(Error::Unresolved)));
         let mut normal = alloc::vec![0xff; 0x2000];

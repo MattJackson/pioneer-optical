@@ -1,6 +1,8 @@
 //! Persistent-bank header requirements, separate from native parameter words.
 //! Offsets and expected values are operands in validated code, not model rules.
 
+use alloc::vec::Vec;
+
 const BASE: u32 = 0x410000;
 
 mod legacy;
@@ -188,9 +190,10 @@ impl Requirement {
 
     /// Recover the unique code calculation supplying this guard's base slot.
     pub fn layout(self, normal: &[u8]) -> Option<Layout> {
+        let mut calls = None;
         let mut found = (0..normal.len().saturating_sub(0x35))
             .step_by(2)
-            .filter_map(|at| base_calculation(normal, at, self));
+            .filter_map(|at| base_calculation(normal, at, self, &mut calls));
         let result = found.next()?;
         found.next().is_none().then_some(result)
     }
@@ -218,7 +221,25 @@ pub struct BankAddresses {
     pub markers: [u32; 2],
 }
 
-fn base_calculation(normal: &[u8], at: usize, guard: Requirement) -> Option<Layout> {
+// Sorted (first, second) targets of every pair of adjacent native calls.
+fn call_pairs(normal: &[u8]) -> Vec<(u32, u32)> {
+    #[cfg(test)]
+    tests::CALL_PAIR_SCANS.with(|c| c.set(c.get() + 1));
+    let mut pairs: Vec<(u32, u32)> = (0..normal.len().saturating_sub(7))
+        .step_by(2)
+        .filter_map(|p| call(normal, p).zip(call(normal, p + 4)))
+        .collect();
+    pairs.sort_unstable();
+    pairs.dedup();
+    pairs
+}
+
+fn base_calculation(
+    normal: &[u8],
+    at: usize,
+    guard: Requirement,
+    calls: &mut Option<Vec<(u32, u32)>>,
+) -> Option<Layout> {
     let b = normal.get(at..)?;
     let query = call(b, 0)?;
     if b.get(4..6)? != [0x7a, 1] || b.get(10..16)? != [0xa8, 1, 0x46, 4, 0x79, 9] {
@@ -226,6 +247,11 @@ fn base_calculation(normal: &[u8], at: usize, guard: Requirement) -> Option<Layo
     }
     let end = word(b, 6)?;
     let compact_end = (end & 0xffff) | (u32::from(u16::from_be_bytes([b[16], b[17]])) << 16);
+    // Equal ends make the when-one path fall through to the extended
+    // subtraction, so the modeled compact case is not what the code computes.
+    if compact_end == end {
+        return None;
+    }
     let (compare, increment, register) = if b.get(18..22)? == [0x0f, 0x90, 0x0b, 0x70] {
         (22, 1u32, 0)
     } else {
@@ -250,9 +276,11 @@ fn base_calculation(normal: &[u8], at: usize, guard: Requirement) -> Option<Layo
     let calculation = BASE.checked_add(at as u32)?;
     // Bind the calculation and validator to the adjacent calls actually used
     // by startup. Merely storing into a similarly numbered slot is insufficient.
-    if !(0..normal.len().saturating_sub(7)).step_by(2).any(|p| {
-        call(normal, p) == Some(calculation) && call(normal, p + 4) == Some(guard.validator)
-    }) {
+    if calls
+        .get_or_insert_with(|| call_pairs(normal))
+        .binary_search(&(calculation, guard.validator))
+        .is_err()
+    {
         return None;
     }
     Some(Layout {
@@ -355,4 +383,140 @@ pub fn discover(normal: &[u8]) -> Option<Requirement> {
         .filter_map(|at| candidate(normal, at));
     let result = matches.next()?;
     matches.next().is_none().then_some(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::cell::Cell;
+
+    std::thread_local! {
+        pub(super) static CALL_PAIR_SCANS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn put(b: &mut [u8], at: usize, bytes: &[u8]) {
+        b[at..at + bytes.len()].copy_from_slice(bytes);
+    }
+    fn call_to(target: u32) -> [u8; 4] {
+        let t = target.to_be_bytes();
+        [0x5e, t[1], t[2], t[3]]
+    }
+
+    // Synthetic capacity guard: validator at 0x100, reject helper at 0x200,
+    // base calculation at 0x300 and the adjacent startup calls at 0x400.
+    fn capacity_fixture(compact: u16) -> Vec<u8> {
+        let mut b = vec![0xff; 0x1000];
+        let g = 0x100;
+        for (offset, bytes) in [
+            (
+                0,
+                &b"\x01\x00\x6d\xf3\x01\x20\x6d\xf4\x79\x37\x00\x06\x7a\x05"[..],
+            ),
+            (0x12, &b"\x01\x00\x6f\xf5\x00\x02\x7a\x06"[..]),
+            (0x1e, &b"\x01\x00\x69\x63\x0f\xb4\x7a\x14"[..]),
+            (0x2a, &b"\x69\x41\x69\xf1\x01\x00\x78\x30\x6b\x22"[..]),
+            (
+                0x38,
+                &b"\x7a\x22\xff\xff\xff\xff\x46\x38\x01\x00\x78\x30\x6b\x20"[..],
+            ),
+            (0x4a, &b"\x0b\x70\x46\x2a"[..]),
+            (
+                0x4e,
+                &b"\x79\x01\x00\x01\x69\xf1\x0f\xf1\x79\x02\x00\x01\x0f\xc0"[..],
+            ),
+            (0x60, &b"\x01\x00\x69\x60\x7a\x10"[..]),
+            (0x6a, &b"\x0f\xf1\x0b\xf1\x79\x02\x00\x02"[..]),
+            (0x76, &b"\x40\x16"[..]),
+            (0x78, &b"\x1f\xd2\x47\x12\x01\x00\x78\x30\x6b\x20"[..]),
+            (0x86, &b"\x1f\xd0\x47\x04"[..]),
+            (0x8e, &b"\x79\x17\x00\x06"[..]),
+        ] {
+            put(&mut b, g + offset, bytes);
+        }
+        let (first, second, slot) = (0x0efffau32, 0x0ffffau32, 0x00ffe000u32);
+        for (offset, value) in [
+            (0xe, 0xfedc4321u32),
+            (0x1a, slot),
+            (0x26, first + 4),
+            (0x34, first),
+            (0x46, second),
+            (0x66, first),
+            (0x82, second),
+        ] {
+            put(&mut b, g + offset, &value.to_be_bytes());
+        }
+        for offset in [0x5c, 0x72] {
+            put(&mut b, g + offset, &call_to(BASE + 0x800));
+        }
+        put(&mut b, g + 0x8a, &call_to(BASE + 0x200));
+        put(&mut b, 0x200, &[0xf8, 1]);
+        put(&mut b, 0x202, &call_to(BASE + 0x220));
+        put(&mut b, 0x206, &[0xf8, 1]);
+        put(&mut b, 0x208, &call_to(BASE + 0x228));
+        put(&mut b, 0x20c, &[0x18, 0x88]);
+        put(&mut b, 0x220, &[0x5e, 0x40, 0x0a, 0x14, 0x54, 0x70]);
+        put(&mut b, 0x228, &[0x5e, 0x40, 0x0a, 0x1a, 0x54, 0x70]);
+        // ER1 = end; when the query returns one, E1 = compact; compare with
+        // end and subtract the matching bank span.
+        let end = 0x0080_0000u32;
+        let c = 0x300;
+        put(&mut b, c, &call_to(BASE + 0x900));
+        put(&mut b, c + 4, &[0x7a, 1]);
+        put(&mut b, c + 6, &end.to_be_bytes());
+        put(&mut b, c + 10, &[0xa8, 1, 0x46, 4, 0x79, 9]);
+        put(&mut b, c + 16, &compact.to_be_bytes());
+        put(&mut b, c + 18, &[0x7a, 0x21]);
+        put(&mut b, c + 20, &end.to_be_bytes());
+        put(&mut b, c + 24, &[0x46, 8, 0x7a, 0x31]);
+        put(&mut b, c + 28, &0x0010_0000u32.to_be_bytes());
+        put(&mut b, c + 32, &[0x40, 6, 0x7a, 0x31]);
+        put(&mut b, c + 36, &0x0010_0000u32.to_be_bytes());
+        put(&mut b, c + 40, &[1, 0, 0x6b, 0xa1]);
+        put(&mut b, c + 44, &slot.to_be_bytes());
+        put(&mut b, c + 48, &[0x54, 0x70]);
+        put(&mut b, 0x400, &call_to(BASE + 0x300));
+        put(&mut b, 0x404, &call_to(BASE + 0x100));
+        b
+    }
+
+    #[test]
+    fn capacity_calculation_recovers_both_address_cases() {
+        let b = capacity_fixture(0x0060);
+        assert_eq!(
+            analyze(&b),
+            Some(Contract {
+                magic: 0xfedc4321,
+                addresses: Addresses::Capacity {
+                    when_one: [0x5efffa, 0x5ffffa],
+                    otherwise: [0x7efffa, 0x7ffffa],
+                },
+                validation: Validation::RejectMismatch,
+            })
+        );
+    }
+
+    #[test]
+    fn compact_end_equal_to_end_does_not_model_the_when_one_branch() {
+        // With E1 already equal to end's upper word, the when-one path falls
+        // through to the extended subtraction; the modeled case is not taken.
+        let b = capacity_fixture(0x0080);
+        assert_eq!(analyze(&b), None);
+    }
+
+    #[test]
+    fn calculation_lookalikes_share_one_call_index() {
+        let mut b = capacity_fixture(0x0060);
+        for at in (0x500..0xa00).step_by(0x40) {
+            b.copy_within(0x300..0x332, at);
+        }
+        CALL_PAIR_SCANS.with(|c| c.set(0));
+        assert!(matches!(
+            analyze(&b),
+            Some(Contract {
+                addresses: Addresses::Capacity { .. },
+                ..
+            })
+        ));
+        assert!(CALL_PAIR_SCANS.with(Cell::get) <= 1);
+    }
 }

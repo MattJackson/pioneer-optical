@@ -151,6 +151,35 @@ mod tests {
         ));
     }
     #[test]
+    fn second_reset_prefix_and_reset_offset_four_bind_the_ep_base() {
+        let (normal, _) = fixture();
+        // Second audited prefix form, reached from the reset vector at zero.
+        let mut kernel = vec![0xff; 0x200];
+        kernel[..4].copy_from_slice(&[0x80, 7, 0, 1]);
+        kernel[0x100..0x118].copy_from_slice(&[
+            0xc0, 0x3f, 8, 0xf4, 0xc0, 0xbf, 8, 0xf4, 0x25, 6, 0, 0, 0, 0, 0x24, 6, 0, 0x80, 0xff,
+            3, 0x40, 0xf6, 0x30, 0,
+        ]);
+        assert!(matches!(
+            native(&normal, Some(&kernel)),
+            Observation::Known(HostSignature {
+                coordinate: 0x3000d2,
+                ..
+            })
+        ));
+        // No JR at offset zero; the JR at offset four reaches the first form.
+        let (_, mut kernel) = fixture();
+        kernel[..4].fill(0xff);
+        kernel[4..8].copy_from_slice(&[0x80, 7, 0xfc, 0]);
+        assert!(matches!(
+            native(&normal, Some(&kernel)),
+            Observation::Known(HostSignature {
+                coordinate: 0x2000d2,
+                ..
+            })
+        ));
+    }
+    #[test]
     fn reset_byte_writes_and_signature_register_must_use_defined_values() {
         let (normal, kernel) = fixture();
         for p in [0usize, 2, 4, 6, 8, 10, 12, 16, 18] {

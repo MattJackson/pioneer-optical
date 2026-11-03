@@ -23,7 +23,7 @@ pub(super) fn prepare(receiver: &Receiver, target: &Envelope) -> Result<Update, 
     if contract.entry != startup || startup == destination {
         return Err(refused(KernelHandoffError::Mismatch {
             installed: contract.entry,
-            target: startup,
+            target: destination,
         }));
     }
     let mut image = source.image.clone();

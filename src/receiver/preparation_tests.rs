@@ -949,6 +949,46 @@ fn handoff_bridge_preserves_source_normal_and_finishes_with_exact_target() {
 }
 
 #[test]
+fn handoff_bridge_mismatch_reports_the_incoming_kernel_startup() {
+    let shifted = |original: &Update| {
+        let mut kernel = original.kernel().image.clone();
+        kernel.copy_within(0x20..0x30, 0x2a);
+        kernel[0x20..0x2a].fill(0);
+        kernel[0x2107] = 0x2a;
+        fix_sum(&mut kernel);
+        Update::load(
+            &original.kernel().repack(&kernel).unwrap(),
+            &original.normal().repack(&original.normal().image).unwrap(),
+        )
+        .unwrap()
+    };
+    // An already-adapted source calls 0x40002a while its own startup stays
+    // at 0x400020; the incoming Kernel starts at 0x40002a.
+    let original = update(false, 1, 0x12, true);
+    let mut kernel = original.kernel().image.clone();
+    kernel[0x2107] = 0x2a;
+    fix_sum(&mut kernel);
+    let adapted = Update::load(
+        &original.kernel().repack(&kernel).unwrap(),
+        &original.normal().repack(&original.normal().image).unwrap(),
+    )
+    .unwrap();
+    let target = shifted(&update(false, 1, 0x12, true));
+    let receiver = Receiver::from_installed(&adapted).unwrap();
+    assert_eq!(
+        crate::receiver::handoff_bridge::prepare(&receiver, target.kernel()).unwrap_err(),
+        PreparationError::KernelHandoff(crate::image::KernelHandoffError::Mismatch {
+            installed: 0x40002a,
+            target: crate::image::kernel_startup_entry(&target.kernel().image).unwrap(),
+        })
+    );
+    assert_eq!(
+        crate::image::kernel_startup_entry(&target.kernel().image),
+        Some(0x40002a)
+    );
+}
+
+#[test]
 fn intermediate_marker_must_be_accepted_by_its_receiver() {
     let source = update(true, 0, 0x12, true);
     let receiver = Receiver::from_installed(&source).unwrap();

@@ -129,6 +129,18 @@ const MIX: &[u8] = &[
     0x88, 0xff, 0xc4, 0x6a, 0x18, 0xff, 0xc5, 0x72, 0x40, 0x6a, 8, 0xff, 0xc5, 0xe8, 0xfc, 0x6a,
     0x88, 0xff, 0xc5,
 ];
+// Whether six bytes at `at` lie inside a recorded MIX span. Spans are ascending
+// and fixed-width, so only the first one starting at or after
+// `at + 6 - MIX.len()` can contain them.
+fn in_mix(mixes: &[(usize, usize)], at: usize) -> bool {
+    let first = (at + 6).saturating_sub(MIX.len());
+    let i = mixes.partition_point(|&(a, _)| {
+        #[cfg(test)]
+        tests::SPAN_CHECKS.with(|c| c.set(c.get() + 1));
+        a < first
+    });
+    mixes.get(i).is_some_and(|&(a, z)| a <= at && at + 6 <= z)
+}
 fn route(n: &Native<'_>, at: usize) -> Option<Value> {
     let b = n.get(at, 26)?;
     if b[..2] != [0x7a, 0]
@@ -227,9 +239,9 @@ pub fn discover(normal: &[u8]) -> Evidence {
                     or_mask: b[1],
                 });
             }
-            if !mixes.iter().any(|&(a, z)| a <= at && at + 6 <= z)
-                && b[..5] == [0x6a, 0x18, 0xff, 0xc5, 0x72]
+            if b[..5] == [0x6a, 0x18, 0xff, 0xc5, 0x72]
                 && [0x50, 0x70].contains(&b[5])
+                && !in_mix(&mixes, at)
             {
                 found.push(Value::Controller {
                     and_mask: 255 ^ (1 << (b[5] >> 4)),
@@ -342,6 +354,25 @@ mod tests {
             },
         ]);
         assert!(matches!(e.selected, Observation::Conflicting));
+    }
+    std::thread_local! {
+        pub(super) static SPAN_CHECKS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    }
+    #[test]
+    fn tiled_mixed_blocks_are_excluded_with_bounded_span_checks() {
+        let mut raw = vec![0xff; 0x10000];
+        for at in (0..raw.len() - MIX.len()).step_by(MIX.len() + 1) {
+            raw[at..at + MIX.len()].copy_from_slice(MIX);
+        }
+        SPAN_CHECKS.with(|c| c.set(0));
+        assert!(matches!(
+            discover(&raw).selected,
+            Observation::Known(Value::Controller {
+                and_mask: 0x0c,
+                or_mask: 0xa0
+            })
+        ));
+        assert!(SPAN_CHECKS.with(core::cell::Cell::get) < 100_000);
     }
     #[test]
     fn mixed_block_does_not_hide_an_independent_contradictory_write() {

@@ -132,6 +132,28 @@ pub(super) fn compensate(normal: &mut [u8], kernel: &[u8], proof: &Contract) -> 
     (flash_sum(normal, kernel)? == 0).then_some(())
 }
 
+/// Install the startup stub, initializer, metadata table (with `length` data
+/// bytes) and the first boot check; returns the contract they describe. The
+/// checksum is not compensated.
+#[cfg(test)]
+pub(super) fn install(normal: &mut [u8], kernel: &mut [u8], length: u32) -> Contract {
+    let shape = shapes::BOOT_CHECKS[0];
+    kernel[0x1000..0x1000 + shape.len()].copy_from_slice(shape);
+    normal[0x100..0x108].copy_from_slice(&[0x26, 6, 0, 4, 1, 0, 0x1f, 0x3a]);
+    normal[0x108..0x10c].copy_from_slice(&[0x80, 0xff, 0xf8, 0]);
+    normal[0x200..0x200 + shapes::INITIALIZER.len()].copy_from_slice(shapes::INITIALIZER);
+    let fields = [0x00504d52u32, 1, 0x03ff8000, 0x03ff8000, length, 24];
+    for (i, v) in fields.iter().enumerate() {
+        normal[0x400 + 4 * i..0x404 + 4 * i].copy_from_slice(&v.to_le_bytes());
+    }
+    Contract {
+        checksum: ((0x418 + length as usize + 259) & !255) - 4,
+        initializer: 0x200,
+        table: 0x400,
+        boot: 0x1000,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +205,44 @@ mod tests {
             assert_eq!(discover(&corrupt, &kernel), None);
             assert_eq!(discover(&normal, &kernel[..kernel.len() - 4]), None);
         }
+    }
+    #[test]
+    fn flash_sum_matches_an_independent_known_answer() {
+        let kernel = vec![0xff; 0x10000];
+        let mut normal = vec![0; 0x1000];
+        normal[..4].copy_from_slice(&0x01020304u32.to_le_bytes());
+        // 0x4000 erased Kernel words, one Normal word, minus the
+        // (0x1c0000 - 0x10000 - 0x1000) / 4 words erased through flash end.
+        assert_eq!(flash_sum(&normal, &kernel), Some(0x00fb0704));
+    }
+    #[test]
+    fn duplicate_boot_checks_or_candidate_tables_are_not_a_unique_contract() {
+        for shape in shapes::BOOT_CHECKS {
+            let (normal, mut kernel, proof) = fixture(shape);
+            kernel[0x2000..0x2000 + shape.len()].copy_from_slice(shape);
+            let mut adjusted = normal.clone();
+            compensate(&mut adjusted, &kernel, &proof).unwrap();
+            assert_eq!(discover(&adjusted, &kernel), None);
+        }
+        let (mut normal, kernel, proof) = fixture(shapes::BOOT_CHECKS[0]);
+        // A second stub binds a different table whose data also ends at 0x438,
+        // so both describe the same checksum field.
+        normal[0x110..0x118].copy_from_slice(&[0x26, 6, 0, 3, 1, 0, 0x1f, 0x3a]);
+        normal[0x118..0x11c].copy_from_slice(&[0x80, 0xff, 0xe8, 0]);
+        let fields = [0x00504d52u32, 1, 0x03ff8000, 0x03ff8000, 0x120, 24];
+        for (i, v) in fields.iter().enumerate() {
+            normal[0x300 + 4 * i..0x304 + 4 * i].copy_from_slice(&v.to_le_bytes());
+        }
+        compensate(&mut normal, &kernel, &proof).unwrap();
+        assert_eq!(discover(&normal, &kernel), None);
+    }
+    #[test]
+    fn full_length_normal_uses_the_fixed_checksum_end() {
+        let (mut normal, kernel, mut proof) = fixture(shapes::BOOT_CHECKS[0]);
+        normal[0x4fc..0x500].fill(0xff);
+        normal.resize(0x1af900, 0xff);
+        proof.checksum = 0x1af8fc;
+        compensate(&mut normal, &kernel, &proof).unwrap();
+        assert_eq!(discover(&normal, &kernel), Some(proof));
     }
 }

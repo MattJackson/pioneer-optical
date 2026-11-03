@@ -117,6 +117,25 @@ mod tests {
     }
 
     #[test]
+    fn second_loader_or_empty_range_is_not_a_layout() {
+        let mut body = fixture();
+        let at = body.len();
+        body.extend_from_slice(MECHANICAL_CACHE_LOADER);
+        body[at + 9..at + 12].copy_from_slice(&[0, 0, 0xf8]);
+        body[at + 6..at + 8].copy_from_slice(&0x10u16.to_le_bytes());
+        assert!(matches!(
+            discover_m32c_serial(&body, 0xf80000),
+            Observation::Unresolved(Unresolved::AmbiguousReader)
+        ));
+        let mut empty = fixture();
+        empty[300 + 23] = 0;
+        assert!(matches!(
+            discover_m32c_serial(&empty, 0xf80000),
+            Observation::Unresolved(_)
+        ));
+    }
+
+    #[test]
     fn changed_range_is_a_different_layout_not_a_model_lookup() {
         let body = fixture();
         let mut changed = body.clone();

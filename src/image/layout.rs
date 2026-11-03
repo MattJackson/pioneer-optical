@@ -355,5 +355,12 @@ mod tests {
         assert_eq!(r.selected_record(&[0; 80]), Some(39));
         r.record_bytes = u32::MAX;
         assert_eq!(r.selected_record(&[0; 80]), None);
+        let mut r = region(HeaderTest::ByteFf);
+        r.record_count = 0;
+        r.header_bytes = 0;
+        assert_eq!(r.selected_record(&[]), None);
+        let mut r = region(HeaderTest::ByteFf);
+        r.record_bytes = 0;
+        assert_eq!(r.selected_record(&[0; 80]), None);
     }
 }

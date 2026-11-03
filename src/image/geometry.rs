@@ -56,10 +56,34 @@ fn call(b: &[u8], at: usize) -> Option<u32> {
     (b[0] == 0x5e).then(|| u32::from_be_bytes([0, b[1], b[2], b[3]]))
 }
 
+// Native targets of every complete startup caller suffix: two initialized
+// state bytes followed by three native calls; the final call is the target.
+fn caller_suffix_targets(normal: &[u8]) -> Vec<u32> {
+    #[cfg(test)]
+    tests::CALLER_SCANS.with(|c| c.set(c.get() + 1));
+    let mut targets: Vec<u32> = (0..normal.len().saturating_sub(19))
+        .step_by(2)
+        .filter_map(|p| {
+            let n = &normal[p..p + 20];
+            if n[..4] == [0xfa, 1, 0x6a, 0xaa] && call(n, 8).is_some() && call(n, 12).is_some() {
+                call(n, 16)
+            } else {
+                None
+            }
+        })
+        .collect();
+    targets.sort_unstable();
+    targets.dedup();
+    targets
+}
+
 // The exact audited initializer binds the Normal call to its Kernel selector.
 // Relocated table and bank addresses are native operands, never package IDs.
-fn kernel_pair(normal: &[u8], kernel: &[u8]) -> Option<Geometry> {
+// `Err` means more than one linked initializer: ambiguous Kernel evidence,
+// never the same as absent evidence.
+fn kernel_pair(normal: &[u8], kernel: &[u8]) -> Result<Option<Geometry>, Unresolved> {
     let mut found = None;
+    let mut callers: Option<Vec<u32>> = None;
     for at in (0..kernel.len().saturating_sub(85)).step_by(2) {
         let b = &kernel[at..at + 86];
         let fixed: &[(usize, &[u8])] = &[
@@ -83,11 +107,18 @@ fn kernel_pair(normal: &[u8], kernel: &[u8]) -> Option<Geometry> {
         {
             continue;
         }
-        let selector = call(b, 58)?;
+        // Every per-candidate check rejects only this window; a malformed
+        // lookalike must not hide a genuine initializer elsewhere.
+        let Some(selector) = call(b, 58) else {
+            continue;
+        };
         if call(b, 82) != Some(selector) {
             continue;
         }
-        let offset = selector.checked_sub(0x400000)? as usize;
+        let Some(offset) = selector.checked_sub(0x400000) else {
+            continue;
+        };
+        let offset = offset as usize;
         let Some(s) = kernel.get(offset..offset + 44) else {
             continue;
         };
@@ -103,25 +134,29 @@ fn kernel_pair(normal: &[u8], kernel: &[u8]) -> Option<Geometry> {
         {
             continue;
         }
-        let bases = [word(s, 30)?, word(s, 38)?];
-        let stride = bases[1].checked_sub(bases[0])?;
+        let (Some(first), Some(second)) = (word(s, 30), word(s, 38)) else {
+            continue;
+        };
+        let bases = [first, second];
+        let Some(stride) = bases[1].checked_sub(bases[0]) else {
+            continue;
+        };
+        let (Some(end0), Some(end1)) = (bases[0].checked_add(stride), bases[1].checked_add(stride))
+        else {
+            continue;
+        };
         if !stride.is_power_of_two()
-            || bases[0].checked_add(stride)?.checked_sub(2) != word(s, 2)
-            || bases[1].checked_add(stride)?.checked_sub(2) != word(s, 8)
+            || end0.checked_sub(2) != word(s, 2)
+            || end1.checked_sub(2) != word(s, 8)
             || word(b, 64) != Some(bases[0])
         {
             continue;
         }
         let entry = 0x400000 + at as u32;
-        // Complete startup caller suffix: two initialized state bytes followed
-        // by three native calls, the final one entering this initializer.
-        let linked = (0..normal.len().saturating_sub(19)).step_by(2).any(|p| {
-            let n = &normal[p..p + 20];
-            n[..4] == [0xfa, 1, 0x6a, 0xaa]
-                && call(n, 8).is_some()
-                && call(n, 12).is_some()
-                && call(n, 16) == Some(entry)
-        });
+        let linked = callers
+            .get_or_insert_with(|| caller_suffix_targets(normal))
+            .binary_search(&entry)
+            .is_ok();
         if !linked {
             continue;
         }
@@ -129,10 +164,10 @@ fn kernel_pair(normal: &[u8], kernel: &[u8]) -> Option<Geometry> {
             .replace(Geometry::NativeBanks { bases, stride })
             .is_some()
         {
-            return None;
+            return Err(Unresolved::AmbiguousReader);
         }
     }
-    found
+    Ok(found)
 }
 
 /// Recover SAT bank geometry from decoded Normal and its supplied Kernel.
@@ -187,8 +222,10 @@ pub fn discover_sat(normal: &[u8], kernel: Option<&[u8]>) -> Observation<Geometr
         });
     }
     if let Some(kernel) = kernel.and_then(native_view) {
-        if let Some(g) = kernel_pair(&native, &kernel) {
-            found.push(g);
+        match kernel_pair(&native, &kernel) {
+            Ok(Some(g)) => found.push(g),
+            Ok(None) => {}
+            Err(unresolved) => return Observation::Unresolved(unresolved),
         }
     }
     let Some(first) = found.first() else {
@@ -275,6 +312,52 @@ mod tests {
                 "{offset:x}"
             );
         }
+    }
+    #[test]
+    fn malformed_kernel_decoy_does_not_hide_the_linked_initializer() {
+        let (normal, mut kernel) = kernel_fixture();
+        // A fixed-fragment lookalike without a selector call, ahead of the
+        // genuine initializer, is skipped rather than ending the search.
+        kernel.copy_within(0x5f7e..0x5f7e + 86, 0x5000);
+        kernel[0x5000 + 58] = 0;
+        assert!(matches!(
+            discover_sat(&normal, Some(&kernel)),
+            Observation::Known(Geometry::NativeBanks {
+                bases: [0x7d0000, 0x7e0000],
+                stride: 0x10000,
+            })
+        ));
+    }
+    #[test]
+    fn ambiguous_kernel_initializers_are_not_missing_kernel_evidence() {
+        let (mut normal, mut kernel) = kernel_fixture();
+        let consumer = decode("5d607a02005d51607a20005c00004604790a005c0fa06921");
+        normal[0x300..0x300 + consumer.len()].copy_from_slice(&consumer);
+        // A second complete initializer with its own startup caller suffix.
+        kernel.copy_within(0x5f7e..0x5f7e + 86, 0x6100);
+        normal.copy_within(0x142..0x142 + 20, 0x400);
+        normal[0x411..0x414].copy_from_slice(&[0x40, 0x61, 0x00]);
+        assert!(matches!(
+            discover_sat(&normal, Some(&kernel)),
+            Observation::Unresolved(Unresolved::AmbiguousReader)
+        ));
+    }
+    #[test]
+    fn kernel_caller_suffix_index_is_built_once() {
+        let (normal, mut kernel) = kernel_fixture();
+        // Unlinked complete initializer copies must not each rescan Normal.
+        for at in (0x6100..0x6100 + 40 * 0x60).step_by(0x60) {
+            kernel.copy_within(0x5f7e..0x5f7e + 86, at);
+        }
+        CALLER_SCANS.with(|c| c.set(0));
+        assert!(matches!(
+            discover_sat(&normal, Some(&kernel)),
+            Observation::Known(_)
+        ));
+        assert!(CALLER_SCANS.with(core::cell::Cell::get) <= 1);
+    }
+    std::thread_local! {
+        pub(super) static CALLER_SCANS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
     }
     #[test]
     fn contradictory_native_geometry_and_malformed_comp_are_rejected() {

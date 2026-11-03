@@ -1,6 +1,7 @@
 //! Full-function M32C phase assignment with native indexed-bus target binding.
 use super::{unique, Interface, Observation, Phase, Unresolved};
 use crate::image::phase::Assignment;
+use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 #[path = "m32c_phase_shapes.rs"]
 mod shapes;
@@ -97,6 +98,7 @@ struct Binding {
 }
 fn bindings(normal: &[u8], normal_base: u32) -> Vec<Binding> {
     let mut found = Vec::new();
+    let mut offsets = BTreeSet::new();
     for s in shapes::CONSUMERS {
         for at in 0..normal.len().saturating_sub(s.bytes.len() - 1) {
             if normal[at..at + 4] != s.bytes[..4] {
@@ -176,9 +178,16 @@ fn bindings(normal: &[u8], normal_base: u32) -> Vec<Binding> {
                     interface: s.interface,
                 },
             };
-            if !found.contains(&value) {
-                found.push(value);
+            // Bindings at distinct offsets never compare equal; only repeated
+            // offsets (different shapes at one site) need the full comparison.
+            if !offsets.insert(at) {
+                #[cfg(test)]
+                tests::COMPARISONS.with(|c| c.set(c.get() + found.len()));
+                if found.contains(&value) {
+                    continue;
+                }
             }
+            found.push(value);
         }
     }
     found
@@ -300,6 +309,87 @@ mod tests {
         let mut duplicate = original.clone();
         duplicate[0x2000..0x2000 + s.bytes.len()].copy_from_slice(s.bytes);
         assert!(correct_indexed(&duplicate, base, Assignment::Direct).is_err());
+    }
+    use crate::image::phase::CorrectionError;
+    std::thread_local! {
+        pub(super) static COMPARISONS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    }
+    fn direct_shapes() -> impl Iterator<Item = &'static Shape> {
+        shapes::CONSUMERS
+            .iter()
+            .filter(|s| matches!(s.interface, Interface::Direct8 { .. }))
+    }
+    // Operand sites and the exact count each direct form must bind.
+    fn operands_of(s: &Shape) -> (Vec<usize>, &'static [usize]) {
+        match s.interface {
+            Interface::Direct8 {
+                channels: [0x54ca, 0x54cb],
+            } => (legacy_direct_operands(s), &[7]),
+            _ => (direct_operands(s), &[3, 4]),
+        }
+    }
+    #[test]
+    fn direct_program_correction_is_pair_only_and_edits_exactly_its_operands() {
+        let base = 0xf00000;
+        for s in direct_shapes() {
+            let mut original = alloc::vec![0xff; 0x10000];
+            original[0x1000..0x1000 + s.bytes.len()].copy_from_slice(s.bytes);
+            // Every audited direct form (three- and four-operand) binds alone.
+            assert_eq!(bindings(&original, base).len(), 1);
+            for target in [Assignment::Direct, Assignment::Swapped] {
+                assert_eq!(
+                    correct_indexed(&original, base, target),
+                    Err(CorrectionError::Unresolved)
+                );
+            }
+            let other = match s.assignment {
+                Assignment::Direct => Assignment::Swapped,
+                Assignment::Swapped => Assignment::Direct,
+            };
+            let corrected = correct_pair(&original, base, other).unwrap();
+            let (operands, counts) = operands_of(s);
+            assert!(counts.contains(&operands.len()));
+            let changed: Vec<_> = original
+                .iter()
+                .zip(&corrected)
+                .enumerate()
+                .filter_map(|(i, (a, b))| (a != b).then_some(i))
+                .collect();
+            assert_eq!(
+                changed,
+                operands.iter().map(|p| 0x1000 + p).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                correct_pair(&corrected, base, s.assignment).unwrap(),
+                original
+            );
+            let mut bad = original.clone();
+            bad[0x1000 + operands[0]] ^= 1;
+            assert!(correct_pair(&bad, base, other).is_err());
+        }
+    }
+    #[test]
+    fn tiled_programs_are_deduplicated_without_quadratic_comparisons() {
+        let s = direct_shapes()
+            .find(|s| {
+                s.interface
+                    == Interface::Direct8 {
+                        channels: [0x118, 0x119],
+                    }
+            })
+            .unwrap();
+        let mut body = alloc::vec![0xff; 0x80000];
+        let stride = s.bytes.len() + 1;
+        let count = (body.len() - 0x1000) / stride;
+        for k in 0..count {
+            let at = 0x1000 + k * stride;
+            body[at..at + s.bytes.len()].copy_from_slice(s.bytes);
+        }
+        COMPARISONS.with(|c| c.set(0));
+        let found = bindings(&body, 0xf00000);
+        assert!(found.len() >= count);
+        assert!(found.windows(2).all(|w| w[0] != w[1]));
+        assert!(COMPARISONS.with(core::cell::Cell::get) < 4 * count);
     }
     #[test]
     fn every_nonrelocated_phase_instruction_is_required() {

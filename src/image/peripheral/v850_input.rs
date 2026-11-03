@@ -200,6 +200,19 @@ mod tests {
         }
     }
     #[test]
+    fn every_complete_program_is_recognized_natively_and_from_bus_order() {
+        for s in shapes::SHAPES {
+            let b = fixture(s);
+            assert!(
+                matches!(native(&b), Observation::Known(a) if a == s.algorithm),
+                "{:02x?}",
+                &s.bytes[..4]
+            );
+            let stored = crate::image::layout::encode_v850_bus(&b).unwrap();
+            assert!(matches!(bus(&stored), Observation::Known(a) if a == s.algorithm));
+        }
+    }
+    #[test]
     fn input_read_alone_or_broken_ram_relation_cannot_establish_key_algorithm() {
         assert!(matches!(
             native(&[0xc0, 0xcf, 6, 0xf4]),

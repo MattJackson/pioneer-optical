@@ -139,4 +139,51 @@ mod tests {
         assert_eq!(apply_normal(&bad, &[]), Err(Error::InvalidNormal));
         assert!(valid_normal(&original));
     }
+    fn recompensate(b: &mut [u8]) {
+        b[16..20].fill(0);
+        let sum = checksum(b);
+        b[16..20].copy_from_slice(&0u32.wrapping_sub(sum).to_be_bytes());
+    }
+    fn sized(len: usize) -> Vec<u8> {
+        let mut b = vec![0; len];
+        b[..16].copy_from_slice(b"PIONEER TEST    ");
+        b[20..24].copy_from_slice(&(len as u32).to_be_bytes());
+        recompensate(&mut b);
+        b
+    }
+    #[test]
+    fn each_normal_condition_is_required_with_a_valid_checksum() {
+        assert!(valid_normal(&sized(32)));
+        let mut spaces = fixture();
+        spaces[..16].fill(b' ');
+        recompensate(&mut spaces);
+        assert!(!valid_normal(&spaces));
+        let mut control = fixture();
+        control[3] = 1;
+        recompensate(&mut control);
+        assert!(!valid_normal(&control));
+        let mut short_word = fixture();
+        short_word[20..24].copy_from_slice(&60u32.to_be_bytes());
+        recompensate(&mut short_word);
+        assert!(!valid_normal(&short_word));
+        // The additive sum ignores a two-byte tail, so only alignment rejects it.
+        let mut unaligned = fixture();
+        unaligned.extend_from_slice(&[0, 0]);
+        unaligned[20..24].copy_from_slice(&66u32.to_be_bytes());
+        recompensate(&mut unaligned);
+        assert!(!valid_normal(&unaligned));
+        assert!(!valid_normal(&sized(28)));
+    }
+    #[test]
+    fn edits_inside_the_32_byte_header_are_rejected() {
+        let original = fixture();
+        for offset in [20, 24, 31] {
+            assert_eq!(
+                apply_normal(&original, &[edit(offset, &[original[offset]], &[1])]),
+                Err(Error::InvalidEdit),
+                "{offset}"
+            );
+        }
+        assert!(apply_normal(&original, &[edit(32, &[0], &[1])]).is_ok());
+    }
 }

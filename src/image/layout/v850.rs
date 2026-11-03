@@ -150,7 +150,8 @@ pub fn discover_v850_native(normal: &[u8], kernel: Option<&[u8]>) -> Observation
             return missing();
         }
         let branch = le16(code, 90);
-        if branch & 15 != 5 {
+        // Format III Bcond: opcode 1011 in bits 10..7 and condition BR (0101).
+        if branch & 0x078f != 0x0585 {
             return missing();
         }
         let raw = ((branch >> 4) & 7) * 2 + ((branch >> 11) & 31) * 16;
@@ -288,7 +289,8 @@ mod tests {
         }
         normal[0x180..0x186].copy_from_slice(&[0x19, 0x50, 0x44, 6, 0xff, 0xf1]);
         let delta = 0x180u16 - 0x15a;
-        let branch = 5 | (((delta >> 1) & 7) << 4) | (((delta >> 4) & 31) << 11);
+        // Format III BR: disp[8:4] | 1011 | disp[3:1] | cond 0101.
+        let branch = 0x0585 | (((delta >> 1) & 7) << 4) | (((delta >> 4) & 31) << 11);
         normal[0x15a..0x15c].copy_from_slice(&branch.to_le_bytes());
         for (offset, target) in [(24, 0x500), (32, 0x600), (40, 0x700), (58, 0x300)] {
             let delta = (target - (0x100 + offset) as i32) as u32 & 0x3fffff;
@@ -333,6 +335,19 @@ mod tests {
     }
 
     #[test]
+    fn end_branch_requires_the_format_iii_opcode() {
+        let (mut normal, kernel) = fixture(false);
+        let branch = le16(&normal, 0x15a);
+        // Same displacement and condition bits, different opcode field.
+        let other = (branch & !0x0780) | 0x0300;
+        normal[0x15a..0x15c].copy_from_slice(&other.to_le_bytes());
+        assert!(matches!(
+            discover_v850_native(&normal, Some(&kernel)),
+            Observation::Unresolved(Unresolved::ReaderNotRecognized)
+        ));
+    }
+
+    #[test]
     fn bus_permutation_has_explicit_bit_and_address_direction() {
         let mut stored = vec![0; 8192];
         stored[2..4].copy_from_slice(&((1u16 << 2) | (1u16 << 14)).to_le_bytes());
@@ -341,6 +356,53 @@ mod tests {
         assert_eq!(&decoded[2..4], &[0, 0]);
         assert!(decode_bus(&stored[..8190]).is_none());
         assert!(decode_bus(&[]).is_none());
+    }
+
+    #[test]
+    fn full_bus_permutation_is_pinned_and_round_trips() {
+        // Stored data bit k appears at native bit NATIVE_BIT[k].
+        const NATIVE_BIT: [u32; 16] = [0, 1, 3, 2, 5, 4, 6, 7, 9, 8, 11, 10, 13, 14, 12, 15];
+        for (k, &native) in NATIVE_BIT.iter().enumerate() {
+            let mut stored = vec![0; 8192];
+            stored[..2].copy_from_slice(&(1u16 << k).to_le_bytes());
+            let decoded = decode_bus(&stored).unwrap();
+            assert_eq!(le16(&decoded, 0), 1 << native, "data bit {k}");
+            assert!(decoded[2..].iter().all(|&b| b == 0));
+        }
+        // Stored byte address bit pairs exchange positions within 8 KiB.
+        for (stored_at, native_at) in [
+            (2, 4),
+            (4, 2),
+            (8, 16),
+            (16, 8),
+            (128, 256),
+            (256, 128),
+            (512, 1024),
+            (1024, 512),
+            (2048, 4096),
+            (4096, 2048),
+            (32, 32),
+            (64, 64),
+            (8192 + 2, 8192 + 4),
+        ] {
+            let mut stored = vec![0; 16384];
+            stored[stored_at..stored_at + 2].copy_from_slice(&1u16.to_le_bytes());
+            let decoded = decode_bus(&stored).unwrap();
+            let set: Vec<_> = (0..decoded.len()).filter(|&i| decoded[i] != 0).collect();
+            assert_eq!(set, [native_at], "address {stored_at:#x}");
+        }
+        let mut state = 0x1234_5678u32;
+        let x: Vec<u8> = (0..16384)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as u8
+            })
+            .collect();
+        assert_eq!(encode_bus(&decode_bus(&x).unwrap()).unwrap(), x);
+        assert_eq!(decode_bus(&encode_bus(&x).unwrap()).unwrap(), x);
+        assert!(encode_bus(&x[..8190]).is_none());
     }
 
     #[test]

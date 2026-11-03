@@ -627,6 +627,22 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn two_complete_readers_in_one_component_are_ambiguous() {
+        let (first, _) = fixture_at(&GRAPHS[0], 0x100, 0);
+        let (mut body, _) = fixture_at(&GRAPHS[0], 0x4000, 0);
+        assert!(first.len() <= 0x4000);
+        assert!(matches!(
+            discover_h8_component(&body, BASE),
+            Observation::Known(_)
+        ));
+        body[0x100..first.len()].copy_from_slice(&first[0x100..]);
+        assert!(matches!(
+            discover_h8_component(&body, BASE),
+            Observation::Unresolved(Unresolved::AmbiguousReader)
+        ));
+    }
+
+    #[test]
     fn redirected_required_calls_never_keep_the_layout() {
         for graph in GRAPHS {
             let (body, locations) = fixture(graph);

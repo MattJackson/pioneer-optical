@@ -696,3 +696,60 @@ fn settings_codec_error_catalogue_has_stable_codes() {
         assert_eq!(error.code(), code);
     }
 }
+
+#[cfg(feature = "image")]
+#[test]
+fn h8_relocation_errors_have_distinct_codes_and_remain_the_nested_cause() {
+    use crate::image::layout::H8RelocationError as E;
+    use std::error::Error as _;
+    let all = [
+        (
+            E::InvalidNormal,
+            "pioneer.layout.h8_relocation.invalid_normal",
+        ),
+        (
+            E::KernelMismatch,
+            "pioneer.layout.h8_relocation.kernel_mismatch",
+        ),
+        (
+            E::UnresolvedReader,
+            "pioneer.layout.h8_relocation.unresolved_reader",
+        ),
+        (
+            E::ResidentReader,
+            "pioneer.layout.h8_relocation.resident_reader",
+        ),
+        (
+            E::FormatChange,
+            "pioneer.layout.h8_relocation.format_change",
+        ),
+        (
+            E::NormalOverlap,
+            "pioneer.layout.h8_relocation.normal_overlap",
+        ),
+        (
+            E::OtherProgramDifference,
+            "pioneer.layout.h8_relocation.other_program_difference",
+        ),
+        (E::Phase, "pioneer.layout.h8_relocation.phase"),
+        (E::Verification, "pioneer.layout.h8_relocation.verification"),
+    ];
+    for (error, code) in all {
+        assert_eq!(error.code(), code);
+        assert!(!error.to_string().is_empty());
+        // Pre-write refusals, never update or verification outcomes.
+        assert_eq!(
+            error.kind(),
+            crate::operation::IssueKind::UnsupportedFirmware
+        );
+    }
+    let outer = crate::compatibility::Error::PersistentLayout(E::KernelMismatch);
+    assert_eq!(
+        outer.code(),
+        "pioneer.compatibility.persistent_layout_correction"
+    );
+    assert_eq!(
+        outer.source().and_then(|s| s.downcast_ref::<E>()),
+        Some(&E::KernelMismatch)
+    );
+}

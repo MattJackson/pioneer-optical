@@ -194,6 +194,25 @@ mod tests {
         assert_eq!(value.writes.len(), 1);
     }
     #[test]
+    fn startup_register_keeps_both_masked_e46b_bits() {
+        for (immediate, expected) in [(0x11, 0x11), (0x01, 0x01), (0xee, 0)] {
+            let mut raw = vec![0xff; 64];
+            raw[..6].copy_from_slice(&[0xf8, immediate, 0x6a, 0x88, 0xe4, 0x6b]);
+            assert!(
+                matches!(
+                    startup(&raw),
+                    Observation::Known(Startup::Register(MaskedWrites {
+                        address: 0xe46b,
+                        mask: 0x11,
+                        value,
+                        ..
+                    })) if value == expected
+                ),
+                "{immediate:#x}"
+            );
+        }
+    }
+    #[test]
     fn shared_register_survives_only_the_exact_intervening_sequence() {
         let mut raw = [
             0xf9, 0x40, 0x6a, 0x89, 0xfe, 0x9d, 0xf8, 1, 0x6a, 0x88, 0xfe, 0x9f, 0x6a, 0x89, 0xfe,

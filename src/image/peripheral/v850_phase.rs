@@ -2,6 +2,7 @@
 //! Native operand correction is separate from full image/update admission.
 use super::{unique, Interface, Observation, Phase, Unresolved};
 use crate::image::phase::{Assignment, CorrectionError};
+use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 struct Shape {
     bytes: &'static [u8],
@@ -45,6 +46,7 @@ struct Pair {
 }
 fn pairs(normal: &[u8]) -> Vec<Pair> {
     let mut found = Vec::new();
+    let mut offsets = BTreeSet::new();
     for s in shapes::SHAPES {
         for (at, b) in normal.windows(s.bytes.len()).enumerate().step_by(2) {
             if b[..2] != [0x20, 0x36] {
@@ -76,9 +78,16 @@ fn pairs(normal: &[u8]) -> Vec<Pair> {
                     writer: target,
                     assignment,
                 };
-                if !found.contains(&pair) {
-                    found.push(pair);
+                // Pairs at distinct offsets never compare equal; only a
+                // repeated offset (another shape at one site) needs comparison.
+                if !offsets.insert(at) {
+                    #[cfg(test)]
+                    tests::COMPARISONS.with(|c| c.set(c.get() + found.len()));
+                    if found.contains(&pair) {
+                        continue;
+                    }
                 }
+                found.push(pair);
             }
         }
     }
@@ -239,6 +248,104 @@ mod tests {
         ambiguous.extend_from_slice(&original);
         assert_eq!(
             correct_pair(&ambiguous, Assignment::Direct),
+            Err(CorrectionError::Unresolved)
+        );
+    }
+    std::thread_local! {
+        pub(super) static COMPARISONS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    }
+    #[test]
+    fn tiled_pairs_are_deduplicated_without_quadratic_comparisons() {
+        let s = &shapes::SHAPES[0];
+        let w = shapes::WRITERS[0];
+        let stride = (s.bytes.len() + 3) & !1;
+        let count = 2000;
+        let writer = count * stride;
+        let mut b = vec![0xff; writer + w.len()];
+        b[writer..].copy_from_slice(w);
+        for k in 0..count {
+            let base = k * stride;
+            b[base..base + s.bytes.len()].copy_from_slice(s.bytes);
+            for at in s.calls {
+                let disp = writer - (base + at);
+                b[base + at..base + at + 2]
+                    .copy_from_slice(&(0xff80u16 | ((disp >> 16) as u16)).to_le_bytes());
+                b[base + at + 2..base + at + 4].copy_from_slice(&(disp as u16).to_le_bytes());
+            }
+        }
+        COMPARISONS.with(|c| c.set(0));
+        let found = pairs(&b);
+        assert_eq!(found.len(), count);
+        assert!(found.iter().all(|p| p.writer == writer));
+        assert!(COMPARISONS.with(core::cell::Cell::get) < 4 * count);
+    }
+    #[test]
+    fn stored_normal_correction_moves_only_operands_and_checksum_and_round_trips() {
+        use super::super::v850_integrity::{compensate, discover, flash_sum, install};
+        use crate::image::layout::{decode_v850_bus, encode_v850_bus};
+        let mut normal = vec![0xff; 8192];
+        let mut kernel = vec![0xff; 0x10000];
+        // Table data spans 0x418..0x818 and carries the phase program and writer.
+        let proof = install(&mut normal, &mut kernel, 0x400);
+        assert_eq!(proof.checksum, 0x8fc);
+        normal[0x418..0x818].fill(0);
+        let s = &shapes::SHAPES[0];
+        let (program, writer) = (0x420, 0x600);
+        normal[program..program + s.bytes.len()].copy_from_slice(s.bytes);
+        for at in s.calls {
+            let disp = writer - (program + at);
+            normal[program + at..program + at + 2]
+                .copy_from_slice(&(0xff80u16 | ((disp >> 16) as u16)).to_le_bytes());
+            normal[program + at + 2..program + at + 4]
+                .copy_from_slice(&(disp as u16).to_le_bytes());
+        }
+        let w = shapes::WRITERS[0];
+        normal[writer..writer + w.len()].copy_from_slice(w);
+        // Reset JR to an EP prefix setting EP = 0x200000.
+        kernel[..4].copy_from_slice(&[0x80, 7, 0, 1]);
+        kernel[0x100..0x110].copy_from_slice(&[
+            0x25, 6, 0, 0, 0, 0, 0x24, 6, 0, 0x70, 0xff, 3, 0x40, 0xf6, 0x20, 0,
+        ]);
+        compensate(&mut normal, &kernel, &proof).unwrap();
+        assert_eq!(discover(&normal, &kernel), Some(proof.clone()));
+        let phase = |normal: &[u8], assignment| {
+            matches!(native(normal, Some(&kernel)), Observation::Known(p) if p == Phase {
+                assignment,
+                interface: Interface::Indexed16 { window: 0x200100, channels: [0x8e, 0x8f] },
+            })
+        };
+        assert!(phase(&normal, Assignment::Swapped));
+        let stored = encode_v850_bus(&normal).unwrap();
+        let stored_kernel = encode_v850_bus(&kernel).unwrap();
+
+        let corrected = correct_normal_bus(&stored, &stored_kernel, Assignment::Direct).unwrap();
+        let decoded = decode_v850_bus(&corrected).unwrap();
+        assert_eq!(flash_sum(&decoded, &kernel), Some(0));
+        assert_eq!(discover(&decoded, &kernel), Some(proof.clone()));
+        assert!(phase(&decoded, Assignment::Direct));
+        let changed: Vec<_> = (0..normal.len())
+            .filter(|&i| normal[i] != decoded[i])
+            .collect();
+        assert!(changed.starts_with(&[program + 2, program + 24]));
+        assert!(changed[2..].iter().all(|i| (0x8fc..0x900).contains(i)));
+        assert!(changed.len() > 2);
+        assert_eq!(
+            correct_normal_bus(&corrected, &stored_kernel, Assignment::Swapped).unwrap(),
+            stored
+        );
+        assert_eq!(
+            correct_bus(&stored, &stored_kernel, Assignment::Swapped).unwrap(),
+            stored
+        );
+        // Without the boot check the checksum field is unproven.
+        let mut unbound = kernel.clone();
+        unbound[0x1000] ^= 1;
+        assert_eq!(
+            correct_normal_bus(
+                &stored,
+                &encode_v850_bus(&unbound).unwrap(),
+                Assignment::Direct
+            ),
             Err(CorrectionError::Unresolved)
         );
     }

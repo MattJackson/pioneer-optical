@@ -46,10 +46,9 @@ fn production_routes_are_valid_unique_and_bound_to_exact_firmware_pairs() {
 }
 
 #[test]
+#[ignore = "requires PIONEER_UD02_NORMAL and PIONEER_UD04_NORMAL"]
 fn held_ud02_ud04_images_reproduce_the_tested_output_and_pristine_return() {
-    let Ok(original) = std::env::var("PIONEER_UD02_NORMAL") else {
-        return;
-    };
+    let original = std::env::var("PIONEER_UD02_NORMAL").expect("PIONEER_UD02_NORMAL");
     let ud02 = std::fs::read(original).unwrap();
     let ud04 = std::fs::read(std::env::var("PIONEER_UD04_NORMAL").unwrap()).unwrap();
     let from = crate::settings::update::Contract::discover(&ud02);
@@ -242,11 +241,10 @@ fn stock_return_preserves_authentication_only_when_the_final_image_is_pristine()
 }
 
 #[test]
+#[ignore = "requires PIONEER_UD02_NORMAL and PIONEER_UD04_NORMAL"]
 fn held_reviewed_mechanism_is_closed_under_phase_and_preserves_native_reverse() {
     use crate::image::phase::{self, Assignment};
-    let Ok(original) = std::env::var("PIONEER_UD02_NORMAL") else {
-        return;
-    };
+    let original = std::env::var("PIONEER_UD02_NORMAL").expect("PIONEER_UD02_NORMAL");
     let ud02 = std::fs::read(original).unwrap();
     let ud04 = std::fs::read(std::env::var("PIONEER_UD04_NORMAL").unwrap()).unwrap();
     let canonical = prepare(&Contract::discover(&ud02), &ud04, "BDR-UD04")

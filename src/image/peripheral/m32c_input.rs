@@ -138,6 +138,9 @@ pub fn discover(raw: &[u8], base: u32) -> Observation<Input> {
     type ArrivalKey = (u32, u8, u8, Option<u32>, bool);
     let mut arrivals: BTreeMap<ArrivalKey, Vec<usize>> = BTreeMap::new();
     for a in &hits {
+        // Every hit is examined once here, whatever the number of startups.
+        #[cfg(test)]
+        tests::HITS_EXAMINED.with(|c| c.set(c.get() + 1));
         let s = a.shape;
         if matches!(s.kind, Kind::Closed | Kind::Opened) {
             arrivals
@@ -336,9 +339,12 @@ mod tests {
             assert!(loading(discover(&raw, BASE)));
             HITS_EXAMINED.with(core::cell::Cell::get)
         };
-        let base = examined(0);
+        // Each extra startup is one more hit examined once while indexing
+        // arrivals; rescanning every hit per distinct action would add all
+        // hits for each of them.
+        let (base, more) = (examined(0), examined(200));
         assert!(base > 0);
-        assert_eq!(examined(200), base);
+        assert!(more <= base + 200, "{base} -> {more}");
     }
     #[test]
     fn isolated_startup_or_input_read_is_not_a_complete_loading_contract() {

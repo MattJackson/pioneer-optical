@@ -235,6 +235,7 @@ mod tests {
         "pioneer.first",
         "pioneer.second",
         "pioneer.invalid",
+        "pioneer.valid",
     ];
     /// Codes whose host owns the cause, or which the caller initiated.
     const DELIBERATELY_UNEXPECTED: &[&str] = &[

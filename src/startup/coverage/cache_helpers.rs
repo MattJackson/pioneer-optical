@@ -389,6 +389,32 @@ pub(super) mod tests {
         }
     }
     #[test]
+    fn relative_callers_resolve_their_targets_and_index_loads() {
+        let mut raw = fixture(&SHAPES[0]);
+        // MOV.B #126,R0L; BSR 0x4000
+        raw[0x3fa0..0x3fa4].copy_from_slice(&[0xf8, 0x7e, 0x55, 0x5c]);
+        // MOV.W #126,R0; BSR.W 0x4000
+        raw[0x100..0x108].copy_from_slice(&[0x79, 0, 0, 0x7e, 0x5c, 0, 0x3e, 0xf8]);
+        let Observation::Known(found) = discover(&raw) else {
+            panic!("fixture")
+        };
+        assert_eq!(
+            found[0].callers,
+            alloc::vec![
+                Caller {
+                    offset: 0x104,
+                    kind: CallKind::Relative16,
+                    indices: Some(alloc::vec![126])
+                },
+                Caller {
+                    offset: 0x3fa2,
+                    kind: CallKind::Relative8,
+                    indices: Some(alloc::vec![126])
+                },
+            ]
+        );
+    }
+    #[test]
     fn caller_changes_cache_009f_bytes_wraparound_and_aliases_stay_visible() {
         for shape in SHAPES {
             let mut raw = alloc::vec![0xff;0x8000];

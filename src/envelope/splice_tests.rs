@@ -291,6 +291,27 @@ fn internal_structural_checks_use_the_lean_comp_parser() {
     assert_eq!(streams::RICH_READS.with(|count| count.get()), 0);
 }
 
+#[cfg(feature = "analysis")]
+#[test]
+fn analysis_uses_the_lean_comp_parser() {
+    let img = image();
+    let d = decode_envelope(&envelope(&img, &SPLICES)).unwrap();
+    streams::RICH_READS.with(|count| count.set(0));
+    let analysis = d
+        .analyze(crate::analysis::Options::default(), &mut ())
+        .unwrap();
+    assert_eq!(streams::RICH_READS.with(|count| count.get()), 0);
+    let expanded: Vec<_> = analysis
+        .regions
+        .iter()
+        .filter(|r| r.stream.is_some())
+        .collect();
+    assert!(!expanded.is_empty());
+    for region in expanded {
+        assert_eq!(region.sha256, sha(region.bytes()));
+    }
+}
+
 #[test]
 fn kernel_xor_skip_inside_a_comp_stream_keeps_splices() {
     use super::builder::{encode_kernel_envelope, KernelBuild};

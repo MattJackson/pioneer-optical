@@ -419,8 +419,10 @@ fn comp_layout(image: &[u8]) -> Option<(u32, Vec<crate::comp_streams::Stream>)> 
 }
 
 mod streams;
+#[cfg(all(test, feature = "analysis"))]
+pub(crate) use streams::read as inspect_streams;
 #[cfg(feature = "analysis")]
-pub(crate) use streams::{read as inspect_streams, StreamError};
+pub(crate) use streams::StreamError;
 
 /// Structurally rebuild only the final COMP stream. Earlier streams retain
 /// their addresses. This does not update the unknown word at image offset

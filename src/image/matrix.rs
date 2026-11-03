@@ -116,6 +116,9 @@ pub fn legacy_discover(hardware: &str, normal: &[u8], kernel: Option<&[u8]>) -> 
 /// Complete independently recognized native contracts for envelope/receiver tests.
 #[cfg(test)]
 pub(crate) fn install_test_contract(body: &mut [u8], variant: u8) {
+    // Geometry is a required registered field even on SAT8, where the held
+    // corpus has one value. Establish its native initializer and selector.
+    crate::startup::bank::fixture(body);
     let mut input = super::inputs::tests::fixture();
     for at in (0..0x400 - 3).step_by(2) {
         if input[at] == 0x5e {
@@ -133,6 +136,16 @@ pub(crate) fn install_test_contract(body: &mut [u8], variant: u8) {
     body[0x710..0x716].copy_from_slice(&[0xf8, 0, 0x6a, 0x88, 0xfe, 0x94]);
     let evidence = SatEvidence::discover(SatPlatform::Sat8, body, None);
     assert!(evidence.as_is_key().is_some(), "{evidence:?}");
+    let context = crate::filters::Context::new(crate::compatibility::Firmware {
+        hardware: "SAT 8600",
+        normal: body,
+        kernel: None,
+    });
+    assert!(
+        crate::filters::identity::discover(&context).is_some(),
+        "{:?}",
+        context.filters()
+    );
 }
 
 /// SAT platform partition supplied by the firmware envelope's hardware tag.

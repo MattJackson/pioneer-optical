@@ -592,10 +592,14 @@ mod tests {
         let mut different_layout = direct.clone();
         different_layout[0x1000..].fill(0xff);
         crate::image::layout::install_test_layout_variant(&mut different_layout, 0x1000, 5);
+        crate::startup::bank::fixture(&mut different_layout);
         assert!(discover("SAT 8600", &different_layout, None).is_some());
+        // Both native layouts are known and differ, but these fixtures supply
+        // no Kernel for the component-bound relocation proof. Refuse the
+        // unresolved correction rather than claiming a proved format conflict.
         assert_eq!(
             prepare_phase(context(&different_layout), context(&swapped)),
-            Err(Error::Incompatible)
+            Err(Error::UnresolvedIdentity)
         );
         let mut missing = direct.clone();
         missing[0x1000..].fill(0xff);

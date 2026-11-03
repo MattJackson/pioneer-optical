@@ -1276,6 +1276,10 @@ fn forced_full_and_normal_only_keep_declared_native_layout_and_phase_effects() {
     image[8..16].fill(b' ');
     crate::image::matrix::install_test_contract(&mut image, 0x12);
     layout::install_test_layout_variant(&mut image, 0x1000, 8);
+    // This case supplies fixed-bank geometry below instead of the shared
+    // fixture's marker-bank initializer and selector. Retaining both would
+    // correctly yield conflicting native geometry.
+    image[0x17e0..0x1a00].fill(0xff);
     let calculation = [
         0x5d, 0x60, 0x7a, 2, 0, 0x5d, 0x51, 0x60, 0x7a, 0x20, 0, 0x5c, 0, 0, 0x46, 4, 0x79, 0x0a,
         0, 0x5c, 0x0f, 0xa0, 0x69, 0x21,

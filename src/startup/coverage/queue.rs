@@ -2,8 +2,8 @@
 //! parameter and desired value; initialization and producer reachability remain
 //! separate observations. Missing recognition never means the queue is empty.
 use super::{cache, cache_flow::Reference, cache_writers, CallKind};
-use crate::image::layout::Observation;
-use alloc::vec::Vec;
+use crate::image::{layout::Observation, Regions};
+use alloc::{collections::BTreeMap, vec::Vec};
 
 /// Complete zero-range call semantics, conditional on its indirect call target.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,8 +33,14 @@ pub fn bind_initial_zero(
     clearer: u32,
 ) -> Option<InitialZero> {
     let start = call.checked_sub(14)?;
-    let bytes =
-        cache_writers::stored_at(normal, 0x410000u32.checked_add(start.try_into().ok()?)?, 16)?;
+    let regions = crate::image::regions(normal)?;
+    let stored = &regions.stored;
+    let bytes = cache_writers::stored_at(
+        normal,
+        stored,
+        0x410000u32.checked_add(start.try_into().ok()?)?,
+        16,
+    )?;
     if bytes[..2] != [0x7a, 0] || bytes[6..8] != [0x7a, 1] || bytes[12..15] != [0x19, 0x22, 0x5d] {
         return None;
     }
@@ -49,7 +55,7 @@ pub fn bind_initial_zero(
     if lo > count || count.checked_add(202)? > hi {
         return None;
     }
-    let leaf = cache_writers::stored_at(normal, clearer, 18)?;
+    let leaf = cache_writers::stored_at(normal, stored, clearer, 18)?;
     const CLEAR: &[u8] = &[
         0x6d, 0xf4, 0x0d, 0x24, 0x0f, 0x92, 0x1a, 0x82, 0x0d, 0x41, 0x5e, 0, 0, 0, 0x6d, 0x74,
         0x54, 0x70,
@@ -63,7 +69,7 @@ pub fn bind_initial_zero(
         return None;
     }
     let memset = u32::from_be_bytes([0, leaf[11], leaf[12], leaf[13]]);
-    if !cache_writers::is_memset(normal, memset) {
+    if !cache_writers::is_memset(normal, stored, memset) {
         return None;
     }
     Some(InitialZero {
@@ -405,48 +411,85 @@ fn branch_target(bytes: &[u8], at: usize, p: usize) -> u32 {
         + 2
         + i64::from(i16::from_be_bytes(bytes[p..p + 2].try_into().unwrap()))) as u32
 }
-fn input_contracts(normal: &[u8], producer: u32) -> Vec<InputContract> {
-    let Some(regions) = crate::image::regions(normal) else {
-        return Vec::new();
-    };
-    let mut matched = Vec::new();
-    for region in regions.stored {
-        let start = region.as_ptr() as usize - normal.as_ptr() as usize;
-        for local in (start & 1..region.len()).step_by(2) {
-            for shape in SEMANTICS {
-                let Some(bytes) = region.get(local..local + shape.bytes.len()) else {
-                    continue;
-                };
-                if bytes[..2] == shape.bytes[..2] && shape.bind(bytes).is_some() {
-                    matched.push((shape, start + local, bytes.to_vec()));
+/// SEMANTICS matches in stored code, decoded once per discovery and indexed by
+/// the producer each block names, so many producers cost one scan.
+struct Semantics<'a> {
+    matched: Vec<(&'static SemanticShape, usize, &'a [u8])>,
+    /// RecordSlots and RequestWrite matches by named producer, in match order.
+    by_producer: BTreeMap<u32, Vec<usize>>,
+    /// RequestEntry matches with native request-word placement, by mode-2 target.
+    entries: BTreeMap<u32, Vec<usize>>,
+}
+impl<'a> Semantics<'a> {
+    fn new(normal: &[u8], regions: &Regions<'a>) -> Self {
+        let mut matched = Vec::new();
+        for region in &regions.stored {
+            #[cfg(test)]
+            tests::REGION_SCANS.with(|c| c.set(c.get() + 1));
+            let start = region.as_ptr() as usize - normal.as_ptr() as usize;
+            for local in (start & 1..region.len()).step_by(2) {
+                for shape in SEMANTICS {
+                    let Some(bytes) = region.get(local..local + shape.bytes.len()) else {
+                        continue;
+                    };
+                    if bytes[..2] == shape.bytes[..2] && shape.bind(bytes).is_some() {
+                        matched.push((shape, start + local, bytes));
+                    }
                 }
             }
         }
+        let mut by_producer: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+        let mut entries: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+        for (i, &(shape, at, bytes)) in matched.iter().enumerate() {
+            match shape.kind {
+                SemanticKind::RecordSlots => {
+                    by_producer.entry(read(bytes, 0x3a, 4)).or_default().push(i);
+                }
+                SemanticKind::RequestWrite => {
+                    by_producer.entry(read(bytes, 0x4d, 3)).or_default().push(i);
+                }
+                // Mode 2 selects exactly one read/write block; request words and
+                // mode byte have the native two-byte relative placement.
+                SemanticKind::RequestEntry => {
+                    if read(bytes, 0x1c, 2).checked_add(2) == Some(read(bytes, 0x12, 2)) {
+                        entries
+                            .entry(branch_target(bytes, at, 0x32))
+                            .or_default()
+                            .push(i);
+                    }
+                }
+            }
+        }
+        Self {
+            matched,
+            by_producer,
+            entries,
+        }
     }
+}
+fn input_contracts(semantics: &Semantics<'_>, producer: u32) -> Vec<InputContract> {
     let mut result = Vec::new();
-    for (shape, at, bytes) in &matched {
-        if shape.kind == SemanticKind::RecordSlots && read(bytes, 0x3a, 4) == producer {
+    let named = semantics
+        .by_producer
+        .get(&producer)
+        .map_or(&[][..], Vec::as_slice);
+    for &i in named {
+        let (shape, at, bytes) = semantics.matched[i];
+        if shape.kind == SemanticKind::RecordSlots {
             result.push(InputContract {
-                range: (*at, *at + bytes.len()),
+                range: (at, at + bytes.len()),
                 input: Input::RecordSlots,
                 external_calls: alloc::vec![read(bytes, 0x24, 4)],
                 continuation_targets: Vec::new(),
             });
-        }
-        if shape.kind != SemanticKind::RequestWrite || read(bytes, 0x4d, 3) != producer {
             continue;
         }
-        for (entry, entry_at, entry_bytes) in &matched {
-            if entry.kind != SemanticKind::RequestEntry {
-                continue;
-            }
-            // Mode 2 selects exactly this read/write block; request words and
-            // mode byte have the native two-byte relative placement.
-            if branch_target(entry_bytes, *entry_at, 0x32) != 0x410000 + *at as u32
-                || read(entry_bytes, 0x1c, 2).checked_add(2) != Some(read(entry_bytes, 0x12, 2))
-            {
-                continue;
-            }
+        let selecting = semantics
+            .entries
+            .get(&(0x410000 + at as u32))
+            .map_or(&[][..], Vec::as_slice);
+        for &e in selecting {
+            let (entry, entry_at, entry_bytes) = semantics.matched[e];
             let mut external_calls = alloc::vec![
                 read(bytes, 2, 4),
                 read(bytes, 0x0d, 3),
@@ -458,24 +501,23 @@ fn input_contracts(normal: &[u8], producer: u32) -> Vec<InputContract> {
             let mut continuation_targets: Vec<u32> = entry
                 .branches
                 .iter()
-                .map(|&(p, _)| branch_target(entry_bytes, *entry_at, p))
+                .map(|&(p, _)| branch_target(entry_bytes, entry_at, p))
                 .collect();
             // Explicit outer branches from the request block are not assumed
             // equivalent merely because their relative displacement is fixed.
             for p in [0x13usize, 0x29, 0x2f, 0x39, 0x45, 0x51] {
                 if p < bytes.len() {
                     let target =
-                        (0x410000i64 + *at as i64 + p as i64 + 1 + i64::from(bytes[p] as i8))
-                            as u32;
-                    if target < 0x410000 + *at as u32
-                        || target >= 0x410000 + (*at + bytes.len()) as u32
+                        (0x410000i64 + at as i64 + p as i64 + 1 + i64::from(bytes[p] as i8)) as u32;
+                    if target < 0x410000 + at as u32
+                        || target >= 0x410000 + (at + bytes.len()) as u32
                     {
                         continuation_targets.push(target);
                     }
                 }
             }
             result.push(InputContract {
-                range: (*at, *at + bytes.len()),
+                range: (at, at + bytes.len()),
                 input: Input::RamRequest,
                 external_calls,
                 continuation_targets,
@@ -493,6 +535,7 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Producer>> {
         Observation::Conflicting => return Observation::Conflicting,
     };
     let regions = crate::image::regions(normal).expect("cache checked regions");
+    let mut semantics = None;
     let mut result = Vec::new();
     for block in blocks {
         for region in &regions.stored {
@@ -513,87 +556,12 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Producer>> {
                     let offset = start + local;
                     let target = 0x410000 + offset as u32;
                     let contracts = if shape.register == 1 {
-                        input_contracts(normal, target)
+                        let semantics =
+                            semantics.get_or_insert_with(|| Semantics::new(normal, &regions));
+                        input_contracts(semantics, target)
                     } else {
                         Vec::new()
                     };
-                    let mut references = Vec::new();
-                    for r in &regions.stored {
-                        let base = r.as_ptr() as usize - normal.as_ptr() as usize;
-                        for (q, window) in r.windows(3).enumerate() {
-                            if window != &target.to_be_bytes()[1..] {
-                                continue;
-                            }
-                            let call = if q > 0 && (base + q - 1) % 2 == 0 && r[q - 1] == 0x5e {
-                                Some(CallKind::Absolute)
-                            } else {
-                                None
-                            };
-                            let mut input = Input::Unresolved;
-                            if call.is_some() {
-                                if q >= 7
-                                    && r[q - 7..q - 5] == [0x79, shape.register]
-                                    && r[q - 3..q - 1]
-                                        == [0x0d, if shape.register == 0 { 0x18 } else { 0x29 }]
-                                {
-                                    input = Input::ContiguousImmediate(u16::from_be_bytes([
-                                        r[q - 5],
-                                        r[q - 4],
-                                    ]));
-                                } else if q >= 5 && r[q - 5..q - 3] == [0x79, shape.register] {
-                                    input = Input::ContiguousImmediate(u16::from_be_bytes([
-                                        r[q - 3],
-                                        r[q - 2],
-                                    ]));
-                                }
-                            }
-                            if let Some(c) = contracts
-                                .iter()
-                                .find(|c| base + q >= c.range.0 && base + q + 3 <= c.range.1)
-                            {
-                                input = c.input.clone();
-                            }
-                            references.push(ReferenceEvidence {
-                                reference: Reference::Stored(base + q),
-                                call,
-                                input,
-                            });
-                        }
-                        for q in (base & 1..r.len()).step_by(2) {
-                            let b = &r[q..];
-                            let encoding = if b.len() >= 2 && b[0] == 0x55 {
-                                Some((CallKind::Relative8, 2, i64::from(b[1] as i8)))
-                            } else if b.len() >= 4 && b[..2] == [0x5c, 0] {
-                                Some((
-                                    CallKind::Relative16,
-                                    4,
-                                    i64::from(i16::from_be_bytes([b[2], b[3]])),
-                                ))
-                            } else {
-                                None
-                            };
-                            if let Some((kind, n, disp)) = encoding {
-                                if 0x410000i64 + (base + q + n) as i64 + disp == i64::from(target) {
-                                    references.push(ReferenceEvidence {
-                                        reference: Reference::Stored(base + q),
-                                        call: Some(kind),
-                                        input: Input::Unresolved,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    for (stream, r) in regions.expanded.iter().enumerate() {
-                        for (offset, b) in r.windows(3).enumerate() {
-                            if b == &target.to_be_bytes()[1..] {
-                                references.push(ReferenceEvidence {
-                                    reference: Reference::Expanded { stream, offset },
-                                    call: None,
-                                    input: Input::Unresolved,
-                                });
-                            }
-                        }
-                    }
                     result.push(Producer {
                         offset,
                         end: offset + bytes.len(),
@@ -602,10 +570,104 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Producer>> {
                         storage: block.ram_base + 130,
                         overflow_callees,
                         diagnostic_sources,
-                        references,
+                        references: Vec::new(),
                         input_contracts: contracts,
                     });
                 }
+            }
+        }
+    }
+    // One reference pass for every producer, in the same per-producer order.
+    // Literal occurrences compare the low 24 address bits; relative calls the
+    // full CPU target.
+    let mut literals: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+    let mut calls: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+    for (i, producer) in result.iter().enumerate() {
+        let target = 0x410000 + producer.offset as u32;
+        literals.entry(target & 0xff_ffff).or_default().push(i);
+        calls.entry(i64::from(target)).or_default().push(i);
+    }
+    if result.is_empty() {
+        return Observation::Known(result);
+    }
+    for r in &regions.stored {
+        #[cfg(test)]
+        tests::REGION_SCANS.with(|c| c.set(c.get() + 1));
+        let base = r.as_ptr() as usize - normal.as_ptr() as usize;
+        for (q, window) in r.windows(3).enumerate() {
+            let value = u32::from_be_bytes([0, window[0], window[1], window[2]]);
+            let Some(indices) = literals.get(&value) else {
+                continue;
+            };
+            let call = if q > 0 && (base + q - 1) % 2 == 0 && r[q - 1] == 0x5e {
+                Some(CallKind::Absolute)
+            } else {
+                None
+            };
+            for &i in indices {
+                let register = result[i].argument_register;
+                let mut input = Input::Unresolved;
+                if call.is_some() {
+                    if q >= 7
+                        && r[q - 7..q - 5] == [0x79, register]
+                        && r[q - 3..q - 1] == [0x0d, if register == 0 { 0x18 } else { 0x29 }]
+                    {
+                        input =
+                            Input::ContiguousImmediate(u16::from_be_bytes([r[q - 5], r[q - 4]]));
+                    } else if q >= 5 && r[q - 5..q - 3] == [0x79, register] {
+                        input =
+                            Input::ContiguousImmediate(u16::from_be_bytes([r[q - 3], r[q - 2]]));
+                    }
+                }
+                if let Some(c) = result[i]
+                    .input_contracts
+                    .iter()
+                    .find(|c| base + q >= c.range.0 && base + q + 3 <= c.range.1)
+                {
+                    input = c.input.clone();
+                }
+                result[i].references.push(ReferenceEvidence {
+                    reference: Reference::Stored(base + q),
+                    call,
+                    input,
+                });
+            }
+        }
+        for q in (base & 1..r.len()).step_by(2) {
+            let b = &r[q..];
+            let encoding = if b.len() >= 2 && b[0] == 0x55 {
+                Some((CallKind::Relative8, 2, i64::from(b[1] as i8)))
+            } else if b.len() >= 4 && b[..2] == [0x5c, 0] {
+                Some((
+                    CallKind::Relative16,
+                    4,
+                    i64::from(i16::from_be_bytes([b[2], b[3]])),
+                ))
+            } else {
+                None
+            };
+            if let Some((kind, n, disp)) = encoding {
+                if let Some(indices) = calls.get(&(0x410000i64 + (base + q + n) as i64 + disp)) {
+                    for &i in indices {
+                        result[i].references.push(ReferenceEvidence {
+                            reference: Reference::Stored(base + q),
+                            call: Some(kind),
+                            input: Input::Unresolved,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    for (stream, r) in regions.expanded.iter().enumerate() {
+        for (offset, b) in r.windows(3).enumerate() {
+            let value = u32::from_be_bytes([0, b[0], b[1], b[2]]);
+            for &i in literals.get(&value).map_or(&[][..], Vec::as_slice) {
+                result[i].references.push(ReferenceEvidence {
+                    reference: Reference::Expanded { stream, offset },
+                    call: None,
+                    input: Input::Unresolved,
+                });
             }
         }
     }
@@ -614,6 +676,10 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Producer>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::cell::Cell;
+    std::thread_local! {
+        pub(super) static REGION_SCANS: Cell<usize> = const { Cell::new(0) };
+    }
     fn producer(shape: &Shape, base: u32) -> Vec<u8> {
         let mut bytes = shape.bytes.to_vec();
         for &(p, n, g) in shape.relocations {
@@ -628,11 +694,182 @@ mod tests {
         }
         bytes
     }
+    const RAM: u32 = 0xa01000;
+    fn semantic(shape: &SemanticShape, value: impl Fn(usize) -> u32) -> Vec<u8> {
+        let mut bytes = shape.bytes.to_vec();
+        for &(p, n, g) in shape.relocations {
+            bytes[p..p + n].copy_from_slice(&value(g).to_be_bytes()[4 - n..]);
+        }
+        assert!(shape.bind(&bytes).is_some());
+        bytes
+    }
+    fn put(raw: &mut [u8], at: usize, bytes: &[u8]) {
+        raw[at..at + bytes.len()].copy_from_slice(bytes);
+    }
+    /// Bulk loop at 0x2000 and `copies` register-1 producers from 0x3000. Input
+    /// blocks for the first producer (0x413000) follow from 0x8000.
+    fn producers_fixture(copies: usize) -> Vec<u8> {
+        let mut raw = alloc::vec![0xff; 0x10000];
+        crate::image::layout::install_test_layout(&mut raw, 0x1000);
+        let bulk = &super::super::cache_shapes::SHAPES[0];
+        put(&mut raw, 0x2000, bulk.bytes);
+        put(&mut raw, 0x2000 + bulk.call + 1, &[0x41, 0x10, 0]);
+        for p in bulk.ram {
+            put(&mut raw, 0x2000 + p, &RAM.to_be_bytes());
+        }
+        for k in 0..copies {
+            put(&mut raw, 0x3000 + k * 0x70, &producer(&PRODUCERS[1], RAM));
+        }
+        let target = 0x413000u32;
+        let other = |g: usize| 0x1000 + g as u32 * 0x100;
+        let slots = &SEMANTICS[0];
+        put(
+            &mut raw,
+            0x8000,
+            &semantic(slots, |g| if g == 2 { target } else { other(g) }),
+        );
+        // A record block naming another callee, with an unrelated producer literal.
+        put(
+            &mut raw,
+            0x8200,
+            &semantic(slots, |g| if g == 1 { target } else { other(g) }),
+        );
+        put(
+            &mut raw,
+            0x8400,
+            &semantic(&SEMANTICS[2], |g| if g == 4 { target } else { other(g) }),
+        );
+        let mut entry = semantic(&SEMANTICS[1], |g| [0x1202, 0x1200][g]);
+        for &(p, _) in SEMANTICS[1].branches {
+            entry[p..p + 2].copy_from_slice(&0i16.to_be_bytes());
+        }
+        let d = (0x8400i64 - (0x8500 + 0x34)) as i16;
+        entry[0x32..0x34].copy_from_slice(&d.to_be_bytes());
+        put(&mut raw, 0x8500, &entry);
+        put(
+            &mut raw,
+            0x8600,
+            &[0x79, 1, 0x12, 0x34, 0x0d, 0x29, 0x5e, 0x41, 0x30, 0],
+        );
+        raw
+    }
+    fn producers(raw: &[u8]) -> Vec<Producer> {
+        let Observation::Known(found) = discover(raw) else {
+            panic!("fixture")
+        };
+        found
+    }
+    #[test]
+    fn many_producers_share_one_decode_and_one_reference_scan() {
+        let work = |copies| {
+            let raw = producers_fixture(copies);
+            crate::comp_streams::READS.with(|c| c.set(0));
+            REGION_SCANS.with(|c| c.set(0));
+            assert_eq!(producers(&raw).len(), copies);
+            (
+                crate::comp_streams::READS.with(|c| c.get()),
+                REGION_SCANS.with(|c| c.get()),
+            )
+        };
+        assert_eq!(work(20), work(1));
+    }
+    #[test]
+    fn input_contracts_attach_only_to_blocks_bound_to_the_producer() {
+        let found = producers(&producers_fixture(2));
+        assert_eq!(
+            found.iter().map(|p| p.offset).collect::<Vec<_>>(),
+            alloc::vec![0x3000, 0x3070]
+        );
+        let p = &found[0];
+        assert_eq!(
+            (p.argument_register, p.count, p.storage),
+            (1, RAM + 128, RAM + 130)
+        );
+        assert_eq!(p.overflow_callees, alloc::vec![0x500200, 0x500400]);
+        assert_eq!(p.diagnostic_sources, alloc::vec![0x500300]);
+        let slots = SEMANTICS[0].bytes.len();
+        let write = SEMANTICS[2].bytes.len();
+        assert_eq!(p.input_contracts.len(), 2);
+        assert_eq!(
+            p.input_contracts[0],
+            InputContract {
+                range: (0x8000, 0x8000 + slots),
+                input: Input::RecordSlots,
+                external_calls: alloc::vec![0x1100],
+                continuation_targets: Vec::new(),
+            }
+        );
+        let ram = &p.input_contracts[1];
+        assert_eq!(ram.range, (0x8400, 0x8400 + write));
+        assert_eq!(ram.input, Input::RamRequest);
+        assert_eq!(
+            ram.external_calls,
+            alloc::vec![0x1000, 0x1100, 0x1200, 0x1300]
+        );
+        let entry_targets: Vec<u32> = SEMANTICS[1]
+            .branches
+            .iter()
+            .map(|&(p, _)| {
+                if p == 0x32 {
+                    0x418400
+                } else {
+                    0x418500 + p as u32 + 2
+                }
+            })
+            .collect();
+        assert_eq!(ram.continuation_targets[..6], entry_targets[..]);
+        let input = |at| {
+            p.references
+                .iter()
+                .find(|r| r.reference == Reference::Stored(at))
+                .unwrap_or_else(|| panic!("reference {at:#x}"))
+        };
+        assert_eq!(input(0x8000 + 0x3b).input, Input::RecordSlots);
+        assert_eq!(input(0x8000 + 0x3b).call, None);
+        assert_eq!(input(0x8200 + 37).input, Input::Unresolved);
+        assert_eq!(input(0x8400 + 0x4d).input, Input::RamRequest);
+        assert_eq!(input(0x8400 + 0x4d).call, Some(CallKind::Absolute));
+        assert_eq!(input(0x8607).input, Input::ContiguousImmediate(0x1234));
+        assert_eq!(input(0x8607).call, Some(CallKind::Absolute));
+        assert_eq!(p.references.len(), 4);
+        assert!(found[1].references.is_empty());
+        assert!(found[1].input_contracts.is_empty());
+    }
+    #[test]
+    fn producer_references_include_relative_calls_and_register_zero_has_no_contracts() {
+        let mut raw = producers_fixture(1);
+        put(&mut raw, 0x2ff0, &[0x55, 0x0e]);
+        put(&mut raw, 0x8700, &[0x5c, 0, 0xa8, 0xfc]);
+        put(&mut raw, 0x3000, &producer(&PRODUCERS[0], RAM));
+        let found = producers(&raw);
+        assert_eq!(found.len(), 1);
+        let p = &found[0];
+        assert_eq!(p.argument_register, 0);
+        assert!(p.input_contracts.is_empty());
+        let relative: Vec<_> = p
+            .references
+            .iter()
+            .filter(|r| matches!(r.call, Some(CallKind::Relative8 | CallKind::Relative16)))
+            .map(|r| (r.reference.clone(), r.call))
+            .collect();
+        assert_eq!(
+            relative,
+            alloc::vec![
+                (Reference::Stored(0x2ff0), Some(CallKind::Relative8)),
+                (Reference::Stored(0x8700), Some(CallKind::Relative16)),
+            ]
+        );
+        // The register-1 caller form does not bind a register-0 producer input.
+        assert!(p.references.iter().all(|r| r.input == Input::Unresolved));
+    }
     #[test]
     fn entire_producer_and_repeated_count_storage_relationship_are_required() {
         for shape in PRODUCERS {
             let mut bytes = producer(shape, 0xa01000);
-            assert!(shape.bind(&bytes, 0xa01000).is_some());
+            assert_eq!(
+                shape.bind(&bytes, 0xa01000),
+                Some((alloc::vec![0x500200, 0x500400], alloc::vec![0x500300]))
+            );
             for i in 0..bytes.len() {
                 if shape
                     .relocations
@@ -701,6 +938,27 @@ mod tests {
         );
         raw[0x4000] ^= 1;
         assert!(bind_initial_zero(&raw, 0xa01000, 0x200e, 0x413000).is_none());
+        raw[0x4000] ^= 1;
+        assert!(bind_initial_zero(&raw, 0xa01000, 0x200e, 0x413000).is_some());
+        // Count byte below the cleared range start.
+        assert!(bind_initial_zero(&raw, 0xa00f00, 0x200e, 0x413000).is_none());
+        assert!(initial_zero_candidates(&raw, 0xa00f00).is_empty());
+        assert!(initial_zero_candidates(&raw, 0xa01f80).is_empty());
+        for i in [0, 1, 6, 7, 12, 13, 14] {
+            raw[0x2000 + i] ^= 1;
+            assert!(
+                bind_initial_zero(&raw, 0xa01000, 0x200e, 0x413000).is_none(),
+                "setup byte {i}"
+            );
+            assert!(
+                initial_zero_candidates(&raw, 0xa01000).is_empty(),
+                "setup byte {i}"
+            );
+            raw[0x2000 + i] ^= 1;
+        }
+        raw[0x200f] = 0x50;
+        assert!(bind_initial_zero(&raw, 0xa01000, 0x200e, 0x413000).is_none());
+        assert!(initial_zero_candidates(&raw, 0xa01000).is_empty());
     }
     #[test]
     fn scalar_request_and_record_index_semantics_cannot_relocate() {

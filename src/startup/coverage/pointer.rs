@@ -2,7 +2,10 @@
 //! startup acceptance; cache, queue and boot coverage remain separate.
 use super::References;
 use crate::image::layout::{Observation, Unresolved};
-use alloc::{collections::BTreeSet, vec::Vec};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    vec::Vec,
+};
 
 /// Native use of a loaded getter pointer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -195,31 +198,48 @@ fn near9f_tail(normal: &[u8], regions: &[&[u8]], start: usize) -> Option<usize> 
     Some(target)
 }
 
-fn callers(
+/// Caller evidence for every candidate formatter entry target, from one
+/// shared pass over the regions (crafted images may hold many candidates).
+/// `None` for a target means it is refused: it has a 32-bit literal alias
+/// anywhere (any alignment, stored or expanded), an absolute-jump alias, an
+/// unbound caller, or no caller at all.
+fn callers_for(
     normal: &[u8],
     regions: &[&[u8]],
     expanded: &[Vec<u8>],
-    entry: usize,
-) -> Option<Vec<Caller>> {
-    let target = 0x410000usize.checked_add(entry)? as u32;
+    targets: &BTreeSet<u32>,
+) -> BTreeMap<u32, Option<Vec<Caller>>> {
+    let mut state: BTreeMap<u32, Option<Vec<Caller>>> =
+        targets.iter().map(|&t| (t, Some(Vec::new()))).collect();
+    if state.is_empty() {
+        return state;
+    }
     // Any 32-bit literal of the entry (MOV.L immediate, function-pointer table,
     // any alignment, stored or expanded) is an alias with unbounded callers.
-    let literal = target.to_be_bytes();
-    if regions
+    for region in regions
         .iter()
         .copied()
         .chain(expanded.iter().map(Vec::as_slice))
-        .any(|r| r.windows(4).any(|w| w == literal))
     {
-        return None;
+        for w in region.windows(4) {
+            #[cfg(test)]
+            tests::WINDOWS.with(|c| c.set(c.get() + 1));
+            let value = u32::from_be_bytes([w[0], w[1], w[2], w[3]]);
+            if let Some(entry) = state.get_mut(&value) {
+                *entry = None;
+            }
+        }
     }
-    let mut result = Vec::new();
     for region in regions {
         let origin = region.as_ptr() as usize - normal.as_ptr() as usize;
         for local in (origin & 1..region.len()).step_by(2) {
+            #[cfg(test)]
+            tests::WINDOWS.with(|c| c.set(c.get() + 1));
             let bytes = &region[local..];
-            if bytes.len() >= 4 && bytes[0] == 0x5a && word(&bytes[1..4]) == target {
-                return None;
+            if bytes.len() >= 4 && bytes[0] == 0x5a {
+                if let Some(entry) = state.get_mut(&word(&bytes[1..4])) {
+                    *entry = None;
+                }
             }
             let destination = if bytes.len() >= 4 && bytes[0] == 0x5e {
                 Some(i64::from(word(&bytes[1..4])))
@@ -235,24 +255,48 @@ fn callers(
             } else {
                 None
             };
-            if destination != Some(i64::from(target)) {
+            let Some(target) = destination.and_then(|d| u32::try_from(d).ok()) else {
                 continue;
-            }
-            let load = local.checked_sub(4)?;
-            if region[load..load + 2] != [0x79, 1] {
-                return None;
-            }
-            let index = u16::from_be_bytes([region[load + 2], region[load + 3]]);
-            if index <= 0x9f {
-                return None;
-            }
-            result.push(Caller {
-                offset: origin + local,
-                index,
+            };
+            let Some(Some(result)) = state.get_mut(&target) else {
+                continue;
+            };
+            let bound = local.checked_sub(4).and_then(|load| {
+                let index = u16::from_be_bytes([region[load + 2], region[load + 3]]);
+                (region[load..load + 2] == [0x79, 1] && index > 0x9f).then_some(index)
             });
+            match bound {
+                Some(index) => result.push(Caller {
+                    offset: origin + local,
+                    index,
+                }),
+                None => {
+                    state.insert(target, None);
+                }
+            }
         }
     }
-    (!result.is_empty()).then_some(result)
+    for entry in state.values_mut() {
+        if entry.as_ref().is_some_and(Vec::is_empty) {
+            *entry = None;
+        }
+    }
+    state
+}
+fn entry_target(entry: usize) -> Option<u32> {
+    Some(0x410000usize.checked_add(entry)? as u32)
+}
+#[cfg(test)]
+fn callers(
+    normal: &[u8],
+    regions: &[&[u8]],
+    expanded: &[Vec<u8>],
+    entry: usize,
+) -> Option<Vec<Caller>> {
+    let target = entry_target(entry)?;
+    callers_for(normal, regions, expanded, &BTreeSet::from([target]))
+        .remove(&target)
+        .flatten()
 }
 /// Bind complete pointer-use blocks, retaining every uncovered pointer load.
 /// This does not substitute for cache, boot, queue or arbitrary-alias analysis.
@@ -270,6 +314,26 @@ fn bind(normal: &[u8], references: &References) -> Observation<Evidence> {
     let Some(regions) = crate::image::regions(normal) else {
         return Observation::Unresolved(Unresolved::ReaderNotRecognized);
     };
+    // Formatter candidates share one caller/alias scan instead of one each.
+    let mut targets = BTreeSet::new();
+    for pointer in &references.pointers {
+        for shape in super::pointer_shapes::SHAPES {
+            if shape.kind != Kind::FourWordOutput {
+                continue;
+            }
+            for &relative in shape.pointers {
+                let Some(at) = pointer.offset.checked_sub(relative) else {
+                    continue;
+                };
+                if stored(normal, &regions.stored, at, shape.bytes.len())
+                    && shape.matches(normal, at, references.getter)
+                {
+                    targets.extend(entry_target(at));
+                }
+            }
+        }
+    }
+    let formatter_callers = callers_for(normal, &regions.stored, &regions.expanded, &targets);
     let mut blocks = Vec::new();
     let mut seen = BTreeSet::new();
     let mut covered = BTreeSet::new();
@@ -300,11 +364,12 @@ fn bind(normal: &[u8], references: &References) -> Observation<Evidence> {
                     None
                 };
                 let clients = if shape.kind == Kind::FourWordOutput {
-                    let Some(clients) = callers(normal, &regions.stored, &regions.expanded, at)
+                    let Some(Some(clients)) =
+                        entry_target(at).and_then(|t| formatter_callers.get(&t))
                     else {
                         continue;
                     };
-                    clients
+                    clients.clone()
                 } else {
                     Vec::new()
                 };
@@ -337,6 +402,10 @@ fn bind(normal: &[u8], references: &References) -> Observation<Evidence> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::cell::Cell;
+    std::thread_local! {
+        pub(super) static WINDOWS: Cell<usize> = const { Cell::new(0) };
+    }
     fn fixture(shape: &Shape) -> Vec<u8> {
         let mut raw = alloc::vec![0xff;0x10000];
         place(shape, &mut raw, 0x200, 0x410100);
@@ -629,5 +698,27 @@ mod tests {
         );
         let empty = alloc::vec![0xffu8; 0x600];
         assert_eq!(callers(&empty, &[&empty], &[], 0x300), None, "no callers");
+    }
+    #[test]
+    fn many_formatter_candidates_share_one_alias_and_caller_scan() {
+        let shape = shape("four_words");
+        let windows = |copies: usize| {
+            let mut raw = alloc::vec![0xff; 0x10000];
+            crate::image::layout::install_test_layout(&mut raw, 0x1000);
+            for k in 0..copies {
+                place(shape, &mut raw, 0x3000 + k * 0x100, 0x411000);
+            }
+            WINDOWS.with(|c| c.set(0));
+            let Observation::Known(evidence) = discover(&raw) else {
+                panic!("fixture")
+            };
+            // No caller: every candidate stays uncovered, so every scan runs fully.
+            assert_eq!(evidence.uncovered.len(), copies);
+            assert!(evidence.blocks.is_empty());
+            WINDOWS.with(Cell::get)
+        };
+        let one = windows(1);
+        assert!(one > 0);
+        assert_eq!(windows(20), one);
     }
 }

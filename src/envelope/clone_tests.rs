@@ -280,3 +280,23 @@ fn fill_lock_is_bounded_to_the_kernel_window() {
     img[..0x1000].copy_from_slice(&fill[..0x1000]);
     assert_eq!(kernel_fill_seed(&img), None);
 }
+
+#[test]
+fn kernel_equality_of_different_lengths_skips_fill_search() {
+    let name = "PIONEER BDR-X";
+    LOCK_FILLS.with(|count| count.set(0));
+    assert_eq!(
+        kernel_image_equality(&vec![0xff; 0x10000], name, &vec![0xff; 0x8000], name),
+        Some(false)
+    );
+    assert_eq!(LOCK_FILLS.with(|count| count.get()), 0);
+    // A side too short to be a Kernel body is still undecidable.
+    assert_eq!(
+        kernel_image_equality(&vec![0xff; 0x10000], name, &[0xff; 0x10], name),
+        None
+    );
+    assert_eq!(
+        kernel_image_equality(&[0xff; 0x10], name, &vec![0xff; 0x10000], name),
+        None
+    );
+}

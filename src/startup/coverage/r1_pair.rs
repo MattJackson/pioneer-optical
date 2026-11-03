@@ -4,7 +4,6 @@
 use super::{cache_flow::Reference, CallKind};
 use crate::image::layout::Observation;
 use alloc::{collections::BTreeMap, vec::Vec};
-use h8_asm::{isa::decode_insn, Mode, Target};
 pub(super) struct Pattern {
     pub bytes: &'static [u8],
     pub masks: &'static [(usize, usize)],
@@ -126,22 +125,13 @@ fn bind(normal: &[u8], stored: &[&[u8]], at: usize, accessor: u32) -> Option<Gra
     })
 }
 /// R1L immediate loaded directly before the aligned call at `local`
-/// (`MOV.W #imm,R1` or `MOV.B #imm,R1L`). The load must be an instruction
-/// boundary: an index byte that is an operand of a longer instruction starting
-/// in the preceding eight bytes (the longest native form) stays unknown.
+/// (`MOV.W #imm,R1` or `MOV.B #imm,R1L`). The load is not proven to be an
+/// instruction boundary: an operand byte F9 or 79 01 can be mistaken for it
+/// (open audit item correctness-P7#1; needs a decoder-anchored entry inventory).
 fn caller_index(region: &[u8], local: usize) -> Option<u8> {
-    let load = if local >= 4 && region[local - 4..local - 2] == [0x79, 1] {
-        local - 4
-    } else if local >= 2 && region[local - 2] == 0xf9 {
-        local - 2
-    } else {
-        return None;
-    };
-    let covered = (1..=4).filter_map(|k| load.checked_sub(2 * k)).any(|s| {
-        decode_insn(&region[s..local], Target::H8S2000, Mode::Advanced)
-            .is_ok_and(|d| s + d.len > load)
-    });
-    (!covered).then(|| region[local - 1])
+    ((local >= 4 && region[local - 4..local - 2] == [0x79, 1])
+        || (local >= 2 && region[local - 2] == 0xf9))
+        .then(|| region[local - 1])
 }
 /// Bind complete pair/initializer/constructor/fill code and all native incoming
 /// call observations. This is a normal-return register contract, not global
@@ -386,17 +376,24 @@ mod tests {
         assert_eq!(work(20), work(1));
     }
     #[test]
-    fn caller_index_requires_the_load_to_start_an_instruction() {
+    fn caller_index_accepts_loads_after_operand_tails_of_earlier_instructions() {
         let call = [0x5e, 0x41, 0x60, 0];
         let with = |prefix: &[u8]| [prefix, &call[..]].concat();
-        assert_eq!(caller_index(&with(&[0x6a, 0x09, 0xf9, 0x40]), 4), None);
-        assert_eq!(caller_index(&with(&[0x79, 0x11, 0xf9, 0x05]), 4), None);
-        assert_eq!(caller_index(&with(&[0, 0, 0xf9, 0x40]), 4), Some(0x40));
+        // JSR @0x416e12; MOV.B #5,R1L.
+        assert_eq!(
+            caller_index(&with(&[0x5e, 0x41, 0x6e, 0x12, 0xf9, 5]), 6),
+            Some(5)
+        );
+        // JSR @0x417912; MOV.B #5,R1L.
+        assert_eq!(
+            caller_index(&with(&[0x5e, 0x41, 0x79, 0x12, 0xf9, 5]), 6),
+            Some(5)
+        );
+        // MOV.L #0xa06b00,ER0; MOV.W #0x40,R1.
+        let long = with(&[0x7a, 0, 0, 0xa0, 0x6b, 0, 0x79, 1, 0, 0x40]);
+        assert_eq!(caller_index(&long, 10), Some(0x40));
         assert_eq!(caller_index(&with(&[0xf9, 0x40]), 2), Some(0x40));
         assert_eq!(caller_index(&with(&[0x79, 1, 0, 0xff]), 4), Some(0xff));
-        // MOV.L #imm,ER0 whose immediate holds the 79 01 bytes.
-        let long = with(&[0x7a, 0, 0, 0, 0x79, 1, 0, 0x40]);
-        assert_eq!(caller_index(&long, 8), None);
         assert_eq!(caller_index(&with(&[0, 0, 0, 0]), 4), None);
     }
     #[test]
@@ -405,7 +402,8 @@ mod tests {
         raw[0x5ff0..0x5ff2].copy_from_slice(&[0x55, 0x0e]);
         raw[0x7000..0x7006].copy_from_slice(&[0xf9, 0xff, 0x5e, 0x41, 0x60, 0]);
         raw[0x7010..0x7018].copy_from_slice(&[0x79, 1, 0, 0x40, 0x5e, 0x41, 0x60, 0]);
-        // R1L immediates that are operand bytes of a longer instruction.
+        // R1L immediates that are operand bytes of a longer instruction are
+        // still taken as indices (open item correctness-P7#1).
         raw[0x7040..0x7048].copy_from_slice(&[0x6a, 0x09, 0xf9, 0x40, 0x5e, 0x41, 0x60, 0]);
         raw[0x7050..0x7058].copy_from_slice(&[0x79, 0x11, 0xf9, 0x05, 0x5e, 0x41, 0x60, 0]);
         raw[0x7021..0x7025].copy_from_slice(&0x416000u32.to_be_bytes());
@@ -432,8 +430,8 @@ mod tests {
                 caller(0x5ff0, CallKind::Relative8, None),
                 caller(0x7002, CallKind::Absolute, Some([0xff, 0x00])),
                 caller(0x7014, CallKind::Absolute, Some([0x40, 0x41])),
-                caller(0x7044, CallKind::Absolute, None),
-                caller(0x7054, CallKind::Absolute, None),
+                caller(0x7044, CallKind::Absolute, Some([0x40, 0x41])),
+                caller(0x7054, CallKind::Absolute, Some([5, 6])),
             ]
         );
         assert_eq!(

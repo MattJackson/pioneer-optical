@@ -133,7 +133,10 @@ fn selector(
     register: u8,
     accessor: u32,
 ) -> (Option<Vec<u8>>, Option<usize>) {
-    if local >= 2 && region[local - 2..local] == [0xf8 + register, 2] {
+    if local >= 2
+        && region[local - 2..local] == [0xf8 + register, 2]
+        && super::cache_helpers::immediate_at(region, local - 2, 2)
+    {
         return (Some(alloc::vec![2]), None);
     }
     for shape in super::cache_rom_shapes::SELECTORS
@@ -468,6 +471,23 @@ mod tests {
         let (many, count) = reads(&raw);
         assert_eq!(many, 8);
         assert_eq!(count, baseline);
+    }
+    #[test]
+    fn immediate_mode_inside_a_longer_instruction_stays_unknown() {
+        let mut raw = fixture();
+        // MOV.B @0xf802:16,R0L; JSR helper. "f8 02" is an address operand.
+        raw[0x700..0x708].copy_from_slice(&[0x6a, 0x08, 0xf8, 0x02, 0x5e, 0x41, 0x40, 0]);
+        let Observation::Known(found) = discover(&raw) else {
+            panic!("fixture")
+        };
+        let caller = found[0].callers.iter().find(|c| c.offset == 0x704).unwrap();
+        assert_eq!(caller.modes, None);
+        raw[0x700..0x702].copy_from_slice(&[0xff, 0xff]);
+        let Observation::Known(found) = discover(&raw) else {
+            panic!("fixture")
+        };
+        let caller = found[0].callers.iter().find(|c| c.offset == 0x704).unwrap();
+        assert_eq!(caller.modes, Some(alloc::vec![2]));
     }
     #[test]
     fn index_resolution_preserves_wrap_and_rejects_unknown_or_foreign_callers() {

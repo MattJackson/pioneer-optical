@@ -244,3 +244,31 @@ fn a_stale_selector_comparison_does_not_survive_a_flag_changing_instruction() {
         Err(Error::Unsupported { .. })
     ));
 }
+#[test]
+fn stack_pointer_rewrites_are_not_modelled_as_unchanged() {
+    // Only the modelled SUB.W/push/STM forms may move SP; any other ER7 write
+    // leaves the traced stack slot unrelated to the real helper argument.
+    for rewrite in [
+        &[0x0f, 0xe7][..],                    // MOV.L ER6,ER7
+        &[0x01, 0x00, 0x6f, 0x77, 0, 0x40][..], // MOV.L @(0x40,ER7),ER7
+        &[0x0d, 0x67][..],                    // MOV.W R6,R7
+        &[0x0d, 0x6f][..],                    // MOV.W R6,E7
+        &[0xf7, 0x00][..],                    // MOV.B #0,R7H
+        &[0x0c, 0x9f][..],                    // MOV.B R1L,R7L
+    ] {
+        let good = handler(Some(6), None, None, false, false);
+        let call = good
+            .windows(4)
+            .position(|w| w == [0x5e, 0x50, 6, 0])
+            .unwrap();
+        let mut bad = good[..call].to_vec();
+        bad.extend_from_slice(rewrite);
+        bad.extend_from_slice(&good[call..]);
+        bad.truncate(0x1000);
+        assert_eq!(memory_call(&good, BASE, MAIN, 0x93, false), Ok(HELPER));
+        assert!(
+            memory_call(&bad, BASE, MAIN, 0x93, false).is_err(),
+            "{rewrite:02x?}"
+        );
+    }
+}

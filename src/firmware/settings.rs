@@ -134,6 +134,58 @@ mod tests {
         assert_eq!(literals(&bytes[..11], 0xd0).count(), 0);
         assert_eq!(literals(&bytes, 0xe0).count(), 0);
     }
+    fn settings_image(base: u32, stop: usize, prologue: u8) -> Vec<u8> {
+        let mut image = vec![0; 4096];
+        for opcode in [0, 1, 3, 4, 0x12, 0x3b, 0x3c] {
+            image[opcode * 4..opcode * 4 + 4].copy_from_slice(&0x1234u32.to_be_bytes());
+        }
+        let mut init = vec![0x7a, 1];
+        init.extend((base + 2048).to_be_bytes());
+        init.extend([1, 0, 0x6b, 0xa1]);
+        init.extend(0x1234u32.to_be_bytes());
+        image[1200..1214].copy_from_slice(&init);
+        for (offset, target) in [(0x10, 2900), (0x1a, 2910), (0x24, 3000)] {
+            image[2048 + offset..2052 + offset].copy_from_slice(&(base + target).to_be_bytes());
+        }
+        // Main dispatch at 3000: first branch to the next handler, F4 branch to 3200.
+        let next = (stop as i32 - 3006) as i16;
+        let f4 = (3200 - 3012) as i16;
+        let mut dispatch = vec![0xa1, 0xf1, 0x58, 0x70];
+        dispatch.extend(next.to_be_bytes());
+        dispatch.extend([0xa1, 0xf4, 0x58, 0x70]);
+        dispatch.extend(f4.to_be_bytes());
+        dispatch.extend([0xa1, 0xa4]);
+        image[3000..3014].copy_from_slice(&dispatch);
+        image[3200..3206].copy_from_slice(&[0x79, 1, 1, 0, 0x0f, prologue]);
+        image[3206..3216].copy_from_slice(&[0x79, 1, 0, 0x31, 0xfa, 4, 0x0f, 0xd0, 0x5d, 0x60]);
+        image
+    }
+    #[test]
+    fn settings_inspect_reports_builder_bounds_and_literals() {
+        let base = 0x510000u32;
+        assert_eq!(
+            inspect(&settings_image(base, 3300, 0xd0), base).unwrap(),
+            Evidence {
+                read_buffer: base + 3000,
+                response_builder: base + 3200,
+                next_handler: base + 3300,
+                literal_stores: vec![LiteralStore {
+                    address: base + 3206,
+                    offset: 0x31,
+                    value: 4,
+                }],
+            }
+        );
+        for (stop, prologue) in [(3300, 0xb0), (3200, 0xd0), (4097, 0xd0)] {
+            assert_eq!(
+                inspect(&settings_image(base, stop, prologue), base),
+                Err(Error::Unsupported {
+                    context: "response builder"
+                }),
+                "stop {stop} prologue {prologue:#x}"
+            );
+        }
+    }
     #[test]
     fn branch_targets_are_bounded_and_signed() {
         assert_eq!(branch(&[0x58, 0x70, 0xff, 0xfc], 0), Some(0));

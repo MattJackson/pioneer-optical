@@ -443,6 +443,21 @@ fn every_hoard_pair_rebuilds_byte_exact_when_configured() {
         assert_eq!(failed, 0, "hoard pairs failed to rebuild");
         let rebuilt = exact + modulo + header_exact.values().map(Vec::len).sum::<usize>();
         assert!(rebuilt > 0, "no hoard pair was in scope");
+        // Header-exact is a fallback that copies OEM headers verbatim, so a
+        // template-free regression would otherwise hide there.
+        assert!(exact + modulo > 0, "no pair rebuilt template-free");
+        // Pin the fallback share to a known-good run's header-exact total.
+        if let Some(ceiling) = std::env::var_os("PIONEER_HOARD_HEADER_EXACT_CEILING") {
+            let ceiling: usize = ceiling
+                .to_str()
+                .and_then(|c| c.parse().ok())
+                .expect("PIONEER_HOARD_HEADER_EXACT_CEILING must be a count");
+            let behind: usize = header_exact.values().map(Vec::len).sum();
+            assert!(
+                behind <= ceiling,
+                "{behind} pairs rebuilt only behind OEM headers; ceiling {ceiling}"
+            );
+        }
     }
 }
 

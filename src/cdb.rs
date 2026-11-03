@@ -10,7 +10,8 @@ pub const WRITE_BUFFER: u8 = 0x3B;
 /// SCSI `READ BUFFER` opcode, used by every vendor read command.
 pub const READ_BUFFER: u8 = 0x3C;
 
-/// Mode of the vendor reads and of the [`knock`].
+/// Buffer mode 02 shared by vendor reads, A0 parameter and diagnostic-control
+/// writes, and the [`knock`].
 pub const READ_MODE: u8 = 0x02;
 /// Buffer id of [`read_memory`].
 pub const MEMORY_ID: u8 = 0xB0;

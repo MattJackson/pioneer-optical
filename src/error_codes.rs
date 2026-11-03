@@ -189,7 +189,10 @@ impl CodedError for crate::receiver::PreparationError {
             Self::RejectedMarker => "pioneer.preparation.rejected_marker",
             Self::UnsupportedFinalStage => "pioneer.preparation.unsupported_restoration",
             Self::FinalStageEntry(..) => "pioneer.preparation.restoration_entry",
-            Self::PatchedRepresentation => "pioneer.preparation.patched_representation",
+            // Same stage code as before; the signing cause is kept in source().
+            Self::PatchedRepresentation | Self::PatchedSigning(..) => {
+                "pioneer.preparation.patched_representation"
+            }
             Self::UnsupportedDialect => "pioneer.preparation.unsupported_dialect",
             Self::UnsupportedTransport => "pioneer.preparation.unsupported_transport",
         }

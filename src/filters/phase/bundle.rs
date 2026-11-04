@@ -15,6 +15,9 @@
 //! more than one template, or more than one site where exactly one is native,
 //! are unresolved. No element is ever defaulted.
 
+/// Native parameter-conversion rewrite stage; full mechanism composition is separate.
+pub mod conversions;
+
 use super::native::{self, Assignment};
 use crate::image::layout::Observation;
 use alloc::vec::Vec;
@@ -116,6 +119,9 @@ macro_rules! t {
     ($($x:tt)*) => { &[$(t!(@ $x)),*] };
 }
 
+/// Native waveform fetch normalization and complete loader binding.
+pub mod waveforms;
+
 // Parameter 0x127/0x128 base conversion: (p127·16)/0x12 + p128·64 + arg, or
 // its mirror 0x40 − (p127·16)/0x12 − p128·64 + arg.
 const BASE: [Template; 2] = [
@@ -153,13 +159,19 @@ const STEP: [Template; 3] = [
 ];
 const LOADER_ASCENDING: Template =
     t!(0xac 0x09 0x44 0x06 0x79 0x10 0x01 0x2a 0x40 0x04 0x79 0x10 0x06 0x02);
+// Complete address-selection block after an in-place descending-to-ascending
+// conversion. Both branches assign R0 from the loop index before adding the
+// ascending DSP address. The retained NOPs are part of this native grammar.
+const LOADER_ASCENDING_PADDED: Template = t!(0xac 0x09 0x44 0x08 0x0d 0xc0 0x79 0x10 0x01 0x2a 0x40 0x0a
+    0x0d 0xc0 0x79 0x10 0x06 0x02 0x00 0x00 0x00 0x00);
 const LOADER_DESCENDING: Template = t!(0xac 0x09 0x44 0x08 0x79 0x00 0x06 0x13 0x19 0xc0 0x40 0x0a
     0x79 0x00 0x01 0x32 0x19 0xc0 0x79 0x10 0x00 0x09);
 // CMP.B #0x11,R4L; BNE; MOV.W @ER5,R0; NEG.W R0 — entry 0x11 special case.
 const LOADER_NEGATED_17: Template = t!(0xac 0x11 0x46 _ 0x69 0x50 0x17 0x90);
+// Complete two-branch mode programs through their common arithmetic join.
 const MODE: [Template; 2] = [
-    t!(0x79 0x00 0x01 0x27 0xae 0x01 0x46 0x24 0x5e _ _ _ 0x0d 0x01 0x0f 0xd0 0x0d 0xb9),
-    t!(0x79 0x00 0x01 0x27 0xae 0x01 0x46 0x22 0x5e _ _ _ 0x0d 0x01 0x17 0x9b 0x0d 0xb9 0x0f 0xd0),
+    t!(0x79 0x00 0x01 0x27 0xae 0x01 0x46 0x24 0x5e _ _ _ 0x0d 0x01 0x0f 0xd0 0x0d 0xb9 0x5e _ _ _ 0x0d 0x08 0x79 0x20 0x00 0x1b 0x45 0x06 0x79 0x00 0x00 0x63 0x40 0x04 0x79 0x00 0x00 0x1b 0x19 0x80 0x40 0x20 0x5e _ _ _ 0x0d 0x01 0x17 0x9b 0x0d 0xb9 0x0f 0xd0 0x5e _ _ _ 0x79 0x20 0x00 0x1b 0x45 0x06 0x79 0x30 0x00 0x1b 0x40 0x04 0x79 0x10 0x00 0x2d),
+    t!(0x79 0x00 0x01 0x27 0xae 0x01 0x46 0x22 0x5e _ _ _ 0x0d 0x01 0x17 0x9b 0x0d 0xb9 0x0f 0xd0 0x5e _ _ _ 0x79 0x20 0x00 0x1b 0x45 0x06 0x79 0x30 0x00 0x1b 0x40 0x28 0x79 0x10 0x00 0x2d 0x40 0x22 0x5e _ _ _ 0x0d 0x01 0x0f 0xd0 0x0d 0xb9 0x5e _ _ _ 0x0d 0x08 0x79 0x20 0x00 0x1b 0x45 0x06 0x79 0x00 0x00 0x63 0x40 0x04 0x79 0x00 0x00 0x1b 0x19 0x80),
 ];
 const CONTROLLER: [Template; 2] = [
     t!(0x79 0x00 0xec 0x88 0xae 0x01 0x46 0x02 0xf8 0x08),
@@ -237,11 +249,7 @@ fn resolve_call(normal: &[u8], target: u32) -> Option<usize> {
 /// Returns the source word whose function receives the negative offset; a coil
 /// operand exchange moves the source word and its offset to the other channel
 /// together, so this element is invariant under the coil correction.
-fn step_source(
-    normal: &[u8],
-    stored: &[&[u8]],
-    coil: &native::PairedPhase,
-) -> Result<u8, Unbound> {
+fn step_source(normal: &[u8], stored: &[&[u8]], coil: &native::PairedPhase) -> Result<u8, Unbound> {
     let plus = sites(normal, stored, STEP_PLUS);
     let minus = sites(normal, stored, STEP_MINUS);
     let ([plus], [minus]) = (plus.as_slice(), minus.as_slice()) else {
@@ -277,6 +285,40 @@ fn step_source(
     Ok(mw as u8)
 }
 
+// An inverted condition selects the opposite branch without moving or
+// duplicating the native NEG instruction. Bind the complete prefix in either
+// encoding, and report the effective mode-one sign rather than the opcode's
+// presence alone.
+fn mode_binding(normal: &[u8], stored: &[&[u8]]) -> Result<(u8, usize), Unbound> {
+    let mut found = None;
+    for (sign, template) in MODE.iter().enumerate() {
+        for inverted in [false, true] {
+            let mut variant = template.to_vec();
+            if inverted {
+                variant[6] = Some(0x47);
+            }
+            for region in stored {
+                let start = region.as_ptr() as usize - normal.as_ptr() as usize;
+                let end = start + region.len();
+                for at in (start + (start & 1)..end).step_by(2) {
+                    if at + variant.len() <= end
+                        && normal[at..at + variant.len()]
+                            .iter()
+                            .zip(&variant)
+                            .all(|(b, t)| t.map_or(true, |t| t == *b))
+                    {
+                        if found.is_some() {
+                            return Err(Unbound::Ambiguous(Element::ModeSign));
+                        }
+                        found = Some(((sign as u8) ^ u8::from(inverted), at));
+                    }
+                }
+            }
+        }
+    }
+    found.ok_or(Unbound::Missing(Element::ModeSign))
+}
+
 /// Bind every bundle element of decoded H8 split-word Normal.
 pub fn bind(normal: &[u8]) -> Result<Bundle, Unbound> {
     let Observation::Known(coil) = native::discover_pair(normal) else {
@@ -288,7 +330,8 @@ pub fn bind(normal: &[u8]) -> Result<Bundle, Unbound> {
     let stored = &regions.stored;
     let step_minus_source = step_source(normal, stored, &coil)?;
     let loader = {
-        let up = sites(normal, stored, LOADER_ASCENDING);
+        let mut up = sites(normal, stored, LOADER_ASCENDING);
+        up.extend(sites(normal, stored, LOADER_ASCENDING_PADDED));
         let down = sites(normal, stored, LOADER_DESCENDING);
         let negated = sites(normal, stored, LOADER_NEGATED_17);
         match (up.len(), down.len(), negated.len()) {
@@ -306,7 +349,7 @@ pub fn bind(normal: &[u8]) -> Result<Bundle, Unbound> {
     let (calibration_base, _) = one_of(normal, stored, &BASE, Element::CalibrationBase)?;
     let (calibration_offset, _) = one_of(normal, stored, &OFFSET, Element::CalibrationOffset)?;
     let (calibration_step, _) = one_of(normal, stored, &STEP, Element::CalibrationStep)?;
-    let (mode_sign, _) = one_of(normal, stored, &MODE, Element::ModeSign)?;
+    let (mode_sign, _) = mode_binding(normal, stored)?;
     let (controller_mode, _) = one_of(normal, stored, &CONTROLLER, Element::ControllerMode)?;
     let table_select_0x28f = !sites(normal, stored, TABLE_SELECT).is_empty();
     Ok(Bundle {
@@ -322,6 +365,39 @@ pub fn bind(normal: &[u8]) -> Result<Bundle, Unbound> {
     })
 }
 
-
 #[cfg(test)]
 pub(crate) mod tests;
+
+/// Select the source word receiving the negative full-step index offset.
+///
+/// Binds both complete step blocks through their calls to the paired native coil
+/// functions. Only the ADD and low/high index constants change; register choices,
+/// coil call addresses, waveform values and checksum bytes remain untouched.
+/// The complete mechanism composer selects this source after its coil rewrite.
+pub fn rewrite_step_offsets(normal: &[u8], required_source: u8) -> Result<Vec<u8>, Unbound> {
+    let Observation::Known(coil) = native::discover_pair(normal) else {
+        return Err(Unbound::Missing(Element::Coil));
+    };
+    let regions = crate::image::regions(normal).ok_or(Unbound::Missing(Element::StepOffsets))?;
+    let current = step_source(normal, &regions.stored, &coil)?;
+    if required_source > 1 {
+        return Err(Unbound::Ambiguous(Element::StepOffsets));
+    }
+    let mut changed = normal.to_vec();
+    if current != required_source {
+        for (before, after) in [(STEP_PLUS, STEP_MINUS), (STEP_MINUS, STEP_PLUS)] {
+            let at = sites(normal, &regions.stored, before)[0];
+            for (i, byte) in after.iter().enumerate() {
+                if let Some(byte) = byte {
+                    changed[at + i] = *byte;
+                }
+            }
+        }
+    }
+    let changed_regions =
+        crate::image::regions(&changed).ok_or(Unbound::Missing(Element::StepOffsets))?;
+    if step_source(&changed, &changed_regions.stored, &coil)? != required_source {
+        return Err(Unbound::Ambiguous(Element::StepOffsets));
+    }
+    Ok(changed)
+}

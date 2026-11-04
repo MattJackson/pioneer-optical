@@ -4,6 +4,12 @@
 //! persistent parameters. It does not authorize cross-flashing: platform,
 //! layout, other hardware inputs and receiver checks remain separate gates.
 
+/// Native calibration-word reader convention and image-only rewrite.
+pub mod calibration;
+
+/// Bounded source-word exchange stage for complete native paired programs.
+pub mod sources;
+
 use crate::image::layout::{Observation, Unresolved};
 use alloc::vec::Vec;
 
@@ -150,10 +156,14 @@ pub fn discover_pair(normal: &[u8]) -> Observation<PairedPhase> {
         return Observation::Unresolved(Unresolved::ReaderNotRecognized);
     };
     let mut functions = Vec::new();
+    let mut inline = Vec::new();
     for region in &regions.stored {
         let start = region.as_ptr() as usize - normal.as_ptr() as usize;
         let end = start + region.len();
         for at in (start + (start & 1)..end).step_by(2) {
+            if let Some(pair) = adapted::paired(normal, at, &regions.stored) {
+                inline.push(pair);
+            }
             let parsed = match normal[at] {
                 1 => full(normal, at),
                 0x0c => short(normal, at),
@@ -175,6 +185,13 @@ pub fn discover_pair(normal: &[u8]) -> Observation<PairedPhase> {
                 }
             }
         }
+    }
+    if !inline.is_empty() {
+        return if inline.len() == 1 && functions.is_empty() {
+            Observation::Known(inline.remove(0))
+        } else {
+            Observation::Unresolved(Unresolved::AmbiguousReader)
+        };
     }
     if functions.len() != 2 {
         return Observation::Unresolved(if functions.len() > 2 {
@@ -687,12 +704,6 @@ pub fn discover(normal: &[u8]) -> Observation<Phase> {
         let start = region.as_ptr() as usize - normal.as_ptr() as usize;
         let end = start + region.len();
         for at in (start + (start & 1)..end).step_by(2) {
-            if let Some(found) = adapted::observe(normal, at, &regions.stored) {
-                if result.is_some_and(|value| value != found) {
-                    return Observation::Conflicting;
-                }
-                result = Some(found);
-            }
             for t in templates::TEMPLATES {
                 if at + t.bytes.len() > end
                     || normal[at] != t.bytes[0]

@@ -63,16 +63,12 @@ as a restoration value.
 
 ## Persistent parameter layout
 
-Persistent layout is a required filter on every platform. Matching primary
-record dimensions alone does not prove safe conversion. Normal-only relocation
-is limited to an address-only whole-program-equivalence subset: the exact
-Kernel is unchanged; readers and formats bind completely; after permitted
-address operands and independently proven phase normalization, the complete
-program must equal the installed program. This preserves the installed writer,
-erase, initialization and bank routes without moving or rewriting retained data.
-New layout correction does not edit Kernel code.
+Persistent layout is a required filter on every platform and, as the owner's
+hardware matrix states, it is not correctable: any known difference refuses.
+The former address-only relocation prover was removed in 1.6.0; it could only
+reinstall the installed program and admitted no held pair.
 
-No held SAT1 or SAT9 layout groups become mutually correctable. All 64 held SAT1
+No held SAT1 or SAT9 layout groups are mutually compatible. All 64 held SAT1
 0x7F0000-primary Normal images contain non-erased decoded bytes in the older
 0x5E0000..0x5E3250 primary area (end exclusive); redirecting them there would
 point into target Normal payload. This is a decoded-address observation, not a device-write trial

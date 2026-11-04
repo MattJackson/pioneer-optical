@@ -26,8 +26,8 @@ The shared runner validates the full operation set before mutation, rejects
 overlap, composes disjoint non-checksum edits, applies one agreed integrity
 repair, and runs each owner's verifier. The receiver retains codec rebuilding,
 authentication, live read/change/verify/rollback and transport execution.
-Phase correction belongs to the phase owner; persistent-address correction
-belongs to the layout owner.
+Phase correction belongs to the phase owner. Persistent parameter layout is
+never corrected; a known difference refuses.
 
 ## Live parameter actions
 

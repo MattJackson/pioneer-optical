@@ -60,6 +60,19 @@ fn a_bad_factory_string_keeps_the_product_code() {
     assert_eq!((p.product_code, p.manufactured), ("BDR-209XJB", None));
     let b = response(b"kw02", b"BDR-209XJB", &[0xff; FACTORY_LEN]);
     assert_eq!(parse(&b).unwrap().manufactured, None);
+    for date in [b"170003", b"170800", b"170832"] {
+        let mut factory = UD04_FACTORY.to_vec();
+        factory[FACTORY_DATE..FACTORY_DATE + 6].copy_from_slice(date);
+        let b = response(b"kw02", b"BDR-209XJB", &factory);
+        assert_eq!(parse(&b).unwrap().manufactured, None, "{date:?}");
+    }
+}
+
+#[test]
+fn control_bytes_inside_the_product_field_are_not_reported() {
+    for code in [b"BDR-UD02\x01TBD", b"BDR-UD02\x00TBD"] {
+        assert_eq!(parse(&response(b"kw01", code, UD04_FACTORY)), None);
+    }
 }
 
 #[test]

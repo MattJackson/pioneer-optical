@@ -66,6 +66,8 @@ impl FlashOutcome {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ExecutionError<E> {
+    /// A read-only preflight failed before this operation attempted any mutation.
+    BeforeWrite(Box<ExecutionError<E>>),
     /// A later transition failed after earlier stages already changed firmware.
     AfterStage {
         /// Number of stages verified before this failure.
@@ -111,6 +113,7 @@ pub enum ExecutionError<E> {
 impl<E: core::fmt::Debug> core::fmt::Display for ExecutionError<E> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::BeforeWrite(source) => write!(f, "before update writes: {source}"),
             Self::AfterStage { completed, source } => {
                 write!(f, "after {completed} completed update stages: {source}")
             }
@@ -155,7 +158,7 @@ impl<E: core::fmt::Debug> core::fmt::Display for ExecutionError<E> {
 impl<E: core::fmt::Debug + 'static> std::error::Error for ExecutionError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::AfterStage { source, .. } => Some(source),
+            Self::BeforeWrite(source) | Self::AfterStage { source, .. } => Some(source),
             Self::IdentityRead { source, .. } => Some(source),
             Self::Flash(source) => Some(source),
             Self::Startup(source) => Some(source),
@@ -184,6 +187,7 @@ impl<E> ExecutionError<E> {
     /// Firmware transfer may have been attempted; conservative for uncertain entry failures.
     pub fn firmware_write_started(&self) -> bool {
         match self {
+            Self::BeforeWrite(_) => false,
             Self::AfterStage { .. } => true,
             Self::VerificationIncomplete(_) => true,
             Self::Plan(_) => false,
@@ -215,6 +219,9 @@ impl<E> ExecutionError<E> {
     }
     /// Any device mutation may have been attempted, including startup settings.
     pub fn write_started(&self) -> bool {
+        if matches!(self, Self::BeforeWrite(_)) {
+            return false;
+        }
         if let Self::Startup(error) = self {
             return match error.as_ref() {
                 crate::startup::migration::Error::Change { .. } => true,
@@ -233,6 +240,7 @@ impl<E> ExecutionError<E> {
     /// The boundary which failed, suitable for operation diagnostics.
     pub fn phase(&self) -> &'static str {
         match self {
+            Self::BeforeWrite(_) => "preflight",
             Self::AfterStage { source, .. } => source.phase(),
             Self::VerificationIncomplete(_) => "Normal readback",
             Self::Plan(_) => "preflight",
@@ -259,9 +267,39 @@ impl<E> ExecutionError<E> {
     }
 }
 impl<E> crate::CodedError for ExecutionError<E> {
+    /// Follows the typed cause, but never reports a pre-write category once
+    /// firmware may have been written.
+    fn kind(&self) -> crate::operation::IssueKind {
+        use crate::operation::IssueKind;
+        use crate::startup::migration::{Error as Migration, Rollback};
+        let mut written = self.firmware_write_started();
+        let kind = match self {
+            Self::AfterStage { source, .. } => source.kind(),
+            Self::IdentityRead { target: true, .. }
+            | Self::IdentityMismatch { target: true, .. } => IssueKind::Verification,
+            Self::Flash(error) => error.kind(),
+            Self::Startup(error) => match error.as_ref() {
+                Migration::Preflight(source) => source.kind(),
+                Migration::Flash { rollback, .. } if rollback.failed() => IssueKind::Update,
+                Migration::Flash {
+                    source, rollback, ..
+                } => {
+                    written |= matches!(rollback, Rollback::UnsafeAfterFirmwareWrite);
+                    source.kind()
+                }
+                other => other.kind(),
+            },
+            _ => crate::error_codes::kind_for_code(self.code()),
+        };
+        if written && !matches!(kind, IssueKind::Update | IssueKind::Verification) {
+            IssueKind::Update
+        } else {
+            kind
+        }
+    }
     fn code(&self) -> &'static str {
         match self {
-            Self::AfterStage { source, .. } => source.code(),
+            Self::BeforeWrite(source) | Self::AfterStage { source, .. } => source.code(),
             Self::VerificationIncomplete(_) => "pioneer.execute.verification_incomplete",
             Self::Plan(_) => "pioneer.execute.plan",
             Self::IdentityRead { .. } => "pioneer.execute.identity_read",
@@ -526,7 +564,7 @@ impl PreparedUpdate {
         R: Transport<Error = W::Error>,
         H: ExecutionRuntime<W::Error>,
     {
-        execute_stages(self.stages(), io, runtime, ExecutionMode::Flash)
+        self.execute(io, runtime, ExecutionMode::Flash)
     }
     /// Execute the complete prepared sequence with per-stage settings and checks.
     pub fn execute<R, W, H>(
@@ -594,6 +632,27 @@ impl PreparedNormal {
         )
     }
 }
+fn preflight_stages<E>(stages: &[PreparedStage]) -> Result<(), ExecutionError<E>> {
+    // Validate the whole sequence before the first settings or firmware write.
+    for stage in stages {
+        let installed = stage
+            .receiver
+            .installed_kernel()
+            .ok_or(ExecutionError::Plan(
+                "installed Kernel evidence unavailable",
+            ))?;
+        class::<E>(installed.update_dialect())?;
+        let mut storage = [Segment::PLACEHOLDER; 3];
+        plan::<E>(
+            stage.kernel_transfer(),
+            stage.normal_transfer(),
+            transport::detect(&installed.image),
+            &mut storage,
+        )?;
+    }
+    Ok(())
+}
+
 fn execute_stages<R, W, H>(
     stages: &[PreparedStage],
     io: FlashTransport<'_, R, W>,
@@ -608,81 +667,7 @@ where
     if stages.is_empty() {
         return Err(ExecutionError::Plan("empty update sequence"));
     }
-    // Validate the whole sequence before the first settings or firmware write.
-    for stage in stages {
-        let installed = stage
-            .receiver
-            .installed_kernel()
-            .ok_or(ExecutionError::Plan(
-                "installed Kernel evidence unavailable",
-            ))?;
-        class::<W::Error>(installed.update_dialect())?;
-        let mut storage = [Segment::PLACEHOLDER; 3];
-        plan::<W::Error>(
-            stage.kernel_transfer(),
-            stage.normal_transfer(),
-            transport::detect(&installed.image),
-            &mut storage,
-        )?;
-    }
-    if stages
-        .iter()
-        .any(|stage| stage.settings.requires_original_hardware())
-    {
-        let mut parameters = [0; crate::production::PARAMETERS_LEN];
-        drive::read(
-            io.reads,
-            &crate::production::parameters(),
-            &mut parameters,
-            crate::production::PARAMETERS_LEN,
-        )
-        .map_err(|error| {
-            ExecutionError::Startup(Box::new(crate::startup::migration::Error::Read(error)))
-        })?;
-        for stage in stages {
-            stage.settings.check_hardware(&parameters).map_err(|_| {
-                ExecutionError::Startup(Box::new(
-                    crate::startup::migration::Error::OriginalHardware,
-                ))
-            })?;
-        }
-    }
-    // Later-stage mechanism prerequisites must not fail after a bridge has
-    // already changed firmware. Recheck them at the normal stage boundary too.
-    let mut prerequisites = alloc::collections::BTreeMap::new();
-    for requirement in stages
-        .iter()
-        .flat_map(|stage| stage.settings.requirements())
-    {
-        if let Some(previous) = prerequisites.insert(requirement.parameter, requirement.value) {
-            if previous != requirement.value {
-                return Err(ExecutionError::Startup(Box::new(
-                    crate::startup::migration::Error::ConflictingParameters,
-                )));
-            }
-        }
-    }
-    for (parameter, expected) in prerequisites {
-        let command = crate::cdb::read_parameter_word(parameter).ok_or_else(|| {
-            ExecutionError::Startup(Box::new(
-                crate::startup::migration::Error::InvalidParameter(parameter),
-            ))
-        })?;
-        let mut value = [0; 2];
-        drive::read(io.reads, &command, &mut value, 2).map_err(|error| {
-            ExecutionError::Startup(Box::new(crate::startup::migration::Error::Read(error)))
-        })?;
-        let actual = u16::from_be_bytes(value);
-        if actual != expected {
-            return Err(ExecutionError::Startup(Box::new(
-                crate::startup::migration::Error::Prerequisite {
-                    parameter,
-                    expected,
-                    actual,
-                },
-            )));
-        }
-    }
+    preflight_stages(stages)?;
     let mut result: Option<FlashOutcome> = None;
     for (index, stage) in stages.iter().enumerate() {
         // A marker-only intermediate already applied the same Normal's settings.
@@ -759,15 +744,7 @@ impl PreparedStage {
             return self.transfer_stage(io, runtime, false, recovery, stage, previous);
         }
         let (updating, _) = self.bind_stage(io.reads, runtime, mode, stage, previous)?;
-        if updating && self.settings.adaptation_id().is_some() {
-            return Err(ExecutionError::Plan(
-                "mechanism conversion requires live original-hardware checks in normal runtime",
-            ));
-        }
-        if !updating
-            && apply_settings
-            && (!self.settings.entries().is_empty() || self.settings.adaptation_id().is_some())
-        {
+        if !updating && apply_settings && !self.settings.entries().is_empty() {
             return self
                 .settings
                 .execute(io.writes, |writes| {

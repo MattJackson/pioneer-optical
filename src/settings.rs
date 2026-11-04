@@ -1,8 +1,6 @@
 //! Transport-independent settings codecs and normalized firmware-reported state.
 mod codec;
 mod f4;
-/// Scoped settings-route selection based on original factory hardware.
-pub mod routing;
 mod schema;
 pub use codec::{Codec, CodecError, Command};
 pub use f4::{F4Response, VendorF4};
@@ -158,7 +156,3 @@ impl PureReadMode {
 /// Firmware-bound settings included in a prepared OEM update.
 #[cfg(feature = "envelope")]
 pub mod update;
-
-/// Guarded compiled-in firmware settings adaptations.
-#[cfg(feature = "envelope")]
-pub mod adaptation;

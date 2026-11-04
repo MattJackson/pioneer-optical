@@ -116,3 +116,30 @@ fn word_vectors_apply_rotation_but_skip_xor_only_at_the_two_receiver_offsets() {
         image
     );
 }
+
+#[test]
+fn modified_image_repack_repairs_split_checksum_and_preserves_excluded_bytes() {
+    let (bytes, image) = fixture();
+    let original = Envelope::load(&bytes).unwrap();
+    let old = u32::from_le_bytes(image[CHECKSUM..CHECKSUM + WORD].try_into().unwrap());
+    let mut modified = image.clone();
+    modified[0x100] += 1;
+    modified[DATA_START + 1] += 1;
+    modified[CODE_END] += 1;
+    let encoded = original.repack_with_checksum(&modified).unwrap();
+    let corrected = Envelope::load(&encoded).unwrap();
+    modified[CHECKSUM..CHECKSUM + WORD].copy_from_slice(&old.wrapping_sub(0x101).to_le_bytes());
+    assert_eq!(corrected.image, modified);
+    let mut reverse = corrected.image.clone();
+    reverse[0x100] = image[0x100];
+    reverse[DATA_START + 1] = image[DATA_START + 1];
+    reverse[CODE_END] = image[CODE_END];
+    assert_eq!(corrected.repack_with_checksum(&reverse).unwrap(), bytes);
+    assert!(original.repack_with_checksum(&modified).is_none());
+    assert!(original
+        .repack_with_checksum(&image[..image.len() - 1])
+        .is_none());
+    let mut corrupt = original.clone();
+    corrupt.image[CHECKSUM] ^= 1;
+    assert!(corrupt.repack_with_checksum(&corrupt.image).is_none());
+}

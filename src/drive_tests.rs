@@ -128,6 +128,31 @@ fn dvr_handshake_precedes_entry() {
 }
 
 #[test]
+fn dvr_unsolvable_challenge_refuses_before_entry() {
+    let control = [0; CONTROL_LEN as usize];
+    let mut challenge = crate::dvr::challenge(0x1234);
+    for b in &mut challenge[..4] {
+        *b ^= 0xFF;
+    }
+    assert!(crate::dvr::solve(&challenge).is_none());
+    let mut m = Mock {
+        responses: std::vec![challenge.to_vec()],
+        ..Mock::default()
+    };
+    assert!(matches!(
+        enter_update(&mut m, DriveClass::Dvr, &control),
+        Err(Error::Challenge)
+    ));
+    assert_eq!(
+        m.cdbs(),
+        [
+            (cdb::dvr_arm().to_vec(), '-'),
+            (cdb::dvr_challenge().to_vec(), '<'),
+        ]
+    );
+}
+
+#[test]
 fn read_memory_knocks_first() {
     let mut m = Mock {
         responses: std::vec![std::vec![7; 0x10]],
@@ -165,6 +190,39 @@ fn identify_parses_and_checks_length() {
             actual: 20
         })
     ));
+}
+
+#[test]
+fn identify_protocol_requires_protocol_evidence() {
+    // Complete responses that `identify` accepts but that are not protocol evidence.
+    let mut inq = std::vec![b' '; INQUIRY_LEN];
+    inq[16..32].copy_from_slice(b"BD-RW   BDR-UD04");
+    let mut m = Mock {
+        responses: std::vec![inq, std::vec![b' '; 48]],
+        ..Mock::default()
+    };
+    assert!(matches!(
+        identify_protocol(&mut m),
+        Err(Error::InvalidProtocol)
+    ));
+
+    let mut inq = std::vec![b' '; INQUIRY_LEN];
+    inq[0] = 5;
+    inq[8..16].copy_from_slice(b"PIONEER ");
+    inq[16..32].copy_from_slice(b"BD-RW   BDR-UD04");
+    inq[32..36].copy_from_slice(b"1.10");
+    let mut vendor = std::vec![b' '; 48];
+    vendor[..12].copy_from_slice(b"LJDL050094WL");
+    vendor[16..24].copy_from_slice(b"SAT 8591");
+    vendor[24..28].copy_from_slice(b"ID22");
+    vendor[32..36].copy_from_slice(b"ID22");
+    vendor[40..44].copy_from_slice(b"0000");
+    let mut m = Mock {
+        responses: std::vec![inq, vendor],
+        ..Mock::default()
+    };
+    let identity = identify_protocol(&mut m).unwrap();
+    assert_eq!(identity.platform(), "SAT 8591");
 }
 
 #[test]

@@ -10,7 +10,7 @@ def command(*args):
 
 
 def same_package_source(base):
-    return all(p.startswith('.github/') for p in command('git', 'diff', '--name-only', base, 'HEAD', '--').splitlines())
+    return all(p.startswith('.github/') for p in command('git', 'diff', '--name-only', '--no-renames', base, 'HEAD', '--').splitlines())
 
 
 def main():

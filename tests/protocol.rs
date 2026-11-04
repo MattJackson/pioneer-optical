@@ -37,10 +37,31 @@ fn loader_does_not_need_serial_or_normal_tag() {
         Evidence::parse(&i, &v).unwrap().unwrap().state(),
         State::Loader
     );
+    // Either loader signal alone is sufficient.
+    assert_eq!(
+        Evidence::parse(&i, &vendor()).unwrap().unwrap().state(),
+        State::Loader
+    );
+    let mut v = vendor();
+    v[32..40].fill(b' ');
+    assert_eq!(
+        Evidence::parse(&inquiry(), &v).unwrap().unwrap().state(),
+        State::Loader
+    );
 }
 #[test]
 fn reject_incomplete_binary_echo_and_non_optical() {
     assert!(Evidence::parse(&inquiry(), &vendor()[..40]).is_err());
+    // Legacy 44-byte F1 responses omit only trailing padding.
+    assert_eq!(
+        Evidence::parse(&inquiry(), &vendor()[..44])
+            .unwrap()
+            .unwrap()
+            .state(),
+        State::Normal
+    );
+    assert!(Evidence::parse(&inquiry()[..35], &vendor()).is_err());
+    assert!(Evidence::parse(&inquiry(), &[b' '; 49]).is_err());
     for v in [[0; 48], [255; 48]] {
         assert!(Evidence::parse(&inquiry(), &v).unwrap().is_none());
     }
@@ -50,6 +71,29 @@ fn reject_incomplete_binary_echo_and_non_optical() {
     let mut v = vendor();
     v[18] = 0xff;
     assert!(Evidence::parse(&inquiry(), &v).unwrap().is_none());
+}
+#[test]
+fn reject_each_malformed_field_in_isolation() {
+    let mut i = inquiry();
+    i[20] = 0x07;
+    assert!(Evidence::parse(&i, &vendor()).unwrap().is_none());
+    for (at, bytes) in [
+        (3, &b"\x07"[..]),
+        (46, b"\x07"),
+        (32, b"ID-2"),
+        (24, b"ID 2"),
+        (40, b"00G0"),
+        (40, b"000 "),
+        (16, b"sat 8591"),
+        (16, b"SAT 85G1"),
+    ] {
+        let mut v = vendor();
+        v[at..at + bytes.len()].copy_from_slice(bytes);
+        assert!(
+            Evidence::parse(&inquiry(), &v).unwrap().is_none(),
+            "{at}: {bytes:?}"
+        );
+    }
 }
 #[test]
 fn unknown_platform_is_evidence_without_writer_permission() {

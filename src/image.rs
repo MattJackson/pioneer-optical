@@ -8,17 +8,20 @@
 
 mod abi;
 mod control;
-#[path = "image_evidence.rs"]
-mod evidence;
+pub(crate) mod edits;
+pub mod geometry;
 pub(crate) mod h8;
 mod handoff;
+pub mod inputs;
+pub mod irq;
+pub mod layout;
+pub mod matrix;
+pub mod peripheral;
+pub mod phase;
 mod receiver;
+pub mod registers;
 pub use abi::{provided_abi, required_abi, Abi};
 pub use control::{receiver_control, ReceiverControl};
-pub use evidence::{
-    CriterionComparison, FamilyComparison, FamilyCriterion, FamilyEvidence, RegisterEvidence,
-    RegisterObservation, RegisterOperation, FAMILY_CRITERIA,
-};
 #[cfg(all(test, feature = "envelope"))]
 pub(crate) use handoff::tests::fixture as handoff_fixture;
 pub use handoff::{
@@ -29,10 +32,6 @@ pub use handoff::{
 pub(crate) use receiver::tests::fixture as receiver_fixture;
 pub use receiver::{kernel_marker_policy, KernelMarkerPolicy};
 
-use alloc::borrow::ToOwned;
-use alloc::collections::{BTreeMap, BTreeSet};
-use alloc::format;
-use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -41,23 +40,8 @@ pub const KERNEL_BASE: u32 = 0x40_0000;
 /// Size of a Kernel body, in bytes.
 pub const KERNEL_LEN: usize = 0x1_0000;
 
-/// Front-end servo/RF ASIC register block (low 16 bits of `0xFFExxx`).
-const ASIC_REGS: [u16; 7] = [0xE436, 0xE43A, 0xE43B, 0xE45B, 0xE463, 0xE46A, 0xE46B];
-/// Remaining hardware/interface initialization evidence.
-/// Excluded host configuration is retained separately for settings admission.
-const PIN_REGS: [u16; 2] = [0xFE94, 0xFEC0];
-/// Legacy board-key fields: interrupt setup and collimator command writes.
-const BOARD_REGS: [u16; 3] = [0xFFC5, 0xEDCC, 0xEDCD];
-
-/// Servo loop-filter coefficient-row anchor (`7f 97 7f 51 7f 51 7f 51 7f 51`).
-const SERVO_ROW: [u8; 10] = [0x7f, 0x97, 0x7f, 0x51, 0x7f, 0x51, 0x7f, 0x51, 0x7f, 0x51];
-/// Number of distinct servo rows that form the version-stable base.
-const SERVO_BASE: usize = 7;
-/// Version 5 excludes FEC0 bit 6 from hardware identity, retaining raw evidence.
-pub const FAMILY_SCHEME: &str = "pioneer.hardware.v5";
-
-/// Full servo coefficient row width.
-const SERVO_ROW_LEN: usize = 40;
+/// Typed matrix scheme used by context-aware, Envelope and receiver identities.
+pub const MATRIX_FAMILY_SCHEME: &str = "pioneer.hardware.v7";
 
 /// Code fragment present in every UHD-capable body and no other.
 const SIG0: [u8; 24] = [
@@ -65,11 +49,9 @@ const SIG0: [u8; 24] = [
     0x01, 0x00, 0x69, 0xE3, 0x5E, 0x40, 0x87, 0xD0,
 ];
 
-/// A hardware-family fingerprint derived from the image's hardware setup.
-/// Matching families establish platform evidence; required settings migrations
-/// must be independently supported before a package can be prepared. The receiver implementation must handle any
-/// protocol or generation differences. Invalid packages and unimplemented
-/// transfer paths must be reported separately from hardware incompatibility.
+/// Opaque digest of a registered-filter identity (scheme
+/// [`MATRIX_FAMILY_SCHEME`]). Matching families establish platform evidence
+/// only; correction and transfer admission remain separate.
 ///
 /// The value is an opaque hash; only equality and the hex [`Display`] form are
 /// meaningful.
@@ -181,287 +163,19 @@ pub(crate) fn aligned_code_region<'a>(region: &'a [u8], body: &[u8]) -> &'a [u8]
     region.get(skip..).unwrap_or_default()
 }
 
-/// `{reg16 -> set(value)}` for `MOV.B #imm,Rn` or self SUB/XOR byte zeroing, followed by
-/// `MOV.B Rn,@aa:8` (`30|n`) or `MOV.B Rn,@aa:16` (`6a 80|n`). Even offsets only.
-fn reg_writes(code: &[u8], want: &BTreeSet<u16>) -> BTreeMap<u16, BTreeSet<u8>> {
-    let mut out: BTreeMap<u16, BTreeSet<u8>> = BTreeMap::new();
-    let mut i = 0;
-    while i + 2 < code.len() {
-        let b0 = code[i];
-        let (r, imm) = if (0xF0..=0xFF).contains(&b0) {
-            (b0 & 0x0F, code[i + 1])
-        } else if matches!(b0, 0x18 | 0x15) && code[i + 1] >> 4 == code[i + 1] & 0x0F {
-            // SUB.B Rn,Rn / XOR.B Rn,Rn writes a known zero, not missing evidence.
-            (code[i + 1] & 0x0F, 0)
-        } else {
-            i += 2;
-            continue;
-        };
-        let b2 = code[i + 2];
-        let a: Option<u16> = if b2 == (0x30 | r) {
-            code.get(i + 3).map(|&lo| 0xFF00u16 | lo as u16)
-        } else if b2 == 0x6A && code.get(i + 3) == Some(&(0x80 | r)) {
-            match (code.get(i + 4), code.get(i + 5)) {
-                (Some(&hi), Some(&lo)) => Some(((hi as u16) << 8) | lo as u16),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        if let Some(a) = a {
-            if want.contains(&a) {
-                out.entry(a).or_default().insert(imm);
-            }
-        }
-        i += 2;
-    }
-    out
-}
-
-/// `{reg16 -> set("BSET5"...)}` for BSET/BNOT/BCLR `#n,@aa:8` / `@aa:16`.
-/// Even offsets only.
-fn bit_ops(code: &[u8], want: &BTreeSet<u16>) -> BTreeMap<u16, BTreeSet<String>> {
-    fn name(op: u8) -> Option<&'static str> {
-        match op {
-            0x70 => Some("BSET"),
-            0x71 => Some("BNOT"),
-            0x72 => Some("BCLR"),
-            _ => None,
-        }
-    }
-    let mut out: BTreeMap<u16, BTreeSet<String>> = BTreeMap::new();
-    // form1: 7f <aa> <7X> <nn>
-    let mut i = 0;
-    while i + 3 < code.len() {
-        if code[i] == 0x7F {
-            let op = code[i + 2];
-            let nn = code[i + 3];
-            if let Some(nm) = name(op) {
-                if nn & 0x8F == 0 {
-                    let a = 0xFF00u16 | code[i + 1] as u16;
-                    if want.contains(&a) {
-                        out.entry(a)
-                            .or_default()
-                            .insert(format!("{}{}", nm, nn >> 4));
-                    }
-                }
-            }
-        }
-        i += 2;
-    }
-    // form2: 6a 18 <aah><aal> <7X> <nn>
-    let mut i = 0;
-    while i + 5 < code.len() {
-        if code[i] == 0x6A && code[i + 1] == 0x18 {
-            let op = code[i + 4];
-            let nn = code[i + 5];
-            if let Some(nm) = name(op) {
-                if nn & 0x8F == 0 {
-                    let a = ((code[i + 2] as u16) << 8) | code[i + 3] as u16;
-                    if want.contains(&a) {
-                        out.entry(a)
-                            .or_default()
-                            .insert(format!("{}{}", nm, nn >> 4));
-                    }
-                }
-            }
-        }
-        i += 2;
-    }
-    out
-}
-
-/// Servo coefficient fingerprint: hash of the first [`SERVO_BASE`] distinct
-/// 40-byte base rows, sorted before hashing, or `"none"`.
-#[cfg(test)]
-fn servo(code: &[u8]) -> String {
-    servo_regions(&[code])
-}
-
-fn servo_regions(regions: &[&[u8]]) -> String {
-    let mut rows: Vec<&[u8]> = Vec::new();
-    for region in regions {
-        for row in region.windows(SERVO_ROW_LEN) {
-            if row.starts_with(&SERVO_ROW) && !rows.contains(&row) {
-                rows.push(row);
-                if rows.len() == SERVO_BASE {
-                    break;
-                }
-            }
-        }
-        if rows.len() == SERVO_BASE {
-            break;
-        }
-    }
-    if rows.is_empty() {
-        return "none".to_owned();
-    }
-    // The version-stable base may be laid out in different physical orders.
-    rows.sort_unstable();
-    let concat: Vec<u8> = rows.into_iter().flatten().copied().collect();
-    format!("{:016x}", fnv1a(&concat))
-}
-
-/// Format a register's value set: sorted lowercase hex joined by `.`; `-` if
-/// empty.
-fn fmt_ints(s: Option<&BTreeSet<u8>>) -> String {
-    match s {
-        Some(set) if !set.is_empty() => {
-            let parts: Vec<String> = set.iter().map(|v| format!("{:x}", v)).collect();
-            parts.join(".")
-        }
-        _ => "-".to_owned(),
-    }
-}
-
-/// Format a board register: value writes (hex) then bit-op labels, joined by
-/// `.`; `-` if both are empty.
-fn fmt_board(ints: Option<&BTreeSet<u8>>, strs: Option<&BTreeSet<String>>) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    if let Some(set) = ints {
-        for v in set {
-            parts.push(format!("{:x}", v));
-        }
-    }
-    if let Some(set) = strs {
-        for v in set {
-            parts.push(v.clone());
-        }
-    }
-    if parts.is_empty() {
-        "-".to_owned()
-    } else {
-        parts.join(".")
-    }
-}
-
-/// The hardware family of a body, or `None` when the body carries no front-end
-/// configuration (a Kernel, an undecodable body, or unrelated data).
-pub fn family(body: &[u8]) -> Option<Family> {
-    family_fingerprint(body).map(|f| f.family)
-}
-
-/// Exact configuration inputs used to calculate a hardware family.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FamilyFingerprint {
-    /// Calculated hardware-family identifier.
-    pub family: Family,
-    /// Canonical servo/RF register values.
-    pub asic: String,
-    /// Legacy interrupt/collimator inputs, not confirmed board identifiers.
-    pub board: String,
-    /// Canonical remaining hardware/interface setup values.
-    /// The legacy field name does not imply verified physical pin assignments.
-    pub pins: String,
-    /// Unmasked observed FE94/FEC0 constants, including shared-register stores.
-    /// These corrected diagnostics are independent of the v5 key projection.
-    pub raw_pins: String,
-    /// Servo coefficient hash, or `"none"` when no anchor rows were found.
-    pub servo: String,
-}
-
-/// Extract the configuration evidence used by [`family`].
-pub fn family_fingerprint(body: &[u8]) -> Option<FamilyFingerprint> {
-    family_evidence(body).map(|e| e.fingerprint)
-}
-
-/// Collect register observations alongside the current family policy inputs.
-/// Unrecognized images retain the same admission behavior as [`family`].
-pub fn family_evidence(body: &[u8]) -> Option<FamilyEvidence> {
-    let regions = regions(body)?;
-    evidence_regions(&regions.slices(), body)
-}
-
-/// Already-decoded regions supplied by the analysis pipeline.
-#[cfg(feature = "analysis")]
-pub(crate) fn family_regions(regions: &[&[u8]], body: &[u8]) -> Option<Family> {
-    evidence_regions(regions, body).map(|e| e.fingerprint.family)
-}
-
-fn evidence_regions(regions: &[&[u8]], body: &[u8]) -> Option<FamilyEvidence> {
-    let mut fingerprint = legacy_fingerprint_regions(regions, body)?;
-    let registers = evidence::register_observations(regions, body);
-    fingerprint.raw_pins = PIN_REGS
-        .iter()
-        .map(|address| {
-            let values = registers
-                .iter()
-                .find(|r| r.address == *address)
-                .expect("host registers are collected")
-                .values();
-            format!("{address:04x}={}", fmt_ints(Some(&values)))
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    Some(FamilyEvidence {
-        fingerprint,
-        registers,
-    })
-}
-
-#[cfg(test)]
-fn fingerprint_regions(regions: &[&[u8]], body: &[u8]) -> Option<FamilyFingerprint> {
-    evidence_regions(regions, body).map(|e| e.fingerprint)
-}
-
-// Keep v5 extraction and serialization stable while fixing the observations.
-// Inserting recovered constants here would rekey existing family identifiers.
-fn legacy_fingerprint_regions(regions: &[&[u8]], body: &[u8]) -> Option<FamilyFingerprint> {
-    let wanted: BTreeSet<u16> = ASIC_REGS
-        .iter()
-        .chain(PIN_REGS.iter())
-        .chain(BOARD_REGS.iter())
-        .copied()
-        .collect();
-    let board_wanted: BTreeSet<u16> = BOARD_REGS.iter().copied().collect();
-
-    let mut w: BTreeMap<u16, BTreeSet<u8>> = BTreeMap::new();
-    let mut b: BTreeMap<u16, BTreeSet<String>> = BTreeMap::new();
-    for region in regions {
-        let region = aligned_code_region(region, body);
-        for (key, values) in reg_writes(region, &wanted) {
-            w.entry(key).or_default().extend(values);
-        }
-        for (key, values) in bit_ops(region, &board_wanted) {
-            b.entry(key).or_default().extend(values);
-        }
-    }
-    if !ASIC_REGS
-        .iter()
-        .any(|a| w.get(a).is_some_and(|s| !s.is_empty()))
-    {
-        return None;
-    }
-    let regs = |set: &[u16], f: &dyn Fn(&u16) -> String| {
-        set.iter()
-            .map(|a| format!("{:04x}={}", a, f(a)))
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-    let asic = regs(&ASIC_REGS, &|a| fmt_ints(w.get(a)));
-    let raw_pins = regs(&PIN_REGS, &|a| fmt_ints(w.get(a)));
-    // PR1ML/211M differ only in FEC0 bit 6 on otherwise matching platforms.
-    // Its physical role is unresolved; exclude only this bit from identity.
-    // Normalize the set before formatting so duplicate masked values collapse.
-    let mut family_writes = w.clone();
-    if let Some(values) = family_writes.get_mut(&0xFEC0) {
-        *values = values.iter().map(|value| value & !0x40).collect();
-    }
-    let pins = regs(&PIN_REGS, &|a| fmt_ints(family_writes.get(a)));
-    let board = regs(&BOARD_REGS, &|a| fmt_board(w.get(a), b.get(a)));
-
-    // Servo is independent evidence even on boards whose FFC5 writes include
-    // 0x20. Omitting it conflates SAT 8000/8680 and SAT 8301/8600/8800.
-    let servo = servo_regions(regions);
-    let key = format!("asic={asic}\u{1f}board={board}\u{1f}pins={pins}\u{1f}servo={servo}");
-    Some(FamilyFingerprint {
-        family: Family(fnv1a(key.as_bytes())),
-        asic,
-        board,
-        pins,
-        raw_pins,
-        servo,
-    })
+/// Matrix hardware family used for matching, from structured platform metadata
+/// and native code. Every required filter, including persistent layout, must be
+/// known. Supply the exact associated Kernel for resident readers and V850 base
+/// bindings.
+///
+/// The family is the registered candidate key: it is built only from facts no
+/// owner corrects (each owner projects away exactly what it may correct, e.g.
+/// the split-word phase assignment). Family equality never authorizes a write;
+/// every remaining difference must still pass its owner's correction proofs, or
+/// the pair is refused at that step. The as-is identity stays available through
+/// [`matrix::discover`] for display and post-correction verification.
+pub fn family_with_context(body: &[u8], hardware: &str, kernel: Option<&[u8]>) -> Option<Family> {
+    matrix::discover(hardware, body, kernel)?.candidate.family()
 }
 
 /// Whether the body is UHD-capable.

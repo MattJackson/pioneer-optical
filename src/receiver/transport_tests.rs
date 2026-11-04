@@ -24,6 +24,12 @@ fn plain_body_is_linear() {
     let mut img = vec![0u8; BODY_LEN];
     img[0x10..0x16].copy_from_slice(&STAGING_ADD);
     assert_eq!(detect(&img), KernelReceive::Linear);
+    // Every fingerprint part is required; omitting any one stays linear.
+    for at in [0x100, 0x200, 0x300, 0x400] {
+        let mut img = signature_body();
+        img[at..at + 6].fill(0);
+        assert_eq!(detect(&img), KernelReceive::Linear, "{at:#x}");
+    }
 }
 
 #[test]

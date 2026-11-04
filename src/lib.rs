@@ -65,6 +65,9 @@ mod product_identity;
 pub use product_identity::ProductIdentity;
 
 pub mod cdb;
+/// Firmware compatibility planner and component-bound correction plans.
+#[cfg(feature = "image")]
+pub mod compatibility;
 /// Typed live device information and settings over a caller-owned transport.
 #[cfg(feature = "drive")]
 pub mod device;
@@ -74,6 +77,9 @@ pub mod diagnostic;
 pub mod drive;
 #[cfg(feature = "envelope")]
 pub mod envelope;
+/// Registered native filters, their observations and correction owners.
+#[cfg(feature = "image")]
+pub mod filters;
 #[cfg(feature = "image")]
 pub mod ident;
 #[cfg(feature = "image")]
@@ -387,6 +393,8 @@ pub mod sense {
     }
 }
 
+#[cfg(all(test, feature = "envelope"))]
+mod hardware_matrix_tests;
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;

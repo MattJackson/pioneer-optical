@@ -1,6 +1,8 @@
 import importlib.util
 import json
 import os
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -14,6 +16,26 @@ class SourceProof(unittest.TestCase):
         for paths, expected in [('', True), ('.github/workflows/ci.yml', True), ('src/lib.rs', False), ('Cargo.toml', False), ('Cargo.lock', False), ('.github/ci.yml\nREADME.md', False)]:
             with self.subTest(paths=paths), patch.object(proof, 'command', return_value=paths):
                 self.assertEqual(proof.same_package_source('qa'), expected)
+
+    def test_rename_into_github_is_a_package_change(self):
+        def git(*args):
+            subprocess.run(('git', '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', *args), check=True, capture_output=True)
+        cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as root:
+            try:
+                os.chdir(root)
+                git('init', '-q')
+                os.mkdir('src')
+                Path('src/x.rs').write_text('fn a() {}\nfn b() {}\nfn c() {}\n')
+                git('add', '.')
+                git('commit', '-q', '-m', 'base')
+                base = proof.command('git', 'rev-parse', 'HEAD')
+                os.mkdir('.github')
+                git('mv', 'src/x.rs', '.github/x.rs')
+                git('commit', '-q', '-m', 'move')
+                self.assertFalse(proof.same_package_source(base))
+            finally:
+                os.chdir(cwd)
 
     def test_failed_or_unrelated_runs_never_qualify(self):
         records = [dict(conclusion='failure', head_branch='qa', event='push'), dict(conclusion='success', head_branch='dev', event='push'), dict(conclusion='success', head_branch='qa', event='pull_request')]

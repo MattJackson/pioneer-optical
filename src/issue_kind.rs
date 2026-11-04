@@ -1,22 +1,16 @@
 //! Stable code classification; additions must carry an explicit host category.
 
-pub(super) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
+pub(crate) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
     use crate::operation::IssueKind;
     match code {
         "pioneer.execute.verification_incomplete"
         | "pioneer.execute.normal_mismatch"
-        | "pioneer.envelope.self_verification"
+        | "pioneer.flash.readback"
         | "pioneer.flash.readback_mismatch"
         | "pioneer.drive.readback_mismatch" => IssueKind::Verification,
-        "pioneer.execute.plan"
-        | "pioneer.startup.preflight_refused"
-        | "pioneer.startup.parameter_change_failed"
+        "pioneer.startup.parameter_change_failed"
         | "pioneer.startup.flash_state_uncertain"
-        | "pioneer.startup.flash_failed_before_transfer"
-        | "pioneer.flash.preflight"
         | "pioneer.flash.update"
-        | "pioneer.flash.readback"
-        | "pioneer.transfer.invalid_span"
         | "pioneer.transfer.entry"
         | "pioneer.transfer.entry_state_read"
         | "pioneer.transfer.entry_state"
@@ -34,26 +28,30 @@ pub(super) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         | "pioneer.drive.locked"
         | "pioneer.drive.short"
         | "pioneer.identity.not_found" => IssueKind::Connection,
-        "pioneer.settings.prerequisite_mismatch"
-        | "pioneer.execute.identity_mismatch"
+        "pioneer.execute.identity_mismatch"
         | "pioneer.receiver.installed_pair_mismatch"
         | "pioneer.receiver.descriptor_mismatch"
         | "pioneer.flash.descriptor_changed"
         | "pioneer.flash.descriptor_mismatch" => IssueKind::ReceiverMismatch,
-        "pioneer.settings.adaptation_registry_invalid"
-        | "pioneer.settings.adaptation_guard_failed" => IssueKind::Unexpected,
-        "pioneer.settings.adaptation_representation_failed"
-        | "pioneer.startup.bank_unknown_installed"
+        // Host-owned or caller-initiated causes. Typed wrappers report a known cause.
+        "pioneer.flash.preflight"
+        | "pioneer.startup.preflight_refused"
+        | "pioneer.startup.flash_failed_before_transfer"
+        | "pioneer.analysis.cancelled" => IssueKind::Unexpected,
+        "pioneer.startup.bank_unknown_installed"
         | "pioneer.startup.bank_unknown_target"
         | "pioneer.startup.bank_conversion_required"
-        | "pioneer.settings.original_hardware_required"
         | "pioneer.device.unsupported"
         | "pioneer.kernel_handoff.unknown_installed"
         | "pioneer.kernel_handoff.unknown_target"
         | "pioneer.transport.kernel_layout"
         | "pioneer.settings.codec.unsupported"
-        | "pioneer.settings.compatibility_unresolved"
-        | "pioneer.settings.conversion_unavailable"
+        | "pioneer.phase.correction_unproven"
+        | "pioneer.compatibility.unresolved_identity"
+        | "pioneer.compatibility.unsupported_correction"
+        | "pioneer.compatibility.phase_correction"
+        | "pioneer.compatibility.unresolved_startup"
+        | "pioneer.preparation.unresolved_startup"
         | "pioneer.normal_layout.unsupported"
         | "pioneer.envelope.unknown_rotation"
         | "pioneer.envelope.unknown_authentication"
@@ -69,8 +67,20 @@ pub(super) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         | "pioneer.preparation.unsupported_dialect"
         | "pioneer.preparation.unsupported_transport"
         | "pioneer.flash.unsupported_transport"
-        | "pioneer.drive.unknown_class" => IssueKind::UnsupportedFirmware,
+        | "pioneer.drive.unknown_class"
+        | "pioneer.execute.plan"
+        | "pioneer.firmware.unsupported"
+        | "pioneer.firmware.limit"
+        | "pioneer.analysis.resource_limit"
+        | "pioneer.layout.no_comp_directory"
+        | "pioneer.layout.runtime_ownership_unproven"
+        | "pioneer.layout.overlay_destinations_unresolved" => IssueKind::UnsupportedFirmware,
         "pioneer.device.malformed"
+        | "pioneer.compatibility.component_mismatch"
+        | "pioneer.compatibility.representation_failed"
+        | "pioneer.compatibility.verification_failed"
+        | "pioneer.compatibility.authentication_failed"
+        | "pioneer.compatibility.ambiguous_startup"
         | "pioneer.startup.ambiguous"
         | "pioneer.startup.parameter_out_of_range"
         | "pioneer.kernel_handoff.mismatch"
@@ -151,10 +161,16 @@ pub(super) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         | "pioneer.drive.challenge"
         | "pioneer.identity.no_model"
         | "pioneer.identity.incomplete_identity"
-        | "pioneer.identity.ambiguous" => IssueKind::InvalidFirmware,
-        "pioneer.settings.original_hardware_mismatch" | "pioneer.receiver.family_mismatch" => {
-            IssueKind::HardwareMismatch
-        }
+        | "pioneer.identity.ambiguous"
+        | "pioneer.envelope.self_verification"
+        | "pioneer.transfer.invalid_span"
+        | "pioneer.firmware.ambiguous"
+        | "pioneer.firmware.malformed"
+        | "pioneer.firmware.out_of_range"
+        | "pioneer.firmware.instruction" => IssueKind::InvalidFirmware,
+        "pioneer.receiver.family_mismatch"
+        | "pioneer.compatibility.incompatible"
+        | "pioneer.compatibility.persistent_layout_overlap" => IssueKind::HardwareMismatch,
         _ => IssueKind::Unexpected,
     }
 }
@@ -162,21 +178,54 @@ pub(super) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn known_settings_refusals_are_not_unexpected_or_hardware_mismatches() {
-        for code in [
-            "pioneer.settings.compatibility_unresolved",
-            "pioneer.settings.conversion_unavailable",
-        ] {
-            assert_eq!(
-                super::kind_for_code(code),
-                crate::operation::IssueKind::UnsupportedFirmware
-            );
-        }
+    fn conflicting_settings_plans_are_invalid_firmware() {
         assert_eq!(
             super::kind_for_code("pioneer.settings.conflicting_parameters"),
             crate::operation::IssueKind::InvalidFirmware
         );
     }
+    #[test]
+    fn codes_without_a_write_boundary_report_their_offline_or_typed_cause() {
+        use crate::operation::IssueKind::*;
+        for (code, kind) in [
+            ("pioneer.execute.plan", UnsupportedFirmware),
+            ("pioneer.transfer.invalid_span", InvalidFirmware),
+            ("pioneer.flash.readback", Verification),
+            ("pioneer.envelope.self_verification", InvalidFirmware),
+            ("pioneer.flash.preflight", Unexpected),
+            ("pioneer.startup.preflight_refused", Unexpected),
+            ("pioneer.startup.flash_failed_before_transfer", Unexpected),
+            ("pioneer.startup.flash_state_uncertain", Update),
+            ("pioneer.compatibility.verification_failed", InvalidFirmware),
+        ] {
+            assert_eq!(super::kind_for_code(code), kind, "{code}");
+        }
+    }
+    /// Literals that look like codes but are not `CodedError` codes.
+    const NOT_ERROR_CODES: &[&str] = &[
+        // Nonfatal analysis `Diagnostic` identifiers.
+        "pioneer.analysis.invalid_directory",
+        "pioneer.analysis.ambiguous_comp",
+        "pioneer.analysis.invalid_comp",
+        "pioneer.analysis.overlapping_streams",
+        "pioneer.analysis.semantic_coverage",
+        "pioneer.analysis.startup_ambiguous",
+        "pioneer.analysis.unrecovered_tail",
+        "pioneer.analysis.ambiguous_runtime_destination",
+        // Settings action identifiers and test-only identifiers.
+        "pioneer.startup.word",
+        "pioneer.first",
+        "pioneer.second",
+        "pioneer.invalid",
+        "pioneer.valid",
+    ];
+    /// Codes whose host owns the cause, or which the caller initiated.
+    const DELIBERATELY_UNEXPECTED: &[&str] = &[
+        "pioneer.flash.preflight",
+        "pioneer.startup.preflight_refused",
+        "pioneer.startup.flash_failed_before_transfer",
+        "pioneer.analysis.cancelled",
+    ];
     #[test]
     fn every_declared_code_has_a_deliberate_host_category() {
         for source in [
@@ -185,21 +234,25 @@ mod tests {
             include_str!("startup/migration.rs"),
             include_str!("startup/bank.rs"),
             include_str!("startup/checks.rs"),
-            include_str!("settings/adaptation.rs"),
+            include_str!("settings/update.rs"),
+            include_str!("compatibility.rs"),
+            include_str!("compatibility/kernel.rs"),
+            include_str!("compatibility/startup.rs"),
+            include_str!("firmware.rs"),
+            include_str!("firmware/error.rs"),
+            include_str!("analysis/mod.rs"),
         ] {
             for code in source.split('"').filter(|s| {
                 s.starts_with("pioneer.")
                     && s.bytes()
                         .all(|b| b.is_ascii_lowercase() || b == b'.' || b == b'_')
+                    && !NOT_ERROR_CODES.contains(s)
             }) {
-                if matches!(
-                    code,
-                    "pioneer.settings.adaptation_registry_invalid"
-                        | "pioneer.settings.adaptation_guard_failed"
-                ) {
+                if DELIBERATELY_UNEXPECTED.contains(&code) {
                     assert_eq!(
                         super::kind_for_code(code),
-                        crate::operation::IssueKind::Unexpected
+                        crate::operation::IssueKind::Unexpected,
+                        "{code}"
                     );
                     continue;
                 }

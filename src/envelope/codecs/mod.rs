@@ -41,6 +41,11 @@ pub(super) trait EnvelopeCodec: Sync {
     fn decoded_checksum(&self, _image: &[u8]) -> Option<u32> {
         None
     }
+    /// Repair a proven decoded checksum for same-length edits. Unsupported
+    /// formats fail closed; this does not establish image semantics or admission.
+    fn repair_decoded(&self, _original: &[u8], _image: &[u8]) -> Option<Vec<u8>> {
+        None
+    }
     fn finish_repack(&self, _data: &mut [u8]) -> Option<()> {
         Some(())
     }

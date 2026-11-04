@@ -19,7 +19,8 @@ use std::ops::Range;
 /// Limits for analysis of one envelope.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
-    /// Maximum total expanded stream bytes per component.
+    /// Maximum total expanded stream bytes per component. The same value
+    /// separately bounds the memory of derived direct-reference facts.
     pub expanded_bytes: usize,
 }
 impl Default for Options {
@@ -102,6 +103,9 @@ pub struct Identity {
     pub uhd: Option<bool>,
     /// Encoding seed where recoverable.
     pub encoding_seed: Option<u32>,
+    /// Every registered filter result, including unresolved operational facts.
+    /// New registrations appear here without a second analysis field list.
+    pub filters: Vec<crate::filters::Assessment>,
 }
 
 /// One disjoint decoded-body extent or one expanded COMP stream.
@@ -209,7 +213,7 @@ impl Envelope {
         let mut result = FirmwareAnalysis {
             identity: Identity {
                 family: None,
-                family_scheme: crate::image::FAMILY_SCHEME,
+                family_scheme: crate::image::MATRIX_FAMILY_SCHEME,
                 model: info.model.clone(),
                 component: info.kind.to_string(),
                 revision: info.revision.clone(),
@@ -219,6 +223,16 @@ impl Envelope {
                 size: self.image.len(),
                 uhd: None,
                 encoding_seed: self.encoding_seed(),
+                filters: if info.kind == crate::ComponentKind::Normal {
+                    crate::compatibility::Firmware {
+                        hardware: &info.hardware_version,
+                        normal: &self.image,
+                        kernel: None,
+                    }
+                    .filters()
+                } else {
+                    Vec::new()
+                },
             },
             regions: Vec::new(),
             startup_requirement: None,
@@ -240,7 +254,8 @@ impl Envelope {
                     .into(),
             });
         }
-        let streams = match envelope::inspect_streams(
+        // The lean reader: analysis needs neither recompression nor uniform ranges.
+        let streams = match crate::comp_streams::read(
             &self.image,
             options.expanded_bytes,
             &mut || observer.proceed("Expanding streams", 0, self.image.len()),
@@ -260,8 +275,7 @@ impl Envelope {
         };
         // Only non-COMP images may be scanned without decoded streams.
         if streams.is_none() && self.image.get(0x1000..0x1004) != Some(b"COMP") {
-            result.identity.family =
-                crate::image::family_regions(&[&self.image], &self.image).map(|f| f.to_string());
+            result.identity.family = self.family().map(|f| f.to_string());
             if info.kind == crate::ComponentKind::Normal {
                 result.identity.uhd = Some(crate::image::uhd_regions(&[&self.image]));
             }
@@ -274,15 +288,14 @@ impl Envelope {
         let mut cursor = 0;
         if let Some((_, mut streams)) = streams {
             let mut ordered: Vec<_> = streams.iter().collect();
-            ordered.sort_by_key(|s| s.info.image_offset);
+            ordered.sort_by_key(|s| s.image_offset);
             let spans: Vec<_> = ordered
                 .iter()
-                .map(|s| (s.info.image_offset, s.info.compressed_size))
+                .map(|s| (s.image_offset, s.compressed_size))
                 .collect();
             if let Some(mut regions) = crate::image::stored_regions(&self.image, &spans) {
                 regions.extend(ordered.iter().map(|s| s.expanded.as_slice()));
-                result.identity.family =
-                    crate::image::family_regions(&regions, &self.image).map(|f| f.to_string());
+                result.identity.family = self.family().map(|f| f.to_string());
                 if info.kind == crate::ComponentKind::Normal {
                     result.identity.uhd = Some(crate::image::uhd_regions(&regions));
                 }
@@ -295,19 +308,20 @@ impl Envelope {
                 return Err(Error::ResourceLimit);
             }
             let mut indexed: Vec<_> = streams.drain(..).enumerate().collect();
-            indexed.sort_by_key(|(_, s)| s.info.image_offset);
+            indexed.sort_by_key(|(_, s)| s.image_offset);
             let valid = indexed
                 .iter()
                 .try_fold(0usize, |previous, (_, s)| {
-                    let start = s.info.image_offset;
-                    let end = start.checked_add(4)?.checked_add(s.info.compressed_size)?;
+                    let start = s.image_offset;
+                    let end = start.checked_add(4)?.checked_add(s.compressed_size)?;
                     (start >= previous && end <= self.image.len()).then_some(end)
                 })
                 .is_some();
             if valid {
-                for (index, stream) in indexed {
-                    check(observer, "Inspecting streams", index, total)?;
-                    let start = stream.info.image_offset;
+                let count = indexed.len();
+                for (position, (index, stream)) in indexed.into_iter().enumerate() {
+                    check(observer, "Inspecting streams", position, count)?;
+                    let start = stream.image_offset;
                     if start > cursor {
                         result.push_region(
                             cursor..start,
@@ -316,14 +330,12 @@ impl Envelope {
                             None,
                         );
                     }
-                    cursor = start + 4 + stream.info.compressed_size;
-                    // `expanded_sha256` is the same lowercase-hex SHA-256 of these bytes.
-                    let digest = stream.info.expanded_sha256;
+                    cursor = start + 4 + stream.compressed_size;
                     result.push_region(
                         start..cursor,
                         Some(index),
                         Cow::Owned(stream.expanded),
-                        Some(digest),
+                        None,
                     );
                 }
             } else {
@@ -363,7 +375,7 @@ impl Envelope {
                 | envelope::Layout::KernelFront
                 | envelope::Layout::KernelDerived
         ) {
-            references::identify(&mut result);
+            references::identify(&mut result, options.expanded_bytes)?;
         }
         result.diagnostics.push(Diagnostic { code: "pioneer.analysis.semantic_coverage", message: "Unrecognized data and table fields are retained as bytes. String-table recognition does not establish write-strategy field meanings.".into() });
         check(

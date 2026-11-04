@@ -81,11 +81,12 @@ fn direct_reference_facts_are_extracted_from_one_image() {
             size: bytes.len(),
             uhd: None,
             encoding_seed: None,
+            filters: Vec::new(),
         },
         regions: vec![region.clone()],
         diagnostics: Vec::new(),
     };
-    references::identify(&mut analysis);
+    references::identify(&mut analysis, Options::default().expanded_bytes).unwrap();
     let reference = &analysis.regions[0].references[0];
     assert_eq!(reference.instruction, 260..264);
     assert_eq!(reference.operand, 261..264);
@@ -94,6 +95,51 @@ fn direct_reference_facts_are_extracted_from_one_image() {
     region.size = 262;
     region.stored = 0..262;
     analysis.regions = vec![region];
-    references::identify(&mut analysis);
+    references::identify(&mut analysis, Options::default().expanded_bytes).unwrap();
     assert!(analysis.regions[0].references.is_empty());
+}
+
+#[test]
+fn derived_reference_memory_is_bounded_by_the_analysis_limit() {
+    // One reference per two input bytes: 0x8000 references (~1.25 MiB on 64-bit).
+    let bytes = [0x40, 0x02].repeat(0x8000);
+    let region = Region {
+        id: 0,
+        name: "Code".into(),
+        stored: 0..bytes.len(),
+        address: Some(0x400000),
+        address_source: None,
+        metadata: Vec::new(),
+        stream: None,
+        sha256: hash(&bytes),
+        size: bytes.len(),
+        tables: Vec::new(),
+        references: Vec::new(),
+        bytes: Cow::Borrowed(&bytes),
+    };
+    let mut analysis = FirmwareAnalysis {
+        startup_requirement: None,
+        identity: Identity {
+            family: None,
+            family_scheme: "test",
+            model: String::new(),
+            component: "Kernel".into(),
+            revision: String::new(),
+            hardware: String::new(),
+            codec: String::new(),
+            sha256: hash(&bytes),
+            size: bytes.len(),
+            uhd: None,
+            encoding_seed: None,
+            filters: Vec::new(),
+        },
+        regions: vec![region],
+        diagnostics: Vec::new(),
+    };
+    assert_eq!(
+        references::identify(&mut analysis, 0x10000),
+        Err(Error::ResourceLimit)
+    );
+    references::identify(&mut analysis, Options::default().expanded_bytes).unwrap();
+    assert_eq!(analysis.regions[0].references.len(), 0x8000);
 }

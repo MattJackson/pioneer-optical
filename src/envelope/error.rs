@@ -5,8 +5,12 @@ use core::fmt;
 
 /// Why an envelope could not be built, validated or signed.
 ///
-/// Decoding functions return `Option` instead: an unrecognized envelope is an
-/// expected outcome there, not a failure.
+/// Decoding reports its own type: [`Envelope::load`](super::Envelope::load)
+/// and [`Envelope::load_with_kernel`](super::Envelope::load_with_kernel) return
+/// [`DecodeError`]; `Option`-returning helpers such as
+/// [`decode_envelope`](super::decode_envelope) and
+/// [`header_info`](super::header_info) treat an unrecognized envelope as an
+/// expected outcome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Error {

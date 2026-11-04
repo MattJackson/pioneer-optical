@@ -274,7 +274,7 @@ impl Update {
     }
     /// Hardware family derived from the decoded Normal, when recognized.
     pub fn family(&self) -> Option<image::Family> {
-        self.normal.family()
+        self.normal.family_with_kernel(&self.kernel)
     }
     /// Front-key Kernel representation; receiver routing is still required.
     pub fn kernel_transfer(&self) -> &[u8] {

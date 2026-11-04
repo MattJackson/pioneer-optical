@@ -31,7 +31,7 @@ jobs:
           if [ "$EVENT" = push ] && [ "$REF" = dev ]; then
             base=$(python3 -c 'import json,os;print(json.load(open(os.environ["GITHUB_EVENT_PATH"])).get("before", ""))')
             if git rev-parse --verify "$base^{commit}" >/dev/null 2>&1; then
-              changes=$(git diff --name-only "$base" HEAD)
+              changes=$(git diff --name-only --no-renames "$base" HEAD)
               if ! printf '%s\n' "$changes" | grep -v '^.github/' | grep -q .; then build=false; branch=dev; fi
             fi
           fi

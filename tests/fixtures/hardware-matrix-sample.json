@@ -1,0 +1,1824 @@
+{
+  "controls": [
+    {
+      "absent": [
+        "SAT 8680"
+      ],
+      "checked": 4,
+      "failed": 0,
+      "name": "8301 / 8600 / 8680 / 8800",
+      "result": "Incomplete",
+      "same": true,
+      "unknown": 8
+    },
+    {
+      "absent": [
+        "SAT 8601",
+        "SAT 8801",
+        "SAT 8F00",
+        "SAT 8F01"
+      ],
+      "checked": 0,
+      "failed": 0,
+      "name": "8601 / 8801 / 8F00 / 8F01",
+      "result": "Incomplete",
+      "same": true,
+      "unknown": 0
+    },
+    {
+      "absent": [
+        "SAT 9000",
+        "SAT 9001"
+      ],
+      "checked": 0,
+      "failed": 0,
+      "name": "9000 / 9001",
+      "result": "Incomplete",
+      "same": true,
+      "unknown": 0
+    },
+    {
+      "absent": [],
+      "checked": 2,
+      "failed": 0,
+      "name": "UD02D / UD03 / UD04 matching family",
+      "result": "Incomplete",
+      "same": true,
+      "unknown": 3
+    },
+    {
+      "absent": [],
+      "checked": 1,
+      "failed": 0,
+      "name": "UD04 ≠ 211M",
+      "result": "Pass",
+      "same": false,
+      "unknown": 0
+    },
+    {
+      "absent": [],
+      "checked": 0,
+      "failed": 0,
+      "name": "212U ≠ 213U",
+      "result": "Incomplete",
+      "same": false,
+      "unknown": 1
+    },
+    {
+      "absent": [
+        "SAT 1034",
+        "SAT 8000"
+      ],
+      "checked": 0,
+      "failed": 0,
+      "name": "1034 (206M) ≠ 8000",
+      "result": "Incomplete",
+      "same": false,
+      "unknown": 0
+    },
+    {
+      "absent": [
+        "SAT 1003",
+        "SAT 1005",
+        "SAT 1007",
+        "SAT 1010",
+        "SAT 1011",
+        "SAT 1013",
+        "SAT 1014",
+        "SAT 1030",
+        "SAT 1031",
+        "SAT 1034",
+        "SAT 1040",
+        "SAT 1041",
+        "SAT 1046",
+        "SAT 8000",
+        "SAT 8130",
+        "SAT 8211",
+        "SAT 8221",
+        "SAT 8231",
+        "SAT 8232",
+        "SAT 8291",
+        "SAT 8410",
+        "SAT 8420",
+        "SAT 8510",
+        "SAT 8511",
+        "SAT 8520",
+        "SAT 8591",
+        "SAT 8601",
+        "SAT 8680",
+        "SAT 8721",
+        "SAT 8722",
+        "SAT 8801",
+        "SAT 8A10",
+        "SAT 8B30",
+        "SAT 8D30",
+        "SAT 8D31",
+        "SAT 8E20",
+        "SAT 8E21",
+        "SAT 8F00",
+        "SAT 8F01"
+      ],
+      "checked": 6,
+      "failed": 0,
+      "name": "SAT1xxx ≠ SAT8xxx",
+      "result": "Incomplete",
+      "same": false,
+      "unknown": 0
+    }
+  ],
+  "filters": [
+    {
+      "correctability": "Never",
+      "correction": "Never corrected. Values must match; equal geometry does not authorize a bank migration, and a differing storage contract refuses under every policy, including the Recovery family override.",
+      "description": "Identifies the persistent storage the firmware uses: H8 bank markers and spacing or native bank bases, ATA flash regions or serial word ranges, SCSI serial records. Addresses, marker constants, record widths and bank spacing are different quantities; geometry does not describe the calibration records stored inside it.",
+      "id": "persistent-storage-geometry",
+      "name": "Persistent storage geometry",
+      "policies": [
+        {
+          "platforms": [],
+          "text": "Matching geometry does not imply a matching parameter layout; the persistent parameter layout is a separate required filter."
+        },
+        {
+          "platforms": [],
+          "text": "A storage reader that is not recognized, or that needs resident code which is not supplied, stays Unresolved; no default geometry is assumed."
+        }
+      ],
+      "role": "Hardware"
+    },
+    {
+      "correctability": "Never",
+      "correction": "Never corrected. Values must match.",
+      "description": "Identifies the startup tray inputs or, where no input reader resolves, the complete native initialization program: role-bound closed/open input predicates (address, encoding, bit, active level) on every SAT platform where they resolve, the SAT1 E46B register value or older H8 initializer, ordered M32C register writes, or a bounded M7900 I/O block. A projected summary bit is never a register value to write, and one architecture's program never stands in for another's.",
+      "id": "startup-inputs-initialization",
+      "name": "Startup inputs / initialization",
+      "policies": [
+        {
+          "platforms": [
+            "SAT 8xxx",
+            "SAT 9xxx"
+          ],
+          "text": "The value is chosen by the native reader that resolves, not by the SAT digit: equal tray input predicates compare equal across SAT8 and SAT9. The constant E46B initialization store is evidence only; SAT8 and SAT9 never fall back to it, so unresolved predicates stay Unresolved."
+        },
+        {
+          "platforms": [
+            "SAT 1xxx"
+          ],
+          "text": "SAT1 has no recognized tray input reader and keeps its native E46B register value (bits 4 and 0) or its older initialization program."
+        },
+        {
+          "platforms": [],
+          "text": "An architecture tag, an external initializer address or an unexamined program is not a known value. Such images stay Unresolved and receive no family ID."
+        }
+      ],
+      "role": "Hardware"
+    },
+    {
+      "correctability": "Never",
+      "correction": "Never corrected. Values must match; no host-setup correction is implemented.",
+      "description": "Identifies the host-interface register setup written by the firmware: the masked H8 FE94 initialization (bit 7) or the complete older H8 host initializer, and M32C or V850 host register mappings with their reset writes. These representations are not interchangeable.",
+      "id": "host-interface-setup",
+      "name": "Host interface setup",
+      "policies": [
+        {
+          "platforms": [],
+          "text": "A detector miss is never an absent host or an invented FE94 zero; it stays Unresolved."
+        }
+      ],
+      "role": "Hardware"
+    },
+    {
+      "correctability": "Never",
+      "correction": "Never corrected. Values must match.",
+      "description": "Identifies the loading input, interrupt-register operation or installed callback route: the H8 FFC5 transformation new = (old & mask) | set, a physical input predicate (address, bit, level) or a vector route, and the ATA mechanical/event input contract. The variant is part of the value: equal numbers under different variants are not equal.",
+      "id": "loading-input-interrupt-setup",
+      "name": "Loading input / interrupt setup",
+      "policies": [
+        {
+          "platforms": [],
+          "text": "Additional recognizer misses are not proof of absence and are never hashed as negative facts."
+        }
+      ],
+      "role": "Hardware"
+    },
+    {
+      "correctability": "Never",
+      "correction": "Never corrected. Any known layout difference refuses. Where the installed record region overlaps non-erased bytes of the target Normal, the refusal reports that collision.",
+      "description": "Locates the retained primary parameter words and compares their complete native record contract: address mode and base, record size and count, header size, word encoding and record-selection rule. Geometry identifies the storage; this identifies the records within it.",
+      "id": "persistent-parameter-layout",
+      "name": "Persistent parameter layout",
+      "policies": [
+        {
+          "platforms": [],
+          "text": "A layout read through a Kernel-resident reader needs the exact paired Kernel; without it the layout stays Unresolved and the image has no family ID."
+        }
+      ],
+      "role": "Hardware"
+    },
+    {
+      "correctability": "Guarded",
+      "correction": "Corrected in Normal only for pairs the phase owner proves; the native architecture and interface must always match. The matching family drops the assignment only for H8 programs with a complete paired-word grammar.",
+      "description": "Identifies which source element drives which phase output (direct 0 or swapped 1) together with the native architecture and output interface: H8 byte or split-word outputs, M32C outputs or the V850 indexed bus. The assignment is not signed waveform winding or physical motor direction.",
+      "id": "phase",
+      "name": "Phase output assignment",
+      "policies": [
+        {
+          "platforms": [],
+          "text": "Unresolved or conflicting phase refuses. A phase correction authorizes only the phase change: every other registered value must still match, and the corrected image is re-verified."
+        },
+        {
+          "platforms": [
+            "SAT 1xxx"
+          ],
+          "text": "SAT1 phase correction is suspended pending command-relative phase proof: any assignment change refuses on every interface."
+        },
+        {
+          "platforms": [
+            "SAT 8xxx",
+            "SAT 9xxx"
+          ],
+          "text": "A split-word (F910-F913) coil rewrite is planned only when the complete sled mechanism bundle is bound in both images and identical apart from the coil. Otherwise it refuses as Unsupported, which the Recovery family override does not waive."
+        },
+        {
+          "platforms": [
+            "ATA"
+          ],
+          "text": "M32C corrections need a tail-key Normal, or a boot-key Normal with its Kernel. V850 corrections need sparse-checksum Normal and Kernel files and the exact paired Kernel."
+        },
+        {
+          "platforms": [
+            "SCSI"
+          ],
+          "text": "No SCSI phase program is recognized, so phase stays Unresolved and no correction is planned."
+        }
+      ],
+      "role": "Hardware"
+    },
+    {
+      "correctability": "Operational",
+      "correction": "Planned against the requested firmware. SAT platforms select a live 0x009F value with read/change/verify and rollback; other platforms have read-only prerequisites and no file edit.",
+      "description": "Identifies what the firmware requires before it starts: the accepted value of H8 startup word 0x009F, the ATA 0x00D9 predicate, the V850 expected Kernel identity, or the SCSI resident checksum and image-pair header. Evaluated on every image and planned per update; never part of the hardware family.",
+      "id": "startup-prerequisite",
+      "name": "Startup prerequisite",
+      "policies": [
+        {
+          "platforms": [
+            "SAT 1xxx",
+            "SAT 8xxx",
+            "SAT 9xxx"
+          ],
+          "text": "Selection uses the bound accepted word, otherwise the deliberate neutral 0x009F = 0xFFFF. It refuses, including the neutral value, when Normal reads persistent words through a Kernel-resident getter whose Kernel is not supplied."
+        },
+        {
+          "platforms": [
+            "SAT 1xxx",
+            "SAT 8xxx",
+            "SAT 9xxx"
+          ],
+          "text": "Where a native conditional gate is bound, 0xFE23 is accepted unconditionally and 0xFE09 only when the complete bound predicate holds."
+        },
+        {
+          "platforms": [
+            "ATA"
+          ],
+          "text": "An equal 0x00D9 predicate needs no change; a different one has no approved write recipe and refuses. V850: the paired Kernel must carry the expected Kernel identity."
+        },
+        {
+          "platforms": [
+            "SCSI"
+          ],
+          "text": "The resident checksum and the matching 16-byte image-pair header must hold; otherwise the update refuses."
+        }
+      ],
+      "role": "Operational"
+    }
+  ],
+  "identity": {
+    "partition": "Families never cross a platform. The identity starts with the platform partition: SAT 1xxx, H8 SAT (SAT 8xxx and SAT 9xxx together), ATA or SCSI. SAT 8xxx and SAT 9xxx share one platform because their Kernels receive, hand off, finalize, checksum and marker-gate updates with the same native code and their persistent banks use the same versioned contract; every filter value must still match. A tag outside these domains produces no identity. Under the strict update policy the correction planner also refuses any transition between different platforms before owner corrections are considered.",
+    "rules": [
+      "Every registered filter runs on every image. Hardware filters form the identity; operational requirements are evaluated and planned per update but never enter it.",
+      "As-is identity: every hardware value before any correction. Matching (candidate) family: each owner's projection with exactly what it may correct removed, so it is built only from facts no owner corrects.",
+      "A required hardware value that is Unresolved or Conflicting produces no family ID. Unresolved values never compare equal; a positive not-applicable proof compares by its proof tag.",
+      "Family equality never authorizes a write. Every remaining difference must pass its owner's correction proof, or the pair refuses at that step."
+    ]
+  },
+  "images": [
+    {
+      "as_is": null,
+      "candidate": null,
+      "component": "0101010101010101010101010101010101010101010101010101010101010101",
+      "filters": [
+        {
+          "evidence": "No complete supported native persistent reader was established",
+          "finding": {
+            "Unresolved": "No complete supported native persistent reader was established"
+          },
+          "id": "persistent-storage-geometry",
+          "label": "Unresolved: No complete supported native persistent reader was established",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "Native startup input predicates unresolved: ReaderNotRecognized",
+          "finding": {
+            "Unresolved": "Native startup input predicates unresolved: ReaderNotRecognized"
+          },
+          "id": "startup-inputs-initialization",
+          "label": "Unresolved: Native startup input predicates unresolved: ReaderNotRecognized",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "FE94 native writes: Unresolved(ReaderNotRecognized); positively bound early host parent: Unresolved(ReaderNotRecognized). The older parent retains every physical-register operand and RAM/call identity relationship; matching parent identity does not establish helper semantics.",
+          "finding": {
+            "Unresolved": "FE94 native writes: Unresolved(ReaderNotRecognized); positively bound early host parent: Unresolved(ReaderNotRecognized). The older parent retains every physical-register operand and RAM/call identity relationship; matching parent identity does not establish helper semantics."
+          },
+          "id": "host-interface-setup",
+          "label": "Unresolved: FE94 native writes: Unresolved(ReaderNotRecognized); positively bound early host parent: Unresolved(ReaderNotRecognized). The older parent retains every physical-register operand and RAM/call identity relationship; matching parent identity does not establish helper semantics.",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "Audited H8 projection: Unresolved(ReaderNotRecognized); every supporting observation: []. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts.",
+          "finding": {
+            "Unresolved": "Audited H8 projection: Unresolved(ReaderNotRecognized); every supporting observation: []. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts."
+          },
+          "id": "loading-input-interrupt-setup",
+          "label": "Unresolved: Audited H8 projection: Unresolved(ReaderNotRecognized); every supporting observation: []. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts.",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "No complete supported native persistent reader was established",
+          "finding": {
+            "Unresolved": "No complete supported native persistent reader was established"
+          },
+          "id": "persistent-parameter-layout",
+          "label": "Unresolved: No complete supported native persistent reader was established",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "native phase assignment/interface unresolved: ReaderNotRecognized; no default or legacy exclusion is inferred",
+          "finding": {
+            "Unresolved": "native phase assignment/interface unresolved: ReaderNotRecognized; no default or legacy exclusion is inferred"
+          },
+          "id": "phase",
+          "label": "Unresolved: native phase assignment/interface unresolved: ReaderNotRecognized; no default or legacy exclusion is inferred",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "Native H8 accepted startup word remains unresolved: ReaderNotRecognized. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance",
+          "finding": {
+            "Unresolved": "Native H8 accepted startup word remains unresolved: ReaderNotRecognized. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance"
+          },
+          "id": "startup-prerequisite",
+          "label": "Unresolved: Native H8 accepted startup word remains unresolved: ReaderNotRecognized. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance",
+          "role": "Operational",
+          "state": "Unresolved"
+        }
+      ],
+      "hardware": "SAT 8600",
+      "platform": "SAT 8xxx",
+      "unresolved": [
+        "persistent-storage-geometry",
+        "startup-inputs-initialization",
+        "host-interface-setup",
+        "loading-input-interrupt-setup",
+        "persistent-parameter-layout",
+        "phase"
+      ]
+    },
+    {
+      "as_is": null,
+      "candidate": null,
+      "component": "0202020202020202020202020202020202020202020202020202020202020202",
+      "filters": [
+        {
+          "evidence": "No complete supported native persistent reader was established",
+          "finding": {
+            "Unresolved": "No complete supported native persistent reader was established"
+          },
+          "id": "persistent-storage-geometry",
+          "label": "Unresolved: No complete supported native persistent reader was established",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "Native startup initialization unresolved: ReaderNotRecognized",
+          "finding": {
+            "Unresolved": "Native startup initialization unresolved: ReaderNotRecognized"
+          },
+          "id": "startup-inputs-initialization",
+          "label": "Unresolved: Native startup initialization unresolved: ReaderNotRecognized",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "FE94 native writes: Unresolved(ReaderNotRecognized); positively bound early host parent: Unresolved(ReaderNotRecognized). The older parent retains every physical-register operand and RAM/call identity relationship; matching parent identity does not establish helper semantics.",
+          "finding": {
+            "Unresolved": "FE94 native writes: Unresolved(ReaderNotRecognized); positively bound early host parent: Unresolved(ReaderNotRecognized). The older parent retains every physical-register operand and RAM/call identity relationship; matching parent identity does not establish helper semantics."
+          },
+          "id": "host-interface-setup",
+          "label": "Unresolved: FE94 native writes: Unresolved(ReaderNotRecognized); positively bound early host parent: Unresolved(ReaderNotRecognized). The older parent retains every physical-register operand and RAM/call identity relationship; matching parent identity does not establish helper semantics.",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "Audited H8 projection: Unresolved(ReaderNotRecognized); every supporting observation: []. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts.",
+          "finding": {
+            "Unresolved": "Audited H8 projection: Unresolved(ReaderNotRecognized); every supporting observation: []. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts."
+          },
+          "id": "loading-input-interrupt-setup",
+          "label": "Unresolved: Audited H8 projection: Unresolved(ReaderNotRecognized); every supporting observation: []. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts.",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "No complete supported native persistent reader was established",
+          "finding": {
+            "Unresolved": "No complete supported native persistent reader was established"
+          },
+          "id": "persistent-parameter-layout",
+          "label": "Unresolved: No complete supported native persistent reader was established",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "native phase assignment/interface unresolved: ReaderNotRecognized; no default or legacy exclusion is inferred",
+          "finding": {
+            "Unresolved": "native phase assignment/interface unresolved: ReaderNotRecognized; no default or legacy exclusion is inferred"
+          },
+          "id": "phase",
+          "label": "Unresolved: native phase assignment/interface unresolved: ReaderNotRecognized; no default or legacy exclusion is inferred",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "Native H8 accepted startup word remains unresolved: ReaderNotRecognized. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance",
+          "finding": {
+            "Unresolved": "Native H8 accepted startup word remains unresolved: ReaderNotRecognized. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance"
+          },
+          "id": "startup-prerequisite",
+          "label": "Unresolved: Native H8 accepted startup word remains unresolved: ReaderNotRecognized. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance",
+          "role": "Operational",
+          "state": "Unresolved"
+        }
+      ],
+      "hardware": "SAT 1050",
+      "platform": "SAT 1xxx",
+      "unresolved": [
+        "persistent-storage-geometry",
+        "startup-inputs-initialization",
+        "host-interface-setup",
+        "loading-input-interrupt-setup",
+        "persistent-parameter-layout",
+        "phase"
+      ]
+    },
+    {
+      "as_is": null,
+      "candidate": null,
+      "component": "0303030303030303030303030303030303030303030303030303030303030303",
+      "filters": [
+        {
+          "evidence": "No complete native storage geometry was established",
+          "finding": {
+            "Unresolved": "No complete native storage geometry was established"
+          },
+          "id": "persistent-storage-geometry",
+          "label": "Unresolved: No complete native storage geometry was established",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "No complete supported native initialization block is bound. An architecture tag, an external initializer address or an unexamined V850 initialization program is not a known initialization value",
+          "finding": {
+            "Unresolved": "No complete supported native initialization block is bound. An architecture tag, an external initializer address or an unexamined V850 initialization program is not a known initialization value"
+          },
+          "id": "startup-inputs-initialization",
+          "label": "Unresolved: No complete supported native initialization block is bound. An architecture tag, an external initializer address or an unexamined V850 initialization program is not a known initialization value",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "Native reset-signature coordinates, including both 01 reset writes: M32C Unresolved(ReaderNotRecognized); V850 Unresolved(TruncatedEvidence). V850 absolute coordinates require its exact Kernel reset EP binding. M7900 ingress/setup needs its own positive native owner.",
+          "finding": {
+            "Unresolved": "Native reset-signature coordinates, including both 01 reset writes: M32C Unresolved(ReaderNotRecognized); V850 Unresolved(TruncatedEvidence). V850 absolute coordinates require its exact Kernel reset EP binding. M7900 ingress/setup needs its own positive native owner."
+          },
+          "id": "host-interface-setup",
+          "label": "Unresolved: Native reset-signature coordinates, including both 01 reset writes: M32C Unresolved(ReaderNotRecognized); V850 Unresolved(TruncatedEvidence). V850 absolute coordinates require its exact Kernel reset EP binding. M7900 ingress/setup needs its own positive native owner.",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "Architecture-native loading/key programs: Unresolved(ReaderNotRecognized); Unresolved(ReaderNotRecognized). This mixed-column input contract is not a claim of no independent IRQ. Legacy M7900 ATA/SCSI facts require their own bound native owner.",
+          "finding": {
+            "Unresolved": "Architecture-native loading/key programs: Unresolved(ReaderNotRecognized); Unresolved(ReaderNotRecognized). This mixed-column input contract is not a claim of no independent IRQ. Legacy M7900 ATA/SCSI facts require their own bound native owner."
+          },
+          "id": "loading-input-interrupt-setup",
+          "label": "Unresolved: Architecture-native loading/key programs: Unresolved(ReaderNotRecognized); Unresolved(ReaderNotRecognized). This mixed-column input contract is not a claim of no independent IRQ. Legacy M7900 ATA/SCSI facts require their own bound native owner.",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "No complete supported native persistent reader was established",
+          "finding": {
+            "Unresolved": "No complete supported native persistent reader was established"
+          },
+          "id": "persistent-parameter-layout",
+          "label": "Unresolved: No complete supported native persistent reader was established",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "native phase assignment/interface unresolved: ReaderNotRecognized; no default or legacy exclusion is inferred",
+          "finding": {
+            "Unresolved": "native phase assignment/interface unresolved: ReaderNotRecognized; no default or legacy exclusion is inferred"
+          },
+          "id": "phase",
+          "label": "Unresolved: native phase assignment/interface unresolved: ReaderNotRecognized; no default or legacy exclusion is inferred",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "Architecture-specific startup prerequisite is unresolved. Bounded no-check entry prefixes, unrooted D9 comparisons, descriptor-dependent 009F APIs and unavailable resident startup code do not supply a numeric requirement",
+          "finding": {
+            "Unresolved": "Architecture-specific startup prerequisite is unresolved. Bounded no-check entry prefixes, unrooted D9 comparisons, descriptor-dependent 009F APIs and unavailable resident startup code do not supply a numeric requirement"
+          },
+          "id": "startup-prerequisite",
+          "label": "Unresolved: Architecture-specific startup prerequisite is unresolved. Bounded no-check entry prefixes, unrooted D9 comparisons, descriptor-dependent 009F APIs and unavailable resident startup code do not supply a numeric requirement",
+          "role": "Operational",
+          "state": "Unresolved"
+        }
+      ],
+      "hardware": "ATA 0004",
+      "platform": "ATA",
+      "unresolved": [
+        "persistent-storage-geometry",
+        "startup-inputs-initialization",
+        "host-interface-setup",
+        "loading-input-interrupt-setup",
+        "persistent-parameter-layout",
+        "phase"
+      ]
+    },
+    {
+      "as_is": null,
+      "candidate": null,
+      "component": "0404040404040404040404040404040404040404040404040404040404040404",
+      "filters": [
+        {
+          "evidence": "No complete native storage geometry was established",
+          "finding": {
+            "Unresolved": "No complete native storage geometry was established"
+          },
+          "id": "persistent-storage-geometry",
+          "label": "Unresolved: No complete native storage geometry was established",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "No complete supported native initialization block is bound. An architecture tag, an external initializer address or an unexamined V850 initialization program is not a known initialization value",
+          "finding": {
+            "Unresolved": "No complete supported native initialization block is bound. An architecture tag, an external initializer address or an unexamined V850 initialization program is not a known initialization value"
+          },
+          "id": "startup-inputs-initialization",
+          "label": "Unresolved: No complete supported native initialization block is bound. An architecture tag, an external initializer address or an unexamined V850 initialization program is not a known initialization value",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "No supported architecture-native host contract established; SCSI/M7900 ingress facts are not an H8 FE94 value or a complete reset-time host contract",
+          "finding": {
+            "Unresolved": "No supported architecture-native host contract established; SCSI/M7900 ingress facts are not an H8 FE94 value or a complete reset-time host contract"
+          },
+          "id": "host-interface-setup",
+          "label": "Unresolved: No supported architecture-native host contract established; SCSI/M7900 ingress facts are not an H8 FE94 value or a complete reset-time host contract",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default",
+          "finding": {
+            "Unresolved": "No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default"
+          },
+          "id": "loading-input-interrupt-setup",
+          "label": "Unresolved: No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "No complete supported native persistent reader was established",
+          "finding": {
+            "Unresolved": "No complete supported native persistent reader was established"
+          },
+          "id": "persistent-parameter-layout",
+          "label": "Unresolved: No complete supported native persistent reader was established",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "native phase assignment/interface unresolved: ReaderNotRecognized; no default or legacy exclusion is inferred",
+          "finding": {
+            "Unresolved": "native phase assignment/interface unresolved: ReaderNotRecognized; no default or legacy exclusion is inferred"
+          },
+          "id": "phase",
+          "label": "Unresolved: native phase assignment/interface unresolved: ReaderNotRecognized; no default or legacy exclusion is inferred",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "Exact paired resident startup checksum/header acceptance is unresolved: ResidentCodeRequired(32784); a different revision's Kernel is not a substitute",
+          "finding": {
+            "Unresolved": "Exact paired resident startup checksum/header acceptance is unresolved: ResidentCodeRequired(32784); a different revision's Kernel is not a substitute"
+          },
+          "id": "startup-prerequisite",
+          "label": "Unresolved: Exact paired resident startup checksum/header acceptance is unresolved: ResidentCodeRequired(32784); a different revision's Kernel is not a substitute",
+          "role": "Operational",
+          "state": "Unresolved"
+        }
+      ],
+      "hardware": "SCSI0001",
+      "platform": "SCSI",
+      "unresolved": [
+        "persistent-storage-geometry",
+        "startup-inputs-initialization",
+        "host-interface-setup",
+        "loading-input-interrupt-setup",
+        "persistent-parameter-layout",
+        "phase"
+      ]
+    },
+    {
+      "as_is": null,
+      "candidate": null,
+      "component": "0505050505050505050505050505050505050505050505050505050505050505",
+      "filters": [
+        {
+          "evidence": "No complete native storage geometry was established",
+          "finding": {
+            "Unresolved": "No complete native storage geometry was established"
+          },
+          "id": "persistent-storage-geometry",
+          "label": "Unresolved: No complete native storage geometry was established",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "Native initialization architecture and complete program are unresolved",
+          "finding": {
+            "Unresolved": "Native initialization architecture and complete program are unresolved"
+          },
+          "id": "startup-inputs-initialization",
+          "label": "Unresolved: Native initialization architecture and complete program are unresolved",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "No supported architecture-native host contract established; SCSI/M7900 ingress facts are not an H8 FE94 value or a complete reset-time host contract",
+          "finding": {
+            "Unresolved": "No supported architecture-native host contract established; SCSI/M7900 ingress facts are not an H8 FE94 value or a complete reset-time host contract"
+          },
+          "id": "host-interface-setup",
+          "label": "Unresolved: No supported architecture-native host contract established; SCSI/M7900 ingress facts are not an H8 FE94 value or a complete reset-time host contract",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default",
+          "finding": {
+            "Unresolved": "No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default"
+          },
+          "id": "loading-input-interrupt-setup",
+          "label": "Unresolved: No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "No complete supported native persistent reader was established",
+          "finding": {
+            "Unresolved": "No complete supported native persistent reader was established"
+          },
+          "id": "persistent-parameter-layout",
+          "label": "Unresolved: No complete supported native persistent reader was established",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "native phase assignment/interface unresolved: ReaderNotRecognized; no default or legacy exclusion is inferred",
+          "finding": {
+            "Unresolved": "native phase assignment/interface unresolved: ReaderNotRecognized; no default or legacy exclusion is inferred"
+          },
+          "id": "phase",
+          "label": "Unresolved: native phase assignment/interface unresolved: ReaderNotRecognized; no default or legacy exclusion is inferred",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
+          "evidence": "No complete native startup prerequisite is bound for this context",
+          "finding": {
+            "Unresolved": "No complete native startup prerequisite is bound for this context"
+          },
+          "id": "startup-prerequisite",
+          "label": "Unresolved: No complete native startup prerequisite is bound for this context",
+          "role": "Operational",
+          "state": "Unresolved"
+        }
+      ],
+      "hardware": "XYZ 0001",
+      "platform": "XYZ 0001",
+      "unresolved": [
+        "persistent-storage-geometry",
+        "startup-inputs-initialization",
+        "host-interface-setup",
+        "loading-input-interrupt-setup",
+        "persistent-parameter-layout",
+        "phase"
+      ]
+    },
+    {
+      "as_is": "00000000000000a0",
+      "candidate": "00000000000000c0",
+      "component": "0606060606060606060606060606060606060606060606060606060606060606",
+      "filters": [
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U32": 4275847969
+                  },
+                  {
+                    "U32": 65536
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "persistent-storage-geometry",
+          "label": "Marker 0xFEDC4321; bank spacing 0x10000 bytes",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U16": 58475
+                  },
+                  {
+                    "U8": 17
+                  },
+                  {
+                    "U8": 1
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "startup-inputs-initialization",
+          "label": "0xE46B & 0x11 = 0x01",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U16": 65172
+                  },
+                  {
+                    "U8": 128
+                  },
+                  {
+                    "U8": 128
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "host-interface-setup",
+          "label": "0xFE94 & 0x80 = 0x80",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "Variant": [
+                      0,
+                      [
+                        {
+                          "U16": 65477
+                        },
+                        {
+                          "U8": 223
+                        },
+                        {
+                          "U8": 0
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "loading-input-interrupt-setup",
+          "label": "0xFFC5 = (old & 0xDF) | 0x00",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "Sequence": [
+                      {
+                        "Sequence": [
+                          {
+                            "U32": 39300
+                          },
+                          {
+                            "U8": 1
+                          },
+                          {
+                            "Variant": [
+                              0,
+                              []
+                            ]
+                          },
+                          {
+                            "U32": 320
+                          },
+                          {
+                            "U16": 20
+                          },
+                          {
+                            "U16": 40
+                          },
+                          {
+                            "U8": 0
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "U8": 0
+                  },
+                  {
+                    "Sequence": []
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "persistent-parameter-layout",
+          "label": "Selected bank + 0x9984 · 20 × 320 B · header 40 B",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U8": 0
+                  },
+                  {
+                    "Variant": [
+                      1,
+                      [
+                        {
+                          "U16": 63760
+                        },
+                        {
+                          "U16": 63761
+                        },
+                        {
+                          "U16": 63762
+                        },
+                        {
+                          "U16": 63763
+                        }
+                      ]
+                    ]
+                  },
+                  {
+                    "U8": 0
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "phase",
+          "label": "Direct (0) · H8 split-word outputs/control 0xF910 / 0xF911 / 0xF912 / 0xF913",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U16": 159
+                  },
+                  {
+                    "U16": 65535
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "startup-prerequisite",
+          "label": "Required word 0x009F = 0xFFFF",
+          "role": "Operational",
+          "state": "Known"
+        }
+      ],
+      "hardware": "SAT 8800",
+      "platform": "SAT 8xxx",
+      "unresolved": []
+    },
+    {
+      "as_is": "00000000000000a1",
+      "candidate": "00000000000000c0",
+      "component": "0707070707070707070707070707070707070707070707070707070707070707",
+      "filters": [
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U32": 4275847969
+                  },
+                  {
+                    "U32": 65536
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "persistent-storage-geometry",
+          "label": "Marker 0xFEDC4321; bank spacing 0x10000 bytes",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U16": 58475
+                  },
+                  {
+                    "U8": 17
+                  },
+                  {
+                    "U8": 1
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "startup-inputs-initialization",
+          "label": "0xE46B & 0x11 = 0x01",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U16": 65172
+                  },
+                  {
+                    "U8": 128
+                  },
+                  {
+                    "U8": 128
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "host-interface-setup",
+          "label": "0xFE94 & 0x80 = 0x80",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "Variant": [
+                      0,
+                      [
+                        {
+                          "U16": 65477
+                        },
+                        {
+                          "U8": 223
+                        },
+                        {
+                          "U8": 0
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "loading-input-interrupt-setup",
+          "label": "0xFFC5 = (old & 0xDF) | 0x00",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "Sequence": [
+                      {
+                        "Sequence": [
+                          {
+                            "U32": 39300
+                          },
+                          {
+                            "U8": 1
+                          },
+                          {
+                            "Variant": [
+                              0,
+                              []
+                            ]
+                          },
+                          {
+                            "U32": 320
+                          },
+                          {
+                            "U16": 20
+                          },
+                          {
+                            "U16": 40
+                          },
+                          {
+                            "U8": 0
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "U8": 0
+                  },
+                  {
+                    "Sequence": []
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "persistent-parameter-layout",
+          "label": "Selected bank + 0x9984 · 20 × 320 B · header 40 B",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U8": 0
+                  },
+                  {
+                    "Variant": [
+                      1,
+                      [
+                        {
+                          "U16": 63760
+                        },
+                        {
+                          "U16": 63761
+                        },
+                        {
+                          "U16": 63762
+                        },
+                        {
+                          "U16": 63763
+                        }
+                      ]
+                    ]
+                  },
+                  {
+                    "U8": 1
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "phase",
+          "label": "Swapped (1) · H8 split-word outputs/control 0xF910 / 0xF911 / 0xF912 / 0xF913",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U16": 159
+                  },
+                  {
+                    "U16": 65535
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "startup-prerequisite",
+          "label": "Required word 0x009F = 0xFFFF",
+          "role": "Operational",
+          "state": "Known"
+        }
+      ],
+      "hardware": "SAT 8301",
+      "platform": "SAT 8xxx",
+      "unresolved": []
+    },
+    {
+      "as_is": "00000000000000a0",
+      "candidate": "00000000000000c0",
+      "component": "0808080808080808080808080808080808080808080808080808080808080808",
+      "filters": [
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U32": 4275847969
+                  },
+                  {
+                    "U32": 65536
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "persistent-storage-geometry",
+          "label": "Marker 0xFEDC4321; bank spacing 0x10000 bytes",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U16": 58475
+                  },
+                  {
+                    "U8": 17
+                  },
+                  {
+                    "U8": 1
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "startup-inputs-initialization",
+          "label": "0xE46B & 0x11 = 0x01",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U16": 65172
+                  },
+                  {
+                    "U8": 128
+                  },
+                  {
+                    "U8": 128
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "host-interface-setup",
+          "label": "0xFE94 & 0x80 = 0x80",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "Variant": [
+                      0,
+                      [
+                        {
+                          "U16": 65477
+                        },
+                        {
+                          "U8": 223
+                        },
+                        {
+                          "U8": 0
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "loading-input-interrupt-setup",
+          "label": "0xFFC5 = (old & 0xDF) | 0x00",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "Sequence": [
+                      {
+                        "Sequence": [
+                          {
+                            "U32": 39300
+                          },
+                          {
+                            "U8": 1
+                          },
+                          {
+                            "Variant": [
+                              0,
+                              []
+                            ]
+                          },
+                          {
+                            "U32": 320
+                          },
+                          {
+                            "U16": 20
+                          },
+                          {
+                            "U16": 40
+                          },
+                          {
+                            "U8": 0
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "U8": 0
+                  },
+                  {
+                    "Sequence": []
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "persistent-parameter-layout",
+          "label": "Selected bank + 0x9984 · 20 × 320 B · header 40 B",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U8": 0
+                  },
+                  {
+                    "Variant": [
+                      1,
+                      [
+                        {
+                          "U16": 63760
+                        },
+                        {
+                          "U16": 63761
+                        },
+                        {
+                          "U16": 63762
+                        },
+                        {
+                          "U16": 63763
+                        }
+                      ]
+                    ]
+                  },
+                  {
+                    "U8": 0
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "phase",
+          "label": "Direct (0) · H8 split-word outputs/control 0xF910 / 0xF911 / 0xF912 / 0xF913",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U16": 159
+                  },
+                  {
+                    "U16": 65535
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "startup-prerequisite",
+          "label": "Required word 0x009F = 0xFFFF",
+          "role": "Operational",
+          "state": "Known"
+        }
+      ],
+      "hardware": "SAT 8301",
+      "platform": "SAT 8xxx",
+      "unresolved": []
+    },
+    {
+      "as_is": null,
+      "candidate": null,
+      "component": "0909090909090909090909090909090909090909090909090909090909090909",
+      "filters": [
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U32": 4275847969
+                  },
+                  {
+                    "U32": 65536
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "persistent-storage-geometry",
+          "label": "Marker 0xFEDC4321; bank spacing 0x10000 bytes",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "two native programs disagree",
+          "finding": {
+            "Conflicting": "two native programs disagree"
+          },
+          "id": "startup-inputs-initialization",
+          "label": "Conflicting: two native programs disagree",
+          "role": "Hardware",
+          "state": "Conflicting"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U16": 65172
+                  },
+                  {
+                    "U8": 128
+                  },
+                  {
+                    "U8": 128
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "host-interface-setup",
+          "label": "0xFE94 & 0x80 = 0x80",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "Variant": [
+                      0,
+                      [
+                        {
+                          "U16": 65477
+                        },
+                        {
+                          "U8": 223
+                        },
+                        {
+                          "U8": 0
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "loading-input-interrupt-setup",
+          "label": "0xFFC5 = (old & 0xDF) | 0x00",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "Sequence": [
+                      {
+                        "Sequence": [
+                          {
+                            "U32": 39300
+                          },
+                          {
+                            "U8": 1
+                          },
+                          {
+                            "Variant": [
+                              0,
+                              []
+                            ]
+                          },
+                          {
+                            "U32": 320
+                          },
+                          {
+                            "U16": 20
+                          },
+                          {
+                            "U16": 40
+                          },
+                          {
+                            "U8": 0
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "U8": 0
+                  },
+                  {
+                    "Sequence": []
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "persistent-parameter-layout",
+          "label": "Selected bank + 0x9984 · 20 × 320 B · header 40 B",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U8": 0
+                  },
+                  {
+                    "Variant": [
+                      1,
+                      [
+                        {
+                          "U16": 63760
+                        },
+                        {
+                          "U16": 63761
+                        },
+                        {
+                          "U16": 63762
+                        },
+                        {
+                          "U16": 63763
+                        }
+                      ]
+                    ]
+                  },
+                  {
+                    "U8": 0
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "phase",
+          "label": "Direct (0) · H8 split-word outputs/control 0xF910 / 0xF911 / 0xF912 / 0xF913",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U16": 159
+                  },
+                  {
+                    "U16": 65535
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "startup-prerequisite",
+          "label": "Required word 0x009F = 0xFFFF",
+          "role": "Operational",
+          "state": "Known"
+        }
+      ],
+      "hardware": "SAT 8600",
+      "platform": "SAT 8xxx",
+      "unresolved": [
+        "startup-inputs-initialization"
+      ]
+    }
+  ],
+  "notes": "https://github.com/MattJackson/pioneer-optical/blob/dev/docs/hardware-matrix-notes.md",
+  "platforms": [
+    {
+      "id": "SAT 1xxx",
+      "images": 1
+    },
+    {
+      "id": "SAT 8xxx",
+      "images": 5
+    },
+    {
+      "id": "SCSI",
+      "images": 1
+    },
+    {
+      "id": "ATA",
+      "images": 1
+    },
+    {
+      "id": "XYZ 0001",
+      "images": 1
+    }
+  ],
+  "records": [
+    {
+      "component": "0202020202020202020202020202020202020202020202020202020202020202",
+      "destination": "GENERAL",
+      "hardware": "SAT 1050",
+      "kernel": null,
+      "model": "BDR-211M",
+      "path": "packages/BDR-211M/1.00.tar",
+      "revision": "1.00"
+    },
+    {
+      "component": "0808080808080808080808080808080808080808080808080808080808080808",
+      "destination": "GENERAL",
+      "hardware": "SAT 8301",
+      "kernel": null,
+      "model": "BDR-212U",
+      "path": "packages/BDR-212U/1.00.tar",
+      "revision": "1.00"
+    },
+    {
+      "component": "0909090909090909090909090909090909090909090909090909090909090909",
+      "destination": "GENERAL",
+      "hardware": "SAT 8600",
+      "kernel": null,
+      "model": "BDR-213U",
+      "path": "packages/BDR-213U/1.00.tar",
+      "revision": "1.00"
+    },
+    {
+      "component": "0707070707070707070707070707070707070707070707070707070707070707",
+      "destination": "GENERAL",
+      "hardware": "SAT 8301",
+      "kernel": null,
+      "model": "BDR-UD02D",
+      "path": "packages/BDR-UD02D/1.00.tar",
+      "revision": "1.00"
+    },
+    {
+      "component": "0606060606060606060606060606060606060606060606060606060606060606",
+      "destination": "GENERAL",
+      "hardware": "SAT 8800",
+      "kernel": null,
+      "model": "BDR-UD03",
+      "path": "packages/BDR-UD03/1.00.tar",
+      "revision": "1.00"
+    },
+    {
+      "component": "0606060606060606060606060606060606060606060606060606060606060606",
+      "destination": "GENERAL",
+      "hardware": "SAT 8800",
+      "kernel": null,
+      "model": "BDR-UD03",
+      "path": "packages/BDR-UD03/1.01.tar",
+      "revision": "1.01"
+    },
+    {
+      "component": "0101010101010101010101010101010101010101010101010101010101010101",
+      "destination": "GENERAL",
+      "hardware": "SAT 8600",
+      "kernel": null,
+      "model": "BDR-UD04",
+      "path": "packages/BDR-UD04/1.00.tar",
+      "revision": "1.00"
+    },
+    {
+      "component": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+      "destination": "GENERAL",
+      "hardware": "ATA 0003",
+      "kernel": null,
+      "model": "BROKEN",
+      "path": "packages/BROKEN/1.31.tar",
+      "revision": "1.31"
+    },
+    {
+      "component": "0303030303030303030303030303030303030303030303030303030303030303",
+      "destination": "GENERAL",
+      "hardware": "ATA 0004",
+      "kernel": null,
+      "model": "DVR-105",
+      "path": "packages/DVR-105/1.00.tar",
+      "revision": "1.00"
+    },
+    {
+      "component": "0404040404040404040404040404040404040404040404040404040404040404",
+      "destination": "GENERAL",
+      "hardware": "SCSI0001",
+      "kernel": null,
+      "model": "DVR-SCSI",
+      "path": "packages/DVR-SCSI/1.00.tar",
+      "revision": "1.00"
+    },
+    {
+      "component": "0505050505050505050505050505050505050505050505050505050505050505",
+      "destination": "GENERAL",
+      "hardware": "XYZ 0001",
+      "kernel": null,
+      "model": "OTHER",
+      "path": "packages/OTHER/1.00.tar",
+      "revision": "1.00"
+    }
+  ],
+  "revisions": {
+    "cases": 1,
+    "conflicts": [],
+    "incomplete": 0
+  },
+  "routes": {
+    "format": "freemkv-crossflash-routes",
+    "routes": [
+      {
+        "evidence": [],
+        "from": "BDR-UD04 1.00",
+        "status": "untested",
+        "steps": [
+          "</script><script>alert(1)</script>"
+        ],
+        "to": "BDR-UD03 1.01"
+      }
+    ],
+    "version": 1
+  },
+  "source": {
+    "crate": "pioneer-optical 0.0.0-test",
+    "hoard": "sha256:test",
+    "revision": "0000000",
+    "scheme": "pioneer.hardware.v7"
+  },
+  "summary": {
+    "as_is_families": 2,
+    "candidate_families": 1,
+    "failures": [
+      {
+        "component": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+        "error": "unsupported firmware envelope layout",
+        "path": "packages/BROKEN/1.31.tar"
+      }
+    ],
+    "images": 9,
+    "known": 3,
+    "packages": 11,
+    "phase_normalized": {
+      "00000000000000c0": [
+        "00000000000000a0",
+        "00000000000000a1"
+      ]
+    },
+    "unresolved": 6
+  },
+  "title": "Pioneer hardware matrix"
+}

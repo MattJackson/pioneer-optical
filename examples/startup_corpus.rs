@@ -112,12 +112,16 @@ mod tests {
         b[28] = 0x5a;
         assert!(pairs(&b, 0x410000).is_empty());
     }
+    #[test]
+    fn corpus_file_without_role_directory_is_an_error() {
+        assert!(row(Path::new("x.enc")).is_err());
+    }
 }
 fn row(path: &Path) -> Result<(String, String), Box<dyn std::error::Error>> {
     let role = path
         .parent()
         .and_then(Path::file_name)
-        .unwrap()
+        .ok_or("corpus file has no role directory")?
         .to_string_lossy();
     let raw = fs::read(path)?;
     let hash = format!("{:x}", Sha256::digest(&raw));

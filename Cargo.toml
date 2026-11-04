@@ -1,7 +1,7 @@
 # Self-contained manifest (no workspace inheritance) so it packages for crates.io as-is.
 [package]
 name = "pioneer-optical"
-version = "1.5.0"
+version = "1.6.0"
 edition = "2021"
 autoexamples = false
 rust-version = "1.75"
@@ -25,9 +25,11 @@ include = [
     "/examples/flash.rs",
     "/examples/image_scan.rs",
     "/examples/hardware_report.rs",
+    "/examples/hardware_matrix/**",
     "/examples/hardware_probe.rs",
     "/examples/logging_scan.rs",
     "/examples/startup_corpus.rs",
+    "/examples/pioneer_startup_checks.rs",
     "/examples/device_firmware_scan.rs",
 ]
 keywords = ["pioneer", "optical", "scsi", "firmware", "bluray"]
@@ -46,7 +48,7 @@ firmware-info = ["std", "image", "dep:serde", "dep:flate2"]
 # Command sequences over a caller-supplied transport. no_std, no alloc.
 drive = []
 # Firmware image analysis. Uses the shared H8 decoder, std and a zlib inflater.
-image = ["std", "dep:miniz_oxide", "dep:flate2", "dep:h8-asm"]
+image = ["std", "dep:miniz_oxide", "dep:flate2", "dep:h8-asm", "dep:sha2"]
 # Envelope codec: decode, encode, sign Pioneer firmware envelopes. Requires std.
 envelope = ["std", "image", "dep:serde_json", "dep:serde", "dep:sha2", "dep:flate2", "dep:num-bigint", "dep:num-traits", "dep:sha1", "dep:getrandom"]
 
@@ -93,5 +95,14 @@ name = "hardware_report"
 required-features = ["envelope"]
 
 [[example]]
+name = "hardware_matrix"
+path = "examples/hardware_matrix/main.rs"
+required-features = ["envelope"]
+
+[[example]]
 name = "hardware_probe"
 required-features = ["analysis"]
+
+[[example]]
+name = "pioneer_startup_checks"
+required-features = ["image"]

@@ -58,13 +58,13 @@ fn descriptor_only_control_has_no_fabricated_key() {
 
 #[test]
 fn family_gate_preserves_both_ids_and_distinguishes_missing_evidence() {
-    let first = [0xf6, 0x12, 0x6a, 0x86, 0xe4, 0x36, 0, 0];
-    let second = [0xf6, 0x13, 0x6a, 0x86, 0xe4, 0x36, 0, 0];
-    let mut installed = image();
-    installed.extend_from_slice(&first);
-    let receiver = Receiver::from_image(&installed).unwrap();
-    let a = family(&first).unwrap();
-    let b = family(&second).unwrap();
+    let mut receiver = Receiver::from_image(&image()).unwrap();
+    let a = crate::image::matrix::test_family(0x12);
+    let b = crate::image::matrix::test_family(0x13);
+    assert_ne!(a, b);
+    // Isolate comparison/error behavior; raw receiver bytes lack platform context.
+    assert_eq!(receiver.family(), None);
+    receiver.family = Some(a);
     assert_eq!(receiver.family(), Some(a));
     assert_eq!(receiver.compare_family(Some(a)), Ok(a));
     assert_eq!(

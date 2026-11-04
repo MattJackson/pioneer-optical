@@ -70,6 +70,33 @@ impl EnvelopeCodec for BootKey {
         Ok(())
     }
 
+    fn repair_decoded(&self, original: &[u8], image: &[u8]) -> Option<Vec<u8>> {
+        if original.len() != IMAGE_SIZE
+            || image.len() != IMAGE_SIZE
+            || original.get(CHECKSUM_START..CHECKSUM_START + 2)?
+                != image.get(CHECKSUM_START..CHECKSUM_START + 2)?
+            || self.validate_decoded(original).is_err()
+        {
+            return None;
+        }
+        let mut corrected = image.to_vec();
+        let sum = corrected[CHECKSUM_START..CODE_END]
+            .chunks_exact(2)
+            .chain(corrected[DATA_START..IMAGE_SIZE].chunks_exact(2))
+            .fold(0u16, |sum, w| {
+                sum.wrapping_add(u16::from_le_bytes(w.try_into().unwrap()))
+            });
+        let old = u16::from_le_bytes(
+            corrected[CHECKSUM_START..CHECKSUM_START + 2]
+                .try_into()
+                .unwrap(),
+        );
+        corrected[CHECKSUM_START..CHECKSUM_START + 2]
+            .copy_from_slice(&old.wrapping_sub(sum).to_le_bytes());
+        self.validate_decoded(&corrected).ok()?;
+        Some(corrected)
+    }
+
     fn transform(&self, bytes: &[u8], key: &[u8], encode: bool, _: &[u32]) -> Option<Vec<u8>> {
         if bytes.len() != IMAGE_SIZE || key.len() != BLOCK {
             return None;

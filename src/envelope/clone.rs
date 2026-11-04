@@ -173,13 +173,18 @@ pub fn kernel_equality(a: &[u8], b: &[u8]) -> Option<bool> {
 
 /// [`kernel_equality`] on decoded images with their drive names.
 pub fn kernel_image_equality(a: &[u8], a_name: &str, b: &[u8], b_name: &str) -> Option<bool> {
+    // `kernel_content_mask` is None exactly for these lengths; decide them
+    // before its fill search.
+    if a.len() < IDENTITY.end || b.len() < IDENTITY.end {
+        return None;
+    }
+    if a.len() != b.len() {
+        return Some(false);
+    }
     let (ma, mb) = (
         kernel_content_mask(a, a_name)?,
         kernel_content_mask(b, b_name)?,
     );
-    if a.len() != b.len() {
-        return Some(false);
-    }
     Some((0..a.len()).all(|p| (ma[p] && mb[p]) || a[p] == b[p]))
 }
 
@@ -225,10 +230,17 @@ fn fill_stream(seed: u32, len: usize) -> Vec<u8> {
         .collect()
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(super) static LOCK_FILLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Lock onto the fill: probe anchors from the end of the image (the tail
 /// after the code is the longest fill run) and return the seed plus the
 /// expected fill bytes.
 fn lock_fill(image: &[u8]) -> Option<(u32, Vec<u8>)> {
+    #[cfg(test)]
+    LOCK_FILLS.with(|count| count.set(count.get() + 1));
     let mut anchor = image.len().checked_sub(FILL_PROBE)?;
     // Positional fill only exists within the last KERNEL_LEN bytes.
     let floor = image.len().saturating_sub(KERNEL_LEN);

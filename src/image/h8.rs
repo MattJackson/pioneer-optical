@@ -2,6 +2,7 @@
 use h8_asm::{isa::decode_insn, Mode, Target};
 
 /// Instruction length, or one word for resynchronization after unrecognized data.
+#[cfg(any(test, feature = "envelope"))]
 pub(crate) fn ilen(bytes: &[u8], offset: usize) -> usize {
     bytes
         .get(offset..)

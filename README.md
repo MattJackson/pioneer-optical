@@ -125,6 +125,15 @@ retains the source Normal and startup code while adapting its recognized RAM
 programmer restart operand for the target. Independent requirements may compose
 into three stages; unknown contracts refuse preparation.
 
+The `compatibility` planner compares registered v7 hardware filters and selects
+supported native corrections automatically from the installed and requested
+firmware. Phase output assignment is checked on every preparation; it changes
+only when required. Persistent parameter layout and storage geometry remain
+independent required filters. A narrowly proven address-only Normal variant
+can be corrected without moving retained data; different record formats and
+unproven variants refuse preparation. See [family identity](docs/family-v7.md)
+and [correction workflow](docs/correction-completion.md).
+
 `PreparedUpdate::flash` uses one stage executor, with live receiver binding,
 settings migration, transfer and verification at each transition. Parameter 0x9F
 is a stage setting, not a separate flashing path. `prepare_normal` uses the same
@@ -134,12 +143,16 @@ first mutation.
 Each receiver exposes `startup_checks()`: the native parameter comparisons and
 persistent bank requirements recovered from its Kernel and Normal. One startup
 planner checks the complete set for every prepared stage. Its evidence is
-available through `settings().startup_plan()`, keeping a detected requirement
-separate from the existing neutral-word policy. Older bank initialization,
+available through `settings().startup_plan()`. The selected startup word and
+its provenance are exposed separately by `settings().startup_selection()`.
+Neutral startup selection deliberately uses `0xFFFF` when no comparison is
+recognized; recognized comparisons must bind to their native getter. Older bank initialization,
 state-header and Kernel-owned sequence schemes retain their own contracts.
 Missing evidence refuses preparation; family overrides do not waive these checks.
-Different persistent formats require a validated record conversion. The planner
-does not rewrite a header marker as a substitute for converting the records.
+Different persistent formats are refused under every policy, including the
+Recovery family override; there is no bank format conversion (for example,
+BDR-212U and BDR-213U banks are never converted in either direction). The
+planner does not rewrite a header marker.
 
 `ExecutionError::completed_stages()` retains earlier completion when a later
 stage fails, including a refusal before its first write. No failing firmware
@@ -232,8 +245,5 @@ assert!(code.platform_is("ud02"));
 ```
 
 `Production::product_code_parts()` exposes this view on a parsed factory record.
-Naming alone grants no compatibility. Scoped `settings::routing` rules resolve
-original hardware to a destination; currently installed branding cannot grant
-another hardware platform's settings route. See
-[settings adaptations](docs/settings-adaptation.md) for live identity checks,
-reviewed target recipes and the native OEM return path.
+Naming alone grants no compatibility; only the registered hardware filters
+decide whether firmware may be prepared.

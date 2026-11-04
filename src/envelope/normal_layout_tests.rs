@@ -75,19 +75,55 @@ fn all_descriptor_forms_resolve_both_length_rules() {
 
 #[test]
 fn malformed_instruction_evidence_is_not_a_match() {
-    let original = kernel(0, false);
-    for offset in [
-        0x200, 0x202, 0x204, 0x206, 0x20e, 0x216, 0x218, 0x21a, 0x21e, 0x222, 0x400, 0x402, 0x408,
-        0x410, 0x416, 0x417, 0x41a, 0x41c, 0x41e, 0x420, 0x421,
-    ] {
-        let mut k = original.clone();
-        k[offset] ^= 1;
+    // Every byte of every descriptor form and both checksum loops is compared
+    // opcode or bound-checked data, except the middle byte of the descriptor
+    // JSR target, which may legitimately move to another even in-Kernel helper.
+    for form in 0..4 {
+        let (descriptor_len, jsr_target_middle) = match form {
+            0 => (36, Some(0x21c)),
+            1 => (40, Some(0x220)),
+            2 => (34, Some(0x21a)),
+            _ => (34, None),
+        };
+        for fixed in [false, true] {
+            let original = kernel(form, fixed);
+            let checksum_len = if fixed { 26 } else { 34 };
+            for offset in (0x200..0x200 + descriptor_len).chain(0x400..0x400 + checksum_len) {
+                if Some(offset) == jsr_target_middle {
+                    continue;
+                }
+                let mut k = original.clone();
+                k[offset] ^= 1;
+                fix(&mut k);
+                assert!(
+                    NormalLayout::from_kernel(&k, KERNEL_BASE).is_err(),
+                    "mutation at form {form} fixed {fixed} offset {offset:#x}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn descriptor_bytes_must_be_printable_ascii() {
+    let mut control = *b"PIONEER BD-RW   ";
+    control[5] = 0x07;
+    let mut high = *b"PIONEER BD-RW   ";
+    high[5] = 0x80;
+    for descriptor in [[b' '; 16], [0; 16], control, high] {
+        let mut k = kernel(0, false);
+        k[0x2000..0x2010].copy_from_slice(&descriptor);
         fix(&mut k);
-        assert!(
-            NormalLayout::from_kernel(&k, KERNEL_BASE).is_err(),
-            "mutation at {offset:x}"
+        assert_eq!(
+            NormalLayout::from_kernel(&k, KERNEL_BASE),
+            Err(NormalLayoutError::Unsupported),
+            "{descriptor:02x?}"
         );
     }
+    let mut k = kernel(0, false);
+    k[0x2000..0x2010].copy_from_slice(b"X               ");
+    fix(&mut k);
+    NormalLayout::from_kernel(&k, KERNEL_BASE).unwrap();
 }
 
 #[test]

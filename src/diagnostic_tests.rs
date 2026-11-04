@@ -27,3 +27,16 @@ fn rejects_a_surface_crossing_the_wire_address_limit() {
     assert!(surface.read_cdb(0, 2).is_none());
     assert!(surface.read_cdb(0, 1).is_some());
 }
+
+#[test]
+fn read_cdb_rejects_a_length_that_does_not_fit_the_24_bit_field() {
+    let surface = ReadSurface {
+        name: "x",
+        selector: 0xB0,
+        offset: 0,
+        length: 0x100_0000,
+        chunk: 0x100_0000,
+    };
+    assert_eq!(surface.read_cdb(0, 0x100_0000), None);
+    assert!(surface.read_cdb(0, 0xff_ffff).is_some());
+}

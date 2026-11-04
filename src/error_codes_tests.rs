@@ -163,16 +163,17 @@ fn envelope_error_catalogue_has_stable_codes_and_actionable_text() {
             Error::DriveNameNotFound,
             "pioneer.envelope.drive_name_not_found",
         ),
+        (
+            Error::KernelBodySize { got: 3 },
+            "pioneer.envelope.kernel_body_size",
+        ),
+        (
+            Error::UnknownMarker { marker: 0x42 },
+            "pioneer.envelope.unknown_marker",
+        ),
     ];
     for (error, code) in cases {
         assert_eq!(error.code(), code);
-        assert!(!error.to_string().is_empty());
-    }
-    for error in [
-        Error::KernelBodySize { got: 3 },
-        Error::UnknownMarker { marker: 0x42 },
-    ] {
-        assert!(!error.code().is_empty());
         assert!(!error.to_string().is_empty());
     }
 }
@@ -279,4 +280,411 @@ fn plan_error_code_and_display() {
         "pioneer.transport.kernel_layout"
     );
     assert!(!PlanError::KernelLayout.to_string().is_empty());
+}
+
+#[cfg(feature = "envelope")]
+#[test]
+fn decode_and_update_error_catalogues_have_stable_codes() {
+    use crate::envelope::{DecodeError as D, Layout, PairField, UpdateError as U};
+    use crate::ComponentKind;
+    let layout = Layout::Normal;
+    let decode = [
+        (D::InvalidHeader, "pioneer.decode.invalid_header"),
+        (D::UnsupportedLayout, "pioneer.decode.unsupported_layout"),
+        (D::AmbiguousLayout, "pioneer.decode.ambiguous_layout"),
+        (D::InvalidPayload, "pioneer.decode.invalid_payload"),
+        (
+            D::ReceiverPolicy {
+                kernel_layout: layout,
+                normal_layout: layout,
+            },
+            "pioneer.decode.receiver_policy",
+        ),
+        (
+            D::PayloadAlignment {
+                layout,
+                alignment: 2,
+                actual: 3,
+            },
+            "pioneer.decode.payload_alignment",
+        ),
+        (
+            D::ChecksumMismatch {
+                layout,
+                checksum_offset: 0,
+                stored: 1,
+                calculated: 2,
+            },
+            "pioneer.decode.checksum_mismatch",
+        ),
+        (
+            D::DecodedChecksum {
+                layout,
+                word_bits: 16,
+                sum: 1,
+            },
+            "pioneer.decode.decoded_checksum",
+        ),
+        (
+            D::PayloadLengthMismatch {
+                layout,
+                payload_offset: 0,
+                declared: 2,
+                actual: 1,
+            },
+            "pioneer.decode.payload_length_mismatch",
+        ),
+    ];
+    for (error, code) in decode {
+        assert_eq!(error.code(), code);
+    }
+    let kernel = ComponentKind::Kernel;
+    let update = [
+        (
+            U::Decode {
+                component: kernel,
+                source: D::InvalidHeader,
+            },
+            "pioneer.update.decode",
+        ),
+        (
+            U::Role {
+                expected: kernel,
+                actual: ComponentKind::Normal,
+            },
+            "pioneer.update.role",
+        ),
+        (
+            U::Header {
+                field: PairField::HardwareVersion,
+                kernel: "a".into(),
+                normal: "b".into(),
+            },
+            "pioneer.update.header",
+        ),
+        (
+            U::Checksum {
+                component: kernel,
+                sum: 1,
+                bytes: 2,
+            },
+            "pioneer.update.checksum",
+        ),
+        (
+            U::Roundtrip { component: kernel },
+            "pioneer.update.roundtrip",
+        ),
+        (
+            U::UnrecoveredTail {
+                offset: 0,
+                length: 1,
+            },
+            "pioneer.update.unrecovered_tail",
+        ),
+        (
+            U::Representation {
+                component: kernel,
+                layout,
+            },
+            "pioneer.update.representation",
+        ),
+        (U::Authentication, "pioneer.update.authentication"),
+        (U::Abi { missing: vec![1] }, "pioneer.update.abi_mismatch"),
+    ];
+    for (error, code) in update {
+        assert_eq!(error.code(), code);
+    }
+}
+
+#[cfg(feature = "envelope")]
+#[test]
+fn receiver_and_preparation_error_catalogues_have_stable_codes() {
+    use crate::receiver::{Error as R, PreparationError as P};
+    use crate::ComponentKind;
+    let a = crate::image::matrix::test_family(0x12);
+    let b = crate::image::matrix::test_family(0x13);
+    let receiver = [
+        (
+            R::Component {
+                actual: ComponentKind::Kernel,
+            },
+            "pioneer.receiver.component",
+        ),
+        (
+            R::KernelComponent {
+                actual: ComponentKind::Normal,
+            },
+            "pioneer.receiver.kernel_component",
+        ),
+        (
+            R::InstalledPairMismatch,
+            "pioneer.receiver.installed_pair_mismatch",
+        ),
+        (R::InvalidDescriptor, "pioneer.receiver.invalid_descriptor"),
+        (R::Unsupported, "pioneer.receiver.unsupported"),
+        (
+            R::DescriptorMismatch,
+            "pioneer.receiver.descriptor_mismatch",
+        ),
+        (
+            R::UnknownInstalledFamily,
+            "pioneer.receiver.unknown_installed_family",
+        ),
+        (
+            R::UnknownTargetFamily,
+            "pioneer.receiver.unknown_target_family",
+        ),
+        (
+            R::FamilyMismatch {
+                installed: a,
+                target: b,
+            },
+            "pioneer.receiver.family_mismatch",
+        ),
+    ];
+    for (error, code) in receiver {
+        assert_eq!(error.code(), code);
+    }
+    let preparation = [
+        (
+            P::UnresolvedStartup,
+            "pioneer.preparation.unresolved_startup",
+        ),
+        (P::AmbiguousStartup, "pioneer.preparation.ambiguous_startup"),
+        (
+            P::UnknownStartupAccess,
+            "pioneer.preparation.unknown_startup_access",
+        ),
+        (
+            P::Target(crate::envelope::UpdateError::Authentication),
+            "pioneer.preparation.target",
+        ),
+        (
+            P::KernelHandoff(crate::image::KernelHandoffError::UnknownTarget),
+            "pioneer.preparation.kernel_handoff",
+        ),
+        (
+            P::MissingInstalledKernel,
+            "pioneer.preparation.missing_installed_kernel",
+        ),
+        (
+            P::InstalledKernelRepresentation,
+            "pioneer.preparation.installed_kernel_representation",
+        ),
+        (
+            P::Compatibility(R::Unsupported),
+            "pioneer.preparation.compatibility",
+        ),
+        (
+            P::UnknownInstalledKernel,
+            "pioneer.preparation.unknown_installed_kernel",
+        ),
+        (P::RejectedMarker, "pioneer.preparation.rejected_marker"),
+        (
+            P::UnsupportedFinalStage,
+            "pioneer.preparation.unsupported_restoration",
+        ),
+        (
+            P::FinalStageEntry(R::Unsupported),
+            "pioneer.preparation.restoration_entry",
+        ),
+        (
+            P::PatchedRepresentation,
+            "pioneer.preparation.patched_representation",
+        ),
+        (
+            P::UnsupportedDialect,
+            "pioneer.preparation.unsupported_dialect",
+        ),
+        (
+            P::UnsupportedTransport,
+            "pioneer.preparation.unsupported_transport",
+        ),
+        // Wrapped causes that surface their own stable code.
+        (
+            P::Startup(crate::startup::checks::Error::AmbiguousWord),
+            "pioneer.preparation.ambiguous_startup",
+        ),
+        (
+            P::PhaseCorrection(crate::compatibility::Error::PersistentLayoutOverlap {
+                start: 0,
+                end: 1,
+            }),
+            "pioneer.compatibility.persistent_layout_overlap",
+        ),
+        (
+            P::PhaseCorrection(crate::compatibility::Error::Unsupported),
+            "pioneer.phase.correction_unproven",
+        ),
+    ];
+    for (error, code) in preparation {
+        assert_eq!(error.code(), code);
+    }
+}
+
+#[cfg(all(feature = "envelope", feature = "drive"))]
+#[test]
+fn flash_error_catalogue_has_stable_codes() {
+    use crate::drive::{Error as D, UpdateError as U};
+    use crate::receiver::{FlashError as F, FlashStage};
+    let stage = FlashStage::Initial;
+    let cases = [
+        (
+            F::Preflight { stage, source: () },
+            "pioneer.flash.preflight",
+        ),
+        (
+            F::DescriptorRead {
+                stage,
+                source: D::Locked,
+            },
+            "pioneer.flash.descriptor_read",
+        ),
+        (
+            F::DescriptorChanged { stage },
+            "pioneer.flash.descriptor_changed",
+        ),
+        (
+            F::DescriptorMismatch { stage },
+            "pioneer.flash.descriptor_mismatch",
+        ),
+        (
+            F::Update {
+                stage,
+                source: U::Finish(D::Locked),
+            },
+            "pioneer.flash.update",
+        ),
+        (
+            F::Readback {
+                stage,
+                source: D::Locked,
+            },
+            "pioneer.flash.readback",
+        ),
+        (
+            F::ReadbackMismatch { stage, address: 0 },
+            "pioneer.flash.readback_mismatch",
+        ),
+        (
+            F::UnsupportedTransport { stage },
+            "pioneer.flash.unsupported_transport",
+        ),
+    ];
+    for (error, code) in cases {
+        assert_eq!(error.code(), code);
+    }
+}
+
+#[cfg(feature = "drive")]
+#[test]
+fn drive_and_device_error_catalogues_have_stable_codes() {
+    use crate::drive::{Error as D, UpdateError as U};
+    use crate::Role;
+    let drive = [
+        (D::Transport(()), "pioneer.drive.transport"),
+        (D::Locked, "pioneer.drive.locked"),
+        (
+            D::Short {
+                expected: 2,
+                actual: 1,
+            },
+            "pioneer.drive.short",
+        ),
+        (
+            D::ReadbackMismatch {
+                expected: 1,
+                actual: 2,
+            },
+            "pioneer.drive.readback_mismatch",
+        ),
+        (D::Oversize(1 << 24), "pioneer.drive.oversize"),
+        (D::Challenge, "pioneer.drive.challenge"),
+        (D::InvalidProtocol, "pioneer.drive.invalid_protocol"),
+        (D::UnknownClass, "pioneer.drive.unknown_class"),
+    ];
+    for (error, code) in drive {
+        assert_eq!(error.code(), code);
+    }
+    let update = [
+        (
+            U::InvalidSpan {
+                role: Role::Kernel,
+                length: 0,
+            },
+            "pioneer.transfer.invalid_span",
+        ),
+        (U::Entry(D::<()>::Locked), "pioneer.transfer.entry"),
+        (
+            U::EntryStateRead(D::Locked),
+            "pioneer.transfer.entry_state_read",
+        ),
+        (
+            U::EntryState { revision: [0; 4] },
+            "pioneer.transfer.entry_state",
+        ),
+        (
+            U::Transfer {
+                role: Role::Normal,
+                offset: 0,
+                length: 1,
+                source: D::Locked,
+            },
+            "pioneer.transfer.transfer",
+        ),
+        (U::Finish(D::Locked), "pioneer.transfer.finish"),
+        (U::ReadyTimeout(D::Locked), "pioneer.transfer.ready_timeout"),
+    ];
+    for (error, code) in update {
+        assert_eq!(error.code(), code);
+    }
+    use crate::device::Error as V;
+    let device = [
+        (
+            V::Transport {
+                source: (),
+                sense: None,
+            },
+            "pioneer.device.transport",
+        ),
+        (V::Unsupported, "pioneer.device.unsupported"),
+        (V::NotReported, "pioneer.device.not_reported"),
+        (V::Malformed, "pioneer.device.malformed"),
+        (V::InvalidValue, "pioneer.device.invalid_value"),
+        (V::RegionLocked, "pioneer.device.region_locked"),
+    ];
+    for (error, code) in device {
+        assert_eq!(error.code(), code);
+    }
+}
+
+#[cfg(feature = "image")]
+#[test]
+fn identity_error_catalogue_has_stable_codes() {
+    use crate::ident::IdentError as I;
+    let cases = [
+        (I::NoModel, "pioneer.identity.no_model"),
+        (
+            I::IncompleteIdentity,
+            "pioneer.identity.incomplete_identity",
+        ),
+        (I::NotFound, "pioneer.identity.not_found"),
+        (I::Ambiguous, "pioneer.identity.ambiguous"),
+    ];
+    for (error, code) in cases {
+        assert_eq!(error.code(), code);
+    }
+}
+
+#[test]
+fn settings_codec_error_catalogue_has_stable_codes() {
+    use crate::settings::CodecError as C;
+    let cases = [
+        (C::Malformed, "pioneer.settings.codec.malformed"),
+        (C::Unsupported, "pioneer.settings.codec.unsupported"),
+        (C::InvalidRequest, "pioneer.settings.codec.invalid_request"),
+    ];
+    for (error, code) in cases {
+        assert_eq!(error.code(), code);
+    }
 }

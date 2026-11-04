@@ -125,3 +125,33 @@ fn ambiguous_decoder_and_non_kernel_context_are_rejected() {
     let normal_context = Envelope::load_with_kernel(&normal, &kernel).unwrap();
     assert!(Envelope::load_with_kernel(&normal, &normal_context).is_err());
 }
+
+#[test]
+fn modified_image_repack_repairs_only_the_bound_checksum_and_reverses_exactly() {
+    let (kernel, bytes, image) = fixture();
+    let original = Envelope::load_with_kernel(&bytes, &kernel).unwrap();
+    let mut modified = image.clone();
+    modified[0x220] = 5;
+    modified[DATA_START] = 3;
+    modified[CODE_END] ^= 1;
+    let encoded = original.repack_with_checksum(&modified).unwrap();
+    let corrected = Envelope::load_with_kernel(&encoded, &kernel).unwrap();
+    assert_eq!(
+        &corrected.image[CHECKSUM_START..CHECKSUM_START + 2],
+        &0xfff8u16.to_le_bytes()
+    );
+    modified[CHECKSUM_START..CHECKSUM_START + 2].copy_from_slice(&0xfff8u16.to_le_bytes());
+    assert_eq!(corrected.image, modified);
+    let mut reverse = corrected.image.clone();
+    reverse[0x220] = image[0x220];
+    reverse[DATA_START] = image[DATA_START];
+    reverse[CODE_END] = image[CODE_END];
+    assert_eq!(corrected.repack_with_checksum(&reverse).unwrap(), bytes);
+    assert!(original.repack_with_checksum(&modified).is_none());
+    assert!(original
+        .repack_with_checksum(&image[..image.len() - 1])
+        .is_none());
+    let mut corrupt = original.clone();
+    corrupt.image[CHECKSUM_START] ^= 1;
+    assert!(corrupt.repack_with_checksum(&corrupt.image).is_none());
+}

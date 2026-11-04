@@ -10,6 +10,20 @@ use alloc::{format, vec, vec::Vec};
 pub struct Loading;
 /// Registered loading/input/interrupt filter.
 pub static FILTER: Loading = Loading;
+
+/// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
+static RULES: super::Rules = super::Rules {
+    description: "Identifies the loading input, interrupt-register operation or installed callback route: the H8 FFC5 transformation new = (old & mask) | set, a physical input predicate (address, bit, level) or a vector route, and the ATA mechanical/event input contract. The variant is part of the value: equal numbers under different variants are not equal.",
+    role: super::Role::Hardware,
+    correctability: super::Correctability::Never,
+    correction: "Never corrected. Values must match.",
+    policies: &[
+        super::Policy {
+            domains: &[],
+            text: "Additional recognizer misses are not proof of absence and are never hashed as negative facts.",
+        },
+    ],
+};
 const ID: &str = "loading-input-interrupt-setup";
 
 fn term(term: inputs::Term) -> Value {
@@ -153,6 +167,9 @@ impl Filter for Loading {
     }
     fn name(&self) -> &'static str {
         "Loading input / interrupt setup"
+    }
+    fn rules(&self) -> Option<&'static super::Rules> {
+        Some(&RULES)
     }
     fn inspect(&self, context: &Context<'_>) -> Assessment {
         if let Some(evidence) = &context.sat {

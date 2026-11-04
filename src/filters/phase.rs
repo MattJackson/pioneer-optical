@@ -249,12 +249,45 @@ pub fn observe(firmware: Firmware<'_>) -> Observation<NativePhase> {
 pub struct PhaseFilter;
 /// Native phase filter, evaluated for every firmware context.
 pub static FILTER: PhaseFilter = PhaseFilter;
+
+/// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
+static RULES: super::Rules = super::Rules {
+    description: "Identifies which source element drives which phase output (direct 0 or swapped 1) together with the native architecture and output interface: H8 byte or split-word outputs, M32C outputs or the V850 indexed bus. The assignment is not signed waveform winding or physical motor direction.",
+    role: super::Role::Hardware,
+    correctability: super::Correctability::Guarded,
+    correction: "Corrected in Normal only for pairs the phase owner proves; the native architecture and interface must always match. The matching family drops the assignment only for H8 programs with a complete paired-word grammar.",
+    policies: &[
+        super::Policy {
+            domains: &[],
+            text: "Unresolved or conflicting phase refuses. A phase correction authorizes only the phase change: every other registered value must still match, and the corrected image is re-verified.",
+        },
+        super::Policy {
+            domains: &[super::identity::Domain::Sat1],
+            text: "SAT1 phase correction is suspended pending command-relative phase proof: any assignment change refuses on every interface.",
+        },
+        super::Policy {
+            domains: &[super::identity::Domain::Sat8, super::identity::Domain::Sat9],
+            text: "A split-word (F910-F913) coil rewrite is planned only when the complete sled mechanism bundle is bound in both images and identical apart from the coil. Otherwise it refuses as Unsupported, which the Recovery family override does not waive.",
+        },
+        super::Policy {
+            domains: &[super::identity::Domain::Ata],
+            text: "M32C corrections need a tail-key Normal, or a boot-key Normal with its Kernel. V850 corrections need sparse-checksum Normal and Kernel files and the exact paired Kernel.",
+        },
+        super::Policy {
+            domains: &[super::identity::Domain::Scsi],
+            text: "No SCSI phase program is recognized, so phase stays Unresolved and no correction is planned.",
+        },
+    ],
+};
 impl Filter for PhaseFilter {
     fn id(&self) -> &'static str {
         "phase"
     }
     fn name(&self) -> &'static str {
         "Phase output assignment"
+    }
+    fn rules(&self) -> Option<&'static super::Rules> {
+        Some(&RULES)
     }
     fn inspect(&self, context: &Context<'_>) -> Assessment {
         match &context.native_phase {

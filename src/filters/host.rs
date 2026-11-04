@@ -10,6 +10,20 @@ mod legacy;
 pub struct Host;
 /// Registered host-interface filter.
 pub static FILTER: Host = Host;
+
+/// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
+static RULES: super::Rules = super::Rules {
+    description: "Identifies the host-interface register setup written by the firmware: the masked H8 FE94 initialization (bit 7) or the complete older H8 host initializer, and M32C or V850 host register mappings with their reset writes. These representations are not interchangeable.",
+    role: super::Role::Hardware,
+    correctability: super::Correctability::Never,
+    correction: "Never corrected. Values must match; no host-setup correction is implemented.",
+    policies: &[
+        super::Policy {
+            domains: &[],
+            text: "A detector miss is never an absent host or an invented FE94 zero; it stays Unresolved.",
+        },
+    ],
+};
 const ID: &str = "host-interface-setup";
 
 fn signature(tag: u16, host: peripheral::HostSignature) -> Value {
@@ -43,6 +57,9 @@ impl Filter for Host {
     }
     fn name(&self) -> &'static str {
         "Host interface setup"
+    }
+    fn rules(&self) -> Option<&'static super::Rules> {
+        Some(&RULES)
     }
     fn inspect(&self, context: &Context<'_>) -> Assessment {
         if let Some(sat) = &context.sat {

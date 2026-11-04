@@ -13,6 +13,28 @@ mod m7900;
 pub struct Initialization;
 /// Registered initialization owner.
 pub static FILTER: Initialization = Initialization;
+
+/// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
+static RULES: super::Rules = super::Rules {
+    description: "Identifies the startup tray inputs or, where no input reader resolves, the complete native initialization program: role-bound closed/open input predicates (address, encoding, bit, active level) on every SAT platform where they resolve, the SAT1 E46B register value or older H8 initializer, ordered M32C register writes, or a bounded M7900 I/O block. A projected summary bit is never a register value to write, and one architecture's program never stands in for another's.",
+    role: super::Role::Hardware,
+    correctability: super::Correctability::Never,
+    correction: "Never corrected. Values must match.",
+    policies: &[
+        super::Policy {
+            domains: &[super::identity::Domain::Sat8, super::identity::Domain::Sat9],
+            text: "The value is chosen by the native reader that resolves, not by the SAT digit: equal tray input predicates compare equal across SAT8 and SAT9. The constant E46B initialization store is evidence only; SAT8 and SAT9 never fall back to it, so unresolved predicates stay Unresolved.",
+        },
+        super::Policy {
+            domains: &[super::identity::Domain::Sat1],
+            text: "SAT1 has no recognized tray input reader and keeps its native E46B register value (bits 4 and 0) or its older initialization program.",
+        },
+        super::Policy {
+            domains: &[],
+            text: "An architecture tag, an external initializer address or an unexamined program is not a known value. Such images stay Unresolved and receive no family ID.",
+        },
+    ],
+};
 const ID: &str = "startup-inputs-initialization";
 
 fn predicate(term: &inputs::Term) -> Value {
@@ -141,6 +163,9 @@ impl Filter for Initialization {
     }
     fn name(&self) -> &'static str {
         "Startup inputs / initialization"
+    }
+    fn rules(&self) -> Option<&'static super::Rules> {
+        Some(&RULES)
     }
     fn inspect(&self, context: &Context<'_>) -> Assessment {
         inspect(context)

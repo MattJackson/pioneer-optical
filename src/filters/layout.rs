@@ -19,12 +19,29 @@ pub struct LayoutFilter;
 /// Registered persistent parameter-layout owner.
 pub static FILTER: LayoutFilter = LayoutFilter;
 
+/// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
+static RULES: super::Rules = super::Rules {
+    description: "Locates the retained primary parameter words and compares their complete native record contract: address mode and base, record size and count, header size, word encoding and record-selection rule. Geometry identifies the storage; this identifies the records within it.",
+    role: super::Role::Hardware,
+    correctability: super::Correctability::Never,
+    correction: "Never corrected. Any known layout difference refuses. Where the installed record region overlaps non-erased bytes of the target Normal, the refusal reports that collision.",
+    policies: &[
+        super::Policy {
+            domains: &[],
+            text: "A layout read through a Kernel-resident reader needs the exact paired Kernel; without it the layout stays Unresolved and the image has no family ID.",
+        },
+    ],
+};
+
 impl Filter for LayoutFilter {
     fn id(&self) -> &'static str {
         "persistent-parameter-layout"
     }
     fn name(&self) -> &'static str {
         "Persistent parameter layout"
+    }
+    fn rules(&self) -> Option<&'static super::Rules> {
+        Some(&RULES)
     }
     fn inspect(&self, context: &Context<'_>) -> Assessment {
         match native(context) {

@@ -7,7 +7,10 @@ architecture dispatch belong inside the owner. The coordinator has no parallel
 list of filters for SAT1, SAT8, SAT9, ATA or SCSI.
 
 Add an owner module and one entry in `filters::filters()`. Give it a unique,
-stable ID and a presentation name. `inspect` returns its role and a typed Known,
+stable ID, a presentation name and its declared `Rules` (`Filter::rules`):
+plain-language description, role, `Correctability`, correction policy and any
+platform-scoped policies. The generated hardware matrix page renders those
+statements verbatim, so write only what the owner's code enforces. `inspect` returns its role and a typed Known,
 Unresolved, Conflicting or positively NotApplicable finding. A hardware owner
 contributes to both keys automatically, in sorted ID order. The operational
 startup owner is evaluated and planned without being serialized as hardware.
@@ -52,5 +55,5 @@ The 722-image native replay reports 626 complete identities, 96 unresolved and
 two previous groups split by additional native findings. Tests cover owner
 registration, typed recognition, canonical identity ordering, unknown refusal,
 operation composition, postcondition verification and parameter transactions.
-The Hardware Matrix exposes native findings, required unknowns and correction
-capability separately. See [v7 identity](family-v7.md) for canonical serialization.
+The Hardware Matrix ([generated from code](hardware-matrix.md)) exposes native
+findings, required unknowns and correction capability separately. See [v7 identity](family-v7.md) for canonical serialization.

@@ -82,6 +82,58 @@ pub enum Role {
     Operational,
 }
 
+/// How an owner treats a difference between installed and requested firmware.
+/// This is declared metadata; `Filter::plan` remains the enforcing decision and
+/// tests pin that the two agree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "envelope", derive(serde::Serialize))]
+pub enum Correctability {
+    /// Values must match. Every known difference refuses.
+    Never,
+    /// The owner plans a guarded firmware correction for proven pairs only;
+    /// every other difference refuses.
+    Guarded,
+    /// An operational requirement planned against the requested firmware,
+    /// never a hardware identity input.
+    Operational,
+}
+
+/// One owner rule, scoped to platform domains (empty means every platform).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Policy {
+    /// Platforms the statement applies to; empty applies to all.
+    pub domains: &'static [identity::Domain],
+    /// Plain-language statement of what the owner's code enforces.
+    pub text: &'static str,
+}
+
+/// Plain-language rules an owner declares next to the code enforcing them.
+/// Reports render these verbatim; they never feed identity or decisions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rules {
+    /// What the filter identifies, in plain language.
+    pub description: &'static str,
+    /// Hardware identity field or operational requirement.
+    pub role: Role,
+    /// Declared correction class, pinned against `plan` by tests.
+    pub correctability: Correctability,
+    /// One-sentence correction policy shared by every platform.
+    pub correction: &'static str,
+    /// Further enforced statements, optionally platform-scoped.
+    pub policies: &'static [Policy],
+}
+impl Rules {
+    /// Statements applying to one platform domain, in declaration order.
+    pub fn policies_for(
+        &self,
+        domain: identity::Domain,
+    ) -> impl Iterator<Item = &'static Policy> + '_ {
+        self.policies
+            .iter()
+            .filter(move |p| p.domains.is_empty() || p.domains.contains(&domain))
+    }
+}
+
 /// Recognition outcome. A detector miss is never a known default or absence.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "envelope", derive(serde::Serialize))]
@@ -325,6 +377,11 @@ pub trait Filter: Sync {
     fn id(&self) -> &'static str;
     /// Human-readable name; never used to construct family identity.
     fn name(&self) -> &'static str;
+    /// Plain-language rules declared beside this owner's enforcing code.
+    /// Every registered owner declares them; `None` is only for test owners.
+    fn rules(&self) -> Option<&'static Rules> {
+        None
+    }
     /// Recognize native facts for any platform, explicitly retaining misses.
     fn inspect(&self, context: &Context<'_>) -> Assessment;
     /// Select live parameter actions for this exact target. New owners can

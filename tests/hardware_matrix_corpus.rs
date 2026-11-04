@@ -1,198 +1,191 @@
-//! Per-image conformance with the owner's hardware matrix over held firmware.
+//! Generate the hardware matrix from the private hoard and check its invariants.
 //!
-//! Private-runner job: `PIONEER_HOARD=<firmware-extractor hoard> cargo test
-//! --release --all-features --test hardware_matrix_corpus -- --ignored`.
-//! Every held package is decoded; its registered as-is and candidate family
-//! identifiers and its matching family must equal the matrix rows, unresolved rows must stay
-//! unresolved, Kernel-getter startup rows must refuse selection, and no pair
-//! inside one matrix family may be admitted with a phase correction unless its
-//! complete sled mechanism bundle is bound and identical.
+//! Private-runner job:
+//! `PIONEER_HOARD=<firmware-extractor hoard> cargo test --release --all-features
+//! --test hardware_matrix_corpus -- --ignored --nocapture`.
+//! Optionally `PIONEER_MATRIX_OUT=<path>.html` keeps the generated page.
+//!
+//! The page model is built exactly as `examples/hardware_matrix` builds it.
+//! Every held package must be listed; every distinct Normal must be analyzed or
+//! reported as undecodable; family IDs must equal the update path's families;
+//! no family may cross a platform; unresolved images must carry their reasons;
+//! and no pair inside one matching family may be admitted with a phase
+//! correction unless its complete sled mechanism bundle is bound and identical.
 #![cfg(feature = "envelope")]
-use pioneer_optical::compatibility::Firmware;
-use pioneer_optical::envelope::Envelope;
-use pioneer_optical::filters::{identity, startup, Context};
-use pioneer_optical::image::layout::Observation;
-use std::collections::BTreeMap;
-use std::path::Path;
+#[path = "../examples/hardware_matrix/page.rs"]
+mod page;
 
-fn tar_members(tar: &[u8]) -> Vec<(String, Vec<u8>)> {
-    let mut out = Vec::new();
-    let mut at = 0;
-    while at + 512 <= tar.len() {
-        let h = &tar[at..at + 512];
-        if h.iter().all(|b| *b == 0) {
-            break;
-        }
-        let text = |b: &[u8]| {
-            String::from_utf8_lossy(&b[..b.iter().position(|c| *c == 0).unwrap_or(b.len())])
-                .into_owned()
-        };
-        let mut name = text(&h[..100]);
-        let prefix = text(&h[345..500]);
-        if !prefix.is_empty() {
-            name = format!("{prefix}/{name}");
-        }
-        let size = usize::from_str_radix(text(&h[124..136]).trim(), 8).unwrap();
-        if h[156] == b'0' || h[156] == 0 {
-            out.push((name, tar[at + 512..at + 512 + size].to_vec()));
-        }
-        at += 512 + size.div_ceil(512) * 512;
-    }
-    out
-}
+use pioneer_optical::compatibility::{Correction, Firmware};
+use pioneer_optical::filters::{phase::bundle, Finding, Role};
+use std::collections::{BTreeMap, BTreeSet};
 
-struct Image {
+struct Held {
+    as_is: String,
     hardware: String,
-    normal: Envelope,
-    kernel: Option<Envelope>,
+    normal: Vec<u8>,
+    kernel: Option<Vec<u8>>,
 }
-
-fn firmware(i: &Image) -> Firmware<'_> {
-    Firmware {
-        hardware: &i.hardware,
-        normal: &i.normal.image,
-        kernel: i.kernel.as_ref().map(|k| k.image.as_slice()),
+impl Held {
+    fn firmware(&self) -> Firmware<'_> {
+        Firmware {
+            hardware: &self.hardware,
+            normal: &self.normal,
+            kernel: self.kernel.as_deref(),
+        }
     }
 }
 
 #[test]
-#[ignore = "requires PIONEER_HOARD (private firmware hoard); private-runner conformance job"]
-fn every_held_image_matches_the_hardware_matrix() {
+#[ignore = "requires PIONEER_HOARD (private firmware hoard); private-runner job"]
+fn generated_matrix_holds_its_invariants_over_the_hoard() {
     let root = std::path::PathBuf::from(std::env::var("PIONEER_HOARD").expect("PIONEER_HOARD"));
-    let matrix: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/hardware-matrix.json")).unwrap();
-    let rows: BTreeMap<&str, &serde_json::Value> = matrix["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| (r["component"].as_str().unwrap(), r))
-        .collect();
-    let index: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(root.join("index/packages.json")).unwrap()).unwrap();
-    let mut images = BTreeMap::new();
-    for package in index["packages"].as_array().unwrap() {
-        let components = package["components"].as_array().unwrap();
-        let normal_entry = components.iter().find(|c| c["role"] == "normal").unwrap();
-        let component = normal_entry["sha256"].as_str().unwrap().to_owned();
-        if images.contains_key(&component) {
-            continue;
-        }
-        let members = tar_members(
-            &std::fs::read(root.join(Path::new(package["path"].as_str().unwrap()))).unwrap(),
-        );
-        let member = |role: &str| {
-            let name = components.iter().find(|c| c["role"] == role)?["member"].as_str()?;
-            members
-                .iter()
-                .find(|(n, _)| n == name)
-                .map(|(_, d)| d.clone())
-        };
-        let kernel = member("kernel").and_then(|k| Envelope::load(&k).ok());
-        let bytes = member("normal").unwrap();
-        let normal = match &kernel {
-            Some(k) => Envelope::load_with_kernel(&bytes, k),
-            None => Envelope::load(&bytes),
-        };
-        let Ok(normal) = normal else { continue };
-        images.insert(
-            component,
-            Image {
-                hardware: normal.info().hardware_version.clone(),
-                normal,
-                kernel,
-            },
-        );
-    }
+    let (packages, index) = page::hoard_packages(&root).unwrap();
     let mut mismatches = Vec::new();
-    let mut families: BTreeMap<String, Vec<&str>> = BTreeMap::new();
-    let mut assignments = BTreeMap::new();
-    for (component, image) in &images {
-        let Some(row) = rows.get(component.as_str()) else {
-            // Held after the matrix was generated: reported, never judged.
-            eprintln!("{component}: held image absent from the matrix");
-            continue;
-        };
-        let firmware = Firmware {
-            hardware: &image.hardware,
-            normal: &image.normal.image,
-            kernel: image.kernel.as_ref().map(|k| k.image.as_slice()),
-        };
-        let context = Context::new(firmware);
-        let found = identity::discover(&context).map(|i| {
-            (
-                format!("{:016x}", i.as_is.fingerprint()),
-                format!("{:016x}", i.candidate.fingerprint()),
-            )
-        });
-        let expected = row["as_is"]
-            .as_str()
-            .map(|a| (a.to_owned(), row["candidate"].as_str().unwrap().to_owned()));
-        if found != expected {
-            mismatches.push(format!("{component}: code {found:?} matrix {expected:?}"));
-        }
-        // The matching family (offline: Normal plus its own paired Kernel) is the
-        // matrix candidate key, built only from facts no owner corrects.
-        let matching = pioneer_optical::image::family_with_context(
-            &image.normal.image,
-            &image.hardware,
-            image.kernel.as_ref().map(|k| k.image.as_slice()),
+    let mut normalized = BTreeMap::new();
+    let (analyses, failures) = page::analyze_hoard(&root, &packages, |_, decoded, analysis| {
+        let kernel = decoded.kernel.as_ref();
+        // The page's family is the update path's matching family.
+        let family = pioneer_optical::image::family_with_context(
+            &decoded.normal.image,
+            &analysis.hardware,
+            kernel.map(|k| k.image.as_slice()),
         )
-        .map(|f| u64::from_str_radix(&f.to_string(), 16).unwrap());
-        let candidate = row["candidate"]
-            .as_str()
-            .map(|c| u64::from_str_radix(c, 16).unwrap());
-        if matching != candidate {
+        .map(|f| f.to_string());
+        if family != analysis.candidate {
             mismatches.push(format!(
-                "{component}: matching family {matching:?} matrix {candidate:?}"
+                "{}: page {:?} update path {family:?}",
+                analysis.component, analysis.candidate
             ));
         }
-        if let Observation::Known(phase) = &context.native_phase {
-            assignments.insert(component.as_str(), phase.assignment);
-        }
-        if let Some((_, candidate)) = found {
-            families.entry(candidate).or_default().push(component);
-        }
-        let display = matrix["startup_009f"][component.as_str()].as_str();
-        if display.is_some_and(|d| d.starts_with("Kernel needed"))
-            && startup::selection(&context).is_ok()
-        {
-            mismatches.push(format!(
-                "{component}: startup selected despite Kernel getter"
-            ));
-        }
-    }
-    for list in matrix["sat1_kernel_getter_needed"].as_array().unwrap() {
-        assert!(images.contains_key(list.as_str().unwrap()));
-    }
-    // Phase corrections inside a matrix family need a bound, identical bundle.
-    for members in families.values() {
-        for a in members {
-            for b in members {
-                // Only pairs whose phase assignments differ can plan a phase edit.
-                match (assignments.get(a), assignments.get(b)) {
-                    (Some(p), Some(q)) if p != q => {}
-                    _ => continue,
-                }
-                let (x, y) = (&images[*a], &images[*b]);
-                let Ok(plan) = pioneer_optical::compatibility::plan(firmware(x), firmware(y))
-                else {
-                    continue;
-                };
-                let phase = plan
-                    .corrections()
-                    .iter()
-                    .any(|c| matches!(c, pioneer_optical::compatibility::Correction::Phase { .. }));
-                if phase {
-                    let bound = |i: &Image| {
-                        pioneer_optical::filters::phase::bundle::bind(&i.normal.image)
-                            .map(|b| b.without_coil())
-                    };
-                    if !matches!((bound(x), bound(y)), (Ok(p), Ok(q)) if p == q) {
-                        mismatches.push(format!("{a} -> {b}: phase admitted without bundle"));
-                    }
+        if let Some(k) = kernel {
+            if let Some(f) = decoded.normal.family_with_kernel(k) {
+                if Some(f.to_string()) != analysis.candidate {
+                    mismatches.push(format!("{}: Envelope family {f}", analysis.component));
                 }
             }
         }
+        if analysis.as_is.is_some() && analysis.as_is != analysis.candidate {
+            normalized.insert(
+                analysis.component.clone(),
+                Held {
+                    as_is: analysis.as_is.clone().unwrap(),
+                    hardware: analysis.hardware.clone(),
+                    normal: decoded.normal.image.clone(),
+                    kernel: kernel.map(|k| k.image.clone()),
+                },
+            );
+        }
+    });
+    let source = page::Source {
+        crate_version: env!("CARGO_PKG_VERSION").into(),
+        revision: "corpus-test".into(),
+        hoard: format!("sha256:{}", page::sha256(&index)),
+    };
+    let data = page::data(&packages, &analyses, &failures, &source, None).unwrap();
+    let html = page::render(&data);
+    if let Some(out) = std::env::var_os("PIONEER_MATRIX_OUT") {
+        std::fs::write(out, &html).unwrap();
     }
+    eprintln!(
+        "{} packages, {} images, {} with family ID, {} undecodable",
+        packages.len(),
+        analyses.len(),
+        data["summary"]["known"],
+        failures.len()
+    );
+
+    // Every package is listed, every distinct Normal is analyzed or reported.
+    assert_eq!(data["records"].as_array().unwrap().len(), packages.len());
+    let components: BTreeSet<_> = packages.iter().map(|p| p.component.as_str()).collect();
+    let covered: BTreeSet<_> = analyses
+        .iter()
+        .map(|a| a.component.as_str())
+        .chain(failures.iter().map(|f| f.component.as_str()))
+        .collect();
+    assert_eq!(components, covered);
+    for component in &components {
+        assert!(
+            html.contains(component),
+            "{component} missing from the page"
+        );
+    }
+
+    let mut platforms: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+    for a in &analyses {
+        // A family ID exists exactly when every hardware finding is established.
+        let open: Vec<_> = a
+            .filters
+            .iter()
+            .filter(|f| {
+                f.role == Role::Hardware
+                    && matches!(f.finding, Finding::Unresolved(_) | Finding::Conflicting(_))
+            })
+            .collect();
+        let domain = pioneer_optical::filters::identity::Domain::from_hardware(&a.hardware);
+        if a.as_is.is_some() != a.candidate.is_some()
+            || (domain.is_some() && a.candidate.is_none() != !open.is_empty())
+        {
+            mismatches.push(format!("{}: identity/finding disagreement", a.component));
+        }
+        if open.iter().any(|f| f.evidence.trim().is_empty()) {
+            mismatches.push(format!("{}: unresolved without a reason", a.component));
+        }
+        if let Some(c) = &a.candidate {
+            platforms
+                .entry(c)
+                .or_default()
+                .insert(page::platform(&a.hardware));
+        }
+    }
+    for (family, set) in &platforms {
+        if set.len() > 1 {
+            mismatches.push(format!("{family}: crosses platforms {set:?}"));
+        }
+    }
+
+    // Phase corrections inside a matching family need a bound, identical bundle.
+    let family: BTreeMap<&str, &str> = analyses
+        .iter()
+        .filter_map(|a| Some((a.component.as_str(), a.candidate.as_deref()?)))
+        .collect();
+    // Only pairs whose as-is identities differ can plan a phase edit.
+    let pairs: Vec<_> = normalized
+        .iter()
+        .flat_map(|(a, x)| normalized.iter().map(move |(b, y)| (a, x, b, y)))
+        .filter(|(a, x, b, y)| x.as_is != y.as_is && family[a.as_str()] == family[b.as_str()])
+        .collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let found = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..std::thread::available_parallelism().map_or(4, |n| n.get()) {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some((a, x, b, y)) = pairs.get(i) else {
+                    break;
+                };
+                let Ok(plan) = pioneer_optical::compatibility::plan(x.firmware(), y.firmware())
+                else {
+                    continue;
+                };
+                if plan
+                    .corrections()
+                    .iter()
+                    .any(|c| matches!(c, Correction::Phase { .. }))
+                {
+                    let bound = |h: &Held| bundle::bind(&h.normal).map(|b| b.without_coil());
+                    if !matches!((bound(x), bound(y)), (Ok(p), Ok(q)) if p == q) {
+                        found
+                            .lock()
+                            .unwrap()
+                            .push(format!("{a} -> {b}: phase admitted without bundle"));
+                    }
+                }
+            });
+        }
+    });
+    let mut found = found.into_inner().unwrap();
+    found.sort();
+    eprintln!("{} same-family phase pairs planned", pairs.len());
+    mismatches.extend(found);
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }

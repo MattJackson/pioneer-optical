@@ -25,6 +25,7 @@ include = [
     "/examples/flash.rs",
     "/examples/image_scan.rs",
     "/examples/hardware_report.rs",
+    "/examples/hardware_matrix/**",
     "/examples/hardware_probe.rs",
     "/examples/logging_scan.rs",
     "/examples/startup_corpus.rs",
@@ -91,6 +92,11 @@ serde_json = "1"
 
 [[example]]
 name = "hardware_report"
+required-features = ["envelope"]
+
+[[example]]
+name = "hardware_matrix"
+path = "examples/hardware_matrix/main.rs"
 required-features = ["envelope"]
 
 [[example]]

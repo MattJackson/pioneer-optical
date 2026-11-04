@@ -11,12 +11,33 @@ pub struct GeometryFilter;
 /// Registered native storage-geometry owner.
 pub static FILTER: GeometryFilter = GeometryFilter;
 
+/// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
+static RULES: super::Rules = super::Rules {
+    description: "Identifies the persistent storage the firmware uses: H8 bank markers and spacing or native bank bases, ATA flash regions or serial word ranges, SCSI serial records. Addresses, marker constants, record widths and bank spacing are different quantities; geometry does not describe the calibration records stored inside it.",
+    role: super::Role::Hardware,
+    correctability: super::Correctability::Never,
+    correction: "Never corrected. Values must match; equal geometry does not authorize a bank migration, and a differing storage contract refuses under every policy, including the Recovery family override.",
+    policies: &[
+        super::Policy {
+            domains: &[],
+            text: "Matching geometry does not imply a matching parameter layout; the persistent parameter layout is a separate required filter.",
+        },
+        super::Policy {
+            domains: &[],
+            text: "A storage reader that is not recognized, or that needs resident code which is not supplied, stays Unresolved; no default geometry is assumed.",
+        },
+    ],
+};
+
 impl Filter for GeometryFilter {
     fn id(&self) -> &'static str {
         "persistent-storage-geometry"
     }
     fn name(&self) -> &'static str {
         "Persistent storage geometry"
+    }
+    fn rules(&self) -> Option<&'static super::Rules> {
+        Some(&RULES)
     }
     fn inspect(&self, context: &Context<'_>) -> Assessment {
         if let Some(sat) = &context.sat {

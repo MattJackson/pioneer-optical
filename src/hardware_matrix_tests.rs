@@ -1,54 +1,89 @@
-//! Conformance of code decisions with the owner's hardware matrix.
+//! Code-declared hardware-matrix rules agree with the code that enforces them.
 //!
-//! `tests/fixtures/hardware-matrix.json` is extracted verbatim from the matrix
-//! HTML by `tests/support/extract_hardware_matrix.py` (source SHA-256 recorded
-//! in the fixture). These CI checks pin every policy the matrix states that can
-//! be exercised without held firmware; the per-image family hashes are checked
-//! against the private hoard by the ignored `hardware_matrix_corpus` test.
+//! Each registered owner declares its rules (`Filter::rules`); the generated
+//! hardware matrix page renders them verbatim. These checks pin that every
+//! statement there is backed by the owner's actual decisions. The per-image
+//! families are checked against the private hoard by the ignored
+//! `hardware_matrix_corpus` test.
 use crate::compatibility::{Error, Firmware};
+use crate::filters::identity::Domain;
 use crate::filters::phase::{bundle, native, FILTER as PHASE};
-use crate::filters::{Context, Filter, Transition};
-use serde_json::Value;
+use crate::filters::{Assessment, Context, Correctability, Filter, Role, Transition, Value};
 
-fn matrix() -> Value {
-    serde_json::from_str(include_str!("../tests/fixtures/hardware-matrix.json")).unwrap()
-}
-
-fn hex(value: &Value, len: usize) -> bool {
-    value
-        .as_str()
-        .is_some_and(|s| s.len() == len && s.bytes().all(|b| b.is_ascii_hexdigit()))
+fn rules(id: &str) -> &'static crate::filters::Rules {
+    crate::filters::filters()
+        .iter()
+        .find(|f| f.id() == id)
+        .and_then(|f| f.rules())
+        .unwrap()
 }
 
 #[test]
-fn fixture_names_the_registered_scheme_owners_and_every_image_once() {
-    let m = matrix();
-    assert!(hex(&m["source"]["sha256"], 64));
-    assert_eq!(m["scheme"], crate::image::MATRIX_FAMILY_SCHEME);
-    let mut owners: Vec<_> = crate::filters::filters().iter().map(|f| f.id()).collect();
-    owners.sort_unstable();
-    let listed: Vec<_> = m["owner_ids"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
-    assert_eq!(owners, listed);
-    let rows = m["rows"].as_array().unwrap();
-    assert_eq!(rows.len() as u64, m["counts"]["images"].as_u64().unwrap());
-    let mut components = std::collections::BTreeSet::new();
-    let mut known = 0;
-    for row in rows {
-        assert!(hex(&row["component"], 64));
-        assert!(components.insert(row["component"].as_str().unwrap()));
-        // A family identifier exists only when every required value is known.
-        match (&row["as_is"], &row["candidate"]) {
-            (Value::Null, Value::Null) => {}
-            (a, c) if hex(a, 16) && hex(c, 16) => known += 1,
-            other => panic!("partial family identifier {other:?}"),
+fn every_registered_filter_declares_rules_matching_its_behaviour() {
+    let empty = |hardware| {
+        Context::new(Firmware {
+            hardware,
+            normal: &[],
+            kernel: None,
+        })
+    };
+    for filter in crate::filters::filters() {
+        let rules = filter.rules().expect("registered filter declares rules");
+        assert!(!rules.description.trim().is_empty(), "{}", filter.id());
+        assert!(!rules.correction.trim().is_empty(), "{}", filter.id());
+        assert!(rules.policies.iter().all(|p| !p.text.trim().is_empty()));
+        assert_eq!(
+            rules.correctability == Correctability::Operational,
+            rules.role == Role::Operational,
+            "{}",
+            filter.id()
+        );
+        for domain in Domain::ALL {
+            let hardware = match domain {
+                Domain::Sat1 => "SAT 1050",
+                Domain::Sat8 => "SAT 8600",
+                Domain::Sat9 => "SAT 9600",
+                Domain::Ata => "ATA 0005",
+                Domain::Scsi => "SCSI0001",
+            };
+            let context = empty(hardware);
+            assert_eq!(filter.inspect(&context).role, rules.role, "{}", filter.id());
+            if rules.correctability != Correctability::Never {
+                continue;
+            }
+            // Declared never-correctable: a known difference refuses, a match passes.
+            let at = |value| Assessment::known(filter.id(), rules.role, Value::U8(value), "test");
+            let transition = Transition {
+                installed: &context,
+                target: &context,
+            };
+            assert!(filter.plan(&transition, &at(1), &at(2)).is_err());
+            assert!(matches!(filter.plan(&transition, &at(1), &at(1)), Ok(None)));
         }
     }
-    assert_eq!(known, m["counts"]["known"].as_u64().unwrap());
+    assert_eq!(
+        rules("persistent-storage-geometry").correctability,
+        Correctability::Never
+    );
+    assert_eq!(rules("phase").correctability, Correctability::Guarded);
+    assert_eq!(
+        rules("startup-prerequisite").correctability,
+        Correctability::Operational
+    );
+}
+
+#[test]
+fn identity_partitions_platforms_and_documents_it() {
+    assert_eq!(Domain::ALL.len(), 5);
+    for domain in Domain::ALL {
+        assert!(crate::filters::identity::PARTITION.contains(domain.label()));
+    }
+    let mut body = alloc::vec![0xff; 0x2000];
+    crate::image::matrix::install_test_contract(&mut body, 0x12);
+    let family = |hardware| crate::image::family_with_context(&body, hardware, None);
+    assert!(family("SAT 8600").is_some());
+    assert_eq!(family("SAT 8600"), family("SAT 8801"));
+    assert_ne!(family("SAT 8600"), family("SAT 9600"));
 }
 
 fn split_word(bound: bool) -> (Vec<u8>, Vec<u8>) {
@@ -103,11 +138,9 @@ fn phase_plan(hardware: &'static str, installed: &[u8], target: &[u8]) -> Result
 
 #[test]
 fn sat1_phase_correction_is_suspended() {
-    let m = matrix();
-    assert!(m["phase_correction_policy"]
-        .as_str()
-        .unwrap()
-        .starts_with("SAT1 correction claims are suspended"));
+    assert!(rules("phase")
+        .policies_for(Domain::Sat1)
+        .any(|p| p.domains == [Domain::Sat1] && p.text.contains("suspended")));
     // Held SAT1 phase programs bind no sled mechanism bundle.
     let (direct, swapped) = split_word(false);
     for (a, b) in [(&direct, &swapped), (&swapped, &direct)] {
@@ -117,12 +150,11 @@ fn sat1_phase_correction_is_suspended() {
 
 #[test]
 fn phase_order_is_not_changed_on_assignment_evidence_alone() {
-    let m = matrix();
-    assert!(m["phase_assignment_limits"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|l| l == "Changing order is not approved by assignment evidence alone."));
+    for domain in [Domain::Sat8, Domain::Sat9] {
+        assert!(rules("phase")
+            .policies_for(domain)
+            .any(|p| p.text.contains("mechanism bundle")));
+    }
     for hardware in ["SAT 8A10", "SAT 9621"] {
         // Assignment-only evidence (no bound mechanism bundle) refuses.
         let (direct, swapped) = split_word(false);
@@ -145,9 +177,9 @@ fn phase_order_is_not_changed_on_assignment_evidence_alone() {
 
 #[test]
 fn layout_is_required_and_never_corrected() {
-    let m = matrix();
-    assert_eq!(m["layout"]["required"], Value::Bool(true));
-    assert_eq!(m["layout"]["correctable"], Value::Bool(false));
+    let declared = rules("persistent-parameter-layout");
+    assert_eq!(declared.role, Role::Hardware);
+    assert_eq!(declared.correctability, Correctability::Never);
     let layout = crate::filters::filters()
         .iter()
         .find(|f| f.id() == "persistent-parameter-layout")
@@ -183,44 +215,12 @@ fn layout_is_required_and_never_corrected() {
 }
 
 #[test]
-fn startup_kernel_getter_images_are_listed_unresolved() {
-    let m = matrix();
-    let needed: Vec<_> = m["sat1_kernel_getter_needed"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
-    assert_eq!(needed.len(), 3);
-    for component in &needed {
-        assert_eq!(
-            m["startup_009f"][component],
-            "Kernel needed: 0x404622 getter"
-        );
+fn startup_rules_state_the_kernel_getter_refusal() {
+    for domain in [Domain::Sat1, Domain::Sat8, Domain::Sat9] {
+        assert!(rules("startup-prerequisite")
+            .policies_for(domain)
+            .any(|p| p.text.contains("Kernel-resident getter")));
     }
-    let flagged = m["startup_009f"]
-        .as_object()
-        .unwrap()
-        .values()
-        .filter(|v| v.as_str().is_some_and(|s| s.starts_with("Kernel needed")))
-        .count();
-    assert_eq!(flagged, needed.len());
-}
-
-#[test]
-fn bank_conversion_and_212u_213u_are_not_sanctioned() {
-    let m = matrix();
-    assert_eq!(
-        m["bank_conversion_status"],
-        "not established as correctable"
-    );
-    let kat = m["compatibility_kats"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|k| k["name"] == "212U ≠ 213U without conversion")
-        .unwrap();
-    assert_eq!(kat["same"], Value::Bool(false));
 }
 
 #[test]

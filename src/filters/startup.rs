@@ -18,6 +18,32 @@ mod v850;
 pub struct Startup;
 /// Registered startup prerequisite filter.
 pub static FILTER: Startup = Startup;
+
+/// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
+static RULES: super::Rules = super::Rules {
+    description: "Identifies what the firmware requires before it starts: the accepted value of H8 startup word 0x009F, the ATA 0x00D9 predicate, the V850 expected Kernel identity, or the SCSI resident checksum and image-pair header. Evaluated on every image and planned per update; never part of the hardware family.",
+    role: super::Role::Operational,
+    correctability: super::Correctability::Operational,
+    correction: "Planned against the requested firmware. SAT platforms select a live 0x009F value with read/change/verify and rollback; other platforms have read-only prerequisites and no file edit.",
+    policies: &[
+        super::Policy {
+            domains: &[super::identity::Domain::Sat1, super::identity::Domain::Sat8, super::identity::Domain::Sat9],
+            text: "Selection uses the bound accepted word, otherwise the deliberate neutral 0x009F = 0xFFFF. It refuses, including the neutral value, when Normal reads persistent words through a Kernel-resident getter whose Kernel is not supplied.",
+        },
+        super::Policy {
+            domains: &[super::identity::Domain::Sat1, super::identity::Domain::Sat8, super::identity::Domain::Sat9],
+            text: "Where a native conditional gate is bound, 0xFE23 is accepted unconditionally and 0xFE09 only when the complete bound predicate holds.",
+        },
+        super::Policy {
+            domains: &[super::identity::Domain::Ata],
+            text: "An equal 0x00D9 predicate needs no change; a different one has no approved write recipe and refuses. V850: the paired Kernel must carry the expected Kernel identity.",
+        },
+        super::Policy {
+            domains: &[super::identity::Domain::Scsi],
+            text: "The resident checksum and the matching 16-byte image-pair header must hold; otherwise the update refuses.",
+        },
+    ],
+};
 const ID: &str = "startup-prerequisite";
 
 fn h8_value(
@@ -159,6 +185,9 @@ impl Filter for Startup {
     }
     fn name(&self) -> &'static str {
         "Startup prerequisite"
+    }
+    fn rules(&self) -> Option<&'static super::Rules> {
+        Some(&RULES)
     }
     fn inspect(&self, context: &Context<'_>) -> Assessment {
         inspect(context)

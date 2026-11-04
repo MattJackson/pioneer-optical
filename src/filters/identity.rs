@@ -21,6 +21,18 @@ pub enum Domain {
     Scsi = 5,
 }
 impl Domain {
+    /// Every domain, in reporting order.
+    pub const ALL: [Self; 5] = [Self::Sat1, Self::Sat8, Self::Sat9, Self::Scsi, Self::Ata];
+    /// Stable platform label used by reports.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sat1 => "SAT 1xxx",
+            Self::Sat8 => "SAT 8xxx",
+            Self::Sat9 => "SAT 9xxx",
+            Self::Ata => "ATA",
+            Self::Scsi => "SCSI",
+        }
+    }
     /// Parse a complete hardware header, never a model or partial tag.
     pub fn from_hardware(hardware: &str) -> Option<Self> {
         let bytes = hardware.as_bytes();
@@ -40,6 +52,21 @@ impl Domain {
         }
     }
 }
+
+/// Platform partition enforced by [`Key::canonical_bytes`]: the domain byte
+/// precedes every filter value.
+pub const PARTITION: &str = "Families never cross a platform. The identity starts with the \
+structured hardware domain (SAT 1xxx, SAT 8xxx, SAT 9xxx, ATA or SCSI), so for example SAT8 and \
+SAT9 images never share a family even when every filter value is equal. A tag outside these \
+domains produces no identity.";
+
+/// Identity rules enforced by [`discover`] and the registered owners.
+pub const RULES: &[&str] = &[
+    "Every registered filter runs on every image. Hardware filters form the identity; operational requirements are evaluated and planned per update but never enter it.",
+    "As-is identity: every hardware value before any correction. Matching (candidate) family: each owner's projection with exactly what it may correct removed, so it is built only from facts no owner corrects.",
+    "A required hardware value that is Unresolved or Conflicting produces no family ID. Unresolved values never compare equal; a positive not-applicable proof compares by its proof tag.",
+    "Family equality never authorizes a write. Every remaining difference must pass its owner's correction proof, or the pair refuses at that step.",
+];
 
 /// The semantic identity contribution of one hardware owner.
 #[derive(Clone, Debug, PartialEq, Eq)]

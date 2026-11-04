@@ -25,6 +25,11 @@ const MARKERS: [u32; 2] = [0x10, 0x8010];
 /// Versioned validator, its loader-flag helper, the capacity base calculation
 /// and the adjacent startup calls binding the two.
 fn versioned() -> Vec<u8> {
+    versioned_with(MAGIC, MARKERS)
+}
+
+/// [`versioned`] with another header magic and marker offsets.
+fn versioned_with(magic: u32, markers: [u32; 2]) -> Vec<u8> {
     let mut b = vec![0; 0x4000];
     let v = VALIDATOR;
     put(
@@ -34,7 +39,7 @@ fn versioned() -> Vec<u8> {
             1, 0, 0x6d, 0xf3, 1, 0x20, 0x6d, 0xf4, 0x79, 0x37, 0, 6, 0x7a, 5,
         ],
     );
-    put32(&mut b, v + 0xe, MAGIC);
+    put32(&mut b, v + 0xe, magic);
     put(&mut b, v + 0x12, &[1, 0, 0x6f, 0xf5, 0, 2, 0x7a, 6]);
     put32(&mut b, v + 0x1a, SLOT);
     put(
@@ -42,13 +47,13 @@ fn versioned() -> Vec<u8> {
         v + 0x1e,
         &[1, 0, 0x69, 0x63, 0x0f, 0xb4, 0x7a, 0x14],
     );
-    put32(&mut b, v + 0x26, MARKERS[0] + 4);
+    put32(&mut b, v + 0x26, markers[0] + 4);
     put(
         &mut b,
         v + 0x2a,
         &[0x69, 0x41, 0x69, 0xf1, 1, 0, 0x78, 0x30, 0x6b, 0x22],
     );
-    put32(&mut b, v + 0x34, MARKERS[0]);
+    put32(&mut b, v + 0x34, markers[0]);
     put(
         &mut b,
         v + 0x38,
@@ -56,7 +61,7 @@ fn versioned() -> Vec<u8> {
             0x7a, 0x22, 0xff, 0xff, 0xff, 0xff, 0x46, 0x38, 1, 0, 0x78, 0x30, 0x6b, 0x20,
         ],
     );
-    put32(&mut b, v + 0x46, MARKERS[1]);
+    put32(&mut b, v + 0x46, markers[1]);
     put(&mut b, v + 0x4a, &[0x0b, 0x70, 0x46, 0x2a]);
     put(
         &mut b,
@@ -67,7 +72,7 @@ fn versioned() -> Vec<u8> {
     );
     put_call(&mut b, v + 0x5c, 0x41_3800);
     put(&mut b, v + 0x60, &[1, 0, 0x69, 0x60, 0x7a, 0x10]);
-    put32(&mut b, v + 0x66, MARKERS[0]);
+    put32(&mut b, v + 0x66, markers[0]);
     put(&mut b, v + 0x6a, &[0x0f, 0xf1, 0x0b, 0xf1, 0x79, 2, 0, 2]);
     put_call(&mut b, v + 0x72, 0x41_3800);
     put(&mut b, v + 0x76, &[0x40, 0x16]);
@@ -76,7 +81,7 @@ fn versioned() -> Vec<u8> {
         v + 0x78,
         &[0x1f, 0xd2, 0x47, 0x12, 1, 0, 0x78, 0x30, 0x6b, 0x20],
     );
-    put32(&mut b, v + 0x82, MARKERS[1]);
+    put32(&mut b, v + 0x82, markers[1]);
     put(&mut b, v + 0x86, &[0x1f, 0xd0, 0x47, 4]);
     put_call(&mut b, v + 0x8a, BASE + LOADER_HELPER as u32);
     put(&mut b, v + 0x8e, &[0x79, 0x17, 0, 6]);
@@ -444,4 +449,44 @@ fn kernel_owned_banks_recover_selector_and_sequence_contracts() {
     // Kernel-owned storage needs a recognized receiver and a complete Kernel.
     assert_eq!(analyze_pair(&[0; 0x100], Some(&kernel)), None);
     assert_eq!(analyze_pair(&[0; 0x100], Some(&kernel[..0x8000])), None);
+}
+
+/// BDR-212U-style storage (magic FEDC4321, 0x10000-byte banks) and
+/// BDR-213U-style storage (magic FEDC4322, 0xC000-byte banks) recovered from
+/// native validators. No conversion exists, so the bank gate refuses the pair
+/// in both directions under the strict policy and under the Recovery family
+/// override (`ExplicitCrossflash`).
+#[test]
+fn bdr_212u_and_213u_style_banks_never_convert_under_any_policy() {
+    use crate::startup::checks::{Checks, Error as StartupError, Policy};
+    let u212 = versioned_with(0xfedc_4321, [0xfffa, 0x1_fffa]);
+    let u213 = versioned_with(0xfedc_4322, [0xbffa, 0x1_7ffa]);
+    assert_eq!(discover(&u212).unwrap().stride(), Some(0x1_0000));
+    assert_eq!(discover(&u213).unwrap().stride(), Some(0xc000));
+    for (installed, target) in [(&u212, &u213), (&u213, &u212)] {
+        let (from, to) = (analyze_pair(installed, None), analyze_pair(target, None));
+        assert!(from.is_some() && to.is_some() && from != to);
+        let refused = Error::ConversionRequired {
+            installed: from.unwrap(),
+            target: to.unwrap(),
+        };
+        assert_eq!(check(from, to), Err(refused));
+        let (installed, target) = (
+            Checks::discover(installed, None),
+            Checks::discover(target, None),
+        );
+        assert_eq!(installed.plan_to(target), Err(StartupError::Banks(refused)));
+        for policy in [Policy::CompatibleBanks, Policy::ExplicitCrossflash] {
+            assert_eq!(
+                installed.plan_to_with_policy(target, policy),
+                Err(StartupError::Banks(refused))
+            );
+        }
+    }
+    for same in [&u212, &u213] {
+        let checks = Checks::discover(same, None);
+        for policy in [Policy::CompatibleBanks, Policy::ExplicitCrossflash] {
+            assert!(checks.plan_to_with_policy(checks, policy).is_ok());
+        }
+    }
 }

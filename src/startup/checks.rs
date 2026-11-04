@@ -41,25 +41,17 @@ impl Checks {
         ]
         .into_iter()
     }
-    /// Resolve the complete startup transition. Bank format conversion has no
-    /// implicit writer; native word changes retain the existing verified path.
+    /// Resolve the complete startup transition. Differing persistent-bank
+    /// contracts always refuse; native word changes retain the verified path.
     pub fn plan_to(self, target: Self) -> Result<Plan, Error> {
         self.plan_to_with_policy(target, Policy::CompatibleBanks)
     }
     /// Resolve target word requirements under an explicit transition policy.
+    /// The policy never waives the persistent-bank comparison: there is no
+    /// bank format conversion, so differing contracts refuse under every policy.
     pub fn plan_to_with_policy(self, target: Self, policy: Policy) -> Result<Plan, Error> {
-        target.word.map_err(|_| Error::AmbiguousWord)?;
-        bank::check(self.banks, target.banks).map_err(Error::Banks)?;
-        self.plan_verified_bank_transition(target, policy)
-    }
-
-    /// Receiver-only entry after an independently bound native conversion plan.
-    pub(crate) fn plan_verified_bank_transition(
-        self,
-        target: Self,
-        policy: Policy,
-    ) -> Result<Plan, Error> {
         let word = target.word.map_err(|_| Error::AmbiguousWord)?;
+        bank::check(self.banks, target.banks).map_err(Error::Banks)?;
         let setting = match word {
             Analysis::Required(r) => Setting {
                 parameter: r.parameter,
@@ -143,66 +135,68 @@ impl crate::CodedError for Error {
 mod tests {
     use super::*;
 
-    #[test]
-    fn explicit_crossflash_retains_both_banks_for_each_capacity_case() {
-        let storage = |magic, when_one, otherwise| {
-            Some(bank::Storage::Versioned(bank::Contract {
-                magic,
-                addresses: bank::Addresses::Capacity {
-                    when_one,
-                    otherwise,
-                },
-                validation: bank::Validation::RejectMismatch,
-            }))
-        };
-        // Known-answer contracts extracted from the customer's 212U 1.01
-        // and destination 213U 1.02. This exercises planning, not a simulated
-        // native boot or a conversion of the underlying persistent records.
-        let installed = Checks {
+    fn storage(magic: u32, when_one: [u32; 2], otherwise: [u32; 2]) -> Option<bank::Storage> {
+        Some(bank::Storage::Versioned(bank::Contract {
+            magic,
+            addresses: bank::Addresses::Capacity {
+                when_one,
+                otherwise,
+            },
+            validation: bank::Validation::RejectMismatch,
+        }))
+    }
+    // Contracts recovered from BDR-212U 1.01 and BDR-213U 1.02.
+    fn bdr_212u() -> Checks {
+        Checks {
             word: Ok(Analysis::Unknown),
             banks: storage(0xfedc4321, [0x5efffa, 0x5ffffa], [0x7dfffa, 0x7efffa]),
-        };
-        let target = Checks {
+        }
+    }
+    fn bdr_213u() -> Checks {
+        Checks {
             word: Ok(Analysis::Unknown),
             banks: storage(0xfedc4322, [0x5f3ffa, 0x5ffffa], [0x7dbffa, 0x7e7ffa]),
-        };
-        assert_eq!(
-            installed.plan_to(target),
-            Err(Error::Banks(bank::Error::ConversionRequired {
+        }
+    }
+
+    #[test]
+    fn bdr_212u_and_213u_banks_refuse_in_both_directions_under_every_policy() {
+        for (installed, target) in [(bdr_212u(), bdr_213u()), (bdr_213u(), bdr_212u())] {
+            let refused = Err(Error::Banks(bank::Error::ConversionRequired {
                 installed: installed.banks.unwrap(),
                 target: target.banks.unwrap(),
-            }))
-        );
-        assert!(matches!(
-            installed.plan_to_with_policy(target, Policy::ExplicitCrossflash),
-            Err(Error::Banks(bank::Error::ConversionRequired { .. }))
-        ));
-        let plan = installed
-            .plan_verified_bank_transition(target, Policy::ExplicitCrossflash)
-            .unwrap();
-        assert_eq!(plan.target_checks(), target);
-        assert_eq!(
-            plan.target_checks().iter().collect::<Vec<_>>(),
-            vec![
-                Check::ParameterWord(Ok(Analysis::Unknown)),
-                Check::PersistentBanks(target.banks)
-            ]
-        );
-        assert_eq!(plan.policy(), Policy::ExplicitCrossflash);
-        assert_eq!(
-            plan.word_setting(),
-            Setting {
-                parameter: 0x9f,
-                value: 0xffff,
-                explicit: false
+            }));
+            assert_eq!(installed.plan_to(target), refused);
+            for policy in [Policy::CompatibleBanks, Policy::ExplicitCrossflash] {
+                assert_eq!(installed.plan_to_with_policy(target, policy), refused);
             }
-        );
-        // Selecting the explicit policy does not mutate or relax the native
-        // bank contracts used by a later ordinary preparation.
-        assert!(matches!(
-            installed.plan_to(target),
-            Err(Error::Banks(bank::Error::ConversionRequired { .. }))
-        ));
+        }
+    }
+
+    #[test]
+    fn identical_banks_plan_under_either_policy_and_retain_both_checks() {
+        for checks in [bdr_212u(), bdr_213u()] {
+            for policy in [Policy::CompatibleBanks, Policy::ExplicitCrossflash] {
+                let plan = checks.plan_to_with_policy(checks, policy).unwrap();
+                assert_eq!(plan.policy(), policy);
+                assert_eq!(plan.target_checks(), checks);
+                assert_eq!(
+                    plan.target_checks().iter().collect::<Vec<_>>(),
+                    vec![
+                        Check::ParameterWord(Ok(Analysis::Unknown)),
+                        Check::PersistentBanks(checks.banks)
+                    ]
+                );
+                assert_eq!(
+                    plan.word_setting(),
+                    Setting {
+                        parameter: 0x9f,
+                        value: 0xffff,
+                        explicit: false
+                    }
+                );
+            }
+        }
     }
 }
 

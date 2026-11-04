@@ -1430,7 +1430,7 @@ fn generic_settings_flash_failures_keep_rollback_outcome_categories() {
 }
 
 // Explicit family overrides retain the ordinary transaction only when bank
-// contracts are compatible. Actual conversion uses a separate deferred plan.
+// contracts are identical; differing contracts refuse at preparation.
 fn setup_explicit_crossflash(restore: bool) -> (PreparedUpdate, Rc<RefCell<State>>) {
     setup_updates_policy(fixture(restore, 1), fixture(false, 0xff), true)
 }

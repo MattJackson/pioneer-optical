@@ -149,8 +149,10 @@ Neutral startup selection deliberately uses `0xFFFF` when no comparison is
 recognized; recognized comparisons must bind to their native getter. Older bank initialization,
 state-header and Kernel-owned sequence schemes retain their own contracts.
 Missing evidence refuses preparation; family overrides do not waive these checks.
-Different persistent formats require a validated record conversion. The planner
-does not rewrite a header marker as a substitute for converting the records.
+Different persistent formats are refused under every policy, including the
+Recovery family override; there is no bank format conversion (for example,
+BDR-212U and BDR-213U banks are never converted in either direction). The
+planner does not rewrite a header marker.
 
 `ExecutionError::completed_stages()` retains earlier completion when a later
 stage fails, including a refusal before its first write. No failing firmware

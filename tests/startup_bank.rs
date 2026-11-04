@@ -443,18 +443,19 @@ fn customer_policy_does_not_reclassify_legacy_bank_formats_as_capacity_banks() {
 
 #[test]
 #[ignore = "requires PIONEER_SETTINGS_HOARD with hash-locked customer OEM envelopes"]
-fn customer_native_programmer_binds_normal_mode_not_destination_or_kernel_vectors() {
-    let source = customer_image("212");
-    let evidence = bank::programmer::discover(&source).unwrap();
-    assert_eq!(evidence.erase_entry(), 0x4f0);
-    assert_eq!(evidence.program_entry(), 0x53c);
-    assert_eq!(evidence.sector_size(), 0x10000);
-    let (ram, length) = evidence.runtime_interval();
-    assert_eq!((ram, length), (0x4be, 0x28c));
-    assert!(evidence.matches_runtime(&source[0x57e8fc - 0x410000..0x57eb88 - 0x410000]));
-    assert!(bank::programmer::discover(&customer_image("213")).is_none());
-    // Kernel-mode entry addresses have different meanings and cannot replace
-    // the audited Normal vector block by matching the erase/program intent.
-    assert_ne!(evidence.erase_entry(), 0x270);
-    assert_ne!(evidence.program_entry(), 0x2bc);
+fn customer_212u_and_213u_banks_refuse_in_both_directions_under_every_policy() {
+    use pioneer_optical::startup::checks::{Checks, Error, Policy};
+    let (u212, u213) = (customer_image("212"), customer_image("213"));
+    for (installed, target) in [(&u212, &u213), (&u213, &u212)] {
+        let (installed, target) = (
+            Checks::discover(installed, None),
+            Checks::discover(target, None),
+        );
+        for policy in [Policy::CompatibleBanks, Policy::ExplicitCrossflash] {
+            assert!(matches!(
+                installed.plan_to_with_policy(target, policy),
+                Err(Error::Banks(bank::Error::ConversionRequired { .. }))
+            ));
+        }
+    }
 }

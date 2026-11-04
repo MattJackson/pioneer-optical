@@ -191,8 +191,92 @@ fn ordinary_preparation_keeps_the_receivers_bank_checks() {
     );
 }
 
+/// Re-sign `installed` with its bank header magic replaced: FEDC4321 is the
+/// BDR-212U-style magic, FEDC4322 the BDR-213U-style magic.
+fn with_bank_magic(installed: &Update, magic: u32) -> Update {
+    let mut normal = installed.normal().image.clone();
+    for at in [0x180a, 0x190a] {
+        normal[at..at + 4].copy_from_slice(&magic.to_be_bytes());
+    }
+    fix_sum(&mut normal);
+    let mut bytes = installed.normal().repack(&normal).unwrap();
+    let mut key = [0; 20];
+    key[19] = 5;
+    SigningKey::from_bytes(key)
+        .unwrap()
+        .sign_normal(&mut bytes)
+        .unwrap();
+    Update::load(installed.kernel_transfer(), &bytes).unwrap()
+}
+
 #[test]
-fn explicit_crossflash_refuses_unknown_banks_without_a_verified_conversion() {
+fn bdr_212u_and_213u_banks_refuse_in_both_directions_strict_and_recovery() {
+    use crate::startup::{bank, checks};
+    let base = update(false, 1, 0x12, true);
+    let u212 = with_bank_magic(&base, 0xfedc_4321);
+    let u213 = with_bank_magic(&base, 0xfedc_4322);
+    let banks = |pair: &Update| {
+        bank::analyze_pair(&pair.normal().image, Some(&pair.kernel().image)).unwrap()
+    };
+    assert_ne!(banks(&u212), banks(&u213));
+    for (installed, target) in [(&u212, &u213), (&u213, &u212)] {
+        let receiver = Receiver::from_installed(installed).unwrap();
+        let conversion = |error: PreparationError| {
+            assert_eq!(
+                error,
+                PreparationError::Startup(checks::Error::Banks(bank::Error::ConversionRequired {
+                    installed: banks(installed),
+                    target: banks(target),
+                }))
+            )
+        };
+        // Strict: the registered geometry filter already differs, so the
+        // family gate refuses before the bank gate is reached.
+        for error in [
+            receiver.prepare(target.clone()).unwrap_err(),
+            receiver
+                .prepare_normal(target.normal_transfer())
+                .unwrap_err(),
+        ] {
+            assert!(
+                matches!(
+                    error,
+                    PreparationError::Compatibility(Error::FamilyMismatch { .. })
+                ),
+                "{error:?}"
+            );
+        }
+        // The bank gate itself refuses under both startup policies.
+        for policy in [
+            checks::Policy::CompatibleBanks,
+            checks::Policy::ExplicitCrossflash,
+        ] {
+            conversion(
+                receiver
+                    .prepare_startup_with_policy(
+                        &target.normal().image,
+                        Some(&target.kernel().image),
+                        policy,
+                    )
+                    .unwrap_err(),
+            );
+        }
+        // Recovery family override waives the family gate, never the banks.
+        conversion(
+            receiver
+                .prepare_without_family_check(target.clone())
+                .unwrap_err(),
+        );
+        conversion(
+            receiver
+                .prepare_normal_without_family_check(target.normal_transfer())
+                .unwrap_err(),
+        );
+    }
+}
+
+#[test]
+fn explicit_crossflash_refuses_unknown_banks() {
     use crate::startup::{bank, checks};
     let installed = update(false, 1, 0x12, true);
     let receiver = Receiver::from_installed(&installed).unwrap();
@@ -234,7 +318,7 @@ fn explicit_crossflash_refuses_unknown_banks_without_a_verified_conversion() {
 }
 
 #[test]
-fn explicit_crossflash_refuses_unaudited_bank_conversion_even_with_a_target_word() {
+fn explicit_crossflash_refuses_changed_bank_magic_even_with_a_target_word() {
     let installed = update(false, 1, 0x12, true);
     let receiver = Receiver::from_installed(&installed).unwrap();
     let mut normal = installed.normal().image.clone();
@@ -260,7 +344,7 @@ fn explicit_crossflash_refuses_unaudited_bank_conversion_even_with_a_target_word
     let kernel = Some(installed.kernel().image.as_slice());
     // The registered correction planner cannot resolve this synthetic target's
     // identity and refuses first; the startup layer independently still
-    // refuses the unaudited bank conversion under the explicit policy.
+    // refuses the changed bank contract under the explicit policy.
     for error in [
         receiver.prepare_without_family_check(target).unwrap_err(),
         receiver

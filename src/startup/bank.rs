@@ -9,21 +9,6 @@ mod legacy;
 #[cfg(test)]
 mod tests;
 
-/// Offline, lossless-receipt conversion for byte-bound audited native layouts.
-#[cfg(feature = "envelope")]
-pub mod conversion;
-
-/// Immutable source-bank backup and persisted-readback receipts.
-#[cfg(feature = "envelope")]
-pub mod backup;
-
-/// Offline construction of the audited temporary Normal bridge.
-#[cfg(feature = "envelope")]
-pub mod bridge;
-
-/// Read-only evidence for audited native bank programming routines.
-pub mod programmer;
-
 /// Persistent header locations extracted from the firmware's addressing code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Addresses {
@@ -106,7 +91,7 @@ pub enum Error {
     UnknownInstalled,
     /// Target storage requirements could not be recovered.
     UnknownTarget,
-    /// The storage formats differ and no record conversion is implemented.
+    /// The storage formats differ. No conversion exists under any policy.
     ConversionRequired {
         /// Installed code-derived storage contract.
         installed: Storage,
@@ -120,7 +105,7 @@ impl core::fmt::Display for Error {
         f.write_str(match self {
             Self::UnknownInstalled=>"installed persistent bank requirements are unresolved; provide the installed Kernel and Normal; no settings or firmware were written",
             Self::UnknownTarget=>"target persistent bank requirements are unresolved; provide the target Kernel and Normal; no settings or firmware were written",
-            Self::ConversionRequired{..}=>"persistent bank format changes require a validated record conversion; no settings or firmware were written",
+            Self::ConversionRequired{..}=>"persistent bank formats differ and no bank conversion exists; no settings or firmware were written",
         })
     }
 }

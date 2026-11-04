@@ -9,8 +9,6 @@ pub enum BridgeKind {
     ReceiverMarker,
     /// Source programmer adapted to the target's recognized startup entry.
     KernelHandoff,
-    /// Receipt-bound temporary Normal for an audited persistent-bank conversion.
-    PersistentBanks,
 }
 
 /// One immutable transition, including its receiving firmware and settings.
@@ -23,7 +21,6 @@ pub struct PreparedStage {
     pub(super) normal_bytes: Vec<u8>,
     pub(super) settings: crate::settings::update::Plan,
     pub(super) bridge: Option<BridgeKind>,
-    pub(super) entry_control: Option<super::Control>,
     #[cfg(feature = "drive")]
     pub(super) normal_region: Option<crate::envelope::NormalRegion>,
 }
@@ -62,16 +59,6 @@ impl PreparedStage {
         ) {
             return Err(PreparationError::RejectedMarker);
         }
-        let entry_control = receiver.bank_bridge.as_ref().and_then(|bridge| {
-            receiver
-                .startup
-                .plan_to(crate::startup::checks::Checks::discover(
-                    &target.normal().image,
-                    Some(&target.kernel().image),
-                ))
-                .ok()
-                .map(|_| bridge.restore_control())
-        });
         let stage = Self {
             #[cfg(feature = "drive")]
             normal_region: super::preparation::normal_region(
@@ -85,7 +72,6 @@ impl PreparedStage {
             normal_bytes: target.normal_transfer().to_vec(),
             settings,
             bridge,
-            entry_control,
         };
         stage.validate_transfer()?;
         Ok(stage)
@@ -143,13 +129,12 @@ impl PreparedStage {
     }
 }
 
-/// Static firmware stages and any audited bank transition requiring live capture.
+/// Static firmware stages, ending in the pristine target.
 #[derive(Debug)]
 pub struct PreparedUpdate {
     pub(super) stages: Vec<PreparedStage>,
     pub(super) target: Update,
     pub(super) kernel_steps: Vec<crate::compatibility::KernelStep>,
-    pub(super) bank_transition: Option<Receiver>,
 }
 
 impl PreparedUpdate {
@@ -158,14 +143,7 @@ impl PreparedUpdate {
     pub fn kernel_steps(&self) -> &[crate::compatibility::KernelStep] {
         &self.kernel_steps
     }
-    /// A live, receipt-bound bank bridge must be materialized before these final stages.
-    pub fn pending_bridge(&self) -> Option<BridgeKind> {
-        self.bank_transition
-            .as_ref()
-            .map(|_| BridgeKind::PersistentBanks)
-    }
     /// Static transitions, including marker/handoff bridges and final OEM pass.
-    /// A pending persistent-bank bridge is materialized before these at execution.
     pub fn stages(&self) -> &[PreparedStage] {
         &self.stages
     }
@@ -181,12 +159,11 @@ impl PreparedUpdate {
     pub fn settings(&self) -> &crate::settings::update::Plan {
         self.stages.last().expect("prepared stage").settings()
     }
-    /// First static Kernel transfer. A pending bank bridge precedes this without
-    /// changing the source Kernel.
+    /// First static Kernel transfer.
     pub fn kernel_transfer(&self) -> &[u8] {
         self.stages[0].kernel_transfer().expect("complete pair")
     }
-    /// First static stage's Normal transfer, after any pending bank bridge.
+    /// First static stage's Normal transfer.
     pub fn normal_transfer(&self) -> &[u8] {
         self.stages[0].normal_transfer()
     }

@@ -114,17 +114,12 @@ impl Receiver {
         kernel: Option<&[u8]>,
         policy: crate::startup::checks::Policy,
     ) -> Result<crate::startup::checks::Plan, PreparationError> {
+        // Persistent banks must match under every policy, including the
+        // Recovery family override. No bank format conversion exists.
         let target = crate::startup::checks::Checks::discover(normal, kernel);
-        if policy == crate::startup::checks::Policy::ExplicitCrossflash
-            && self.source_schema().is_some_and(|source| {
-                crate::startup::bank::conversion::LayoutPair::discover(source, normal).is_ok()
-            })
-        {
-            self.startup.plan_verified_bank_transition(target, policy)
-        } else {
-            self.startup.plan_to_with_policy(target, policy)
-        }
-        .map_err(PreparationError::Startup)
+        self.startup
+            .plan_to_with_policy(target, policy)
+            .map_err(PreparationError::Startup)
     }
     fn prepare_corrections(
         &self,
@@ -197,67 +192,6 @@ impl Receiver {
             .map_err(PreparationError::PhaseCorrection)
     }
 
-    /// Authenticate the bounded bank bridge for the unchanged source Kernel.
-    #[cfg(feature = "drive")]
-    pub(super) fn prepare_persistent_bridge(
-        &self,
-        image: &[u8],
-        settings: crate::settings::update::Plan,
-    ) -> Result<PreparedStage, PreparationError> {
-        use crate::envelope::{
-            builder::{
-                normal_authentication_from_kernel, normal_authentication_valid,
-                NormalAuthentication,
-            },
-            signature::SigningKey,
-        };
-        let kernel = self
-            .installed_kernel
-            .as_ref()
-            .ok_or(PreparationError::MissingInstalledKernel)?;
-        let source = self
-            .installed_normal
-            .as_ref()
-            .ok_or(PreparationError::PatchedRepresentation)?;
-        let mut bytes = source
-            .repack_resized_normal(image)
-            .ok_or(PreparationError::PatchedRepresentation)?;
-        let signer = SigningKey::random().map_err(|_| PreparationError::PatchedRepresentation)?;
-        match normal_authentication_from_kernel(&kernel.image) {
-            Some(NormalAuthentication::KeyAndCiphertext) => signer.sign_normal(&mut bytes),
-            Some(NormalAuthentication::CiphertextOnly) => {
-                signer.sign_normal_ciphertext_only(&mut bytes)
-            }
-            _ => return Err(PreparationError::PatchedRepresentation),
-        }
-        .map_err(|_| PreparationError::PatchedRepresentation)?;
-        if !normal_authentication_valid(&bytes, &kernel.image) {
-            return Err(PreparationError::PatchedRepresentation);
-        }
-        let kernel_bytes = kernel
-            .repack(&kernel.image)
-            .ok_or(PreparationError::InstalledKernelRepresentation)?;
-        let pair = Update::load(&kernel_bytes, &bytes).map_err(PreparationError::Target)?;
-        if pair.normal().image != image {
-            return Err(PreparationError::PatchedRepresentation);
-        }
-        let (normal, normal_bytes) = pair.into_normal();
-        let stage = PreparedStage {
-            #[cfg(feature = "drive")]
-            normal_region: normal_region(kernel, &normal.image),
-            receiver: self.clone(),
-            kernel: None,
-            kernel_bytes: None,
-            normal,
-            normal_bytes,
-            settings,
-            bridge: Some(BridgeKind::PersistentBanks),
-            entry_control: self.bank_bridge.as_ref().map(|b| b.restore_control()),
-        };
-        stage.validate_transfer()?;
-        Ok(stage)
-    }
-
     fn startup_selection_for(
         context: &crate::filters::Context<'_>,
     ) -> Result<Option<crate::compatibility::startup::Plan>, PreparationError> {
@@ -323,8 +257,7 @@ impl Receiver {
     /// Prepare Normal-only with a deliberate caller override of family comparison.
     ///
     /// Component compatibility, integrity and installed-Kernel authentication
-    /// remain mandatory. Persistent banks must remain compatible; Normal-only
-    /// preparation cannot authorize a deferred bank conversion.
+    /// remain mandatory. Persistent banks must remain compatible.
     pub fn prepare_normal_without_family_check(
         &self,
         target: &[u8],
@@ -373,7 +306,6 @@ impl Receiver {
                 normal_bytes,
                 settings,
                 bridge: None,
-                entry_control: self.bank_bridge.as_ref().map(|b| b.restore_control()),
             },
         })
     }
@@ -390,9 +322,9 @@ impl Receiver {
     /// Prepare with an explicit caller override of the hardware family gate.
     ///
     /// Intended for applications exposing a deliberate force option. This may
-    /// target incompatible hardware. Persistent banks must remain compatible,
-    /// or the exact audited pair must produce a deferred, receipt-bound bank
-    /// transition. Target integrity, marker policy and restoration still apply.
+    /// target incompatible hardware. Persistent banks must remain compatible;
+    /// no bank format conversion exists. Target integrity, marker policy and
+    /// restoration still apply.
     pub fn prepare_without_family_check(
         &self,
         target: Update,
@@ -424,7 +356,7 @@ impl Receiver {
                 .map_err(PreparationError::Compatibility)?;
         }
         // The family override is also the explicit crossflash startup policy;
-        // persistent banks still require compatibility or the audited conversion.
+        // persistent banks still require identical storage contracts.
         let startup_policy = if check_family {
             crate::startup::checks::Policy::CompatibleBanks
         } else {
@@ -532,27 +464,10 @@ impl Receiver {
         {
             return Err(PreparationError::PatchedRepresentation);
         }
-        let bank_transition = self.source_schema().and_then(|source| {
-            crate::startup::bank::conversion::LayoutPair::discover(source, &target.normal().image)
-                .ok()
-                .map(|_| self.clone())
-        });
-        // The audited conversion cannot be combined with another source bridge.
-        if bank_transition.is_some()
-            && (stages
-                .first()
-                .map_or(true, |s| s.normal_image() != target.normal().image)
-                || stages
-                    .iter()
-                    .any(|s| s.bridge == Some(BridgeKind::KernelHandoff)))
-        {
-            return Err(PreparationError::UnsupportedFinalStage);
-        }
         Ok(PreparedUpdate {
             stages,
             target,
             kernel_steps,
-            bank_transition,
         })
     }
 }

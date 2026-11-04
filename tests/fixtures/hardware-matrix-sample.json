@@ -154,8 +154,7 @@
       "policies": [
         {
           "platforms": [
-            "SAT 8xxx",
-            "SAT 9xxx"
+            "SAT 8xxx/9xxx"
           ],
           "text": "The value is chosen by the native reader that resolves, not by the SAT digit: equal tray input predicates compare equal across SAT8 and SAT9. The constant E46B initialization store is evidence only; SAT8 and SAT9 never fall back to it, so unresolved predicates stay Unresolved."
         },
@@ -233,8 +232,7 @@
         },
         {
           "platforms": [
-            "SAT 8xxx",
-            "SAT 9xxx"
+            "SAT 8xxx/9xxx"
           ],
           "text": "A split-word (F910-F913) coil rewrite is planned only when the complete sled mechanism bundle is bound in both images and identical apart from the coil. Otherwise it refuses as Unsupported, which the Recovery family override does not waive."
         },
@@ -263,16 +261,14 @@
         {
           "platforms": [
             "SAT 1xxx",
-            "SAT 8xxx",
-            "SAT 9xxx"
+            "SAT 8xxx/9xxx"
           ],
           "text": "Selection uses the bound accepted word, otherwise the deliberate neutral 0x009F = 0xFFFF. It refuses, including the neutral value, when Normal reads persistent words through a Kernel-resident getter whose Kernel is not supplied."
         },
         {
           "platforms": [
             "SAT 1xxx",
-            "SAT 8xxx",
-            "SAT 9xxx"
+            "SAT 8xxx/9xxx"
           ],
           "text": "Where a native conditional gate is bound, 0xFE23 is accepted unconditionally and 0xFE09 only when the complete bound predicate holds."
         },
@@ -293,7 +289,7 @@
     }
   ],
   "identity": {
-    "partition": "Families never cross a platform. The identity starts with the platform partition: SAT 1xxx, H8 SAT (SAT 8xxx and SAT 9xxx together), ATA or SCSI. SAT 8xxx and SAT 9xxx share one platform because their Kernels receive, hand off, finalize, checksum and marker-gate updates with the same native code and their persistent banks use the same versioned contract; every filter value must still match. A tag outside these domains produces no identity. Under the strict update policy the correction planner also refuses any transition between different platforms before owner corrections are considered.",
+    "partition": "Families never cross a platform. The identity starts with the platform partition: SAT 1xxx, SAT 8xxx/9xxx (one H8 SAT platform), ATA or SCSI. SAT 8xxx and SAT 9xxx are one platform because their Kernels receive, hand off, finalize, checksum and marker-gate updates with the same native code and their persistent banks use the same versioned contract; every filter value must still match. A tag outside these domains produces no identity. Under the strict update policy the correction planner also refuses any transition between different platforms before owner corrections are considered.",
     "rules": [
       "Every registered filter runs on every image. Hardware filters form the identity; operational requirements are evaluated and planned per update but never enter it.",
       "As-is identity: every hardware value before any correction. Matching (candidate) family: each owner's projection with exactly what it may correct removed, so it is built only from facts no owner corrects.",
@@ -379,7 +375,7 @@
         }
       ],
       "hardware": "SAT 8600",
-      "platform": "SAT 8xxx",
+      "platform": "SAT 8xxx/9xxx",
       "unresolved": [
         "persistent-storage-geometry",
         "startup-inputs-initialization",
@@ -965,7 +961,7 @@
         }
       ],
       "hardware": "SAT 8800",
-      "platform": "SAT 8xxx",
+      "platform": "SAT 8xxx/9xxx",
       "unresolved": []
     },
     {
@@ -1196,7 +1192,7 @@
         }
       ],
       "hardware": "SAT 8301",
-      "platform": "SAT 8xxx",
+      "platform": "SAT 8xxx/9xxx",
       "unresolved": []
     },
     {
@@ -1427,7 +1423,7 @@
         }
       ],
       "hardware": "SAT 8301",
-      "platform": "SAT 8xxx",
+      "platform": "SAT 8xxx/9xxx",
       "unresolved": []
     },
     {
@@ -1643,7 +1639,7 @@
         }
       ],
       "hardware": "SAT 8600",
-      "platform": "SAT 8xxx",
+      "platform": "SAT 8xxx/9xxx",
       "unresolved": [
         "startup-inputs-initialization"
       ]
@@ -1656,7 +1652,7 @@
       "images": 1
     },
     {
-      "id": "SAT 8xxx",
+      "id": "SAT 8xxx/9xxx",
       "images": 5
     },
     {

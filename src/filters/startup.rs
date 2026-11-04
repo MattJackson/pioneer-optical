@@ -27,11 +27,11 @@ static RULES: super::Rules = super::Rules {
     correction: "Planned against the requested firmware. SAT platforms select a live 0x009F value with read/change/verify and rollback; other platforms have read-only prerequisites and no file edit.",
     policies: &[
         super::Policy {
-            domains: &[super::identity::Domain::Sat1, super::identity::Domain::Sat8, super::identity::Domain::Sat9],
+            domains: &[super::identity::Domain::Sat1, super::identity::Domain::H8Sat],
             text: "Selection uses the bound accepted word, otherwise the deliberate neutral 0x009F = 0xFFFF. It refuses, including the neutral value, when Normal reads persistent words through a Kernel-resident getter whose Kernel is not supplied.",
         },
         super::Policy {
-            domains: &[super::identity::Domain::Sat1, super::identity::Domain::Sat8, super::identity::Domain::Sat9],
+            domains: &[super::identity::Domain::Sat1, super::identity::Domain::H8Sat],
             text: "Where a native conditional gate is bound, 0xFE23 is accepted unconditionally and 0xFE09 only when the complete bound predicate holds.",
         },
         super::Policy {

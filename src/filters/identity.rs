@@ -11,10 +11,11 @@ use sha2::{Digest, Sha256};
 pub enum Domain {
     /// SAT 1xxx hardware.
     Sat1 = 1,
-    /// SAT 8xxx hardware.
-    Sat8 = 2,
-    /// SAT 9xxx hardware.
-    Sat9 = 3,
+    /// H8 SAT hardware: SAT 8xxx and SAT 9xxx are one platform. Their Kernels
+    /// receive, hand off, finalize, checksum and marker-gate updates with the
+    /// same native code (the marker gate differs only in relocated RAM) and
+    /// their persistent banks use the same versioned contract.
+    H8Sat = 2,
     /// ATA hardware; native architecture remains a registered observation.
     Ata = 4,
     /// SCSI hardware; required native observations must still be established.
@@ -22,28 +23,16 @@ pub enum Domain {
 }
 impl Domain {
     /// Every domain, in reporting order.
-    pub const ALL: [Self; 5] = [Self::Sat1, Self::Sat8, Self::Sat9, Self::Scsi, Self::Ata];
+    pub const ALL: [Self; 4] = [Self::Sat1, Self::H8Sat, Self::Scsi, Self::Ata];
     /// Stable platform label used by reports.
     pub fn label(self) -> &'static str {
         match self {
             Self::Sat1 => "SAT 1xxx",
-            Self::Sat8 => "SAT 8xxx",
-            Self::Sat9 => "SAT 9xxx",
+            Self::H8Sat => "SAT 8xxx/9xxx",
             Self::Ata => "ATA",
             Self::Scsi => "SCSI",
         }
     }
-    /// Platform partition byte. SAT 8xxx and SAT 9xxx are one H8 SAT platform:
-    /// identical Kernel transport, handoff, finalizer, checksum and marker gate
-    /// (relocated RAM only) and versioned bank contracts, so they share SAT8's
-    /// byte and every other domain keeps its own. Lower filters still decide.
-    pub fn partition(self) -> u8 {
-        match self {
-            Self::Sat9 => Self::Sat8 as u8,
-            other => other as u8,
-        }
-    }
-
     /// Parse a complete hardware header, never a model or partial tag.
     pub fn from_hardware(hardware: &str) -> Option<Self> {
         let bytes = hardware.as_bytes();
@@ -53,8 +42,7 @@ impl Domain {
         match &bytes[..4] {
             b"SAT " => match bytes[4] {
                 b'1' => Some(Self::Sat1),
-                b'8' => Some(Self::Sat8),
-                b'9' => Some(Self::Sat9),
+                b'8' | b'9' => Some(Self::H8Sat),
                 _ => None,
             },
             b"ATA " => Some(Self::Ata),
@@ -67,8 +55,8 @@ impl Domain {
 /// Platform partition enforced by [`Key::canonical_bytes`]: the domain byte
 /// precedes every filter value.
 pub const PARTITION: &str = "Families never cross a platform. The identity starts with the \
-platform partition: SAT 1xxx, H8 SAT (SAT 8xxx and SAT 9xxx together), ATA or SCSI. SAT 8xxx and \
-SAT 9xxx share one platform because their Kernels receive, hand off, finalize, checksum and \
+platform partition: SAT 1xxx, SAT 8xxx/9xxx (one H8 SAT platform), ATA or SCSI. SAT 8xxx and \
+SAT 9xxx are one platform because their Kernels receive, hand off, finalize, checksum and \
 marker-gate updates with the same native code and their persistent banks use the same versioned \
 contract; every filter value must still match. A tag outside these domains produces no identity. \
 Under the strict update policy the correction planner also refuses any transition between \
@@ -115,17 +103,11 @@ pub struct Entry {
 }
 
 /// Version seven identity containing every registered hardware field.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Key {
     domain: Domain,
     entries: Vec<Entry>,
 }
-impl PartialEq for Key {
-    fn eq(&self, other: &Self) -> bool {
-        self.domain.partition() == other.domain.partition() && self.entries == other.entries
-    }
-}
-impl Eq for Key {}
 impl Key {
     /// Broad structured-header domain retained alongside all native fields.
     pub fn domain(&self) -> Domain {
@@ -149,7 +131,7 @@ impl Key {
     /// typed values retain their native widths and owner proof discriminants.
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut bytes = b"PIONEER-FAMILY\0\x07".to_vec();
-        bytes.push(self.domain.partition());
+        bytes.push(self.domain as u8);
         bytes.extend((self.entries.len() as u64).to_be_bytes());
         for entry in &self.entries {
             bytes.extend((entry.id.len() as u64).to_be_bytes());

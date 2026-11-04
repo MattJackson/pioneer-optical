@@ -112,10 +112,8 @@ pub(crate) fn test_family(variant: u8) -> super::Family {
 pub enum SatPlatform {
     /// SAT 1xxx.
     Sat1,
-    /// SAT 8xxx.
-    Sat8,
-    /// SAT 9xxx.
-    Sat9,
+    /// H8 SAT: SAT 8xxx and SAT 9xxx.
+    H8,
 }
 impl SatPlatform {
     /// Parse an exact SAT hardware tag. Model names and fuzzy strings are not evidence.
@@ -126,8 +124,7 @@ impl SatPlatform {
         }
         match b[4] {
             b'1' => Some(Self::Sat1),
-            b'8' => Some(Self::Sat8),
-            b'9' => Some(Self::Sat9),
+            b'8' | b'9' => Some(Self::H8),
             _ => None,
         }
     }
@@ -187,7 +184,7 @@ mod tests {
     fn platform_is_a_structured_tag_not_a_model_guess() {
         assert_eq!(
             SatPlatform::from_hardware("SAT 8A10"),
-            Some(SatPlatform::Sat8)
+            Some(SatPlatform::H8)
         );
         assert_eq!(
             SatPlatform::from_hardware("SAT 1003"),
@@ -195,7 +192,7 @@ mod tests {
         );
         assert_eq!(
             SatPlatform::from_hardware("SAT 9200"),
-            Some(SatPlatform::Sat9)
+            Some(SatPlatform::H8)
         );
         for s in [
             "BDR-212",

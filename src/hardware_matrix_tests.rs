@@ -41,8 +41,7 @@ fn every_registered_filter_declares_rules_matching_its_behaviour() {
         for domain in Domain::ALL {
             let hardware = match domain {
                 Domain::Sat1 => "SAT 1050",
-                Domain::Sat8 => "SAT 8600",
-                Domain::Sat9 => "SAT 9600",
+                Domain::H8Sat => "SAT 8600",
                 Domain::Ata => "ATA 0005",
                 Domain::Scsi => "SCSI0001",
             };
@@ -74,7 +73,7 @@ fn every_registered_filter_declares_rules_matching_its_behaviour() {
 
 #[test]
 fn identity_partitions_platforms_and_documents_it() {
-    assert_eq!(Domain::ALL.len(), 5);
+    assert_eq!(Domain::ALL.len(), 4);
     for domain in Domain::ALL {
         assert!(crate::filters::identity::PARTITION.contains(domain.label()));
     }
@@ -151,11 +150,9 @@ fn sat1_phase_correction_is_suspended() {
 
 #[test]
 fn phase_order_is_not_changed_on_assignment_evidence_alone() {
-    for domain in [Domain::Sat8, Domain::Sat9] {
-        assert!(rules("phase")
-            .policies_for(domain)
-            .any(|p| p.text.contains("mechanism bundle")));
-    }
+    assert!(rules("phase")
+        .policies_for(Domain::H8Sat)
+        .any(|p| p.text.contains("mechanism bundle")));
     for hardware in ["SAT 8A10", "SAT 9621"] {
         // Assignment-only evidence (no bound mechanism bundle) refuses.
         let (direct, swapped) = split_word(false);
@@ -217,7 +214,7 @@ fn layout_is_required_and_never_corrected() {
 
 #[test]
 fn startup_rules_state_the_kernel_getter_refusal() {
-    for domain in [Domain::Sat1, Domain::Sat8, Domain::Sat9] {
+    for domain in [Domain::Sat1, Domain::H8Sat] {
         assert!(rules("startup-prerequisite")
             .policies_for(domain)
             .any(|p| p.text.contains("Kernel-resident getter")));

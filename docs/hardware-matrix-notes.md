@@ -11,6 +11,10 @@ those. Where a note below disagrees with the code, the code is authoritative.
 
 ## What moved where
 
+Since 1.6.0, SAT9 startup inputs are identified by the tray input predicates,
+as on SAT8. The SAT9 E46B values that the hand-made page grouped on are now
+evidence only, so every SAT9 family identifier changed.
+
 | Hand-made page section | Now |
 | --- | --- |
 | Header stats, families, groups, matrix, compare, all firmware, SAT compare | Generated from the registered filters and `identity::discover` |
@@ -41,8 +45,9 @@ them (see CHANGELOG 1.6.0):
   prerequisites", and the conversion overview's "Specialized UD mechanism
   conversions retain their exact-image guards". The UD02/UD03/UD04 recipes were
   removed. A split-word coil rewrite needs identical bound sled mechanism bundles;
-  UD02D against UD03/UD04/SBC/SBW/Slimtype, and XD08/AD08/XD08U against XS08U, share
-  matching families but ship mirrored bundles and are refused.
+  UD02D against UD03/UD04/SBC/SBW/Slimtype share a matching family but ship
+  mirrored bundles and are refused. XS08U no longer shares a family with
+  XD08/AD08/XD08U, because their tray input predicates differ.
 - "An exact UD02-to-UD04 image transformation reproduces its expected digest."
   No UD02-to-UD04 transformation is implemented or planned.
 - Persistent parameter layout: "A conditional Normal-only address-equivalence

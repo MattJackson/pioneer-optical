@@ -44,14 +44,21 @@ fn generated_matrix_holds_its_invariants_over_the_hoard() {
     let mut normalized = BTreeMap::new();
     let (analyses, failures) = page::analyze_hoard(&root, &packages, |_, decoded, analysis| {
         let kernel = decoded.kernel.as_ref();
-        // The page's family is the update path's matching family.
+        // The page's family is the update path's matching family. `Family`
+        // displays without leading zeros; the page pads to 16 digits.
+        let page = analysis
+            .candidate
+            .as_deref()
+            .map(|c| u64::from_str_radix(c, 16).unwrap());
+        let number =
+            |f: pioneer_optical::image::Family| u64::from_str_radix(&f.to_string(), 16).unwrap();
         let family = pioneer_optical::image::family_with_context(
             &decoded.normal.image,
             &analysis.hardware,
             kernel.map(|k| k.image.as_slice()),
         )
-        .map(|f| f.to_string());
-        if family != analysis.candidate {
+        .map(number);
+        if family != page {
             mismatches.push(format!(
                 "{}: page {:?} update path {family:?}",
                 analysis.component, analysis.candidate
@@ -59,7 +66,7 @@ fn generated_matrix_holds_its_invariants_over_the_hoard() {
         }
         if let Some(k) = kernel {
             if let Some(f) = decoded.normal.family_with_kernel(k) {
-                if Some(f.to_string()) != analysis.candidate {
+                if Some(number(f)) != page {
                     mismatches.push(format!("{}: Envelope family {f}", analysis.component));
                 }
             }

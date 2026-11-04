@@ -163,12 +163,19 @@ pub(crate) fn aligned_code_region<'a>(region: &'a [u8], body: &[u8]) -> &'a [u8]
     region.get(skip..).unwrap_or_default()
 }
 
-/// Matrix hardware family from structured platform metadata and native code.
-/// Every required filter, including persistent layout, must be known. Supply
-/// the exact associated Kernel for resident readers and V850 base bindings.
-/// This returns the as-is identity; candidate normalization never authorizes a write.
+/// Matrix hardware family used for matching, from structured platform metadata
+/// and native code. Every required filter, including persistent layout, must be
+/// known. Supply the exact associated Kernel for resident readers and V850 base
+/// bindings.
+///
+/// The family is the registered candidate key: it is built only from facts no
+/// owner corrects (each owner projects away exactly what it may correct, e.g.
+/// the split-word phase assignment). Family equality never authorizes a write;
+/// every remaining difference must still pass its owner's correction proofs, or
+/// the pair is refused at that step. The as-is identity stays available through
+/// [`matrix::discover`] for display and post-correction verification.
 pub fn family_with_context(body: &[u8], hardware: &str, kernel: Option<&[u8]>) -> Option<Family> {
-    matrix::discover(hardware, body, kernel)?.as_is.family()
+    matrix::discover(hardware, body, kernel)?.candidate.family()
 }
 
 /// Whether the body is UHD-capable.

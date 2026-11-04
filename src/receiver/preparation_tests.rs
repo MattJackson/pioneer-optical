@@ -896,7 +896,8 @@ fn native_phase_preparation_is_bidirectional_for_full_and_normal_only_updates() 
         .unwrap();
     let kernel_bytes = direct.kernel().repack(&direct.kernel().image).unwrap();
     let swapped = Update::load(&kernel_bytes, &bytes).unwrap();
-    assert_ne!(direct.family(), swapped.family());
+    // Matching families exclude the correctable phase assignment.
+    assert_eq!(direct.family(), swapped.family());
     for (installed, target) in [(&direct, &swapped), (&swapped, &direct)] {
         fn context(pair: &Update) -> crate::compatibility::Firmware<'_> {
             crate::compatibility::Firmware {

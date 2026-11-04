@@ -222,3 +222,53 @@ fn bank_conversion_and_212u_213u_are_not_sanctioned() {
         .unwrap();
     assert_eq!(kat["same"], Value::Bool(false));
 }
+
+#[test]
+fn matching_family_excludes_phase_but_unproven_correction_still_refuses() {
+    // Family = registered candidate key: built only from facts no owner
+    // corrects. A phase-only difference shares the family; the phase owner then
+    // decides, and a mirrored sled mechanism is refused at that step.
+    let contract = |convention| {
+        let mut body = alloc::vec![0xff; 0x2000];
+        crate::image::matrix::install_test_contract(&mut body, 0x12);
+        body[0xc00..0xd00].fill(0xff);
+        body[0xf00..0x1000].fill(0xff);
+        bundle::tests::install(
+            &mut body,
+            0xc00,
+            0xf00,
+            [0xd00 + 32, 0xd00 + 160],
+            convention,
+        );
+        body
+    };
+    let direct = contract(bundle::tests::Convention::Direct);
+    let coil_only = native::correct_pair(&direct, native::Assignment::Swapped).unwrap();
+    let mirrored = native::correct_pair(
+        &contract(bundle::tests::Convention::Mirrored),
+        native::Assignment::Swapped,
+    )
+    .unwrap();
+    let family = |body: &[u8]| crate::image::family_with_context(body, "SAT 8600", None);
+    let as_is = |body: &[u8]| {
+        crate::image::matrix::discover("SAT 8600", body, None)
+            .unwrap()
+            .as_is
+    };
+    assert!(family(&direct).is_some());
+    assert_eq!(family(&direct), family(&coil_only));
+    assert_eq!(family(&direct), family(&mirrored));
+    assert_ne!(as_is(&direct), as_is(&coil_only));
+    let firmware = |normal| Firmware {
+        hardware: "SAT 8600",
+        normal,
+        kernel: None,
+    };
+    for (a, b) in [(&direct, &mirrored), (&mirrored, &direct)] {
+        assert!(matches!(
+            crate::compatibility::plan(firmware(a), firmware(b)),
+            Err(Error::Unsupported)
+        ));
+    }
+    assert!(crate::compatibility::plan(firmware(&direct), firmware(&coil_only)).is_ok());
+}

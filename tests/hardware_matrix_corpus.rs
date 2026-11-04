@@ -3,7 +3,7 @@
 //! Private-runner job: `PIONEER_HOARD=<firmware-extractor hoard> cargo test
 //! --release --all-features --test hardware_matrix_corpus -- --ignored`.
 //! Every held package is decoded; its registered as-is and candidate family
-//! identifiers must equal the matrix rows, unresolved rows must stay
+//! identifiers and its matching family must equal the matrix rows, unresolved rows must stay
 //! unresolved, Kernel-getter startup rows must refuse selection, and no pair
 //! inside one matrix family may be admitted with a phase correction unless its
 //! complete sled mechanism bundle is bound and identical.
@@ -11,6 +11,7 @@
 use pioneer_optical::compatibility::Firmware;
 use pioneer_optical::envelope::Envelope;
 use pioneer_optical::filters::{identity, startup, Context};
+use pioneer_optical::image::layout::Observation;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -104,9 +105,11 @@ fn every_held_image_matches_the_hardware_matrix() {
     }
     let mut mismatches = Vec::new();
     let mut families: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    let mut assignments = BTreeMap::new();
     for (component, image) in &images {
         let Some(row) = rows.get(component.as_str()) else {
-            mismatches.push(format!("{component}: not in matrix"));
+            // Held after the matrix was generated: reported, never judged.
+            eprintln!("{component}: held image absent from the matrix");
             continue;
         };
         let firmware = Firmware {
@@ -127,6 +130,25 @@ fn every_held_image_matches_the_hardware_matrix() {
         if found != expected {
             mismatches.push(format!("{component}: code {found:?} matrix {expected:?}"));
         }
+        // The matching family (offline: Normal plus its own paired Kernel) is the
+        // matrix candidate key, built only from facts no owner corrects.
+        let matching = pioneer_optical::image::family_with_context(
+            &image.normal.image,
+            &image.hardware,
+            image.kernel.as_ref().map(|k| k.image.as_slice()),
+        )
+        .map(|f| u64::from_str_radix(&f.to_string(), 16).unwrap());
+        let candidate = row["candidate"]
+            .as_str()
+            .map(|c| u64::from_str_radix(c, 16).unwrap());
+        if matching != candidate {
+            mismatches.push(format!(
+                "{component}: matching family {matching:?} matrix {candidate:?}"
+            ));
+        }
+        if let Observation::Known(phase) = &context.native_phase {
+            assignments.insert(component.as_str(), phase.assignment);
+        }
         if let Some((_, candidate)) = found {
             families.entry(candidate).or_default().push(component);
         }
@@ -146,6 +168,11 @@ fn every_held_image_matches_the_hardware_matrix() {
     for members in families.values() {
         for a in members {
             for b in members {
+                // Only pairs whose phase assignments differ can plan a phase edit.
+                match (assignments.get(a), assignments.get(b)) {
+                    (Some(p), Some(q)) if p != q => {}
+                    _ => continue,
+                }
                 let (x, y) = (&images[*a], &images[*b]);
                 let Ok(plan) = pioneer_optical::compatibility::plan(firmware(x), firmware(y))
                 else {

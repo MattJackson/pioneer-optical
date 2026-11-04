@@ -1,6 +1,8 @@
 //! Native startup input and initialization contracts for every platform.
 //! Field variants retain their own address spaces; a projected bit value is
-//! never substituted for another architecture's initialization program.
+//! never substituted for another architecture's initialization program. On SAT
+//! the variant is chosen by which native reader resolves, not by the platform
+//! digit, so equal tray inputs compare equal across SAT8 and SAT9.
 use super::{Assessment, Context, Filter, Role, Value};
 use crate::image::{inputs, layout::Observation, matrix::SatPlatform, registers};
 use alloc::{format, vec, vec::Vec};
@@ -103,30 +105,50 @@ fn legacy_program(normal: &[u8], start: usize) -> Option<Vec<u8>> {
 }
 
 /// Inspect the initialization field without selecting a firmware correction.
+///
+/// The representation is chosen by which native reader resolves, never by the
+/// SAT hardware digit. Role-bound tray input predicates are the identity value on
+/// every SAT platform where they resolve: SAT8 and SAT9 run byte-identical
+/// active-low switch routines, while the SAT9 E46B store is one constant
+/// initialization write that is never read back, so it is evidence only.
+/// SAT1, whose images carry no recognized predicate reader, keeps its native
+/// register or legacy initialization program. SAT8/SAT9 never fall back to the
+/// register projection: equal constant stores say nothing about the inputs.
 pub fn inspect(context: &Context<'_>) -> Assessment {
     if let Some(sat) = &context.sat {
-        return if sat.platform == SatPlatform::Sat8 {
-            match &sat.inputs {
-                Observation::Known(value) => Assessment::known(ID, Role::Hardware, input_value(value),
-                    "Complete role-bound native closed/open predicates; physical address, instruction address encoding, bit and active level retained. No feature-flag projection."),
-                Observation::Conflicting => Assessment::conflicting(ID, Role::Hardware, "Native startup input predicates conflict"),
-                Observation::Unresolved(reason) => Assessment::unresolved(ID, Role::Hardware, format!("Native startup input predicates unresolved: {reason:?}")),
+        match &sat.inputs {
+            Observation::Known(value) => {
+                let startup = match &sat.startup {
+                    Observation::Known(registers::Startup::Register(value)) => format!(
+                        " Startup register {:#06x} mask {:#04x} value {:#04x} retained as evidence only: {:?}",
+                        value.address, value.mask, value.value, value.writes
+                    ),
+                    _ => alloc::string::String::new(),
+                };
+                return Assessment::known(ID, Role::Hardware, input_value(value),
+                    format!("Complete role-bound native closed/open predicates; physical address, instruction address encoding, bit and active level retained. No feature-flag projection.{startup}"));
             }
-        } else {
-            match &sat.startup {
-                Observation::Known(registers::Startup::Register(value)) => Assessment::known(ID, Role::Hardware,
-                    Value::Variant(1, vec![Value::U16(value.address), Value::U8(value.mask), Value::U8(value.value)]),
-                    format!("Native H8 register projection; full defining writes remain evidence: {:?}", value.writes)),
-                Observation::Known(registers::Startup::LegacyProgram { initializer, wrapper }) => {
-                    match legacy_program(context.firmware.normal, *initializer) {
-                        Some(bytes) => Assessment::known(ID, Role::Hardware, Value::Variant(2, vec![Value::Bytes(bytes)]),
-                            format!("Complete older H8 E4 initialization program at Normal+{initializer:#x}, linked by early wrapper Normal+{wrapper:#x}; coordinates excluded from value")),
-                        None => Assessment::unresolved(ID, Role::Hardware, "Recognized older H8 initializer has no complete decoded return boundary"),
-                    }
+            Observation::Conflicting => {
+                return Assessment::conflicting(ID, Role::Hardware, "Native startup input predicates conflict")
+            }
+            Observation::Unresolved(reason) if sat.platform != SatPlatform::Sat1 => {
+                return Assessment::unresolved(ID, Role::Hardware, format!("Native startup input predicates unresolved: {reason:?}"))
+            }
+            Observation::Unresolved(_) => {}
+        }
+        return match &sat.startup {
+            Observation::Known(registers::Startup::Register(value)) => Assessment::known(ID, Role::Hardware,
+                Value::Variant(1, vec![Value::U16(value.address), Value::U8(value.mask), Value::U8(value.value)]),
+                format!("Native H8 register projection; full defining writes remain evidence: {:?}", value.writes)),
+            Observation::Known(registers::Startup::LegacyProgram { initializer, wrapper }) => {
+                match legacy_program(context.firmware.normal, *initializer) {
+                    Some(bytes) => Assessment::known(ID, Role::Hardware, Value::Variant(2, vec![Value::Bytes(bytes)]),
+                        format!("Complete older H8 E4 initialization program at Normal+{initializer:#x}, linked by early wrapper Normal+{wrapper:#x}; coordinates excluded from value")),
+                    None => Assessment::unresolved(ID, Role::Hardware, "Recognized older H8 initializer has no complete decoded return boundary"),
                 }
-                Observation::Conflicting => Assessment::conflicting(ID, Role::Hardware, "Native startup initialization observations conflict"),
-                Observation::Unresolved(reason) => Assessment::unresolved(ID, Role::Hardware, format!("Native startup initialization unresolved: {reason:?}")),
             }
+            Observation::Conflicting => Assessment::conflicting(ID, Role::Hardware, "Native startup initialization observations conflict"),
+            Observation::Unresolved(reason) => Assessment::unresolved(ID, Role::Hardware, format!("Native startup initialization unresolved: {reason:?}")),
         };
     }
     let hardware = context.firmware.hardware;
@@ -182,6 +204,82 @@ mod tests {
             normal,
             kernel: None,
         })
+    }
+    fn tray_switch_image(e46b: u8) -> Vec<u8> {
+        // 212M/X12 shape: closed @FF414000 bit0 == 0, open @FF414100 bit4 == 0,
+        // plus the constant E46B initialization store that is never read back.
+        let mut raw = inputs::tests::fixture();
+        raw[0x800..0x806].copy_from_slice(&[0xf8, e46b, 0x6a, 0x88, 0xe4, 0x6b]);
+        raw
+    }
+    #[test]
+    fn the_resolving_reader_not_the_sat_digit_selects_the_value() {
+        use super::super::Finding;
+        let raw = tray_switch_image(0x15);
+        let sat8 = inspect(&context("SAT 8F00", &raw));
+        let sat9 = inspect(&context("SAT 9000", &raw));
+        let Finding::Known(value) = &sat9.finding else {
+            panic!("{sat9:?}");
+        };
+        let Observation::Known(predicates) = inputs::discover(&raw) else {
+            panic!();
+        };
+        assert!(matches!(value, Value::Variant(3, _)));
+        assert_eq!(*value, input_value(&predicates));
+        assert_eq!(sat8.finding, sat9.finding);
+        // E46B is evidence only: a different constant store never changes the value.
+        assert!(sat9.evidence.contains("0xe46b"));
+        let other = tray_switch_image(0x04);
+        assert_eq!(inspect(&context("SAT 9000", &other)).finding, sat9.finding);
+    }
+    #[test]
+    fn sat8_and_sat9_never_fall_back_to_the_e46b_store() {
+        use super::super::Finding;
+        let mut raw = vec![0xff; 0x100];
+        raw[..6].copy_from_slice(&[0xf8, 0x15, 0x6a, 0x88, 0xe4, 0x6b]);
+        for hardware in ["SAT 8F00", "SAT 9000"] {
+            assert!(matches!(
+                inspect(&context(hardware, &raw)).finding,
+                Finding::Unresolved(_)
+            ));
+        }
+        // SAT1 carries no predicate reader and keeps its native register value.
+        assert_eq!(
+            inspect(&context("SAT 1050", &raw)).finding,
+            Finding::Known(Value::Variant(
+                1,
+                vec![Value::U16(0xe46b), Value::U8(0x11), Value::U8(0x11)]
+            ))
+        );
+    }
+    #[test]
+    fn xd_and_xs_tray_predicates_still_differ() {
+        let term = |address, encoding, bit, active| inputs::Term {
+            address,
+            encoding,
+            bit,
+            active,
+        };
+        let (a32, a16) = (inputs::Encoding::Absolute32, inputs::Encoding::Absolute16);
+        // XD05..XD08U: one switch, closed when bit0 == 0, open when bit0 == 1.
+        let xd = inputs::Predicates {
+            closed: vec![term(0xff414000, a32, 0, false)],
+            opened: vec![term(0xff414000, a32, 0, true)],
+        };
+        // XS07/XS08U: three sensors with the opposite polarity.
+        let xs = inputs::Predicates {
+            closed: vec![
+                term(0xff414000, a32, 0, true),
+                term(0xfdcd, a16, 0, true),
+                term(0xfdcd, a16, 4, true),
+            ],
+            opened: vec![
+                term(0xff414000, a32, 0, false),
+                term(0xfdcd, a16, 0, false),
+                term(0xfdcd, a16, 4, false),
+            ],
+        };
+        assert_ne!(input_value(&xd), input_value(&xs));
     }
     #[test]
     fn empty_platforms_are_unresolved_and_architecture_labels_are_not_values() {

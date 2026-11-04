@@ -288,7 +288,7 @@ pub fn evaluate_with<'a>(
         super::identity::Domain::from_hardware(installed.firmware.hardware),
         super::identity::Domain::from_hardware(target.firmware.hardware),
     ) {
-        (Some(a), Some(b)) if a.partition() == b.partition() => Comparison::Match,
+        (Some(a), Some(b)) if a == b => Comparison::Match,
         (Some(_), Some(_)) => Comparison::Different,
         _ => Comparison::Unresolved,
     };

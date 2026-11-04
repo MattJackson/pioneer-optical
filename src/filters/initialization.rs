@@ -24,7 +24,7 @@ static RULES: super::Rules = super::Rules {
     correction: "Never corrected. Values must match.",
     policies: &[
         super::Policy {
-            domains: &[super::identity::Domain::Sat8, super::identity::Domain::Sat9],
+            domains: &[super::identity::Domain::H8Sat],
             text: "The value is chosen by the native reader that resolves, not by the SAT digit: equal tray input predicates compare equal across SAT8 and SAT9. The constant E46B initialization store is evidence only; SAT8 and SAT9 never fall back to it, so unresolved predicates stay Unresolved.",
         },
         super::Policy {

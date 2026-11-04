@@ -266,7 +266,7 @@ static RULES: super::Rules = super::Rules {
             text: "SAT1 phase correction is suspended pending command-relative phase proof: any assignment change refuses on every interface.",
         },
         super::Policy {
-            domains: &[super::identity::Domain::Sat8, super::identity::Domain::Sat9],
+            domains: &[super::identity::Domain::H8Sat],
             text: "A split-word (F910-F913) coil rewrite is planned only when the complete sled mechanism bundle is bound in both images and identical apart from the coil. Otherwise it refuses as Unsupported, which the Recovery family override does not waive.",
         },
         super::Policy {

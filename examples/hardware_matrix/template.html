@@ -77,7 +77,7 @@ const owners=M.filters,defs=owners.map(o=>o.name),hardwareOwnerIds=owners.filter
 const images=new Map(M.images.map(i=>[i.component,i]));
 const platformOrder=M.platforms.map(p=>p.id);
 let selected=defs.map((_,i)=>i),active='groups',ids=new Map(),analysisInputs=defs.map((_,i)=>i);
-const selectedPlatforms=new Set(['SAT 1xxx','SAT 8xxx','SAT 9xxx'].filter(p=>platformOrder.includes(p)));
+const selectedPlatforms=new Set(['SAT 1xxx','SAT 8xxx/9xxx'].filter(p=>platformOrder.includes(p)));
 if(!selectedPlatforms.size)platformOrder.forEach(p=>selectedPlatforms.add(p));
 function canonical(v){if(Array.isArray(v))return v.map(canonical);if(v&&typeof v==='object')return Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])]));return v;}
 function serialized(v){return JSON.stringify(canonical(v));}

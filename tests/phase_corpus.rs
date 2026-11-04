@@ -397,12 +397,10 @@ fn sat1_original_files_follow_independent_operand_oracle_and_round_trip() {
                                 ));
                                 unresolved_identity += 1;
                             } else {
-                                let plan = compatibility::plan(installed, destination).unwrap();
+                                // SAT1 phase correction is suspended by the hardware matrix.
                                 assert!(matches!(
-                                    plan.prepare_file(&original, None),
-                                    Err(compatibility::Error::Phase(
-                                        CorrectionError::InvalidNormal
-                                    ))
+                                    compatibility::plan(installed, destination),
+                                    Err(compatibility::Error::Unsupported)
                                 ));
                             }
                             invalid_standalone += 1;
@@ -470,29 +468,14 @@ fn sat1_original_files_follow_independent_operand_oracle_and_round_trip() {
                             ));
                             unresolved_identity += 1;
                         } else {
-                            let plan = compatibility::plan(installed, destination)
-                                .unwrap_or_else(|e| panic!("{component}: plan {e:?}"));
-                            let prepared = plan
-                                .prepare_file(&original, kernel.as_ref())
-                                .unwrap()
-                                .unwrap();
-                            // Authenticated files receive a new signature in their header.
-                            // Their encoded payload and decoded image must still match the
-                            // independently constructed operand/checksum oracle exactly.
-                            let signature =
-                                pioneer_optical::envelope::builder::NORMAL_SIGNATURE_RANGE;
-                            assert_eq!(prepared.len(), file.len(), "{component}: full-file length");
+                            // SAT1 phase correction is suspended by the hardware matrix; the
+                            // native operand oracle above stays proven, admission refuses.
                             assert!(
-                prepared
-                    .iter()
-                    .zip(&file)
-                    .enumerate()
-                    .all(|(offset, (a, b))| a == b || signature.contains(&offset)),
-                "{component}: only the exact signature block may differ from raw repack"
-            );
-                            assert!(
-                                load(&prepared).unwrap().image == expected,
-                                "{component}: full-file decoded oracle"
+                                matches!(
+                                    compatibility::plan(installed, destination),
+                                    Err(compatibility::Error::Unsupported)
+                                ),
+                                "{component}: SAT1 phase correction must refuse"
                             );
                         }
                         complete += 1;
@@ -618,6 +601,17 @@ fn every_paired_original_file_proves_preparation_or_missing_kernel_boundary() {
                             normal: &original.image,
                             kernel: kernel_image,
                         };
+                        if pioneer_optical::filters::phase::bundle::bind(&original.image).is_err() {
+                            // Assignment evidence alone never admits a phase correction.
+                            assert!(
+                                matches!(
+                                    compatibility::plan(installed, target),
+                                    Err(compatibility::Error::Unsupported)
+                                ),
+                                "{component}: unbound mechanism bundle must refuse"
+                            );
+                            continue;
+                        }
                         let plan = compatibility::plan(installed, target)
                             .unwrap_or_else(|e| panic!("{component}: plan {e:?}"));
                         let file = plan

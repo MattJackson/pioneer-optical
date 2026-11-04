@@ -174,3 +174,39 @@ fn odd_calls_and_relocated_internal_jumps_are_rejected() {
     }
     assert!(calls > 0 && jumps > 0);
 }
+
+#[test]
+fn sat1_byte_pair_correction_is_suspended_but_other_platforms_keep_it() {
+    use crate::compatibility::{Error, Firmware};
+    use crate::filters::{phase::FILTER, Context, Filter, Transition};
+    for t in templates::TEMPLATES
+        .iter()
+        .filter(|t| t.interface == Interface::BytePair)
+    {
+        let raw = fixture(t);
+        let corrected = correct(&raw, opposite(t.assignment)).unwrap();
+        for (hardware, admitted) in [("SAT 1046", false), ("SAT 8000", true)] {
+            let context = |normal| {
+                Context::new(Firmware {
+                    hardware,
+                    normal,
+                    kernel: None,
+                })
+            };
+            let (installed, target) = (context(&corrected), context(&raw));
+            let plan = FILTER.plan(
+                &Transition {
+                    installed: &installed,
+                    target: &target,
+                },
+                &FILTER.inspect(&installed),
+                &FILTER.inspect(&target),
+            );
+            if admitted {
+                assert!(matches!(plan, Ok(Some(_))), "{hardware}");
+            } else {
+                assert!(matches!(plan, Err(Error::Unsupported)), "{hardware}");
+            }
+        }
+    }
+}

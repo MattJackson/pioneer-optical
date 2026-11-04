@@ -393,6 +393,8 @@ pub mod sense {
     }
 }
 
+#[cfg(all(test, feature = "envelope"))]
+mod hardware_matrix_tests;
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;

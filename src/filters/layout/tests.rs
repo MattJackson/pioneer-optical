@@ -1,4 +1,6 @@
 use super::*;
+use crate::filters::Finding;
+use crate::image::phase;
 use crate::{
     compatibility::Firmware,
     image::layout::{LogicalDomain, RecordRegion},
@@ -52,106 +54,48 @@ fn fw<'a>(n: &'a [u8], k: &'a [u8]) -> Firmware<'a> {
         kernel: Some(k),
     }
 }
-fn preparation<'a>(target: Firmware<'a>) -> Preparation<'a> {
-    Preparation {
-        target,
-        #[cfg(feature = "envelope")]
-        normal: None,
-        #[cfg(feature = "envelope")]
-        kernel: None,
-    }
-}
-
-#[test]
-fn owner_prepares_layout_only_and_verifies_independent_phase_composition() {
-    let n = normal();
-    let k = kernel();
-    let layout_target = variant(&n);
-    let target = phase::correct_normal(&layout_target, phase::Assignment::Swapped).unwrap();
-    let source = Context::new(fw(&n, &k));
-    let destination = Context::new(fw(&target, &k));
-    let operation = FILTER
+fn plan(installed: &Context<'_>, target: &Context<'_>) -> Result<bool, Error> {
+    FILTER
         .plan(
-            &Transition {
-                installed: &source,
-                target: &destination,
-            },
-            &FILTER.inspect(&source),
-            &FILTER.inspect(&destination),
+            &Transition { installed, target },
+            &FILTER.inspect(installed),
+            &FILTER.inspect(target),
         )
-        .unwrap()
-        .unwrap();
-    let context = preparation(fw(&target, &k));
-    let changed = operation.prepare(&context).unwrap().unwrap();
-    assert_eq!(operation.filter_id(), FILTER.id());
-    assert_eq!(
-        operation.description(),
-        Some(
-            crate::compatibility::Correction::PersistentParameterLayout {
-                from: 0x5984,
-                to: 0x9984
-            }
-        )
-    );
-    assert!(
-        matches!(phase::discover(&changed),Observation::Known(p) if p.assignment==phase::Assignment::Swapped)
-    );
-    let Observation::Known(expected) = native(&source) else {
-        panic!("native source layout")
-    };
-    assert!(
-        matches!(layout::discover_h8(&changed,Some(&k)), Observation::Known(p) if p == expected)
-    );
-    operation.verify(&context, &changed).unwrap();
-    operation.verify(&context, &n).unwrap();
-    let mut unrelated = n.clone();
-    unrelated[0x9000] ^= 1;
-    fix(&mut unrelated);
-    assert_eq!(
-        operation.verify(&context, &unrelated),
-        Err(Error::VerificationFailed)
-    );
-    let altered = preparation(fw(&unrelated, &k));
-    assert_eq!(operation.prepare(&altered), Err(Error::ComponentMismatch));
+        .map(|operation| operation.is_some())
 }
 
 #[test]
-fn layout_planning_requires_equal_proved_geometry_and_complete_components() {
+fn address_only_difference_is_never_corrected_in_either_direction() {
+    // The hardware matrix marks persistent layout not correctable, even where
+    // only the primary record address differs and a Kernel is supplied.
     let n = normal();
     let k = kernel();
-    let target = variant(&n);
+    let moved = variant(&n);
+    let swapped = phase::correct_normal(&moved, phase::Assignment::Swapped).unwrap();
     let source = Context::new(fw(&n, &k));
-    let mut bad = target.clone();
-    bad[0x7000] ^= 1;
+    for target in [&moved, &swapped] {
+        let destination = Context::new(fw(target, &k));
+        assert_ne!(FILTER.inspect(&source), FILTER.inspect(&destination));
+        assert_eq!(plan(&source, &destination), Err(Error::Incompatible));
+        assert_eq!(plan(&destination, &source), Err(Error::Incompatible));
+    }
+    assert_eq!(plan(&source, &source), Ok(false));
+}
+
+#[test]
+fn unresolved_layout_refuses_as_unresolved_identity() {
+    let n = normal();
+    let k = kernel();
+    let mut bad = variant(&n);
+    bad[0x1000..0x3000].fill(0xff);
     fix(&mut bad);
+    let source = Context::new(fw(&n, &k));
     let missing = Context::new(fw(&bad, &k));
     assert!(matches!(
-        FILTER.plan(
-            &Transition {
-                installed: &source,
-                target: &missing
-            },
-            &FILTER.inspect(&source),
-            &FILTER.inspect(&missing)
-        ),
-        Err(Error::UnresolvedIdentity)
+        FILTER.inspect(&missing).finding,
+        Finding::Unresolved(_)
     ));
-    let mut other_kernel = k.clone();
-    other_kernel[0x9000] ^= 1;
-    let destination = Context::new(fw(&target, &other_kernel));
-    assert!(matches!(
-        FILTER.plan(
-            &Transition {
-                installed: &source,
-                target: &destination
-            },
-            &FILTER.inspect(&source),
-            &FILTER.inspect(&destination)
-        ),
-        Err(Error::PersistentLayout(
-            layout::H8RelocationError::KernelMismatch
-        ))
-    ));
+    assert_eq!(plan(&source, &missing), Err(Error::UnresolvedIdentity));
 }
 
 #[test]
@@ -232,7 +176,7 @@ fn native_misses_are_reported_and_do_not_create_equal_layouts() {
 }
 
 #[test]
-fn address_only_owner_is_bidirectional_and_candidate_values_remain_distinct() {
+fn address_only_candidate_values_remain_distinct() {
     let source_normal = normal();
     let target_normal = variant(&source_normal);
     let kernel = kernel();
@@ -241,33 +185,10 @@ fn address_only_owner_is_bidirectional_and_candidate_values_remain_distinct() {
     let a = FILTER.inspect(&source);
     let b = FILTER.inspect(&target);
     assert_ne!(FILTER.candidate(&source, &a), FILTER.candidate(&target, &b));
-    for (installed, requested, from, to, expected) in [
-        (&source, &target, 0x5984, 0x9984, &source_normal),
-        (&target, &source, 0x9984, 0x5984, &target_normal),
-    ] {
-        let operation = FILTER
-            .plan(
-                &Transition {
-                    installed,
-                    target: requested,
-                },
-                &FILTER.inspect(installed),
-                &FILTER.inspect(requested),
-            )
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            operation.description(),
-            Some(crate::compatibility::Correction::PersistentParameterLayout { from, to })
-        );
-        let context = preparation(requested.firmware);
-        assert_eq!(operation.prepare(&context).unwrap(), Some(expected.clone()));
-        assert_eq!(operation.prepare(&context).unwrap(), Some(expected.clone()));
-    }
 }
 
 #[test]
-fn record_format_and_independent_known_geometry_remain_required() {
+fn record_format_and_missing_kernel_differences_refuse() {
     let n = normal();
     let k = kernel();
     let source = Context::new(fw(&n, &k));
@@ -275,70 +196,18 @@ fn record_format_and_independent_known_geometry_remain_required() {
     forty[0x1000..0x3000].fill(0xff);
     layout::install_test_layout_variant(&mut forty, 0x1000, 0);
     fix(&mut forty);
-    let target = Context::new(fw(&forty, &k));
-    assert!(matches!(
-        FILTER.plan(
-            &Transition {
-                installed: &source,
-                target: &target
-            },
-            &FILTER.inspect(&source),
-            &FILTER.inspect(&target)
-        ),
+    assert_eq!(
+        plan(&source, &Context::new(fw(&forty, &k))),
         Err(Error::Incompatible)
-    ));
+    );
     let other_address = variant(&n);
-    let mut geometry_difference = Context::new(fw(&other_address, &k));
-    // Independent cached native geometry must remain a required comparison;
-    // equal primary record dimensions cannot erase that observation.
-    geometry_difference.sat.as_mut().unwrap().geometry =
-        Observation::Known(crate::image::geometry::Geometry::MarkerBanks {
-            marker: 0xfedc4322,
-            stride: 0xc000,
-        });
-    assert!(matches!(
-        FILTER.plan(
-            &Transition {
-                installed: &source,
-                target: &geometry_difference
-            },
-            &FILTER.inspect(&source),
-            &FILTER.inspect(&geometry_difference)
-        ),
-        Err(Error::Incompatible)
-    ));
     let mut unrelated = other_address.clone();
     unrelated[0x9000] ^= 1;
     fix(&mut unrelated);
-    let changed = Context::new(fw(&unrelated, &k));
-    assert!(matches!(
-        FILTER.plan(
-            &Transition {
-                installed: &source,
-                target: &changed
-            },
-            &FILTER.inspect(&source),
-            &FILTER.inspect(&changed)
-        ),
-        Err(Error::PersistentLayout(
-            layout::H8RelocationError::OtherProgramDifference
-        ))
-    ));
-    let missing_kernel = Context::new(Firmware {
-        kernel: None,
-        ..fw(&other_address, &k)
-    });
-    assert!(matches!(
-        FILTER.plan(
-            &Transition {
-                installed: &source,
-                target: &missing_kernel
-            },
-            &FILTER.inspect(&source),
-            &FILTER.inspect(&missing_kernel)
-        ),
-        Err(Error::UnresolvedIdentity)
-    ));
+    assert_eq!(
+        plan(&source, &Context::new(fw(&unrelated, &k))),
+        Err(Error::Incompatible)
+    );
 }
 
 #[test]

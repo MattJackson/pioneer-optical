@@ -13,8 +13,6 @@ pub(crate) use h8::tests::{
 pub(crate) use h8::{normal_reader, normal_reader_binding};
 mod h8_shapes;
 pub use h8::{discover_h8, discover_h8_component, discover_h8_reader};
-mod relocation;
-pub use relocation::{plan_h8_relocation, H8AddressEdit, H8RelocationError, H8RelocationPlan};
 mod m32c;
 mod m32c_serial;
 mod m32c_serial_shapes;

@@ -169,8 +169,7 @@ impl CodedError for crate::receiver::PreparationError {
         match self {
             Self::Startup(error) => error.code(),
             Self::PhaseCorrection(
-                error @ (crate::compatibility::Error::PersistentLayoutOverlap { .. }
-                | crate::compatibility::Error::PersistentLayout(_)),
+                error @ crate::compatibility::Error::PersistentLayoutOverlap { .. },
             ) => error.code(),
             Self::PhaseCorrection(_) => "pioneer.phase.correction_unproven",
             Self::UnresolvedStartup => "pioneer.preparation.unresolved_startup",
@@ -283,23 +282,6 @@ impl CodedError for crate::image::KernelHandoffError {
             Self::UnknownInstalled => "pioneer.kernel_handoff.unknown_installed",
             Self::UnknownTarget => "pioneer.kernel_handoff.unknown_target",
             Self::Mismatch { .. } => "pioneer.kernel_handoff.mismatch",
-        }
-    }
-}
-
-#[cfg(feature = "image")]
-impl CodedError for crate::image::layout::H8RelocationError {
-    fn code(&self) -> &'static str {
-        match self {
-            Self::InvalidNormal => "pioneer.layout.h8_relocation.invalid_normal",
-            Self::KernelMismatch => "pioneer.layout.h8_relocation.kernel_mismatch",
-            Self::UnresolvedReader => "pioneer.layout.h8_relocation.unresolved_reader",
-            Self::ResidentReader => "pioneer.layout.h8_relocation.resident_reader",
-            Self::FormatChange => "pioneer.layout.h8_relocation.format_change",
-            Self::NormalOverlap => "pioneer.layout.h8_relocation.normal_overlap",
-            Self::OtherProgramDifference => "pioneer.layout.h8_relocation.other_program_difference",
-            Self::Phase => "pioneer.layout.h8_relocation.phase",
-            Self::Verification => "pioneer.layout.h8_relocation.verification",
         }
     }
 }

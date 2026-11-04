@@ -100,7 +100,7 @@ pub(crate) fn install_test_contract(body: &mut [u8], variant: u8) {
 }
 
 /// Registered-filter family of a synthetic contract from [`install_test_contract`].
-#[cfg(test)]
+#[cfg(all(test, feature = "envelope"))]
 pub(crate) fn test_family(variant: u8) -> super::Family {
     let mut body = alloc::vec![0xff; 0x2000];
     install_test_contract(&mut body, variant);

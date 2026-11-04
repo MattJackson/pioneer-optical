@@ -87,8 +87,6 @@ pub enum Error {
     Unsupported,
     /// Native phase correction or Normal checksum validation failed.
     Phase(phase::CorrectionError),
-    /// Complete Normal-only persistent layout proof failed.
-    PersistentLayout(crate::image::layout::H8RelocationError),
     /// Corrected firmware did not reproduce the installed identity.
     VerificationFailed,
     /// Envelope components differ from the firmware used to make the plan.
@@ -112,7 +110,6 @@ impl core::fmt::Display for Error {
                 "target Normal occupies retained parameter-record addresses {start:#08x}..{end:#08x}; changing the primary address alone cannot preserve these records"),
             Self::Unsupported => f.write_str("this native firmware correction is unsupported"),
             Self::Phase(error) => write!(f, "native phase correction failed: {error:?}"),
-            Self::PersistentLayout(error) => write!(f, "persistent layout correction proof failed: {error}"),
             Self::VerificationFailed => {
                 f.write_str("prepared firmware did not reproduce the required identity")
             }
@@ -128,14 +125,7 @@ impl core::fmt::Display for Error {
         }
     }
 }
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::PersistentLayout(error) => Some(error),
-            _ => None,
-        }
-    }
-}
+impl std::error::Error for Error {}
 
 impl crate::CodedError for Error {
     fn code(&self) -> &'static str {
@@ -147,7 +137,6 @@ impl crate::CodedError for Error {
             }
             Self::Unsupported => "pioneer.compatibility.unsupported_correction",
             Self::Phase(_) => "pioneer.compatibility.phase_correction",
-            Self::PersistentLayout(_) => "pioneer.compatibility.persistent_layout_correction",
             Self::VerificationFailed => "pioneer.compatibility.verification_failed",
             Self::ComponentMismatch => "pioneer.compatibility.component_mismatch",
             Self::Representation => "pioneer.compatibility.representation_failed",
@@ -176,13 +165,6 @@ pub enum Correction {
         /// Required installed assignment.
         to: phase::Assignment,
     },
-    /// Retain the installed primary location using a complete-program proof.
-    PersistentParameterLayout {
-        /// Primary location encoded in the target before correction.
-        from: u32,
-        /// Primary location required by installed retained records.
-        to: u32,
-    },
 }
 
 /// Component-bound owner plan.
@@ -190,8 +172,8 @@ pub enum Correction {
 /// Planning never performs device I/O. This plan borrows the exact target bytes
 /// used for detection; callers cannot substitute another image at application.
 /// Envelope authentication and live setting prerequisites remain receiver gates.
-/// Address relocation additionally requires complete Normal program equivalence
-/// and the exact unchanged Kernel; published candidate keys retain layout.
+/// Persistent parameter layout is never corrected; published candidate keys
+/// retain it.
 pub struct CorrectionPlan<'a> {
     target: Firmware<'a>,
     expected: Option<Key>,
@@ -464,12 +446,10 @@ mod tests {
         crate::image::layout::install_test_layout_variant(&mut different_layout, 0x1000, 5);
         crate::startup::bank::fixture(&mut different_layout);
         assert!(discover("SAT 8600", &different_layout, None).is_some());
-        // Both native layouts are known and differ, but these fixtures supply
-        // no Kernel for the component-bound relocation proof. Refuse the
-        // unresolved correction rather than claiming a proved format conflict.
+        // Both native layouts are known and differ: layout is never corrected.
         assert_eq!(
             prepare_phase(context(&different_layout), context(&swapped)),
-            Err(Error::UnresolvedIdentity)
+            Err(Error::Incompatible)
         );
         let mut missing = direct.clone();
         missing[0x1000..].fill(0xff);

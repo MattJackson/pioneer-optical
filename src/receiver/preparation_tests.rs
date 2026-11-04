@@ -1123,7 +1123,7 @@ fn startup_selection_uses_exact_architecture_and_never_gives_ata_or_scsi_h8_acti
 }
 
 #[test]
-fn forced_full_and_normal_only_keep_declared_native_layout_and_phase_effects() {
+fn forced_full_and_normal_only_never_relocate_layout_but_keep_phase_effects() {
     use crate::image::{layout, phase};
     fn file(base: &Update, image: &[u8]) -> Update {
         let mut key = [0; 20];
@@ -1210,6 +1210,8 @@ fn forced_full_and_normal_only_keep_declared_native_layout_and_phase_effects() {
         .candidate
     };
     assert_ne!(candidate(&installed), candidate(&target));
+    // The recovery override waives the non-correctable layout difference; it
+    // never relocates. Only the coil mapping is aligned to the installed one.
     for (installed, target) in [(&installed, &target), (&target, &installed)] {
         let receiver = Receiver::from_installed(installed).unwrap();
         let full = receiver
@@ -1218,17 +1220,21 @@ fn forced_full_and_normal_only_keep_declared_native_layout_and_phase_effects() {
         let normal = receiver
             .prepare_normal_without_family_check(target.normal_transfer())
             .unwrap();
-        assert_eq!(full.target.normal().image, installed.normal().image);
-        assert_eq!(normal.normal_image(), installed.normal().image);
+        let crate::image::layout::Observation::Known(required) =
+            phase::discover(&installed.normal().image)
+        else {
+            panic!("installed phase");
+        };
+        let expected = phase::correct_normal(&target.normal().image, required.assignment).unwrap();
+        assert_ne!(expected, installed.normal().image);
+        assert_eq!(full.target.normal().image, expected);
+        assert_eq!(normal.normal_image(), expected);
         assert_eq!(full.target.kernel().image, target.kernel().image);
         assert!(full
             .settings()
             .firmware_corrections()
             .iter()
-            .any(|effect| matches!(
-                effect,
-                crate::compatibility::Correction::PersistentParameterLayout { .. }
-            )));
+            .all(|effect| matches!(effect, crate::compatibility::Correction::Phase { .. })));
         assert_eq!(
             full.settings().firmware_corrections(),
             normal.settings().firmware_corrections()

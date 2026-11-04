@@ -6,6 +6,8 @@
 pub mod mechanism;
 #[cfg(feature = "envelope")]
 pub(crate) mod preparation;
+/// Sled mechanism convention bundle bound from native code.
+pub mod bundle;
 /// Native phase recognition, operand corrections and instruction contracts.
 pub mod native;
 
@@ -298,6 +300,9 @@ impl Filter for PhaseFilter {
         }
         // This is a native grouping contract, not checksum/file admission.
         // Complete paired grammar is a reviewed two-way output permutation.
+        // The candidate projection is the published family grouping and stays
+        // assignment-free; correctability is decided per pair in `plan`, where
+        // the complete mechanism bundle is gated.
         if fact.architecture == Architecture::H8
             && matches!(native::discover_pair(context.firmware.normal),Observation::Known(p) if p.assignment == fact.assignment)
             && matches!(&context.native_phase,Observation::Known(actual) if *actual == fact)
@@ -337,6 +342,7 @@ impl Filter for PhaseFilter {
         {
             return Err(Error::UnresolvedIdentity);
         }
+        mechanism_gate(transition, from, required)?;
         if from == required {
             return Ok(None);
         }
@@ -349,6 +355,34 @@ impl Filter for PhaseFilter {
         })))
     }
 }
+/// Split-word coil mapping is one element of the sled mechanism convention.
+/// A coil rewrite is only planned when every other bundle element is bound in
+/// both images and already identical; equal coil mappings must not hide a
+/// differing bound element. Refusal is `Unsupported`, which a family override
+/// cannot waive: flashing as-is would drive the sled in the wrong convention.
+fn mechanism_gate(
+    transition: &Transition<'_, '_>,
+    from: NativePhase,
+    required: NativePhase,
+) -> Result<(), Error> {
+    if !matches!(from.interface, Interface::H8SplitWord { .. }) {
+        return Ok(());
+    }
+    let installed = bundle::bind(transition.installed.firmware.normal);
+    let target = bundle::bind(transition.target.firmware.normal);
+    match (installed, target) {
+        (Ok(a), Ok(b)) if a.without_coil() == b.without_coil() => {
+            if a.coil != required.assignment || b.coil != from.assignment {
+                return Err(Error::UnresolvedIdentity);
+            }
+            Ok(())
+        }
+        (Ok(_), Ok(_)) => Err(Error::Unsupported),
+        _ if from.assignment != required.assignment => Err(Error::Unsupported),
+        _ => Ok(()),
+    }
+}
+
 fn fact(assessment: &Assessment) -> Result<NativePhase, Error> {
     match &assessment.finding {
         Finding::Known(value) => NativePhase::from_value(value).ok_or(Error::UnresolvedIdentity),

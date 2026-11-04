@@ -75,6 +75,7 @@ fn reviewed_image_is_replanned_and_a_new_native_mismatch_refuses() {
     let documents = [document(&normal.image, &normal, &allowed, false)];
     let prepared = prepare(
         Some(&native),
+        None,
         &source,
         &normal,
         &kernel,
@@ -99,6 +100,7 @@ fn reviewed_image_is_replanned_and_a_new_native_mismatch_refuses() {
     assert!(matches!(
         prepare(
             Some(&native),
+            None,
             &source,
             &normal,
             &kernel,
@@ -133,6 +135,7 @@ fn post_mechanism_native_phase_operation_is_applied_and_clears_stock_authenticat
     let documents = [document(&installed.image, &target, &target.image, true)];
     let prepared = prepare(
         Some(&native),
+        None,
         &source,
         &target,
         &target_kernel,
@@ -173,6 +176,7 @@ fn raw_reviewed_effect_does_not_grant_missing_global_native_admission() {
     assert!(!raw.verified_by_filters());
     assert!(matches!(
         prepare(
+            None,
             None,
             &source,
             &normal,

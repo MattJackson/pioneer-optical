@@ -76,6 +76,13 @@ pub(crate) fn install_test_contract(body: &mut [u8], variant: u8) {
     }
     body[0x800..0xc00].copy_from_slice(&input[..0x400]);
     body[0xd00..0xf00].copy_from_slice(&super::phase::tests::fixture(false));
+    crate::filters::phase::bundle::tests::install(
+        body,
+        0xc00,
+        0xf00,
+        [0xd00 + 32, 0xd00 + 160],
+        crate::filters::phase::bundle::tests::Convention::Direct,
+    );
     super::layout::install_test_layout(body, 0x1000);
     // An actual required IRQ field carries the synthetic family's distinction.
     body[0x700..0x706].copy_from_slice(&[0xf8, variant, 0x6a, 0x88, 0xff, 0xc5]);

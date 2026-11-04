@@ -49,8 +49,11 @@ fn verify_mechanism_footprint(
 /// live prerequisites remain mandatory throughout composition. Every other
 /// required native effect is replanned and verified on the reviewed output;
 /// no correction from the original target is discarded or blindly replayed.
+// The eighth argument exists only in test builds (injected recipe documents).
+#[cfg_attr(test, allow(clippy::too_many_arguments))]
 pub(crate) fn prepare(
     native: Option<&CorrectionPlan<'_>>,
+    refused: Option<(crate::compatibility::Firmware<'_>, crate::filters::runner::Policy)>,
     source: &mechanism::Contract,
     normal: &Envelope,
     kernel: &Envelope,
@@ -81,7 +84,9 @@ pub(crate) fn prepare(
             // A reviewed mechanism recipe changes the original target grammar.
             // Rebind every native owner to its exact authenticated output, using
             // the immutable installed components and the original policy.
-            let native = native.ok_or(PreparationError::Firmware(Error::UnresolvedIdentity))?;
+            if native.is_none() && refused.is_none() {
+                return Err(PreparationError::Firmware(Error::UnresolvedIdentity));
+            }
             let bytes = crate::compatibility::rebuild_normal(
                 normal,
                 Some(kernel),
@@ -106,13 +111,22 @@ pub(crate) fn prepare(
             });
             verify_mechanism_footprint(&requested_context, &reviewed_context)
                 .map_err(|_| PreparationError::Mechanism(mechanism::Error::Guard))?;
-            let replanned = native
-                .replan(crate::compatibility::Firmware {
-                    hardware: &reviewed.info().hardware_version,
-                    normal: &reviewed.image,
-                    kernel: Some(&kernel.image),
-                })
-                .map_err(PreparationError::Firmware)?;
+            let output = crate::compatibility::Firmware {
+                hardware: &reviewed.info().hardware_version,
+                normal: &reviewed.image,
+                kernel: Some(&kernel.image),
+            };
+            // A target refused as unsupported (for example a mirrored sled
+            // mechanism bundle) is never prepared itself; only the reviewed
+            // output is planned from the same installed snapshot and policy.
+            let replanned = match (native, refused) {
+                (Some(native), _) => native.replan(output),
+                (None, Some((installed, policy))) => {
+                    crate::compatibility::plan_with_policy(installed, output, policy)
+                }
+                (None, None) => Err(Error::UnresolvedIdentity),
+            }
+            .map_err(PreparationError::Firmware)?;
             if let Some(image) = replanned
                 .prepare_image(&reviewed, Some(kernel))
                 .map_err(PreparationError::Firmware)?
@@ -134,6 +148,9 @@ pub(crate) fn prepare(
                 .prepare_image(normal, Some(kernel))
                 .map_err(PreparationError::Firmware)?
                 .map(|image| PreparedCorrection::native(image, plan.corrections())),
+            None if refused.is_some() => {
+                return Err(PreparationError::Firmware(Error::Unsupported))
+            }
             None => None,
         },
     };

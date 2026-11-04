@@ -171,7 +171,37 @@ impl Receiver {
         kernel: &Envelope,
         check_family: bool,
     ) -> Result<Option<crate::compatibility::PreparedCorrection>, PreparationError> {
-        let native = self.plan_native_correction(normal, kernel, check_family)?;
+        // An unsupported native correction (e.g. a mirrored sled mechanism
+        // bundle) is deferred: only a reviewed mechanism output may proceed,
+        // and it is replanned from the installed snapshot under this policy.
+        let (native, refused) = match self.plan_native_correction(normal, kernel, check_family) {
+            Ok(native) => (native, None),
+            Err(PreparationError::PhaseCorrection(crate::compatibility::Error::Unsupported)) => {
+                let installed =
+                    self.installed_normal
+                        .as_ref()
+                        .ok_or(PreparationError::Compatibility(
+                            Error::UnknownInstalledFamily,
+                        ))?;
+                let policy = if check_family {
+                    crate::filters::runner::Policy::Strict
+                } else {
+                    crate::filters::runner::Policy::FamilyOverride
+                };
+                (
+                    None,
+                    Some((
+                        crate::compatibility::Firmware {
+                            hardware: &installed.info().hardware_version,
+                            normal: &installed.image,
+                            kernel: self.installed_kernel.as_ref().map(|k| k.image.as_slice()),
+                        },
+                        policy,
+                    )),
+                )
+            }
+            Err(error) => return Err(error),
+        };
         let original = if self.settings_contract.hardware_sensitive() {
             match &self.original_product {
                 Some(Ok(original)) => Some(original.as_str()),
@@ -183,6 +213,7 @@ impl Receiver {
         };
         crate::compatibility::prepare_corrections(
             native.as_ref(),
+            refused,
             &self.settings_contract,
             normal,
             kernel,

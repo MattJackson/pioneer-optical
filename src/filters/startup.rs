@@ -115,6 +115,16 @@ fn native_h8(context: &Context<'_>) -> bool {
         )
 }
 
+/// Normal delegates persistent-word reads to a Kernel-resident getter that was
+/// not supplied (BDR-202 1.06/1.07, BDC-202 8.07: 0x404622). The startup word
+/// cannot be bound, so no action, including neutral 0xFFFF, is selected.
+fn resident_reader_missing(firmware: crate::compatibility::Firmware<'_>) -> bool {
+    matches!(
+        crate::image::layout::discover_h8_reader(firmware.normal, firmware.kernel),
+        Observation::Unresolved(crate::image::layout::Unresolved::ResidentCodeRequired(_))
+    )
+}
+
 /// Select the existing verified H8 word transaction for positively recognized
 /// native H8 firmware. ATA/SCSI return no H8 action; their native requirements
 /// remain separate and never inherit the H8 A0 write command.
@@ -136,7 +146,7 @@ pub fn selection_with_policy(
     if context.sat.is_none() {
         return Ok(None);
     }
-    if !native_h8(context) {
+    if !native_h8(context) || resident_reader_missing(context.firmware) {
         return Err(Error::UnresolvedIdentity);
     }
     crate::compatibility::startup::plan_with_policy(context.firmware.normal, policy)
@@ -230,6 +240,26 @@ impl Filter for Startup {
 mod tests {
     use super::*;
     use crate::compatibility::Firmware;
+    #[test]
+    fn kernel_resident_getter_without_its_kernel_is_unresolved() {
+        // Normal delegating persistent reads (A4/A5) to Kernel 0x400100.
+        let mut normal = alloc::vec![0xff; 64];
+        normal[..24].copy_from_slice(&[
+            0x79, 0, 0, 0xa4, 0x5e, 0x40, 1, 0, 0x6f, 0xf0, 0, 4, 0x79, 0, 0, 0xa5, 0x5e, 0x40, 1,
+            0, 0x6f, 0xf0, 0, 6,
+        ]);
+        let firmware = Firmware {
+            hardware: "SAT 1003",
+            normal: &normal,
+            kernel: None,
+        };
+        assert!(resident_reader_missing(firmware));
+        assert!(selection(&Context::new(firmware)).is_err());
+        assert!(!resident_reader_missing(Firmware {
+            normal: &[0xff; 64],
+            ..firmware
+        }));
+    }
     #[test]
     fn missing_comparison_never_becomes_a_native_ffff_finding_or_action() {
         for hardware in [

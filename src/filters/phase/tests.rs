@@ -1,7 +1,14 @@
 use super::*;
 
 fn fixture() -> Vec<u8> {
-    crate::image::phase::tests::fixture(false)
+    bundled(bundle::tests::Convention::Direct)
+}
+/// Coil functions plus every other bound mechanism element.
+fn bundled(convention: bundle::tests::Convention) -> Vec<u8> {
+    let mut raw = crate::image::phase::tests::fixture(false);
+    raw.resize(0x400, 0xff);
+    bundle::tests::install(&mut raw, 0x200, 0x300, [32, 160], convention);
+    raw
 }
 fn context<'a>(normal: &'a [u8]) -> Context<'a> {
     Context::new(Firmware {
@@ -266,4 +273,94 @@ fn helper_relocation_does_not_become_phase_hardware_identity() {
         FILTER.candidate(&a, &FILTER.inspect(&a)),
         FILTER.candidate(&b, &FILTER.inspect(&b))
     );
+}
+
+fn plan_pair(installed: &[u8], target: &[u8]) -> Result<Option<Box<dyn Operation>>, Error> {
+    let (installed, target) = (context(installed), context(target));
+    FILTER.plan(
+        &Transition {
+            installed: &installed,
+            target: &target,
+        },
+        &FILTER.inspect(&installed),
+        &FILTER.inspect(&target),
+    )
+}
+
+#[test]
+fn mirrored_mechanism_bundle_refuses_coil_only_correction_in_both_directions() {
+    // Opposite coil mapping AND every other element mirrored (XD08 vs XS08U
+    // shape): a coil rewrite alone would leave the DSP loader, 0x127/0x128
+    // conversions, mode sign and 0xEC bit in the target convention.
+    let direct = fixture();
+    let mirrored = native::correct_pair(
+        &bundled(bundle::tests::Convention::Mirrored),
+        native::Assignment::Swapped,
+    )
+    .unwrap();
+    for (installed, target) in [(&direct, &mirrored), (&mirrored, &direct)] {
+        assert!(matches!(plan_pair(installed, target), Err(Error::Unsupported)));
+    }
+    // Same coil mapping does not hide differing bound elements.
+    let mirrored_same_coil = bundled(bundle::tests::Convention::Mirrored);
+    assert!(matches!(
+        plan_pair(&direct, &mirrored_same_coil),
+        Err(Error::Unsupported)
+    ));
+}
+
+#[test]
+fn coil_only_difference_with_identical_bundle_round_trips_byte_exact() {
+    for convention in [
+        bundle::tests::Convention::Direct,
+        bundle::tests::Convention::Mirrored,
+    ] {
+        let a = complete(bundled(convention));
+        let b = native::correct_normal(&a, native::Assignment::Swapped).unwrap();
+        for (installed, target) in [(&a, &b), (&b, &a)] {
+            let operation = plan_pair(installed, target).unwrap().unwrap();
+            let prepared = operation
+                .prepare(&preparation(context(target).firmware))
+                .unwrap()
+                .unwrap();
+            // The raw path leaves the checksum word to the shared composer.
+            assert!(prepared[..16] == installed[..16] && prepared[20..] == installed[20..]);
+        }
+    }
+}
+
+#[test]
+fn unbound_bundle_refuses_correction_but_not_an_identical_coil_mapping() {
+    let mut raw = crate::image::phase::tests::fixture(false);
+    raw.resize(0x400, 0xff);
+    let swapped = native::correct_pair(&raw, native::Assignment::Swapped).unwrap();
+    assert!(bundle::bind(&raw).is_err());
+    assert!(matches!(plan_pair(&raw, &swapped), Err(Error::Unsupported)));
+    assert!(matches!(plan_pair(&swapped, &raw), Err(Error::Unsupported)));
+    assert!(matches!(plan_pair(&raw, &raw), Ok(None)));
+    // One side bound, the other not: still no coil-only correction.
+    let bound = fixture();
+    assert!(matches!(plan_pair(&bound, &swapped), Err(Error::Unsupported)));
+}
+
+#[test]
+fn family_override_never_waives_a_mechanism_refusal() {
+    let direct = fixture();
+    let mirrored = native::correct_pair(
+        &bundled(bundle::tests::Convention::Mirrored),
+        native::Assignment::Swapped,
+    )
+    .unwrap();
+    let (installed, target) = (context(&direct), context(&mirrored));
+    let refused = crate::filters::runner::evaluate_with(
+        &installed,
+        &target,
+        crate::filters::runner::Policy::FamilyOverride,
+        &[&FILTER],
+    )
+    .unwrap();
+    assert!(refused.admit().is_err());
+    let decision = &refused.decisions()[0];
+    assert!(!decision.waived);
+    assert_eq!(decision.blocked(), Some(Error::Unsupported));
 }

@@ -142,9 +142,9 @@ pub struct SatEvidence {
     pub geometry: Observation<geometry::Geometry>,
     /// Required primary parameter layout on every SAT platform.
     pub layout: Observation<ParameterLayout>,
-    /// SAT1/SAT9 initialization evidence; not an identity input in the matrix.
+    /// Startup initialization program: the SAT1 value, evidence elsewhere.
     pub startup: Observation<registers::Startup>,
-    /// SAT8 role-bound physical input predicates.
+    /// Role-bound physical input predicates; the SAT8/SAT9 initialization value.
     pub inputs: Observation<inputs::Predicates>,
     /// Host register projection and full supporting writes.
     pub host: Observation<registers::MaskedWrites>,

@@ -207,8 +207,8 @@
    "hardware": "SAT 1003"
   },
   {
-   "as_is": "17ac54c7af582320",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "bfd2cd0adc5ce621",
+   "candidate": "4fe7653f9f471a63",
    "component": "0223ebe3a55530b8a513029e4ac0247ce29a26baf79451b4c04073c67d1dfaf9",
    "hardware": "SAT 9331"
   },
@@ -291,8 +291,8 @@
    "hardware": "SAT 8600"
   },
   {
-   "as_is": "84eafb4208777a05",
-   "candidate": "37f6fb9bbd43c917",
+   "as_is": "924864fb2f8c2fa1",
+   "candidate": "0146e96e122ebede",
    "component": "0721ae3f371af530d959c55b4268bbb5c1642833b55fceb32752aca8e22b9135",
    "hardware": "SAT 9000"
   },
@@ -303,8 +303,8 @@
    "hardware": "SAT 8301"
   },
   {
-   "as_is": "84eafb4208777a05",
-   "candidate": "37f6fb9bbd43c917",
+   "as_is": "924864fb2f8c2fa1",
+   "candidate": "0146e96e122ebede",
    "component": "07dbe542dbf2ee6184d1e7ac111f41b35b80d3206ca995c3c9715ce0f90ce556",
    "hardware": "SAT 9000"
   },
@@ -339,8 +339,8 @@
    "hardware": "SAT 8800"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "0a7673c47d62fd0d38cc7539e3937992a164ae8a63a18e636a6d18c6c2eb0b2e",
    "hardware": "SAT 9201"
   },
@@ -417,8 +417,8 @@
    "hardware": "SAT 8F00"
   },
   {
-   "as_is": "84eafb4208777a05",
-   "candidate": "37f6fb9bbd43c917",
+   "as_is": "924864fb2f8c2fa1",
+   "candidate": "0146e96e122ebede",
    "component": "0db89e3fa866676a5e73a64b88213219f4bdbca18b09904037913ac1542ee27b",
    "hardware": "SAT 9001"
   },
@@ -447,8 +447,8 @@
    "hardware": "ATA 0011"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "0ec82fe7fd6fda011a903e87e1a76c20001b479f1acd2297bce36fcb350aa476",
    "hardware": "SAT 9401"
   },
@@ -513,14 +513,14 @@
    "hardware": "ATA 0003"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "119c54a77253668c8ad0d85301ae0fa7cde55e18eb5d888173c6669eb779e8fa",
    "hardware": "SAT 9401"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "11e10b1b2313f0ce42c267982753912dbd035fa408dccce34a6b121e8e20dc94",
    "hardware": "SAT 9201"
   },
@@ -609,8 +609,8 @@
    "hardware": "ATA 0009"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "167690d0e45d85f5b82b5bd140cdf8b51c025335d42d0ddcf9956ebe2d0be65a",
    "hardware": "SAT 9401"
   },
@@ -675,8 +675,8 @@
    "hardware": "SAT 8000"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "18a98e9ce9a35b2ae774205df0364872696086f621e242aeaa66f3bb78aa398d",
    "hardware": "SAT 9200"
   },
@@ -717,8 +717,8 @@
    "hardware": "SAT 8D30"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "1b7f61c14a58bf20949e2839a78e911373655a9d79965c4de0032e58830a4b5a",
    "hardware": "SAT 9200"
   },
@@ -759,8 +759,8 @@
    "hardware": "SAT 1014"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "1e0da32de5aa41097b4f88c408669818387681225b893a05726360927697b665",
    "hardware": "SAT 9400"
   },
@@ -771,8 +771,8 @@
    "hardware": "ATA 0011"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "1e86bf1b419924fac6bde602ae4c08a04ffa472c8064707912f7d552aeb197d8",
    "hardware": "SAT 9400"
   },
@@ -783,8 +783,8 @@
    "hardware": "ATA 0004"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "1f1a5b382eb920651e8a7762c07bcfa1a29b21d8568d44fc2d6382cbae5d420c",
    "hardware": "SAT 9200"
   },
@@ -825,8 +825,8 @@
    "hardware": "SAT 8800"
   },
   {
-   "as_is": "17ac54c7af582320",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "bfd2cd0adc5ce621",
+   "candidate": "4fe7653f9f471a63",
    "component": "234767041eaaeb0f6243755be0febcbf9f8f13ca42f7f7391f5a78c02c66dc66",
    "hardware": "SAT 9330"
   },
@@ -861,8 +861,8 @@
    "hardware": "SAT 8301"
   },
   {
-   "as_is": "17ac54c7af582320",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "bfd2cd0adc5ce621",
+   "candidate": "4fe7653f9f471a63",
    "component": "2579ac81925a67b2b88029d0b94f14910a2da0dd92914a357a16dfb7a64ab6c4",
    "hardware": "SAT 9331"
   },
@@ -993,8 +993,8 @@
    "hardware": "ATA 0004"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "2d7c18f2dec20dc88b2b8b778020b72bf7a0e8ec3bc3acbdb02fe3abd9d55e09",
    "hardware": "SAT 9401"
   },
@@ -1011,8 +1011,8 @@
    "hardware": "SAT 8600"
   },
   {
-   "as_is": "17ac54c7af582320",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "bfd2cd0adc5ce621",
+   "candidate": "4fe7653f9f471a63",
    "component": "2e841f944c77e15dc7d1580d52155897da4353a4a132159ea1feba2cc7814da7",
    "hardware": "SAT 9331"
   },
@@ -1533,8 +1533,8 @@
    "hardware": "SAT 1007"
   },
   {
-   "as_is": "17ac54c7af582320",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "bfd2cd0adc5ce621",
+   "candidate": "4fe7653f9f471a63",
    "component": "575d3efa21b8e264ba08ee6987beec91569cc7355c3fd7c092495151e1bc7121",
    "hardware": "SAT 9330"
   },
@@ -1587,8 +1587,8 @@
    "hardware": "SAT 8801"
   },
   {
-   "as_is": "84eafb4208777a05",
-   "candidate": "37f6fb9bbd43c917",
+   "as_is": "924864fb2f8c2fa1",
+   "candidate": "0146e96e122ebede",
    "component": "5b90f1f8b7795fb30f836579c601aec7cf804c2e579d8a4ba61a83d2858cb9e4",
    "hardware": "SAT 9001"
   },
@@ -1653,8 +1653,8 @@
    "hardware": "SAT 8000"
   },
   {
-   "as_is": "84eafb4208777a05",
-   "candidate": "37f6fb9bbd43c917",
+   "as_is": "924864fb2f8c2fa1",
+   "candidate": "0146e96e122ebede",
    "component": "5f04d90fa8f2a9c25127ccced70fa7101c0ab17d4d14efa77b0a363eae4721bc",
    "hardware": "SAT 9000"
   },
@@ -1707,8 +1707,8 @@
    "hardware": "SAT 1003"
   },
   {
-   "as_is": "17ac54c7af582320",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "bfd2cd0adc5ce621",
+   "candidate": "4fe7653f9f471a63",
    "component": "63156fa615caf731d7791f8a97b0d5ff13e6fcfe8046e8aba9e0d0bf91b4579e",
    "hardware": "SAT 9330"
   },
@@ -1809,8 +1809,8 @@
    "hardware": "ATA 0007"
   },
   {
-   "as_is": "84eafb4208777a05",
-   "candidate": "37f6fb9bbd43c917",
+   "as_is": "924864fb2f8c2fa1",
+   "candidate": "0146e96e122ebede",
    "component": "67b748112853559e9d0c7e4716c09ddab3ebbe313532ae5dff302da3a560dda0",
    "hardware": "SAT 9001"
   },
@@ -1821,8 +1821,8 @@
    "hardware": "ATA 0009"
   },
   {
-   "as_is": "84eafb4208777a05",
-   "candidate": "37f6fb9bbd43c917",
+   "as_is": "924864fb2f8c2fa1",
+   "candidate": "0146e96e122ebede",
    "component": "67c0fcac8fd47193499509d5e1b5c34d256606be8c487e16866162808aaee441",
    "hardware": "SAT 9000"
   },
@@ -1905,8 +1905,8 @@
    "hardware": "SAT 8301"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "6cb45384af00bf0b615ead4f74a88a10615a5154b62da40e1aefade3c88b55ad",
    "hardware": "SAT 9201"
   },
@@ -1971,8 +1971,8 @@
    "hardware": "SAT 8D30"
   },
   {
-   "as_is": "17ac54c7af582320",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "bfd2cd0adc5ce621",
+   "candidate": "4fe7653f9f471a63",
    "component": "70cf396c6574098cfaaf703a07972c4f4606aeadd2e4248568797496c0ec15e9",
    "hardware": "SAT 9331"
   },
@@ -2013,8 +2013,8 @@
    "hardware": "SAT 8600"
   },
   {
-   "as_is": "17ac54c7af582320",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "bfd2cd0adc5ce621",
+   "candidate": "4fe7653f9f471a63",
    "component": "7259c62f41e1d3bfdc72f60795186d9d95f96be979a4edc34aa4308bf33cff52",
    "hardware": "SAT 9330"
   },
@@ -2103,8 +2103,8 @@
    "hardware": "ATA 0012"
   },
   {
-   "as_is": "84eafb4208777a05",
-   "candidate": "37f6fb9bbd43c917",
+   "as_is": "924864fb2f8c2fa1",
+   "candidate": "0146e96e122ebede",
    "component": "77ffacb84f286a0989fc559a75a6ae5a574b390c87610c68dc7696be771939a9",
    "hardware": "SAT 9000"
   },
@@ -2121,8 +2121,8 @@
    "hardware": "ATA 0008"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "79be309399d8755d524c6ddddbcf790cff6bf338814aa2f49335379f8a907b02",
    "hardware": "SAT 9201"
   },
@@ -2145,8 +2145,8 @@
    "hardware": "SAT 8F00"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "7a5f077c1b0430aff3b1caf0cc2dc9acf85d7d158584fd0efc4ae8c177e8f524",
    "hardware": "SAT 9201"
   },
@@ -2247,8 +2247,8 @@
    "hardware": "ATA 0009"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "80f382ead95237335bebcc08f2b6bbcf82fbf8b68ec1e580bc4dfdb4b9c8f097",
    "hardware": "SAT 9401"
   },
@@ -2271,8 +2271,8 @@
    "hardware": "SAT 8211"
   },
   {
-   "as_is": "17ac54c7af582320",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "bfd2cd0adc5ce621",
+   "candidate": "4fe7653f9f471a63",
    "component": "83520aa106c2f512929bf084d93281730faaa14063c880018e175fced3cb0606",
    "hardware": "SAT 9330"
   },
@@ -2427,8 +2427,8 @@
    "hardware": "SAT 8000"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "8ebb3d7653bb73c3cef867bd2bf68923c9d083c79612996cf3246de60d088b67",
    "hardware": "SAT 9201"
   },
@@ -2451,8 +2451,8 @@
    "hardware": "ATA 0007"
   },
   {
-   "as_is": "84eafb4208777a05",
-   "candidate": "37f6fb9bbd43c917",
+   "as_is": "924864fb2f8c2fa1",
+   "candidate": "0146e96e122ebede",
    "component": "8f66067ee528deacd2ae44f5339596b5d01fad39e267a1dac5311a9bdc5e927d",
    "hardware": "SAT 9000"
   },
@@ -2481,8 +2481,8 @@
    "hardware": "ATA 0008"
   },
   {
-   "as_is": "84eafb4208777a05",
-   "candidate": "37f6fb9bbd43c917",
+   "as_is": "924864fb2f8c2fa1",
+   "candidate": "0146e96e122ebede",
    "component": "91933e1b329e06d6555d85778949d4ef70bcb4d3920b1de3fe2778bdc6b6fd64",
    "hardware": "SAT 9000"
   },
@@ -2571,8 +2571,8 @@
    "hardware": "ATA 0007"
   },
   {
-   "as_is": "84eafb4208777a05",
-   "candidate": "37f6fb9bbd43c917",
+   "as_is": "924864fb2f8c2fa1",
+   "candidate": "0146e96e122ebede",
    "component": "967204dde52e81007974859a7dcc87cb1832052df409fe5e374f3d87c0e847cc",
    "hardware": "SAT 9001"
   },
@@ -2607,8 +2607,8 @@
    "hardware": "SAT 8E20"
   },
   {
-   "as_is": "84eafb4208777a05",
-   "candidate": "37f6fb9bbd43c917",
+   "as_is": "924864fb2f8c2fa1",
+   "candidate": "0146e96e122ebede",
    "component": "983dbc1d2f3240e5de721a9aeecc93eb05ccec6fff96554c6165791f9ad6df00",
    "hardware": "SAT 9001"
   },
@@ -2697,8 +2697,8 @@
    "hardware": "SAT 8600"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "9df981d3f217bc60bf8b8cbb1d0fc6fbe65103453400e81b653c8015e2692acc",
    "hardware": "SAT 9400"
   },
@@ -2739,8 +2739,8 @@
    "hardware": "ATA 0008"
   },
   {
-   "as_is": "17ac54c7af582320",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "bfd2cd0adc5ce621",
+   "candidate": "4fe7653f9f471a63",
    "component": "a09dc6f1d04abe4d46aaa74256e0950225fe87b1d4660ac6bd942415b3d88a19",
    "hardware": "SAT 9330"
   },
@@ -2841,8 +2841,8 @@
    "hardware": "ATA 0007"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "a542b8e923fb9fb4197f756c8ca707b8f392364105074b1a7ee032a184219c03",
    "hardware": "SAT 9401"
   },
@@ -2973,8 +2973,8 @@
    "hardware": "SAT 8000"
   },
   {
-   "as_is": "17ac54c7af582320",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "bfd2cd0adc5ce621",
+   "candidate": "4fe7653f9f471a63",
    "component": "ad17fcfb4a6c05e23247d132aab2377a82f121eca6a44d5d1458873cb8ed0437",
    "hardware": "SAT 9330"
   },
@@ -3027,8 +3027,8 @@
    "hardware": "SAT 8E21"
   },
   {
-   "as_is": "84eafb4208777a05",
-   "candidate": "37f6fb9bbd43c917",
+   "as_is": "924864fb2f8c2fa1",
+   "candidate": "0146e96e122ebede",
    "component": "b2ff8c8de4b4ced981f639b9398bf18453718bf62a807e952d9e95d61a8c1e5e",
    "hardware": "SAT 9000"
   },
@@ -3039,8 +3039,8 @@
    "hardware": "SAT 8801"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "b3accaabf509d411da58314ef6fc1b7c0ddccc202c4be363b1e6547933cde4f6",
    "hardware": "SAT 9201"
   },
@@ -3123,8 +3123,8 @@
    "hardware": "ATA 0008"
   },
   {
-   "as_is": "17ac54c7af582320",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "bfd2cd0adc5ce621",
+   "candidate": "4fe7653f9f471a63",
    "component": "b6fa47637897e119244daa31b02bbd92a497a6db7f61a1db631c27daf9396784",
    "hardware": "SAT 9331"
   },
@@ -3243,8 +3243,8 @@
    "hardware": "SAT 8600"
   },
   {
-   "as_is": "14bacd2613d34861",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "9896c7c9111afa33",
+   "candidate": "a61608e79911a22f",
    "component": "be936ad6240309bfbf8efc57547ebe46f59d8ea4bc29e8f0621a9eeedbfd53d3",
    "hardware": "SAT 9621"
   },
@@ -3261,8 +3261,8 @@
    "hardware": "SAT 8601"
   },
   {
-   "as_is": "17ac54c7af582320",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "bfd2cd0adc5ce621",
+   "candidate": "4fe7653f9f471a63",
    "component": "bfb3371bee5d254032d2bda5827deaa6ca25d4a49318a0adf8c34bf0ec982907",
    "hardware": "SAT 9331"
   },
@@ -3327,8 +3327,8 @@
    "hardware": "SAT 8F01"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "c45156efa3e19f3092cdd57e68a6d4e71cb2d7fa54509cb56a0c470a8fe65fc4",
    "hardware": "SAT 9201"
   },
@@ -3351,8 +3351,8 @@
    "hardware": "ATA 0008"
   },
   {
-   "as_is": "84eafb4208777a05",
-   "candidate": "37f6fb9bbd43c917",
+   "as_is": "924864fb2f8c2fa1",
+   "candidate": "0146e96e122ebede",
    "component": "c532a20e52e6ba22ba4c89c22d7d5aeddbbc1061188972caf55e0ea69022ccc2",
    "hardware": "SAT 9001"
   },
@@ -3423,8 +3423,8 @@
    "hardware": "SAT 8000"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "c6dfdd1c7d98120284ba56dfd2addacc2877ff1580dfbf135eeecadef5574448",
    "hardware": "SAT 9401"
   },
@@ -3543,8 +3543,8 @@
    "hardware": "SAT 8600"
   },
   {
-   "as_is": "17ac54c7af582320",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "bfd2cd0adc5ce621",
+   "candidate": "4fe7653f9f471a63",
    "component": "cc607e1c8fb72fdbf106428eb56a027f34f1e2d77af1a574b6afbec1ad43cff0",
    "hardware": "SAT 9330"
   },
@@ -3561,8 +3561,8 @@
    "hardware": "SAT 8801"
   },
   {
-   "as_is": "84eafb4208777a05",
-   "candidate": "37f6fb9bbd43c917",
+   "as_is": "924864fb2f8c2fa1",
+   "candidate": "0146e96e122ebede",
    "component": "cc8f14c6284629e13d8d1d1c537e5fed4801932e479b9da0a0fad0ebb941d431",
    "hardware": "SAT 9000"
   },
@@ -3645,8 +3645,8 @@
    "hardware": "SAT 8F00"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "d02f1d4f0a594c681c1620b82a054b771f570fdbfb78e14a5f35c80467896c4f",
    "hardware": "SAT 9201"
   },
@@ -3735,8 +3735,8 @@
    "hardware": "ATA 0007"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "d72ea703a2a6bf4a97b6a605b5c94d092c28a246f8fbd308cf6e856888ecd85b",
    "hardware": "SAT 9201"
   },
@@ -3795,8 +3795,8 @@
    "hardware": "SAT 8801"
   },
   {
-   "as_is": "17ac54c7af582320",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "bfd2cd0adc5ce621",
+   "candidate": "4fe7653f9f471a63",
    "component": "da57e9cf0b2da9bf8abe764107183cb22f3862504f804f6fdff5e7ecd66eeb70",
    "hardware": "SAT 9330"
   },
@@ -3999,8 +3999,8 @@
    "hardware": "ATA 0064"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "e282638e032b51624b320627da7749d6b78a6d8e0ee4f160759bce969347d6d6",
    "hardware": "SAT 9400"
   },
@@ -4029,14 +4029,14 @@
    "hardware": "SAT 8600"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "e5232efed5dd25314d032b9ccc18db6b4cc7679b734ea7a8b75ac8fb880f7da2",
    "hardware": "SAT 9400"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "e5ad2e204db7d2f6c6fe871dd265b1abcbe6dc9fedfe63544751054307aa8abe",
    "hardware": "SAT 9201"
   },
@@ -4053,8 +4053,8 @@
    "hardware": "SAT 8600"
   },
   {
-   "as_is": "14bacd2613d34861",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "9896c7c9111afa33",
+   "candidate": "a61608e79911a22f",
    "component": "e65c4997975a1ab2f4a71f7ff271ad5b3800d7070fcc4ad593aedfc7d8fd6c64",
    "hardware": "SAT 9621"
   },
@@ -4119,8 +4119,8 @@
    "hardware": "SAT 8000"
   },
   {
-   "as_is": "17ac54c7af582320",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "bfd2cd0adc5ce621",
+   "candidate": "4fe7653f9f471a63",
    "component": "ea8e80a88626b3a6d4bdad83f67de06a69da64c2048a53197b4d57a9290d3208",
    "hardware": "SAT 9330"
   },
@@ -4161,8 +4161,8 @@
    "hardware": "SAT 8601"
   },
   {
-   "as_is": "84eafb4208777a05",
-   "candidate": "37f6fb9bbd43c917",
+   "as_is": "924864fb2f8c2fa1",
+   "candidate": "0146e96e122ebede",
    "component": "ed72bbdea7dc98edcbc64a16681bfe36b7bafa06becf3a2c302f9a0f97309318",
    "hardware": "SAT 9000"
   },
@@ -4179,8 +4179,8 @@
    "hardware": "SAT 8000"
   },
   {
-   "as_is": "17ac54c7af582320",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "bfd2cd0adc5ce621",
+   "candidate": "4fe7653f9f471a63",
    "component": "ed9ea12185fa2e654541bda11e654d3f55a6d19c78074c1be8be1731dcca94ed",
    "hardware": "SAT 9330"
   },
@@ -4233,8 +4233,8 @@
    "hardware": "SAT 8801"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "f075cb05644d142a3690c3c01b7fe2108c1589061778fe7a9b2be970bf850489",
    "hardware": "SAT 9400"
   },
@@ -4281,8 +4281,8 @@
    "hardware": "SAT 1030"
   },
   {
-   "as_is": "17ac54c7af582320",
-   "candidate": "0e328b13c5220c27",
+   "as_is": "bfd2cd0adc5ce621",
+   "candidate": "4fe7653f9f471a63",
    "component": "f24c8c4beb5638d3995b1baaa7d71febd6afffc94759f2b7184dd2eeffe6eab3",
    "hardware": "SAT 9330"
   },
@@ -4329,8 +4329,8 @@
    "hardware": "SAT 8E21"
   },
   {
-   "as_is": "84eafb4208777a05",
-   "candidate": "37f6fb9bbd43c917",
+   "as_is": "924864fb2f8c2fa1",
+   "candidate": "0146e96e122ebede",
    "component": "f65cd355304c474aaf4a69f1fffd25422a6260db78ae332fcefcd8209c5ef5f3",
    "hardware": "SAT 9000"
   },
@@ -4461,8 +4461,8 @@
    "hardware": "SAT 8601"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "fdffcc5fcfea7c078f1505d589f17e419c881daa7fb0bb445959d164976dd1d0",
    "hardware": "SAT 9400"
   },
@@ -4473,8 +4473,8 @@
    "hardware": "ATA 0004"
   },
   {
-   "as_is": "25accaf0679bb97f",
-   "candidate": "26085308aeb20d52",
+   "as_is": "a8a5eccbd07d6233",
+   "candidate": "9f9127128a59650c",
    "component": "ff6c19e719c37894e6d23608d260a176b0baaf9e14520fab91a283a245955b41",
    "hardware": "SAT 9201"
   },

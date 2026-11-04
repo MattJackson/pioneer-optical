@@ -81,7 +81,8 @@ pub fn masked_writes(normal: &[u8], address: u16, mask: u8) -> Observation<Maske
     })
 }
 
-/// SAT1/SAT9 startup initialization observation; SAT8 uses input predicates.
+/// H8 startup initialization observation. The identity value only on SAT1;
+/// on SAT8/SAT9 the E46B store is a never-read constant kept as evidence.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Startup {
     /// E46B bits zero and four, including native write evidence.

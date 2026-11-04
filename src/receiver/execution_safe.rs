@@ -699,10 +699,7 @@ impl PreparedNormal {
         )
     }
 }
-fn preflight_stages<T: Transport>(
-    stages: &[PreparedStage],
-    reads: &mut T,
-) -> Result<(), ExecutionError<T::Error>> {
+fn preflight_stages<E>(stages: &[PreparedStage]) -> Result<(), ExecutionError<E>> {
     // Validate the whole sequence before the first settings or firmware write.
     for stage in stages {
         let installed = stage
@@ -711,72 +708,14 @@ fn preflight_stages<T: Transport>(
             .ok_or(ExecutionError::Plan(
                 "installed Kernel evidence unavailable",
             ))?;
-        class::<T::Error>(installed.update_dialect())?;
+        class::<E>(installed.update_dialect())?;
         let mut storage = [Segment::PLACEHOLDER; 3];
-        plan::<T::Error>(
+        plan::<E>(
             stage.kernel_transfer(),
             stage.normal_transfer(),
             transport::detect(&installed.image),
             &mut storage,
         )?;
-    }
-    if stages
-        .iter()
-        .any(|stage| stage.settings.requires_original_hardware())
-    {
-        let mut parameters = [0; crate::production::PARAMETERS_LEN];
-        drive::read(
-            reads,
-            &crate::production::parameters(),
-            &mut parameters,
-            crate::production::PARAMETERS_LEN,
-        )
-        .map_err(|error| {
-            ExecutionError::Startup(Box::new(crate::startup::migration::Error::Read(error)))
-        })?;
-        for stage in stages {
-            stage.settings.check_hardware(&parameters).map_err(|_| {
-                ExecutionError::Startup(Box::new(
-                    crate::startup::migration::Error::OriginalHardware,
-                ))
-            })?;
-        }
-    }
-    // Later-stage mechanism prerequisites must not fail after a bridge has
-    // already changed firmware. Recheck them at the normal stage boundary too.
-    let mut prerequisites = alloc::collections::BTreeMap::new();
-    for requirement in stages
-        .iter()
-        .flat_map(|stage| stage.settings.requirements())
-    {
-        if let Some(previous) = prerequisites.insert(requirement.parameter, requirement.value) {
-            if previous != requirement.value {
-                return Err(ExecutionError::Startup(Box::new(
-                    crate::startup::migration::Error::ConflictingParameters,
-                )));
-            }
-        }
-    }
-    for (parameter, expected) in prerequisites {
-        let command = crate::cdb::read_parameter_word(parameter).ok_or_else(|| {
-            ExecutionError::Startup(Box::new(
-                crate::startup::migration::Error::InvalidParameter(parameter),
-            ))
-        })?;
-        let mut value = [0; 2];
-        drive::read(reads, &command, &mut value, 2).map_err(|error| {
-            ExecutionError::Startup(Box::new(crate::startup::migration::Error::Read(error)))
-        })?;
-        let actual = u16::from_be_bytes(value);
-        if actual != expected {
-            return Err(ExecutionError::Startup(Box::new(
-                crate::startup::migration::Error::Prerequisite {
-                    parameter,
-                    expected,
-                    actual,
-                },
-            )));
-        }
     }
     Ok(())
 }
@@ -825,7 +764,7 @@ where
     if stages.is_empty() {
         return Err(ExecutionError::Plan("empty update sequence"));
     }
-    preflight_stages(stages, io.reads)?;
+    preflight_stages(stages)?;
     let mut result: Option<FlashOutcome> = None;
     for (index, stage) in stages.iter().enumerate() {
         // A marker-only intermediate already applied the same Normal's settings.
@@ -902,15 +841,7 @@ impl PreparedStage {
             return self.transfer_stage(io, runtime, false, recovery, stage, previous);
         }
         let (updating, _) = self.bind_stage(io.reads, runtime, mode, stage, previous)?;
-        if updating && self.settings.requires_normal_runtime() {
-            return Err(ExecutionError::Plan(
-                "mechanism conversion requires live original-hardware checks in normal runtime",
-            ));
-        }
-        if !updating
-            && apply_settings
-            && (!self.settings.entries().is_empty() || !self.settings.requirements().is_empty())
-        {
+        if !updating && apply_settings && !self.settings.entries().is_empty() {
             return self
                 .settings
                 .execute(io.writes, |writes| {

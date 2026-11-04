@@ -102,12 +102,7 @@ pub struct Receiver {
     descriptor: [u8; DESCRIPTOR_LEN],
     policy: ReceiverControl,
     family: Option<Family>,
-    settings_contract: crate::filters::phase::mechanism::Contract,
-    original_product: Option<Result<String, crate::filters::phase::mechanism::Error>>,
-    original_scope: Option<crate::settings::routing::ProductSelector<'static>>,
     startup: crate::startup::checks::Checks,
-    #[cfg(test)]
-    correction_contracts: Option<Vec<String>>,
     kernel_policy: Option<crate::image::KernelMarkerPolicy>,
     installed_kernel: Option<Envelope>,
     installed_normal: Option<Envelope>,
@@ -195,12 +190,7 @@ impl Receiver {
             descriptor,
             policy,
             family: None,
-            settings_contract: crate::filters::phase::mechanism::Contract::discover(image),
-            original_product: None,
-            original_scope: None,
             startup: crate::startup::checks::Checks::discover(image, None),
-            #[cfg(test)]
-            correction_contracts: None,
             kernel_policy: None,
             installed_kernel: None,
             installed_normal: None,
@@ -270,12 +260,6 @@ impl Receiver {
     /// Hardware family recovered from the captured installed image.
     pub fn family(&self) -> Option<Family> {
         self.family
-    }
-
-    /// This settings cohort needs original factory evidence at live preparation
-    /// and execution. Unrelated receivers require no additional parameters read.
-    pub fn requires_original_hardware(&self) -> bool {
-        self.settings_contract.hardware_sensitive()
     }
 
     /// All recognized startup requirements belonging to this receiver.

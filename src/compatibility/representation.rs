@@ -31,7 +31,6 @@ pub(crate) fn rebuild_normal(
     normal: &Envelope,
     kernel: Option<&Envelope>,
     image: &[u8],
-    preserve_authentication: bool,
 ) -> Result<Vec<u8>, Error> {
     if !matching_components(normal, kernel) || normal.image.len() != image.len() {
         return Err(Error::ComponentMismatch);
@@ -51,22 +50,20 @@ pub(crate) fn rebuild_normal(
             use builder::NormalAuthentication;
             let authentication = builder::normal_authentication_from_kernel(&kernel.image)
                 .ok_or(Error::Authentication)?;
-            if !preserve_authentication {
-                match authentication {
-                    NormalAuthentication::KeyAndCiphertext => {
-                        SigningKey::random()
-                            .map_err(|_| Error::Authentication)?
-                            .sign_normal(&mut bytes)
-                            .map_err(|_| Error::Authentication)?;
-                    }
-                    NormalAuthentication::CiphertextOnly => {
-                        SigningKey::random()
-                            .map_err(|_| Error::Authentication)?
-                            .sign_normal_ciphertext_only(&mut bytes)
-                            .map_err(|_| Error::Authentication)?;
-                    }
-                    NormalAuthentication::Unsigned | NormalAuthentication::ScaledChecksumOnly => {}
+            match authentication {
+                NormalAuthentication::KeyAndCiphertext => {
+                    SigningKey::random()
+                        .map_err(|_| Error::Authentication)?
+                        .sign_normal(&mut bytes)
+                        .map_err(|_| Error::Authentication)?;
                 }
+                NormalAuthentication::CiphertextOnly => {
+                    SigningKey::random()
+                        .map_err(|_| Error::Authentication)?
+                        .sign_normal_ciphertext_only(&mut bytes)
+                        .map_err(|_| Error::Authentication)?;
+                }
+                NormalAuthentication::Unsigned | NormalAuthentication::ScaledChecksumOnly => {}
             }
             if !builder::normal_authentication_valid(&bytes, &kernel.image) {
                 return Err(Error::Authentication);

@@ -502,14 +502,6 @@ fn receiver_and_preparation_error_catalogues_have_stable_codes() {
         ),
         // Wrapped causes that surface their own stable code.
         (
-            P::Settings(crate::settings::update::Error::Unresolved),
-            "pioneer.settings.compatibility_unresolved",
-        ),
-        (
-            P::Adaptation(crate::filters::phase::mechanism::Error::Guard),
-            "pioneer.settings.adaptation_guard_failed",
-        ),
-        (
             P::Startup(crate::startup::checks::Error::AmbiguousWord),
             "pioneer.preparation.ambiguous_startup",
         ),

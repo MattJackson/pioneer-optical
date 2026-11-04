@@ -243,8 +243,5 @@ assert!(code.platform_is("ud02"));
 ```
 
 `Production::product_code_parts()` exposes this view on a parsed factory record.
-Naming alone grants no compatibility. Scoped `settings::routing` rules resolve
-original hardware to a destination; currently installed branding cannot grant
-another hardware platform's settings route. See
-[settings adaptations](docs/settings-adaptation.md) for live identity checks,
-reviewed target recipes and the native OEM return path.
+Naming alone grants no compatibility; only the registered hardware filters
+decide whether firmware may be prepared.

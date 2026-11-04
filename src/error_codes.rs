@@ -167,8 +167,6 @@ impl CodedError for crate::receiver::PreparationError {
     }
     fn code(&self) -> &'static str {
         match self {
-            Self::Settings(error) => error.code(),
-            Self::Adaptation(error) => error.code(),
             Self::Startup(error) => error.code(),
             Self::PhaseCorrection(
                 error @ (crate::compatibility::Error::PersistentLayoutOverlap { .. }

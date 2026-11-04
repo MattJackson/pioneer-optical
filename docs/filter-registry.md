@@ -26,9 +26,8 @@ The shared runner validates the full operation set before mutation, rejects
 overlap, composes disjoint non-checksum edits, applies one agreed integrity
 repair, and runs each owner's verifier. The receiver retains codec rebuilding,
 authentication, live read/change/verify/rollback and transport execution.
-Mechanism recipes belong to the phase owner; persistent-address correction
-belongs to the layout owner. Read-only live prerequisites are independent of
-writable startup selections and must hold before the first write.
+Phase correction belongs to the phase owner; persistent-address correction
+belongs to the layout owner.
 
 ## Live parameter actions
 

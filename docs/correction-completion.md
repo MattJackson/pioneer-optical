@@ -17,10 +17,9 @@ patches. Matching candidate identities alone do not authorize an update.
 `compatibility` invokes the registered owners for installed and requested
 firmware. Each owner enumerates its own supported effects, and the shared runner
 produces component-bound plans. Every unrelated required filter
-must match. Firmware operands, startup selections and read-only mechanism
-prerequisites remain distinct effects within that workflow. The receiver owns
-execution and rechecks each stage's hardware and live requirements before
-settings, bridge or firmware writes. Planning performs no device I/O.
+must match. Firmware operands and startup selections remain distinct effects
+within that workflow. The receiver owns execution and rechecks each stage's
+live requirements before settings, bridge or firmware writes. Planning performs no device I/O.
 
 Normal edits validate all original operands and reject overlap before mutation.
 They apply to owned bytes, compensate the checksum once, and re-extract the
@@ -29,7 +28,7 @@ components, use the codec's checksum contract, rebuild and authenticate, then
 decode and verify the prepared image. File preparation does not grant a receiver
 support for a transfer representation it otherwise refuses.
 
-## Phase and mechanism correction
+## Phase correction
 
 SAT8/SAT9 use native output-pair correction. SAT1 has explicit operand edits on
 thirteen complete native forms. M32C and V850 use architecture-specific native
@@ -38,15 +37,8 @@ Same assignment produces no edit; changed assignment must preserve every other
 required filter. Published SAT1 and ATA candidate keys retain phase even when
 an individual transition has a supported correction.
 
-Mechanism correction retains all eleven reviewed dev 1.5 definitions and six
-original-hardware routing rules as typed Rust contracts. UD02, UD03 and UD04
-routes retain exact firmware guards, calibration-format recognition and live
-prerequisites. Pristine return and native inverse correction are distinct routes.
-They share the correction handoff with native phase; a mechanism recipe cannot
-be replaced by a generic phase edit. See [mechanism contracts](settings-adaptation.md).
-Production JSON recipes are removed; test fixtures retain independent reference
-data and invalid-registry cases. Existing diagnostic names and forwarding API
-aliases remain available to callers.
+There is no mechanism or settings recipe layer. Firmware whose registered
+hardware filters differ, other than by a supported native correction, is refused.
 
 ## Startup selection
 
@@ -67,7 +59,7 @@ of additional startup requirements.
 The settings transaction reads the actual before-value, changes it only when
 needed, verifies the selected value and preserves the before-value for rollback.
 No firmware edit represents a live startup write, and 0xFFFF is never invented
-as a restoration value. Read-only mechanism prerequisites remain independent.
+as a restoration value.
 
 ## Persistent parameter layout
 

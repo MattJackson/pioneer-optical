@@ -270,10 +270,7 @@ pub fn correct_normal(normal: &[u8], target: Assignment) -> Result<Vec<u8>, Corr
     let patched = if matches!(discover_pair(normal), Observation::Known(_)) {
         correct_pair(normal, target)?
     } else {
-        match correct_legacy(normal, target) {
-            Err(CorrectionError::Unresolved) => correct_adapted(normal, target)?,
-            other => other?,
-        }
+        correct_legacy(normal, target)?
     };
     let edits: Vec<_> = normal
         .iter()
@@ -662,12 +659,6 @@ fn template_matches_bytes(t: &Template, normal: &[u8], at: usize, candidate: &[u
         }
     }
     true
-}
-
-/// Correct the output assignment of the complete certified mechanism-adapted pair.
-/// Only four output operands may change; this does not convert mechanism formats.
-pub fn correct_adapted(normal: &[u8], target: Assignment) -> Result<Vec<u8>, CorrectionError> {
-    adapted::correct(normal, target)
 }
 
 /// Correct a uniquely bound SAT1 output program without changing shared helpers.

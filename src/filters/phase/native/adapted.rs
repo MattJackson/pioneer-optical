@@ -1,8 +1,8 @@
-//! Native output pair emitted by the existing certified mechanism adaptation.
-//! Only the four output operands vary. Mechanism math and source encoding stay fixed.
+//! Read-only observation of the output pair left on drives by the removed
+//! pre-1.6 mechanism adaptation. Only the four output operands vary. This
+//! identifies installed firmware; it never prepares or corrects such an image.
 
-use super::{Assignment, CorrectionError, Interface, Observation, Phase};
-use alloc::vec::Vec;
+use super::{Assignment, Interface, Phase};
 
 const PAIR: &[u8] = &[
     0x01, 0x00, 0x6d, 0xf3, 0x1a, 0xb3, 0x0c, 0x8b, 0x10, 0x73, 0x0a, 0x93, 0x69, 0x30, 0x00, 0x00,
@@ -15,14 +15,7 @@ const PAIR: &[u8] = &[
 
 const OPERANDS: [usize; 4] = [29, 41, 75, 85];
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Binding {
-    at: usize,
-    leaf: usize,
-    assignment: Assignment,
-}
-
-fn bind(normal: &[u8], at: usize, stored: &[&[u8]]) -> Option<Binding> {
+fn bind(normal: &[u8], at: usize, stored: &[&[u8]]) -> Option<Assignment> {
     let bytes = normal.get(at..at.checked_add(PAIR.len())?)?;
     let swapped = bytes[OPERANDS[0]] ^ PAIR[OPERANDS[0]];
     if swapped > 1
@@ -56,59 +49,18 @@ fn bind(normal: &[u8], at: usize, stored: &[&[u8]]) -> Option<Binding> {
     {
         return None;
     }
-    Some(Binding {
-        at,
-        leaf,
-        assignment: if swapped == 0 {
-            Assignment::Direct
-        } else {
-            Assignment::Swapped
-        },
+    Some(if swapped == 0 {
+        Assignment::Direct
+    } else {
+        Assignment::Swapped
     })
 }
 
 pub(super) fn observe(normal: &[u8], at: usize, stored: &[&[u8]]) -> Option<Phase> {
-    bind(normal, at, stored).map(|b| Phase {
-        assignment: b.assignment,
+    bind(normal, at, stored).map(|assignment| Phase {
+        assignment,
         interface: Interface::SplitWord,
     })
-}
-
-pub(super) fn correct(normal: &[u8], target: Assignment) -> Result<Vec<u8>, CorrectionError> {
-    let regions = crate::image::regions(normal).ok_or(CorrectionError::Unresolved)?;
-    let mut bindings = Vec::new();
-    for region in &regions.stored {
-        let start = region.as_ptr() as usize - normal.as_ptr() as usize;
-        for at in (start + (start & 1)..start + region.len()).step_by(2) {
-            if let Some(binding) = bind(normal, at, &regions.stored) {
-                bindings.push(binding);
-            }
-        }
-    }
-    let [before] = bindings.as_slice() else {
-        return Err(CorrectionError::Unresolved);
-    };
-    if !matches!(super::discover(normal), Observation::Known(p) if p == Phase { assignment: before.assignment, interface: Interface::SplitWord })
-    {
-        return Err(CorrectionError::Unresolved);
-    }
-    let mut corrected = normal.to_vec();
-    if before.assignment != target {
-        for offset in OPERANDS {
-            corrected[before.at + offset] ^= 1;
-        }
-    }
-    let regions = crate::image::regions(&corrected).ok_or(CorrectionError::VerificationFailed)?;
-    let after =
-        bind(&corrected, before.at, &regions.stored).ok_or(CorrectionError::VerificationFailed)?;
-    if after.at != before.at
-        || after.leaf != before.leaf
-        || after.assignment != target
-        || !matches!(super::discover(&corrected), Observation::Known(p) if p == Phase { assignment: target, interface: Interface::SplitWord })
-    {
-        return Err(CorrectionError::VerificationFailed);
-    }
-    Ok(corrected)
 }
 
 #[cfg(test)]
@@ -143,48 +95,24 @@ mod tests {
         assert!(observe(&raw, 32, &[&raw[..384]]).is_none());
     }
     #[test]
-    fn output_only_correction_is_reversible_bounded_and_idempotent() {
+    fn observed_adapted_pair_is_never_corrected() {
         let mut raw = alloc::vec![0xff; 512];
         raw[32..32 + PAIR.len()].copy_from_slice(PAIR);
         raw[49..52].copy_from_slice(&[0x41, 1, 0x80]);
         raw[67..70].copy_from_slice(&[0x41, 1, 0x82]);
         raw[384..390].copy_from_slice(&[0x54, 0x70, 0x0c, 8, 0x54, 0x70]);
-        let swapped = correct_adapted(&raw, Assignment::Swapped).unwrap();
-        let changed: Vec<_> = raw
-            .iter()
-            .zip(&swapped)
-            .enumerate()
-            .filter_map(|(i, (a, b))| (a != b).then_some(i))
-            .collect();
-        assert_eq!(changed, OPERANDS.map(|x| x + 32));
-        assert_eq!(correct_adapted(&swapped, Assignment::Direct).unwrap(), raw);
-        assert_eq!(
-            correct_adapted(&swapped, Assignment::Swapped).unwrap(),
-            swapped
-        );
-        assert_eq!(correct_adapted(&raw, Assignment::Direct).unwrap(), raw);
-        for offset in OPERANDS {
-            let mut partial = raw.clone();
-            partial[32 + offset] ^= 1;
-            assert_eq!(
-                correct_adapted(&partial, Assignment::Direct),
-                Err(CorrectionError::Unresolved)
-            );
-        }
-        let mut duplicate = raw.clone();
-        duplicate[160..160 + PAIR.len()].copy_from_slice(&raw[32..32 + PAIR.len()]);
-        assert_eq!(
-            correct_adapted(&duplicate, Assignment::Swapped),
-            Err(CorrectionError::Unresolved)
-        );
         raw[..16].copy_from_slice(b"PIONEER TEST    ");
         raw[16..20].fill(0);
         raw[20..24].copy_from_slice(&512u32.to_be_bytes());
         raw[24..28].copy_from_slice(b"ID01");
         let compensation = 0u32.wrapping_sub(super::super::checksum(&raw));
         raw[16..20].copy_from_slice(&compensation.to_be_bytes());
-        let checked = correct_normal(&raw, Assignment::Swapped).unwrap();
-        assert_eq!(super::super::checksum(&checked), 0);
-        assert_eq!(correct_normal(&checked, Assignment::Direct).unwrap(), raw);
+        assert!(matches!(discover(&raw), Observation::Known(_)));
+        for target in [Assignment::Direct, Assignment::Swapped] {
+            assert_eq!(
+                correct_normal(&raw, target),
+                Err(CorrectionError::Unresolved)
+            );
+        }
     }
 }

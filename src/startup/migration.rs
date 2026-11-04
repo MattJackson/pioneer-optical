@@ -28,19 +28,7 @@ pub enum Error<E, F> {
     InvalidParameter(u16),
     /// The complete settings plan contains duplicate or conflicting writes.
     ConflictingParameters,
-    /// Factory identity was absent or differed; no mutation was attempted.
-    OriginalHardware,
-    /// A read-only mechanism prerequisite did not match; no writes occurred.
-    Prerequisite {
-        /// Parameter that failed the read-only check.
-        parameter: u16,
-        /// Required value.
-        expected: u16,
-        /// Observed value.
-        actual: u16,
-    },
-    /// Initial A0 word or factory production-record read failed; no parameter
-    /// or firmware write was attempted.
+    /// Initial A0 word read failed; no parameter or firmware write was attempted.
     Read(drive::Error<E>),
     /// Parameter change or verification failed; flash was never invoked.
     Change {
@@ -96,8 +84,6 @@ impl<E, F> crate::CodedError for Error<E, F> {
         match self {
             Self::Preflight(_) => "pioneer.startup.preflight_refused",
             Self::ConflictingParameters => "pioneer.settings.conflicting_parameters",
-            Self::OriginalHardware => "pioneer.settings.original_hardware_mismatch",
-            Self::Prerequisite { .. } => "pioneer.settings.prerequisite_mismatch",
             Self::InvalidParameter(_) => "pioneer.startup.parameter_out_of_range",
             Self::Read(_) => "pioneer.startup.parameter_read_failed",
             Self::Change { .. } => "pioneer.startup.parameter_change_failed",
@@ -130,11 +116,9 @@ impl<E: core::fmt::Debug, F: core::fmt::Display> core::fmt::Display for Error<E,
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Preflight(source)=>write!(f,"update preflight refused before changing startup settings or firmware: {source}"),
-            Self::Prerequisite { parameter, expected, actual } => write!(f, "mechanism prerequisite {parameter:#x} requires {expected:#06x}, observed {actual:#06x}; no settings or firmware were written"),
-            Self::OriginalHardware => f.write_str("the drive’s original hardware could not be confirmed for this transition; no settings or firmware were written"),
             Self::ConflictingParameters => f.write_str("conflicting settings plan; no command was sent"),
             Self::InvalidParameter(p)=>write!(f,"startup parameter {p:#x} is outside the supported parameter surface; no command was sent"),
-            Self::Read(e)=>write!(f,"initial drive read (A0 startup parameter or factory production record) failed; no settings or firmware were written. The drive may not implement this command in its current mode: {e}"),
+            Self::Read(e)=>write!(f,"initial A0 startup parameter read failed; no settings or firmware were written. The drive may not implement this command in its current mode: {e}"),
             Self::Change{source,rollback,..}=>write!(f,"A0 startup parameter write or verification failed; no firmware was written: {source}; {rollback}"),
             Self::Flash{source,rollback,..}=>write!(f,"firmware update failed: {source}; {rollback}"),
         }
@@ -148,10 +132,7 @@ impl<E: core::fmt::Debug + 'static, F: std::error::Error + 'static> std::error::
         match self {
             Self::Preflight(source) | Self::Flash { source, .. } => Some(source),
             Self::Read(source) | Self::Change { source, .. } => Some(source),
-            Self::InvalidParameter(_)
-            | Self::ConflictingParameters
-            | Self::OriginalHardware
-            | Self::Prerequisite { .. } => None,
+            Self::InvalidParameter(_) | Self::ConflictingParameters => None,
         }
     }
 }
@@ -356,65 +337,6 @@ where
     }
 }
 
-/// Check every read-only prerequisite before invoking the existing settings executor.
-/// Empty prerequisites preserve the original command sequence exactly.
-#[cfg(feature = "envelope")]
-pub fn execute_many_checked<T, F, R, X>(
-    io: &mut T,
-    settings: &[(u16, u16)],
-    requirements: &[crate::compatibility::ParameterPrerequisite],
-    original_product_code: Option<&str>,
-    flash: F,
-) -> Result<R, Error<T::Error, X>>
-where
-    T: Transport,
-    F: FnOnce(&mut FlashTransport<'_, T>) -> Result<R, X>,
-{
-    for (i, &(parameter, _)) in settings.iter().enumerate() {
-        if parameter >= 0x400 {
-            return Err(Error::InvalidParameter(parameter));
-        }
-        if settings[..i].iter().any(|(p, _)| *p == parameter) {
-            return Err(Error::ConflictingParameters);
-        }
-    }
-    for (i, r) in requirements.iter().enumerate() {
-        if r.parameter >= 0x400 {
-            return Err(Error::InvalidParameter(r.parameter));
-        }
-        if requirements[..i]
-            .iter()
-            .any(|other| other.parameter == r.parameter)
-        {
-            return Err(Error::ConflictingParameters);
-        }
-    }
-    if let Some(expected) = original_product_code {
-        let mut bytes = [0; crate::production::PARAMETERS_LEN];
-        drive::read(
-            io,
-            &crate::production::parameters(),
-            &mut bytes,
-            crate::production::PARAMETERS_LEN,
-        )
-        .map_err(Error::Read)?;
-        if crate::production::parse(&bytes).map(|p| p.product_code) != Some(expected) {
-            return Err(Error::OriginalHardware);
-        }
-    }
-    for r in requirements {
-        let actual = read(io, r.parameter).map_err(Error::Read)?;
-        if actual != r.value {
-            return Err(Error::Prerequisite {
-                parameter: r.parameter,
-                expected: r.value,
-                actual,
-            });
-        }
-    }
-    execute_many(io, settings, flash)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,156 +399,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "envelope")]
-    #[test]
-    fn unmet_mechanism_prerequisite_never_changes_settings_or_flashes() {
-        let mut io = mock(0xffff);
-        let error = execute_many_checked(
-            &mut io,
-            &[(0x9f, 7)],
-            &[crate::compatibility::ParameterPrerequisite {
-                parameter: 0x9f,
-                value: 1,
-            }],
-            None,
-            |_| -> Result<(), &str> { panic!("must not flash") },
-        )
-        .unwrap_err();
-        assert!(matches!(error, Error::Prerequisite { actual: 0xffff, .. }));
-        assert!(io.writes.is_empty());
-        assert_eq!(io.firmware_attempts, 0);
-    }
-
-    #[cfg(feature = "envelope")]
-    #[test]
-    fn empty_requirements_preserve_existing_command_sequence() {
-        let mut original = mock(0xffff);
-        let mut checked = mock(0xffff);
-        execute_many(&mut original, &[(0x9f, 7)], |_| Ok::<_, &str>(())).unwrap();
-        execute_many_checked(&mut checked, &[(0x9f, 7)], &[], None, |_| Ok::<_, &str>(())).unwrap();
-        assert_eq!(checked.reads, original.reads);
-        assert_eq!(checked.writes, original.writes);
-    }
-
-    /// Factory production-record transport: `None` fails the read, otherwise
-    /// the whole record is filled with the given byte.
-    #[cfg(feature = "envelope")]
-    struct Record {
-        inner: Mock,
-        fill: Option<u8>,
-    }
-    #[cfg(feature = "envelope")]
-    impl Transport for Record {
-        type Error = &'static str;
-        fn exec(&mut self, cdb: &[u8], data: Data<'_>) -> Result<usize, Self::Error> {
-            if cdb == crate::production::parameters() {
-                let (Some(fill), Data::In(bytes)) = (self.fill, data) else {
-                    return Err("factory record read failed");
-                };
-                bytes.fill(fill);
-                return Ok(bytes.len());
-            }
-            self.inner.exec(cdb, data)
-        }
-        fn sense(&self) -> Option<(u8, u8, u8)> {
-            None
-        }
-    }
-
-    #[cfg(feature = "envelope")]
-    #[test]
-    fn failed_factory_record_read_is_reported_as_an_initial_read() {
-        let mut t = Record {
-            inner: mock(0xffff),
-            fill: None,
-        };
-        let err = execute_many_checked(
-            &mut t,
-            &[(0x9f, 7)],
-            &[],
-            Some("BDR-UD02TBD"),
-            |_| -> Result<(), &str> { panic!("must not flash") },
-        )
-        .unwrap_err();
-        assert!(matches!(err, Error::Read(_)));
-        assert!(format!("{err}").contains("factory production record"));
-        assert!(t.inner.writes.is_empty());
-        assert_eq!(t.inner.reads, 0);
-    }
-
-    #[cfg(feature = "envelope")]
-    #[test]
-    fn absent_or_unparseable_factory_record_is_not_original_hardware() {
-        for fill in [0xff, 0] {
-            let mut t = Record {
-                inner: mock(0xffff),
-                fill: Some(fill),
-            };
-            let err = execute_many_checked(
-                &mut t,
-                &[(0x9f, 7)],
-                &[],
-                Some("BDR-UD02TBD"),
-                |_| -> Result<(), &str> { panic!("must not flash") },
-            )
-            .unwrap_err();
-            assert!(matches!(err, Error::OriginalHardware), "fill {fill:#x}");
-            assert_eq!(t.inner.reads, 0);
-            assert!(t.inner.writes.is_empty());
-        }
-    }
-
-    #[cfg(feature = "envelope")]
-    #[test]
-    fn live_factory_identity_is_rechecked_before_any_mutation() {
-        struct Factory {
-            inner: Mock,
-            code: &'static str,
-        }
-        impl Transport for Factory {
-            type Error = &'static str;
-            fn exec(&mut self, cdb: &[u8], data: Data<'_>) -> Result<usize, Self::Error> {
-                if cdb == crate::production::parameters() {
-                    if let Data::In(bytes) = data {
-                        bytes.fill(0xff);
-                        bytes[0x84..0x88].copy_from_slice(b"kw01");
-                        bytes[0x90..0x9f].fill(b' ');
-                        bytes[0x90..0x90 + self.code.len()].copy_from_slice(self.code.as_bytes());
-                        return Ok(bytes.len());
-                    }
-                    panic!("factory record must only be read");
-                }
-                self.inner.exec(cdb, data)
-            }
-            fn sense(&self) -> Option<(u8, u8, u8)> {
-                None
-            }
-        }
-        let mut wrong = Factory {
-            inner: mock(0xffff),
-            code: "BDR-UD04",
-        };
-        let error = execute_many_checked(
-            &mut wrong,
-            &[(0x9f, 7)],
-            &[],
-            Some("BDR-UD02TBD"),
-            |_| -> Result<(), &str> { panic!("must not flash native UD04") },
-        )
-        .unwrap_err();
-        assert!(matches!(error, Error::OriginalHardware));
-        assert!(wrong.inner.writes.is_empty());
-        assert_eq!(wrong.inner.reads, 0);
-        let mut correct = Factory {
-            inner: mock(0xffff),
-            code: "BDR-UD02TBD",
-        };
-        execute_many_checked(&mut correct, &[(0x9f, 7)], &[], Some("BDR-UD02TBD"), |_| {
-            Ok::<_, &str>(())
-        })
-        .unwrap();
-        assert_eq!(correct.inner.writes, [7]);
-    }
     #[test]
     fn failed_change_verification_never_calls_flash() {
         let mut t = mock(0xffff);
@@ -709,7 +481,7 @@ mod tests {
             panic!("flash must not run without original state")
         })
         .unwrap_err();
-        assert!(format!("{err}").contains("initial drive read (A0 startup parameter"));
+        assert!(format!("{err}").contains("initial A0 startup parameter read"));
         assert!(matches!(err, Error::Read(_)));
         assert!(t.writes.is_empty());
         assert_eq!(t.firmware_attempts, 0);
@@ -941,65 +713,6 @@ mod collection_tests {
         execute_many(&mut m, &[(0x9f, 1), (0xa0, 4)], |_| Ok::<_, &str>(())).unwrap();
         let writes: Vec<_> = m.log.iter().filter(|e| e.0 == 0x3b).copied().collect();
         assert_eq!(writes, vec![(0x3b, 1, 4)]);
-    }
-
-    #[cfg(feature = "envelope")]
-    #[test]
-    fn every_prerequisite_is_validated_and_checked_before_any_write() {
-        use crate::compatibility::ParameterPrerequisite as P;
-        let checked = |m: &mut Mock, requirements: &[P]| {
-            execute_many_checked(
-                m,
-                &[(0x9f, 3), (0xa0, 4)],
-                requirements,
-                None,
-                |_| -> Result<(), &str> { panic!("must not flash") },
-            )
-            .unwrap_err()
-        };
-        let mut m = mock();
-        let err = checked(
-            &mut m,
-            &[
-                P {
-                    parameter: 0x9f,
-                    value: 1,
-                },
-                P {
-                    parameter: 0xa0,
-                    value: 9,
-                },
-            ],
-        );
-        assert!(matches!(
-            err,
-            Error::Prerequisite {
-                parameter: 0xa0,
-                expected: 9,
-                actual: 2
-            }
-        ));
-        assert!(m.log.iter().all(|e| e.0 == 0x3c));
-        let mut m = mock();
-        let twice = || P {
-            parameter: 0x9f,
-            value: 1,
-        };
-        assert!(matches!(
-            checked(&mut m, &[twice(), twice()]),
-            Error::ConflictingParameters
-        ));
-        assert!(m.log.is_empty());
-        let mut m = mock();
-        let outside = P {
-            parameter: 0x400,
-            value: 0,
-        };
-        assert!(matches!(
-            checked(&mut m, &[outside]),
-            Error::InvalidParameter(0x400)
-        ));
-        assert!(m.log.is_empty());
     }
 
     #[test]

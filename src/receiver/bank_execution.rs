@@ -185,7 +185,7 @@ where
         .source_schema()
         .ok_or(ExecutionError::Plan("original source schema unavailable"))?;
     let target = &update.target.normal().image;
-    preflight_stages(update.stages(), io.reads)?;
+    preflight_stages(update.stages())?;
     // A native bank writer requires running Normal even when the outer request
     // was called recovery; a loader cannot waive this live binding.
     update.stages[0].bind_stage(

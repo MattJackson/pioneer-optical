@@ -14,46 +14,18 @@ pub mod startup;
 mod representation;
 #[cfg(feature = "envelope")]
 pub(crate) use representation::rebuild_normal;
-#[cfg(feature = "envelope")]
-mod preparation;
-#[cfg(feature = "envelope")]
-pub(crate) use preparation::{prepare as prepare_corrections, PreparationError};
 
 use crate::image::matrix::{discover, Key};
 use crate::image::phase;
 use alloc::vec::Vec;
 
-/// A live parameter must have this value before any settings or firmware write.
-#[cfg(feature = "envelope")]
-#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct ParameterPrerequisite {
-    /// A0 word index, not a byte offset.
-    pub parameter: u16,
-    /// Required existing value; this is never a request to write that value.
-    pub value: u16,
-}
-
-// Prepared firmware changes and live prerequisites share one receiver handoff.
+// Prepared native firmware changes share one receiver handoff.
 #[cfg(feature = "envelope")]
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedCorrection {
-    pub verification: Verification,
     pub id: String,
     pub image: Vec<u8>,
     pub corrections: Vec<Correction>,
-    pub requirements: Vec<ParameterPrerequisite>,
-    pub(crate) requires_normal_runtime: bool,
-    pub(crate) stock_return: bool,
-    pub resolves_issue: String,
-}
-
-#[cfg(feature = "envelope")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Verification {
-    RegisteredFilters,
-    ReviewedMechanism,
-    ReviewedMechanismAndRegisteredFilters,
 }
 
 #[cfg(feature = "envelope")]
@@ -61,8 +33,6 @@ pub(crate) enum Verification {
 pub(crate) struct CorrectionRequirements {
     pub id: String,
     pub corrections: Vec<Correction>,
-    pub requirements: Vec<ParameterPrerequisite>,
-    pub requires_normal_runtime: bool,
 }
 
 #[cfg(feature = "envelope")]
@@ -71,8 +41,6 @@ impl From<PreparedCorrection> for CorrectionRequirements {
         Self {
             id: a.id,
             corrections: a.corrections,
-            requirements: a.requirements,
-            requires_normal_runtime: a.requires_normal_runtime,
         }
     }
 }
@@ -81,24 +49,10 @@ impl From<PreparedCorrection> for CorrectionRequirements {
 impl PreparedCorrection {
     pub(crate) fn native(image: Vec<u8>, corrections: &[Correction]) -> Self {
         Self {
-            verification: Verification::RegisteredFilters,
             id: "pioneer.native-correction.v1".into(),
             image,
             corrections: corrections.to_vec(),
-            requirements: Vec::new(),
-            requires_normal_runtime: false,
-            stock_return: false,
-            resolves_issue: String::new(),
         }
-    }
-    pub(crate) fn stock_return(&self) -> bool {
-        self.stock_return
-    }
-    pub(crate) fn verified_by_filters(&self) -> bool {
-        matches!(
-            self.verification,
-            Verification::RegisteredFilters | Verification::ReviewedMechanismAndRegisteredFilters
-        )
     }
 }
 
@@ -231,23 +185,7 @@ pub enum Correction {
     },
 }
 
-// Owned snapshot of the installed firmware.
-struct InstalledFirmware {
-    hardware: alloc::string::String,
-    normal: Vec<u8>,
-    kernel: Option<Vec<u8>>,
-}
-impl InstalledFirmware {
-    fn as_firmware(&self) -> Firmware<'_> {
-        Firmware {
-            hardware: &self.hardware,
-            normal: &self.normal,
-            kernel: self.kernel.as_deref(),
-        }
-    }
-}
-
-/// Component-bound owner plan with an immutable installed-firmware snapshot.
+/// Component-bound owner plan.
 ///
 /// Planning never performs device I/O. This plan borrows the exact target bytes
 /// used for detection; callers cannot substitute another image at application.
@@ -255,20 +193,12 @@ impl InstalledFirmware {
 /// Address relocation additionally requires complete Normal program equivalence
 /// and the exact unchanged Kernel; published candidate keys retain layout.
 pub struct CorrectionPlan<'a> {
-    installed: InstalledFirmware,
-    policy: crate::filters::runner::Policy,
     target: Firmware<'a>,
     expected: Option<Key>,
     runner: crate::filters::runner::Plan<'a>,
     corrections: Vec<Correction>,
 }
 impl CorrectionPlan<'_> {
-    /// Re-evaluate every registered owner after a reviewed whole-program effect.
-    /// The installed snapshot and explicit family policy remain unchanged.
-    pub fn replan<'a>(&self, target: Firmware<'a>) -> Result<CorrectionPlan<'a>, Error> {
-        plan_with_policy(self.installed.as_firmware(), target, self.policy)
-    }
-
     /// Native corrections selected by their registered owners.
     pub fn corrections(&self) -> &[Correction] {
         &self.corrections
@@ -291,7 +221,7 @@ impl CorrectionPlan<'_> {
         let Some(image) = self.prepare_image(normal, kernel)? else {
             return Ok(None);
         };
-        let bytes = rebuild_normal(normal, kernel, &image, false)?;
+        let bytes = rebuild_normal(normal, kernel, &image)?;
         Ok(Some(bytes))
     }
 
@@ -398,12 +328,6 @@ pub fn plan_with_policy<'a>(
         })
         .collect();
     Ok(CorrectionPlan {
-        installed: InstalledFirmware {
-            hardware: installed.hardware.into(),
-            normal: installed.normal.to_vec(),
-            kernel: installed.kernel.map(<[u8]>::to_vec),
-        },
-        policy,
         target,
         expected,
         runner,

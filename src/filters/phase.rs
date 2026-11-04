@@ -2,10 +2,6 @@
 //!
 //! A detected phase is not evidence that its file can be corrected. Native
 //! interfaces remain part of identity even when source assignment is normalized.
-#[cfg(feature = "envelope")]
-pub mod mechanism;
-#[cfg(feature = "envelope")]
-pub(crate) mod preparation;
 /// Sled mechanism convention bundle bound from native code.
 pub mod bundle;
 /// Native phase recognition, operand corrections and instruction contracts.
@@ -365,6 +361,17 @@ fn mechanism_gate(
     from: NativePhase,
     required: NativePhase,
 ) -> Result<(), Error> {
+    // The hardware matrix suspends every SAT1 phase correction claim pending
+    // command-relative phase proof, whatever the native interface.
+    let sat1 = |firmware: Firmware<'_>| {
+        super::identity::Domain::from_hardware(firmware.hardware)
+            == Some(super::identity::Domain::Sat1)
+    };
+    if from.assignment != required.assignment
+        && (sat1(transition.installed.firmware) || sat1(transition.target.firmware))
+    {
+        return Err(Error::Unsupported);
+    }
     if !matches!(from.interface, Interface::H8SplitWord { .. }) {
         return Ok(());
     }
@@ -573,10 +580,7 @@ impl PhaseOperation {
 pub(crate) fn h8_native(normal: &[u8], assignment: native::Assignment) -> Result<Vec<u8>, Error> {
     match native::discover_pair(normal) {
         Observation::Known(_) => native::correct_pair(normal, assignment),
-        _ => match native::correct_legacy(normal, assignment) {
-            Err(native::CorrectionError::Unresolved) => native::correct_adapted(normal, assignment),
-            result => result,
-        },
+        _ => native::correct_legacy(normal, assignment),
     }
     .map_err(Error::Phase)
 }

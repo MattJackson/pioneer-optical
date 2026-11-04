@@ -346,15 +346,6 @@ fn fmt_board(ints: Option<&BTreeSet<u8>>, strs: Option<&BTreeSet<String>>) -> St
     }
 }
 
-/// Legacy v5 diagnostic identity. Not suitable for hardware admission.
-/// Raw bytes lack the platform and exact Kernel context required by the matrix.
-#[deprecated(
-    note = "use family_with_context or Envelope::family; legacy_family is for historical profile lookup only"
-)]
-pub fn family(body: &[u8]) -> Option<Family> {
-    legacy_family(body)
-}
-
 /// Historical v5 fingerprint retained for exact legacy profile lookups.
 /// Never authorizes an update or replaces the matrix family comparison.
 pub fn legacy_family(body: &[u8]) -> Option<Family> {
@@ -386,14 +377,6 @@ pub struct FamilyFingerprint {
     pub raw_pins: String,
     /// Servo coefficient hash, or `"none"` when no anchor rows were found.
     pub servo: String,
-}
-
-/// Extract historical v5 diagnostic evidence; not a matrix identity.
-#[deprecated(
-    note = "use matrix::discover for typed family evidence; legacy_family_fingerprint is diagnostic only"
-)]
-pub fn family_fingerprint(body: &[u8]) -> Option<FamilyFingerprint> {
-    legacy_family_fingerprint(body)
 }
 
 /// Collect historical register observations independently of matrix admission.

@@ -1091,10 +1091,10 @@ fn workflow_mechanism_bridge() -> (PreparedUpdate, Rc<RefCell<State>>) {
         "id": "test.workflow-mechanism",
         "hardware_scheme": crate::image::FAMILY_SCHEME,
         "hardware_family": crate::image::legacy_family(&source.normal().image).unwrap().to_string(),
-        "source_normal_sha256": [crate::compatibility::mechanism::digest(&source.normal().image)],
+        "source_normal_sha256": [crate::filters::phase::mechanism::digest(&source.normal().image)],
         "mode": "adapt",
         "resolves_issue": "ud02-mechanism-convention",
-        "target_normal_sha256": crate::compatibility::mechanism::digest(&target.normal().image),
+        "target_normal_sha256": crate::filters::phase::mechanism::digest(&target.normal().image),
         "target_model": target.normal().info().model,
         "input_length": target.normal().image.len(),
         "required_parameters": [{"parameter": 0x28f, "value": 1}],
@@ -1104,7 +1104,7 @@ fn workflow_mechanism_bridge() -> (PreparedUpdate, Rc<RefCell<State>>) {
             "replacement_hex": format!("{:02x}", expected[0x624]),
         }],
         "checksum_offset": expected.len() - 4,
-        "output_sha256": crate::compatibility::mechanism::digest(&expected),
+        "output_sha256": crate::filters::phase::mechanism::digest(&expected),
     })
     .to_string();
     let mut receiver = Receiver::from_installed(&source).unwrap();

@@ -1,8 +1,8 @@
 use super::*;
 const FIXTURE: &str = include_str!("fixture.json");
 
-fn source() -> crate::settings::update::Contract {
-    let mut contract = crate::settings::update::Contract::discover(b"fixture-ud02");
+fn source() -> crate::filters::phase::mechanism::Contract {
+    let mut contract = crate::filters::phase::mechanism::Contract::discover(b"fixture-ud02");
     contract.hardware_family = Some("1111111111111111".into());
     contract
 }
@@ -51,7 +51,7 @@ fn held_ud02_ud04_images_reproduce_the_tested_output_and_pristine_return() {
     let original = std::env::var("PIONEER_UD02_NORMAL").expect("PIONEER_UD02_NORMAL");
     let ud02 = std::fs::read(original).unwrap();
     let ud04 = std::fs::read(std::env::var("PIONEER_UD04_NORMAL").unwrap()).unwrap();
-    let from = crate::settings::update::Contract::discover(&ud02);
+    let from = crate::filters::phase::mechanism::Contract::discover(&ud02);
     assert_eq!(
         digest(&ud02),
         "84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750"
@@ -66,16 +66,16 @@ fn held_ud02_ud04_images_reproduce_the_tested_output_and_pristine_return() {
         "ca09032288c62b8b26bb983431af11b52aaeec8da9bd0e80afcccdf3b07f0815"
     );
     from.check_resolving(
-        &crate::settings::update::Contract::discover(&adapted.image),
+        &crate::filters::phase::mechanism::Contract::discover(&adapted.image),
         Some(&adapted.resolves_issue),
     )
     .unwrap();
-    let back = crate::settings::update::Contract::discover(&adapted.image);
+    let back = crate::filters::phase::mechanism::Contract::discover(&adapted.image);
     let returned = prepare(&back, &ud02, "BDR-UD02D").unwrap().unwrap();
     assert!(returned.stock_return());
     assert_eq!(returned.image, ud02);
     // Native UHD firmware is not a certified source for the stock-return route.
-    let native = crate::settings::update::Contract::discover(&ud04);
+    let native = crate::filters::phase::mechanism::Contract::discover(&ud04);
     assert!(prepare(&native, &ud02, "BDR-UD02D").unwrap().is_some());
     let mut changed = ud04.clone();
     changed[0x1000] ^= 1;

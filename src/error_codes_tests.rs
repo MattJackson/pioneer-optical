@@ -506,7 +506,7 @@ fn receiver_and_preparation_error_catalogues_have_stable_codes() {
             "pioneer.settings.compatibility_unresolved",
         ),
         (
-            P::Adaptation(crate::compatibility::mechanism::Error::Guard),
+            P::Adaptation(crate::filters::phase::mechanism::Error::Guard),
             "pioneer.settings.adaptation_guard_failed",
         ),
         (

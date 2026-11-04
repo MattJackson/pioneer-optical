@@ -16,9 +16,9 @@ pub enum PreparationError {
     /// Required configuration is unresolved or has no validated conversion.
     Settings(crate::settings::update::Error),
     /// A compiled-in settings correction failed its exact firmware guards.
-    Adaptation(crate::compatibility::mechanism::Error),
+    Adaptation(crate::filters::phase::mechanism::Error),
     /// Required native phase correction could not be proven.
-    PhaseCorrection(crate::image::matrix::correction::Error),
+    PhaseCorrection(crate::compatibility::Error),
     /// Target requires a setting but the installed write surface is unknown.
     UnknownStartupAccess,
     /// Installed updater cannot hand control to the replacement Kernel.
@@ -142,7 +142,7 @@ impl Receiver {
             crate::production::parse(parameters)
                 .filter(|p| p.product_code_parts().is_some())
                 .map(|p| p.product_code.to_owned())
-                .ok_or(crate::settings::adaptation::Error::OriginalRequired),
+                .ok_or(crate::filters::phase::mechanism::Error::OriginalRequired),
         );
         self
     }
@@ -153,12 +153,12 @@ impl Receiver {
     pub fn with_original_hardware_scope(
         mut self,
         scope: crate::settings::routing::ProductSelector<'static>,
-    ) -> Result<Self, crate::settings::adaptation::Error> {
-        if !crate::settings::adaptation::hardware_rules()?
+    ) -> Result<Self, crate::filters::phase::mechanism::Error> {
+        if !crate::filters::phase::mechanism::hardware_rules()?
             .iter()
             .any(|r| r.hardware.same(scope))
         {
-            return Err(crate::settings::adaptation::Error::OriginalMismatch);
+            return Err(crate::filters::phase::mechanism::Error::OriginalMismatch);
         }
         self.original_product = None;
         self.original_scope = Some(scope);
@@ -273,7 +273,7 @@ impl Receiver {
         let before = candidate(requested);
         if before.is_none() || candidate(prepared) != before {
             return Err(PreparationError::Adaptation(
-                crate::compatibility::mechanism::Error::Guard,
+                crate::filters::phase::mechanism::Error::Guard,
             ));
         }
         Ok(())
@@ -292,7 +292,7 @@ impl Receiver {
             corrected.stock_return(),
         )
         .map_err(|_| {
-            PreparationError::Adaptation(crate::compatibility::mechanism::Error::Representation)
+            PreparationError::Adaptation(crate::filters::phase::mechanism::Error::Representation)
         })
     }
 
@@ -360,7 +360,9 @@ impl Receiver {
     /// Independent required-settings gate; hardware overrides never waive it.
     pub fn check_settings(&self, normal: &[u8]) -> Result<(), PreparationError> {
         self.settings_contract
-            .check(&crate::settings::update::Contract::discover(normal))
+            .check(&crate::filters::phase::mechanism::Contract::discover(
+                normal,
+            ))
             .map_err(PreparationError::Settings)
     }
     fn startup_selection_for(

@@ -336,15 +336,15 @@ fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
             panic!("installed native phase is unresolved")
         };
         let reviewed =
-            crate::compatibility::mechanism::reviewed_recipe_image(recipe, &target.normal().image)
+            crate::filters::phase::mechanism::reviewed_recipe_image(recipe, &target.normal().image)
                 .unwrap();
         let expected = phase::correct_normal(&reviewed, required.assignment).unwrap();
         let first_difference = actual.iter().zip(&expected).position(|(a, b)| a != b);
         assert!(
             actual == expected,
             "{recipe}: actual={}, expected={}, first difference={first_difference:?}",
-            crate::compatibility::mechanism::digest(actual),
-            crate::compatibility::mechanism::digest(&expected),
+            crate::filters::phase::mechanism::digest(actual),
+            crate::filters::phase::mechanism::digest(&expected),
         );
         assert!(matches!(phase::discover(actual), Observation::Known(after) if after == required));
     }
@@ -390,7 +390,7 @@ fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
     );
     assert_eq!(
         forced.settings().requirements(),
-        &[crate::compatibility::mechanism::Requirement {
+        &[crate::filters::phase::mechanism::Requirement {
             parameter: 0x28f,
             value: 1
         }]
@@ -409,13 +409,13 @@ fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
     );
     assert_eq!(
         prepared.settings().requirements(),
-        &[crate::compatibility::mechanism::Requirement {
+        &[crate::filters::phase::mechanism::Requirement {
             parameter: 0x28f,
             value: 1
         }]
     );
     assert_eq!(
-        crate::compatibility::mechanism::digest(&prepared.target.normal().image),
+        crate::filters::phase::mechanism::digest(&prepared.target.normal().image),
         "ca09032288c62b8b26bb983431af11b52aaeec8da9bd0e80afcccdf3b07f0815"
     );
     let back = Receiver::from_installed(&prepared.target)
@@ -503,7 +503,7 @@ fn held_ud02_settings_route_authenticates_and_roundtrips_through_receiver() {
         .prepare(ud03_latest.clone())
         .unwrap();
     assert_eq!(
-        crate::compatibility::mechanism::digest(&forward_latest.target.normal().image),
+        crate::filters::phase::mechanism::digest(&forward_latest.target.normal().image),
         "57d0be1d40c2c8bba7f71bd7b84e66fd4394eb56924fb385610ba92c62797f32"
     );
     // Native mechanisms select the shared inverse, while original UD02 on the
@@ -568,15 +568,15 @@ fn adding_one_test_profile_changes_only_the_matching_prepared_image() {
         "schema_version": 1, "id": "test.single-image",
         "hardware_scheme": crate::image::FAMILY_SCHEME,
         "hardware_family": crate::image::legacy_family(&installed.normal().image).unwrap().to_string(),
-        "source_normal_sha256": [crate::compatibility::mechanism::digest(&installed.normal().image)],
+        "source_normal_sha256": [crate::filters::phase::mechanism::digest(&installed.normal().image)],
         "mode": "adapt",
         "resolves_issue": "ud02-mechanism-convention",
-        "target_normal_sha256": crate::compatibility::mechanism::digest(&target_normal),
+        "target_normal_sha256": crate::filters::phase::mechanism::digest(&target_normal),
         "target_model": target.normal().info().model,
         "input_length": target_normal.len(), "required_parameters": [],
         "replacements": [{ "offset": 0x600, "expected_hex": "0000", "replacement_hex": "0102" }],
         "checksum_offset": target_normal.len() - 4,
-        "output_sha256": crate::compatibility::mechanism::digest(&expected),
+        "output_sha256": crate::filters::phase::mechanism::digest(&expected),
     })
     .to_string();
     let receiver = Receiver::from_installed(&installed).unwrap();
@@ -948,7 +948,7 @@ fn held_ud04_211m_recovery_does_not_invent_a_settings_requirement() {
     assert!(matches!(
         receiver.prepare_without_family_check(m211),
         Err(PreparationError::Adaptation(
-            crate::settings::adaptation::Error::OriginalMismatch
+            crate::filters::phase::mechanism::Error::OriginalMismatch
         ))
     ));
 }
@@ -1081,7 +1081,7 @@ fn handoff_bridge_preserves_source_normal_and_finishes_with_exact_target() {
 #[test]
 fn original_hardware_scope_ignores_ascii_case() {
     let receiver = Receiver::from_installed(&update(false, 1, 0x12, true)).unwrap();
-    for rule in crate::settings::adaptation::hardware_rules().unwrap() {
+    for rule in crate::filters::phase::mechanism::hardware_rules().unwrap() {
         let lower = |v: &str| &*Box::leak(v.to_ascii_lowercase().into_boxed_str());
         let scope = crate::settings::routing::ProductSelector {
             platform: lower(rule.hardware.platform),
@@ -1570,14 +1570,14 @@ fn reviewed_mechanism_cannot_change_an_unrelated_family_fact_under_either_force_
         "schema_version": 1, "id": "test.unrelated-native-field",
         "hardware_scheme": crate::image::FAMILY_SCHEME,
         "hardware_family": crate::image::legacy_family(&installed.normal().image).unwrap().to_string(),
-        "source_normal_sha256": [crate::compatibility::mechanism::digest(&installed.normal().image)],
+        "source_normal_sha256": [crate::filters::phase::mechanism::digest(&installed.normal().image)],
         "mode": "adapt", "resolves_issue": "ud02-mechanism-convention",
-        "target_normal_sha256": crate::compatibility::mechanism::digest(&target.normal().image),
+        "target_normal_sha256": crate::filters::phase::mechanism::digest(&target.normal().image),
         "target_model": target.normal().info().model,
         "input_length": output.len(), "required_parameters": [],
         "replacements": [{"offset": 0x701, "expected_hex": "12", "replacement_hex": "13"}],
         "checksum_offset": output.len()-4,
-        "output_sha256": crate::compatibility::mechanism::digest(&output),
+        "output_sha256": crate::filters::phase::mechanism::digest(&output),
     }).to_string();
     let mut receiver = Receiver::from_installed(&installed).unwrap();
     receiver.correction_contracts = Some(vec![profile]);
@@ -1593,7 +1593,7 @@ fn reviewed_mechanism_cannot_change_an_unrelated_family_fact_under_either_force_
     ] {
         assert_eq!(
             error,
-            PreparationError::Adaptation(crate::compatibility::mechanism::Error::Guard)
+            PreparationError::Adaptation(crate::filters::phase::mechanism::Error::Guard)
         );
     }
 }

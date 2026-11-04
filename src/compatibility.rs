@@ -3,10 +3,6 @@
 //! Native detection stays with each filter. This module compares requirements,
 //! constructs a component-bound correction plan and verifies prepared firmware.
 //! Execution and live setting transactions remain owned by the receiver.
-/// Mechanism correction guards and live prerequisites.
-#[cfg(feature = "envelope")]
-pub mod mechanism;
-
 #[cfg(feature = "envelope")]
 mod kernel;
 #[cfg(feature = "envelope")]
@@ -24,8 +20,6 @@ mod preparation;
 pub(crate) use preparation::{prepare as prepare_corrections, PreparationError};
 
 use crate::image::matrix::{discover, Key};
-#[cfg(test)]
-use crate::image::matrix::{AtaInput, SatKey};
 use crate::image::phase;
 use alloc::vec::Vec;
 
@@ -353,35 +347,6 @@ impl CorrectionPlan<'_> {
     }
 }
 
-// ATA transition support is checked per exact target by codec/checksum proof
-// during preparation. Its published candidate identity still retains phase.
-// Admit a potential plan only when every other typed field is exactly equal.
-#[cfg(test)]
-fn compatible_candidates(source: &Key, target: &Key) -> bool {
-    if source == target {
-        return true;
-    }
-    match (source, target) {
-        (Key::Sat(SatKey::Sat1 { phase, .. }), Key::Sat(SatKey::Sat1 { .. })) => {
-            let mut adjusted = target.clone();
-            if let Key::Sat(SatKey::Sat1 {
-                phase: ref mut value,
-                ..
-            }) = adjusted
-            {
-                *value = *phase;
-            }
-            *source == adjusted
-        }
-        (Key::Ata(a), Key::Ata(b)) => {
-            let mut adjusted = b.clone();
-            adjusted.phase.assignment = a.phase.assignment;
-            *a == adjusted
-        }
-        _ => false,
-    }
-}
-
 /// Detect and compare full identities, then plan supported firmware corrections.
 /// Every unrelated required filter must match. Unknown observations fail closed.
 /// This is the firmware compatibility planner; it does not select live settings.
@@ -519,93 +484,6 @@ struct NonExhaustiveEnums;
 mod tests {
     use super::*;
 
-    #[test]
-    fn ata_phase_planning_cannot_waive_other_required_fields() {
-        use crate::image::matrix::AtaKey;
-        use crate::image::{geometry, layout, peripheral};
-        let layout = layout::ParameterLayout::SerialRange {
-            address_bits: 16,
-            first_word: 0xc0,
-            word_count: 160,
-            encoding: layout::WordEncoding::SerialHighByteFirst,
-        };
-        let a = AtaKey {
-            geometry: match geometry::peripheral_geometry(&layout) {
-                layout::Observation::Known(v) => v,
-                _ => panic!("fixture geometry"),
-            },
-            layout,
-            host: peripheral::HostSignature {
-                coordinate: 0x2000d2,
-                signature_low: 0x2000d2,
-                signature_high: 0x2000d3,
-                initial_one: [0x2000d4, 0x2000d5],
-            },
-            input: AtaInput::V850(peripheral::KeyAlgorithm::CounterLow),
-            phase: peripheral::Phase {
-                assignment: phase::Assignment::Direct,
-                interface: peripheral::Interface::Indexed16 {
-                    window: 0x200100,
-                    channels: [0x8e, 0x8f],
-                },
-            },
-        };
-        for input in [
-            a.input,
-            AtaInput::M32c(peripheral::Input::KeyEvent {
-                address: 0x183,
-                mask: 1,
-                required: 1,
-            }),
-        ] {
-            let mut a = a.clone();
-            a.input = input;
-            let source = Key::Ata(a.clone());
-            let mut swapped = a.clone();
-            swapped.phase.assignment = phase::Assignment::Swapped;
-            assert!(compatible_candidates(&source, &Key::Ata(swapped.clone())));
-            for field in 0..5 {
-                let mut bad = swapped.clone();
-                match field {
-                    0 => {
-                        if let layout::ParameterLayout::SerialRange {
-                            ref mut word_count, ..
-                        } = bad.layout
-                        {
-                            *word_count -= 1;
-                        }
-                    }
-                    1 => {
-                        bad.geometry = geometry::PeripheralGeometry::SerialWords {
-                            first: 0xc1,
-                            last: 0x15f,
-                        }
-                    }
-                    2 => bad.host.signature_high += 1,
-                    3 => {
-                        bad.input = match a.input {
-                            AtaInput::V850(_) => AtaInput::V850(peripheral::KeyAlgorithm::TimerLow),
-                            AtaInput::M32c(_) => AtaInput::M32c(peripheral::Input::KeyEvent {
-                                address: 0x183,
-                                mask: 2,
-                                required: 2,
-                            }),
-                        }
-                    }
-                    _ => {
-                        bad.phase.interface = peripheral::Interface::Indexed16 {
-                            window: 0x210100,
-                            channels: [0x8e, 0x8f],
-                        }
-                    }
-                }
-                assert!(
-                    !compatible_candidates(&source, &Key::Ata(bad)),
-                    "required field {field}"
-                );
-            }
-        }
-    }
     fn normal(variant: u8) -> Vec<u8> {
         let mut bytes = alloc::vec![0xff; 0x2000];
         crate::image::matrix::install_test_contract(&mut bytes, variant);

@@ -263,7 +263,6 @@ mod tests {
             include_str!("startup/migration.rs"),
             include_str!("startup/bank.rs"),
             include_str!("startup/checks.rs"),
-            include_str!("settings/adaptation.rs"),
             include_str!("settings/update.rs"),
             include_str!("compatibility.rs"),
             include_str!("compatibility/kernel.rs"),

@@ -87,7 +87,7 @@ pub struct Plan {
     correction: Option<crate::compatibility::CorrectionRequirements>,
     startup: Option<crate::compatibility::startup::Plan>,
     startup_checks_plan: Option<crate::startup::checks::Plan>,
-    hardware_guard: Option<crate::compatibility::mechanism::HardwareGuard>,
+    hardware_guard: Option<crate::filters::phase::mechanism::HardwareGuard>,
 }
 impl Plan {
     #[cfg(test)]
@@ -209,7 +209,7 @@ impl Plan {
     ) -> Self {
         if scoped {
             self.hardware_guard = Some(
-                crate::compatibility::mechanism::HardwareGuard::new(
+                crate::filters::phase::mechanism::HardwareGuard::new(
                     &target.info().model,
                     &target.image,
                     if self.requires_normal_runtime() {
@@ -228,10 +228,16 @@ impl Plan {
     /// A guarded plan without a predicate must not become an ordinary route.
     pub fn original_hardware_scope(
         &self,
-    ) -> Result<Option<super::routing::ProductSelector<'static>>, super::adaptation::Error> {
+    ) -> Result<
+        Option<super::routing::ProductSelector<'static>>,
+        crate::filters::phase::mechanism::Error,
+    > {
         self.hardware_guard
             .as_ref()
-            .map(|g| g.scope().ok_or(super::adaptation::Error::OriginalRequired))
+            .map(|g| {
+                g.scope()
+                    .ok_or(crate::filters::phase::mechanism::Error::OriginalRequired)
+            })
             .transpose()
     }
 
@@ -242,7 +248,10 @@ impl Plan {
     }
 
     #[cfg(feature = "drive")]
-    pub(crate) fn check_hardware(&self, parameters: &[u8]) -> Result<(), super::adaptation::Error> {
+    pub(crate) fn check_hardware(
+        &self,
+        parameters: &[u8],
+    ) -> Result<(), crate::filters::phase::mechanism::Error> {
         match &self.hardware_guard {
             Some(guard) => guard.check(parameters),
             None => Ok(()),
@@ -343,11 +352,8 @@ impl Plan {
     }
 }
 
-/// Compatibility name for the planner-owned mechanism admission contract.
-pub use crate::compatibility::mechanism::Contract;
-
 #[cfg(test)]
-use crate::compatibility::mechanism::{phase, phase_at};
+use crate::filters::phase::mechanism::{phase, phase_at, Contract};
 
 #[cfg(test)]
 mod tests {

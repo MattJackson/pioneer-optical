@@ -5,7 +5,8 @@ phase recognition, comparison and correction planning. Production recipes and ha
 in `filters/phase/mechanism/contracts.rs`; production neither loads JSON nor
 accepts host-supplied patch recipes. The eleven reviewed definitions and six
 hardware routing rules retain the dev 1.5 hardware, calibration and byte guards.
-`settings::adaptation` remains a forwarding API alias.
+The public path is `filters::phase::mechanism`; the former `settings::adaptation`
+and `compatibility::mechanism` aliases were removed in 1.6.0.
 
 Native firmware corrections and guarded mechanism recipes share the
 `PreparedCorrection` handoff. Firmware bytes pass through codec-bound checksum,

@@ -2,13 +2,14 @@
 
 ## [1.6.0] - Unreleased
 
-- Introduce typed v7 family identity through one shared filter registry for every platform. Each filter owns recognition, comparison, correction and verification; new registrations automatically feed identity, compatibility, reporting and live parameter actions. Required unresolved evidence produces no identity; historical v5/v6 diagnostics remain available separately.
+- Introduce typed v7 family identity through one shared filter registry for every platform. Each filter owns recognition, comparison, correction and verification; new registrations automatically feed identity, compatibility, reporting and live parameter actions. Required unresolved evidence produces no identity; historical v5 diagnostics remain available separately.
 - Select bidirectional native phase corrections from the installed and target firmware, including supported SAT1, SAT8, SAT9, M32C and V850 forms. Bind edits, native checksums, envelope authentication and complete identity verification to exact components.
 - Add Normal-only persistent-address correction for whole-program-equivalent variants with an unchanged Kernel. Preserve independent geometry and format gates; held SAT1/SAT9 layout groups and SAT8000 format changes remain separated.
 - Unify native firmware corrections, reviewed mechanism contracts, startup selection, live prerequisites and ordered Kernel bridge planning. Replace production correction JSON with typed Rust while retaining all 1.5 hardware routes and calibration guards.
 - Make neutral startup selection explicit: use a bound native requirement when present, otherwise deliberately select 0x009F = 0xFFFF. Preserve native uncertainty, read/change/verify transactions, actual before-values and rollback boundaries.
 - Add corpus, bidirectional, malformed-input, composition and receiver regression coverage. No new live DVR transfer support or physical hardware qualification is implied.
 - Make host error categories follow the firmware write boundary. Failures after any firmware write report Update or Verification, including target startup identity failures and failures inside settings migration; refusals before any write no longer report Update. Previously unmapped firmware, layout, analysis and compatibility codes now carry explicit categories. Error codes are unchanged.
+- Remove superseded API: the deprecated `image::family` and `image::family_fingerprint` wrappers; the `settings::adaptation`, `compatibility::mechanism` and `image::matrix::correction` alias modules and the `settings::update::Contract` re-export (use `filters::phase::mechanism` and `compatibility`); and the historical version-six projection (`image::matrix::legacy_discover`, `matrix::Key::Sat`/`Key::Ata`, `SatKey`, `AtaKey`, `SatEvidence`/`AtaEvidence` key projections). Matrix identity, update admission and correction behaviour are unchanged.
 
 ## [1.5.0] - 2026-11-02
 

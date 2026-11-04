@@ -58,7 +58,8 @@ impl Domain {
 pub const PARTITION: &str = "Families never cross a platform. The identity starts with the \
 structured hardware domain (SAT 1xxx, SAT 8xxx, SAT 9xxx, ATA or SCSI), so for example SAT8 and \
 SAT9 images never share a family even when every filter value is equal. A tag outside these \
-domains produces no identity.";
+domains produces no identity. Under the strict update policy the correction planner also refuses \
+any transition between different domains before owner corrections are considered.";
 
 /// Identity rules enforced by [`discover`] and the registered owners.
 pub const RULES: &[&str] = &[

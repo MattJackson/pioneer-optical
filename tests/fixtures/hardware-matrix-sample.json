@@ -148,10 +148,23 @@
     {
       "correctability": "Never",
       "correction": "Never corrected. Values must match.",
-      "description": "Identifies the startup inputs or the complete native initialization program: the H8 E46B immediate (bits 4 and 0), SAT8 role-bound closed/open input predicates, the older H8 initializer, ordered M32C register writes, or a bounded M7900 I/O block. A projected summary bit is never a register value to write, and one architecture's program never stands in for another's.",
+      "description": "Identifies the startup tray inputs or, where no input reader resolves, the complete native initialization program: role-bound closed/open input predicates (address, encoding, bit, active level) on every SAT platform where they resolve, the SAT1 E46B register value or older H8 initializer, ordered M32C register writes, or a bounded M7900 I/O block. A projected summary bit is never a register value to write, and one architecture's program never stands in for another's.",
       "id": "startup-inputs-initialization",
       "name": "Startup inputs / initialization",
       "policies": [
+        {
+          "platforms": [
+            "SAT 8xxx",
+            "SAT 9xxx"
+          ],
+          "text": "The value is chosen by the native reader that resolves, not by the SAT digit: equal tray input predicates compare equal across SAT8 and SAT9. The constant E46B initialization store is evidence only; SAT8 and SAT9 never fall back to it, so unresolved predicates stay Unresolved."
+        },
+        {
+          "platforms": [
+            "SAT 1xxx"
+          ],
+          "text": "SAT1 has no recognized tray input reader and keeps its native E46B register value (bits 4 and 0) or its older initialization program."
+        },
         {
           "platforms": [],
           "text": "An architecture tag, an external initializer address or an unexamined program is not a known value. Such images stay Unresolved and receive no family ID."
@@ -280,7 +293,7 @@
     }
   ],
   "identity": {
-    "partition": "Families never cross a platform. The identity starts with the structured hardware domain (SAT 1xxx, SAT 8xxx, SAT 9xxx, ATA or SCSI), so for example SAT8 and SAT9 images never share a family even when every filter value is equal. A tag outside these domains produces no identity.",
+    "partition": "Families never cross a platform. The identity starts with the structured hardware domain (SAT 1xxx, SAT 8xxx, SAT 9xxx, ATA or SCSI), so for example SAT8 and SAT9 images never share a family even when every filter value is equal. A tag outside these domains produces no identity. Under the strict update policy the correction planner also refuses any transition between different domains before owner corrections are considered.",
     "rules": [
       "Every registered filter runs on every image. Hardware filters form the identity; operational requirements are evaluated and planned per update but never enter it.",
       "As-is identity: every hardware value before any correction. Matching (candidate) family: each owner's projection with exactly what it may correct removed, so it is built only from facts no owner corrects.",

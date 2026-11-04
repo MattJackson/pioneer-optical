@@ -293,7 +293,7 @@
     }
   ],
   "identity": {
-    "partition": "Families never cross a platform. The identity starts with the structured hardware domain (SAT 1xxx, SAT 8xxx, SAT 9xxx, ATA or SCSI), so for example SAT8 and SAT9 images never share a family even when every filter value is equal. A tag outside these domains produces no identity. Under the strict update policy the correction planner also refuses any transition between different domains before owner corrections are considered.",
+    "partition": "Families never cross a platform. The identity starts with the platform partition: SAT 1xxx, H8 SAT (SAT 8xxx and SAT 9xxx together), ATA or SCSI. SAT 8xxx and SAT 9xxx share one platform because their Kernels receive, hand off, finalize, checksum and marker-gate updates with the same native code and their persistent banks use the same versioned contract; every filter value must still match. A tag outside these domains produces no identity. Under the strict update policy the correction planner also refuses any transition between different platforms before owner corrections are considered.",
     "rules": [
       "Every registered filter runs on every image. Hardware filters form the identity; operational requirements are evaluated and planned per update but never enter it.",
       "As-is identity: every hardware value before any correction. Matching (candidate) family: each owner's projection with exactly what it may correct removed, so it is built only from facts no owner corrects.",

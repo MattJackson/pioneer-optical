@@ -33,6 +33,17 @@ impl Domain {
             Self::Scsi => "SCSI",
         }
     }
+    /// Platform partition byte. SAT 8xxx and SAT 9xxx are one H8 SAT platform:
+    /// identical Kernel transport, handoff, finalizer, checksum and marker gate
+    /// (relocated RAM only) and versioned bank contracts, so they share SAT8's
+    /// byte and every other domain keeps its own. Lower filters still decide.
+    pub fn partition(self) -> u8 {
+        match self {
+            Self::Sat9 => Self::Sat8 as u8,
+            other => other as u8,
+        }
+    }
+
     /// Parse a complete hardware header, never a model or partial tag.
     pub fn from_hardware(hardware: &str) -> Option<Self> {
         let bytes = hardware.as_bytes();
@@ -56,10 +67,12 @@ impl Domain {
 /// Platform partition enforced by [`Key::canonical_bytes`]: the domain byte
 /// precedes every filter value.
 pub const PARTITION: &str = "Families never cross a platform. The identity starts with the \
-structured hardware domain (SAT 1xxx, SAT 8xxx, SAT 9xxx, ATA or SCSI), so for example SAT8 and \
-SAT9 images never share a family even when every filter value is equal. A tag outside these \
-domains produces no identity. Under the strict update policy the correction planner also refuses \
-any transition between different domains before owner corrections are considered.";
+platform partition: SAT 1xxx, H8 SAT (SAT 8xxx and SAT 9xxx together), ATA or SCSI. SAT 8xxx and \
+SAT 9xxx share one platform because their Kernels receive, hand off, finalize, checksum and \
+marker-gate updates with the same native code and their persistent banks use the same versioned \
+contract; every filter value must still match. A tag outside these domains produces no identity. \
+Under the strict update policy the correction planner also refuses any transition between \
+different platforms before owner corrections are considered.";
 
 /// Identity rules enforced by [`discover`] and the registered owners.
 pub const RULES: &[&str] = &[
@@ -102,11 +115,17 @@ pub struct Entry {
 }
 
 /// Version seven identity containing every registered hardware field.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Key {
     domain: Domain,
     entries: Vec<Entry>,
 }
+impl PartialEq for Key {
+    fn eq(&self, other: &Self) -> bool {
+        self.domain.partition() == other.domain.partition() && self.entries == other.entries
+    }
+}
+impl Eq for Key {}
 impl Key {
     /// Broad structured-header domain retained alongside all native fields.
     pub fn domain(&self) -> Domain {
@@ -130,7 +149,7 @@ impl Key {
     /// typed values retain their native widths and owner proof discriminants.
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut bytes = b"PIONEER-FAMILY\0\x07".to_vec();
-        bytes.push(self.domain as u8);
+        bytes.push(self.domain.partition());
         bytes.extend((self.entries.len() as u64).to_be_bytes());
         for entry in &self.entries {
             bytes.extend((entry.id.len() as u64).to_be_bytes());
@@ -495,11 +514,18 @@ mod tests {
     }
 
     #[test]
-    fn structured_domains_are_distinct_and_partial_or_model_tags_refuse() {
+    fn structured_platforms_are_distinct_and_partial_or_model_tags_refuse() {
         let filter = Fake::known("native", Value::U8(0));
+        let key = |hardware| discover_with(&context(hardware), &[&filter]).unwrap().as_is;
+        // SAT 8xxx and SAT 9xxx are one H8 SAT platform; the others stay apart.
+        assert_eq!(key("SAT 8000"), key("SAT 9000"));
+        assert_eq!(
+            key("SAT 8000").canonical_bytes(),
+            key("SAT 9000").canonical_bytes()
+        );
         let mut keys = Vec::new();
-        for hardware in ["SAT 1000", "SAT 8000", "SAT 9000", "ATA 0000", "SCSI0001"] {
-            let key = discover_with(&context(hardware), &[&filter]).unwrap().as_is;
+        for hardware in ["SAT 1000", "SAT 8000", "ATA 0000", "SCSI0001"] {
+            let key = key(hardware);
             assert!(!keys.contains(&key));
             keys.push(key);
         }

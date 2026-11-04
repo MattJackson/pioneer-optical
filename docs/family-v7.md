@@ -26,8 +26,12 @@ The registry contains no outer platform-specific field list.
 
 `filters::identity::Key` begins with the 16 bytes
 `50494f4e4545522d46414d494c590007` (`PIONEER-FAMILY`, NUL, version 7), followed by
-a u8 domain: 1 SAT1, 2 SAT8, 3 SAT9, 4 ATA or 5 SCSI. The complete eight-byte
-structured hardware tag establishes the domain; model labels do not.
+a u8 platform partition: 1 SAT1, 2 H8 SAT (SAT8 and SAT9), 4 ATA or 5 SCSI. The
+complete eight-byte structured hardware tag establishes the domain; model labels
+do not. SAT9 shares SAT8's partition byte because both receive, hand off,
+finalize, checksum and marker-gate Kernel updates with the same native code
+(the gated marker check differs only in its relocated RAM flag address) and use
+the same versioned persistent-bank contract; every filter value must still match.
 
 All integer encodings are big endian. A u64 hardware-entry count precedes entries
 sorted lexically by stable owner ID. Each entry contains a u64 UTF-8 byte length,

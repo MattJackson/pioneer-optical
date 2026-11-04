@@ -288,7 +288,7 @@ pub fn evaluate_with<'a>(
         super::identity::Domain::from_hardware(installed.firmware.hardware),
         super::identity::Domain::from_hardware(target.firmware.hardware),
     ) {
-        (Some(a), Some(b)) if a == b => Comparison::Match,
+        (Some(a), Some(b)) if a.partition() == b.partition() => Comparison::Match,
         (Some(_), Some(_)) => Comparison::Different,
         _ => Comparison::Unresolved,
     };
@@ -796,22 +796,37 @@ mod tests {
     }
 
     #[test]
-    fn native_domains_remain_separate_and_plans_are_send_sync() {
+    fn h8_sat_platforms_share_a_partition_and_others_stay_separate() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<Plan<'static>>();
         let image = image();
         let a = context(&image);
-        let b = Context::new(Firmware {
+        let owner = Owner::field("constant", 24);
+        let sat9 = Context::new(Firmware {
             hardware: "SAT 9000",
             normal: &image,
             kernel: None,
         });
-        let owner = Owner::field("constant", 24);
-        assert!(matches!(
-            plan_with(&a, &b, Policy::Strict, &[&owner]),
-            Err(Error::Incompatible)
-        ));
-        assert!(plan_with(&a, &b, Policy::FamilyOverride, &[&owner]).is_ok());
+        let plan = plan_with(&a, &sat9, Policy::Strict, &[&owner]).unwrap();
+        assert!(
+            plan.admit().is_ok(),
+            "SAT8 and SAT9 share the H8 SAT platform"
+        );
+        for hardware in ["SAT 1046", "ATA 0004", "SCSI0001"] {
+            let other = Context::new(Firmware {
+                hardware,
+                normal: &image,
+                kernel: None,
+            });
+            assert!(
+                matches!(
+                    plan_with(&a, &other, Policy::Strict, &[&owner]).and_then(|p| p.admit()),
+                    Err(Error::Incompatible)
+                ),
+                "{hardware} must stay on its own platform"
+            );
+            assert!(plan_with(&a, &other, Policy::FamilyOverride, &[&owner]).is_ok());
+        }
     }
 
     #[test]

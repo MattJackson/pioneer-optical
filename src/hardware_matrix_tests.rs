@@ -83,7 +83,8 @@ fn identity_partitions_platforms_and_documents_it() {
     let family = |hardware| crate::image::family_with_context(&body, hardware, None);
     assert!(family("SAT 8600").is_some());
     assert_eq!(family("SAT 8600"), family("SAT 8801"));
-    assert_ne!(family("SAT 8600"), family("SAT 9600"));
+    assert_eq!(family("SAT 8600"), family("SAT 9600"));
+    assert_ne!(family("SAT 8600"), family("SAT 1046"));
 }
 
 fn split_word(bound: bool) -> (Vec<u8>, Vec<u8>) {

@@ -4,8 +4,6 @@
 //! hardware compatibility, component acceptance, or a complete flash plan.
 
 use crate::envelope::Envelope;
-#[cfg(test)]
-use crate::image::legacy_family;
 use crate::image::{receiver_control, Family, ReceiverControl};
 use crate::{cdb, ComponentKind};
 

@@ -1,5 +1,9 @@
 # Pioneer register analysis backlog — 2026-11-01
 
+> Historical record. The v5 family fingerprint and register-evidence API it
+> describes (`FamilyFingerprint`, `image::family_evidence`, `FamilyCriterion`)
+> were removed in 1.6.0; family identity is the registered-filter v7 key only.
+
 ## Decision and evidence
 
 Exclude **FEC0 bit 6 only** from hardware-family matching. Keep FE94, the

@@ -401,8 +401,8 @@ fn decode_and_update_error_catalogues_have_stable_codes() {
 fn receiver_and_preparation_error_catalogues_have_stable_codes() {
     use crate::receiver::{Error as R, PreparationError as P};
     use crate::ComponentKind;
-    let a = crate::image::legacy_family(&[0xf6, 0x12, 0x6a, 0x86, 0xe4, 0x36, 0, 0]).unwrap();
-    let b = crate::image::legacy_family(&[0xf6, 0x13, 0x6a, 0x86, 0xe4, 0x36, 0, 0]).unwrap();
+    let a = crate::image::matrix::test_family(0x12);
+    let b = crate::image::matrix::test_family(0x13);
     let receiver = [
         (
             R::Component {

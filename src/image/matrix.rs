@@ -99,6 +99,14 @@ pub(crate) fn install_test_contract(body: &mut [u8], variant: u8) {
     );
 }
 
+/// Registered-filter family of a synthetic contract from [`install_test_contract`].
+#[cfg(test)]
+pub(crate) fn test_family(variant: u8) -> super::Family {
+    let mut body = alloc::vec![0xff; 0x2000];
+    install_test_contract(&mut body, variant);
+    super::family_with_context(&body, "SAT 8600", None).expect("registered identity")
+}
+
 /// SAT platform partition supplied by the firmware envelope's hardware tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SatPlatform {

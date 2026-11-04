@@ -83,10 +83,20 @@ fn setup(restore: bool) -> (PreparedUpdate, Rc<RefCell<State>>) {
     setup_updates(fixture(restore, 1), fixture(false, 0xff))
 }
 fn setup_updates(installed: Update, target: Update) -> (PreparedUpdate, Rc<RefCell<State>>) {
-    let plan = Receiver::from_installed(&installed)
-        .unwrap()
-        .prepare(target.clone())
-        .unwrap();
+    setup_updates_policy(installed, target, false)
+}
+fn setup_updates_policy(
+    installed: Update,
+    target: Update,
+    bypass: bool,
+) -> (PreparedUpdate, Rc<RefCell<State>>) {
+    let receiver = Receiver::from_installed(&installed).unwrap();
+    let plan = if bypass {
+        receiver.prepare_without_family_check(target.clone())
+    } else {
+        receiver.prepare(target.clone())
+    }
+    .unwrap();
     let layout = target
         .kernel()
         .normal_layout()
@@ -1680,4 +1690,61 @@ fn generic_settings_flash_failures_keep_rollback_outcome_categories() {
         .kind(),
         Update
     );
+}
+
+// Explicit family overrides retain the ordinary transaction only when bank
+// contracts are compatible. Actual conversion uses a separate deferred plan.
+fn setup_explicit_crossflash(restore: bool) -> (PreparedUpdate, Rc<RefCell<State>>) {
+    setup_updates_policy(fixture(restore, 1), fixture(false, 0xff), true)
+}
+
+#[test]
+fn explicit_crossflash_preserves_settings_transaction_and_bridge_policy() {
+    for restore in [false, true] {
+        for mode in [ExecutionMode::Flash, ExecutionMode::Recovery] {
+            let (plan, state) = setup_explicit_crossflash(restore);
+            for stage in plan.stages() {
+                let startup = stage.settings.startup_plan().unwrap();
+                assert_eq!(
+                    startup.policy(),
+                    crate::startup::checks::Policy::ExplicitCrossflash
+                );
+                assert_eq!(startup.word_setting().parameter, 0x9f);
+                assert_eq!(startup.word_setting().value, 0xffff);
+            }
+            let result = run(&plan, &state, mode).unwrap();
+            assert!(result.kernel_verified && result.normal_verified);
+            assert_eq!(result.completed_stages, if restore { 2 } else { 1 });
+            assert_eq!(state.borrow().parameter_writes, [0xffff]);
+        }
+    }
+}
+
+#[test]
+fn explicit_crossflash_rolls_back_word_before_firmware_entry_on_descriptor_change() {
+    for restore in [false, true] {
+        let (plan, state) = setup_explicit_crossflash(restore);
+        state.borrow_mut().change_descriptor_at = Some(3);
+        let error = run(&plan, &state, ExecutionMode::Flash).unwrap_err();
+        assert!(!error.firmware_write_started());
+        assert_eq!(state.borrow().entries, 0);
+        assert_eq!(state.borrow().parameter_writes, [0xffff, 0xfe24]);
+    }
+}
+
+#[test]
+fn explicit_crossflash_all_firmware_write_failures_stop_without_retry() {
+    let (plan, state) = setup_explicit_crossflash(true);
+    run(&plan, &state, ExecutionMode::Flash).unwrap();
+    let count = state.borrow().writes;
+    for fail in 2..=count {
+        let (plan, state) = setup_explicit_crossflash(true);
+        state.borrow_mut().fail_write = Some(fail);
+        assert!(
+            run(&plan, &state, ExecutionMode::Flash).is_err(),
+            "write {fail}"
+        );
+        assert_eq!(state.borrow().writes, fail, "unexpected retry at {fail}");
+        assert_eq!(state.borrow().parameter_writes, [0xffff]);
+    }
 }

@@ -28,6 +28,8 @@ include = [
     "/examples/hardware_probe.rs",
     "/examples/logging_scan.rs",
     "/examples/startup_corpus.rs",
+    "/examples/bank_transaction_contract.rs",
+    "/examples/pioneer_startup_checks.rs",
     "/examples/device_firmware_scan.rs",
 ]
 keywords = ["pioneer", "optical", "scsi", "firmware", "bluray"]
@@ -95,3 +97,10 @@ required-features = ["envelope"]
 [[example]]
 name = "hardware_probe"
 required-features = ["analysis"]
+
+[[example]]
+name = "pioneer_startup_checks"
+required-features = ["image"]
+
+[[example]]
+name = "bank_transaction_contract"

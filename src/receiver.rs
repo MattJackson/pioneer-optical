@@ -111,6 +111,7 @@ pub struct Receiver {
     kernel_policy: Option<crate::image::KernelMarkerPolicy>,
     installed_kernel: Option<Envelope>,
     installed_normal: Option<Envelope>,
+    bank_bridge: Option<std::sync::Arc<crate::startup::bank::bridge::InstalledBridge>>,
     codec: &'static dyn ReceiverCodec,
 }
 
@@ -153,8 +154,18 @@ impl Receiver {
                 actual: normal.info().kind,
             });
         }
-        let mut receiver = Self::from_image(&normal.image)?;
-        receiver.family = normal.family();
+        let bank_bridge = crate::startup::bank::bridge::recognize(&normal.image);
+        let mut receiver = Self::from_image(
+            bank_bridge
+                .as_ref()
+                .map_or(normal.image.as_slice(), |b| b.source_image()),
+        )?;
+        receiver.family = normal.family_of(
+            bank_bridge
+                .as_ref()
+                .map_or(normal.image.as_slice(), |b| b.source_image()),
+        );
+        receiver.bank_bridge = bank_bridge.map(std::sync::Arc::new);
         receiver.installed_normal = Some(normal.clone());
         Ok(receiver)
     }
@@ -193,6 +204,7 @@ impl Receiver {
             kernel_policy: None,
             installed_kernel: None,
             installed_normal: None,
+            bank_bridge: None,
             codec,
         })
     }
@@ -230,11 +242,29 @@ impl Receiver {
             }
         }
         receiver.kernel_policy = crate::image::kernel_marker_policy(&kernel.image);
-        receiver.startup =
-            crate::startup::checks::Checks::discover(&normal.image, Some(&kernel.image));
-        receiver.family = normal.family_with_kernel(kernel);
+        receiver.startup = crate::startup::checks::Checks::discover(
+            receiver
+                .bank_bridge
+                .as_ref()
+                .map_or(normal.image.as_slice(), |b| b.source_image()),
+            Some(&kernel.image),
+        );
+        receiver.family = normal.family_of_with_kernel(
+            receiver
+                .bank_bridge
+                .as_ref()
+                .map_or(normal.image.as_slice(), |b| b.source_image()),
+            kernel,
+        );
         receiver.installed_kernel = Some(kernel.clone());
         Ok(receiver)
+    }
+
+    fn source_schema(&self) -> Option<&[u8]> {
+        self.bank_bridge
+            .as_ref()
+            .map(|b| b.source_image())
+            .or_else(|| self.installed_normal.as_ref().map(|n| n.image.as_slice()))
     }
 
     /// Hardware family recovered from the captured installed image.

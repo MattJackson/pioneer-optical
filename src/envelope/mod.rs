@@ -1305,16 +1305,32 @@ impl DecodedEnvelope {
     /// Returns None when required evidence resides in an associated Kernel;
     /// use [`Self::family_with_kernel`] for that case. Kernels have no family.
     pub fn family(&self) -> Option<crate::image::Family> {
+        self.family_of(&self.image)
+    }
+
+    /// [`Self::family`] evaluated over a substitute decoded image carrying this
+    /// envelope's header tags, such as the verified source behind a bridge.
+    pub(crate) fn family_of(&self, image: &[u8]) -> Option<crate::image::Family> {
         if self.info.kind != ComponentKind::Normal {
             return None;
         }
-        crate::image::family_with_context(&self.image, &self.info.hardware_version, None)
+        crate::image::family_with_context(image, &self.info.hardware_version, None)
     }
 
     /// Matrix family with the exact associated Kernel. Both component kinds,
     /// hardware tags and Kernel-version tags must agree before resident evidence
     /// can participate. Header agreement alone does not prove a live capture.
     pub fn family_with_kernel(&self, kernel: &Self) -> Option<crate::image::Family> {
+        self.family_of_with_kernel(&self.image, kernel)
+    }
+
+    /// [`Self::family_with_kernel`] evaluated over a substitute decoded image
+    /// carrying this envelope's header tags.
+    pub(crate) fn family_of_with_kernel(
+        &self,
+        image: &[u8],
+        kernel: &Self,
+    ) -> Option<crate::image::Family> {
         if self.info.kind != ComponentKind::Normal
             || kernel.info.kind != ComponentKind::Kernel
             || self.info.hardware_version.is_empty()
@@ -1324,11 +1340,7 @@ impl DecodedEnvelope {
         {
             return None;
         }
-        crate::image::family_with_context(
-            &self.image,
-            &self.info.hardware_version,
-            Some(&kernel.image),
-        )
+        crate::image::family_with_context(image, &self.info.hardware_version, Some(&kernel.image))
     }
 
     /// True when the decoded image is UHD-capable; see [`crate::image::is_uhd`].

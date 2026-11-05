@@ -307,7 +307,7 @@ pub fn transplant(
                     return Err(Error::Unresolved);
                 }
                 let address = next_call.next().ok_or(Error::Unresolved)?;
-                bytes[at + 1..at + 4].copy_from_slice(&address.to_be_bytes()[1..]);
+                super::encoding::retarget_call(&mut bytes, at, address).ok_or(Error::Unresolved)?;
             }
             at += decoded.len;
         }

@@ -165,7 +165,14 @@ pub fn discover_pair(normal: &[u8]) -> Observation<PairedPhase> {
     for region in &regions.stored {
         let start = region.as_ptr() as usize - normal.as_ptr() as usize;
         let end = start + region.len();
-        for at in (start + (start & 1)..end).step_by(2) {
+        let mut candidates = Vec::new();
+        for prefix in [&[1, 0, 0x6d, 0xf3][..], &[0x0c, 0x8a, 0x1a, 0x80][..]] {
+            let pattern: Vec<_> = prefix.iter().copied().map(Some).collect();
+            candidates.extend(super::bundle::sites(normal, &[*region], &pattern));
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+        for at in candidates {
             if let Some(pair) = adapted::paired(normal, at, &regions.stored) {
                 inline.push(pair);
             }
@@ -705,23 +712,14 @@ pub fn discover(normal: &[u8]) -> Observation<Phase> {
         }),
         _ => None,
     };
-    for region in &regions.stored {
-        let start = region.as_ptr() as usize - normal.as_ptr() as usize;
-        let end = start + region.len();
-        for at in (start + (start & 1)..end).step_by(2) {
-            for t in templates::TEMPLATES {
-                if at + t.bytes.len() > end
-                    || normal[at] != t.bytes[0]
-                    || normal[at + 1] != t.bytes[1]
-                {
-                    continue;
+    for t in templates::TEMPLATES {
+        let prefix = [Some(t.bytes[0]), Some(t.bytes[1])];
+        for at in super::bundle::sites(normal, &regions.stored, &prefix) {
+            if let Some(found) = legacy::observe(t, normal, at, &regions.stored) {
+                if result.is_some_and(|value| value != found) {
+                    return Observation::Conflicting;
                 }
-                if let Some(found) = legacy::observe(t, normal, at, &regions.stored) {
-                    if result.is_some_and(|value| value != found) {
-                        return Observation::Conflicting;
-                    }
-                    result = Some(found);
-                }
+                result = Some(found);
             }
         }
     }

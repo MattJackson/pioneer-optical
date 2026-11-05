@@ -186,7 +186,7 @@ const STEP_PLUS: Template =
 const STEP_MINUS: Template =
     t!(0x0c _ 0x88 0xf8 0xe8 0x3f 0xa8 0x20 0x44 0x04 0xf8 0x10 0x40 0x02 0xf8 0x30);
 
-fn masked(template: Template) -> Vec<(u16, u16)> {
+fn masked(template: &[Option<u8>]) -> Vec<(u16, u16)> {
     template
         .chunks(2)
         .map(|pair| {
@@ -203,7 +203,7 @@ fn masked(template: Template) -> Vec<(u16, u16)> {
 }
 
 /// Even stored-region offsets where `template` matches through h8-asm.
-fn sites(normal: &[u8], stored: &[&[u8]], template: Template) -> Vec<usize> {
+pub(super) fn sites(normal: &[u8], stored: &[&[u8]], template: &[Option<u8>]) -> Vec<usize> {
     let mut found = Vec::new();
     if template.is_empty() || template.len() % 2 != 0 {
         return found;
@@ -313,22 +313,11 @@ fn mode_binding(normal: &[u8], stored: &[&[u8]]) -> Result<(u8, usize), Unbound>
             if inverted {
                 variant[6] = Some(0x47);
             }
-            for region in stored {
-                let start = region.as_ptr() as usize - normal.as_ptr() as usize;
-                let end = start + region.len();
-                for at in (start + (start & 1)..end).step_by(2) {
-                    if at + variant.len() <= end
-                        && normal[at..at + variant.len()]
-                            .iter()
-                            .zip(&variant)
-                            .all(|(b, t)| t.map_or(true, |t| t == *b))
-                    {
-                        if found.is_some() {
-                            return Err(Unbound::Ambiguous(Element::ModeSign));
-                        }
-                        found = Some(((sign as u8) ^ u8::from(inverted), at));
-                    }
+            for at in sites(normal, stored, &variant) {
+                if found.is_some() {
+                    return Err(Unbound::Ambiguous(Element::ModeSign));
                 }
+                found = Some(((sign as u8) ^ u8::from(inverted), at));
             }
         }
     }

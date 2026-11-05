@@ -104,6 +104,9 @@ fn stored(normal: &[u8], regions: &[&[u8]], at: usize, len: usize) -> bool {
 }
 
 pub(super) fn observe(t: &Template, normal: &[u8], at: usize, regions: &[&[u8]]) -> Option<Phase> {
+    if !stored(normal, regions, at, t.bytes.len()) {
+        return None;
+    }
     normal.get(at..at.checked_add(t.bytes.len())?)?;
     if let Some(b) = binding(t, normal, at) {
         if !t.requires_leaf
@@ -136,12 +139,10 @@ fn bindings(normal: &[u8]) -> Option<Vec<Binding>> {
     for region in regions.stored {
         let start = region.as_ptr() as usize - normal.as_ptr() as usize;
         let end = start + region.len();
-        for at in (start + (start & 1)..end).step_by(2) {
-            for t in templates::TEMPLATES {
-                if t.requires_leaf && at - start < 6 {
-                    continue;
-                }
-                if at + t.bytes.len() > end || normal.get(at..at + 2)? != &t.bytes[..2] {
+        for t in templates::TEMPLATES {
+            let prefix = [Some(t.bytes[0]), Some(t.bytes[1])];
+            for at in crate::filters::phase::bundle::sites(normal, &[region], &prefix) {
+                if (t.requires_leaf && at - start < 6) || at + t.bytes.len() > end {
                     continue;
                 }
                 if let Some(b) = binding(t, normal, at) {

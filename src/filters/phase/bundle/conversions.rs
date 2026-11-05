@@ -94,7 +94,8 @@ fn emit(normal: &[u8], from: &Program, donor: &[u8], desired: &Program) -> Resul
         if address & 1 != 0 || address < 0x400000 || address >= 0x410000 + normal.len() as u32 {
             return Err(Error::InvalidProgram);
         }
-        bytes[new..new + 3].copy_from_slice(operand);
+        crate::filters::phase::native::encoding::retarget_call(&mut bytes, new - 1, address)
+            .ok_or(Error::InvalidProgram)?;
     }
     Ok(bytes)
 }

@@ -44,54 +44,52 @@ struct Reader {
 fn bind(normal: &[u8]) -> Result<Reader, Error> {
     let regions = crate::image::regions(normal).ok_or(Error::Unresolved)?;
     let mut found = None;
-    for region in &regions.stored {
-        let start = region.as_ptr() as usize - normal.as_ptr() as usize;
-        for (packed, template, holes) in [
-            (false, WHOLE, &[31usize][..]),
-            (true, PACKED, &[43usize, 53][..]),
-        ] {
-            for at in (start + (start & 1)..start + region.len()).step_by(2) {
-                let Some(bytes) = normal
-                    .get(at..at + template.len())
-                    .filter(|_| at + template.len() <= start + region.len())
-                else {
-                    continue;
-                };
-                if !bytes.iter().zip(template).enumerate().all(|(i, (a, b))| {
-                    holes.iter().any(|h| (*h..*h + 3).contains(&i))
-                        || (packed && (56..58).contains(&i))
-                        || a == b
-                }) {
-                    continue;
-                }
-                let convention = if packed {
-                    match &bytes[56..58] {
-                        [0x0c, 8] => Convention::PackedBytes,
-                        [0, 0] => Convention::WholeWord,
-                        _ => continue,
-                    }
-                } else {
-                    Convention::WholeWord
-                };
-                let getter: [u8; 3] = bytes[holes[0]..holes[0] + 3].try_into().expect("getter");
-                let address = u32::from_be_bytes([0, getter[0], getter[1], getter[2]]);
-                if address & 1 != 0
-                    || address < 0x400000
-                    || address >= 0x410000 + normal.len() as u32
-                    || holes.iter().any(|h| bytes[*h..*h + 3] != getter)
+    for (packed, template, holes) in [
+        (false, WHOLE, &[31usize][..]),
+        (true, PACKED, &[43usize, 53][..]),
+    ] {
+        let pattern: Vec<Option<u8>> = template
+            .iter()
+            .enumerate()
+            .map(|(i, byte)| {
+                if holes.iter().any(|h| (*h..*h + 3).contains(&i))
+                    || (packed && (56..58).contains(&i))
                 {
-                    continue;
+                    None
+                } else {
+                    Some(*byte)
                 }
-                if found.is_some() {
-                    return Err(Error::Unresolved);
+            })
+            .collect();
+        for at in crate::filters::phase::bundle::sites(normal, &regions.stored, &pattern) {
+            let bytes = &normal[at..at + template.len()];
+            let convention = if packed {
+                match &bytes[56..58] {
+                    [0x0c, 8] => Convention::PackedBytes,
+                    [0, 0] => Convention::WholeWord,
+                    _ => continue,
                 }
-                found = Some(Reader {
-                    at,
-                    convention,
-                    packed_shape: packed,
-                    getter,
-                });
+            } else {
+                Convention::WholeWord
+            };
+            let getter: [u8; 3] = bytes[holes[0]..holes[0] + 3].try_into().expect("getter");
+            let address = u32::from_be_bytes([0, getter[0], getter[1], getter[2]]);
+            if address & 1 != 0
+                || address < 0x400000
+                || address >= 0x410000 + normal.len() as u32
+                || holes.iter().any(|h| bytes[*h..*h + 3] != getter)
+            {
+                continue;
             }
+            if found.is_some() {
+                return Err(Error::Unresolved);
+            }
+            found = Some(Reader {
+                at,
+                convention,
+                packed_shape: packed,
+                getter,
+            });
         }
     }
     found.ok_or(Error::Unresolved)
@@ -146,7 +144,12 @@ pub fn rewrite(
         }
         let mut program = PACKED.to_vec();
         for at in [43, 53] {
-            program[at..at + 3].copy_from_slice(&before.getter);
+            super::encoding::retarget_call(
+                &mut program,
+                at - 1,
+                u32::from_be_bytes([0, before.getter[0], before.getter[1], before.getter[2]]),
+            )
+            .ok_or(Error::Unresolved)?;
         }
         let address = 0x410000usize
             .checked_add(space.start)
@@ -190,7 +193,12 @@ pub fn transplant(
         &[31]
     };
     for field in fields {
-        code[*field..*field + 3].copy_from_slice(&before.getter);
+        super::encoding::retarget_call(
+            &mut code,
+            *field - 1,
+            u32::from_be_bytes([0, before.getter[0], before.getter[1], before.getter[2]]),
+        )
+        .ok_or(Error::Unresolved)?;
     }
     let original = before.at..before.at + size(&before);
     let mut changed = target.to_vec();

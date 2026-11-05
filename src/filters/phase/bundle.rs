@@ -186,27 +186,41 @@ const STEP_PLUS: Template =
 const STEP_MINUS: Template =
     t!(0x0c _ 0x88 0xf8 0xe8 0x3f 0xa8 0x20 0x44 0x04 0xf8 0x10 0x40 0x02 0xf8 0x30);
 
-fn matches(bytes: &[u8], at: usize, template: Template) -> bool {
-    bytes.get(at..at + template.len()).is_some_and(|window| {
-        window
-            .iter()
-            .zip(template)
-            .all(|(b, t)| t.map_or(true, |t| t == *b))
-    })
+fn masked(template: Template) -> Vec<(u16, u16)> {
+    template
+        .chunks(2)
+        .map(|pair| {
+            let byte = |at: usize| pair.get(at).copied().flatten();
+            (
+                u16::from_be_bytes([byte(0).unwrap_or(0), byte(1).unwrap_or(0)]),
+                u16::from_be_bytes([
+                    if byte(0).is_some() { 255 } else { 0 },
+                    if byte(1).is_some() { 255 } else { 0 },
+                ]),
+            )
+        })
+        .collect()
 }
 
-/// Even stored-region offsets where `template` matches.
+/// Even stored-region offsets where `template` matches through h8-asm.
 fn sites(normal: &[u8], stored: &[&[u8]], template: Template) -> Vec<usize> {
     let mut found = Vec::new();
+    if template.is_empty() || template.len() % 2 != 0 {
+        return found;
+    }
+    let pattern = masked(template);
     for region in stored {
         let start = region.as_ptr() as usize - normal.as_ptr() as usize;
-        let end = start + region.len();
-        let mut at = start + (start & 1);
-        while at + template.len() <= end {
-            if matches(normal, at, template) {
-                found.push(at);
-            }
-            at += 2;
+        let skip = start & 1;
+        let Some(aligned) = region.get(skip..) else {
+            continue;
+        };
+        let mut cursor = 0;
+        while let Some(at) =
+            h8_asm::image::find(aligned, h8_asm::image::Needle::Masked(&pattern), cursor)
+        {
+            found.push(start + skip + at);
+            cursor = at + 2;
         }
     }
     found

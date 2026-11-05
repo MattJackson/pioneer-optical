@@ -234,7 +234,7 @@
           "platforms": [
             "SAT 8xxx/9xxx"
           ],
-          "text": "Source-word, full-step offset, calibration-reader, parameter-conversion and mode/controller rewrite stages are implemented, but full mechanism conversion is not yet enabled. A split-word (F910-F913) coil rewrite is currently planned only when the complete sled mechanism bundle is bound in both images and identical apart from the coil. Otherwise it refuses as Unsupported, which the Recovery family override does not waive."
+          "text": "Split-word (F910-F913) corrections bind the complete sled mechanism bundle. Differing bundles use OEM routines and tables through the phase operation, with full resource and caller verification; equal coil assignments do not suppress required mechanism correction. Growth without proved placement remains Unsupported and cannot be waived by Recovery. Bound 0x28F selection requires the existing word to equal 1; the operation never writes it."
         },
         {
           "platforms": [

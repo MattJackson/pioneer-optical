@@ -134,11 +134,11 @@ fn phase_plan(hardware: &'static str, installed: &[u8], target: &[u8]) -> Result
 }
 
 #[test]
-fn sat1_phase_correction_is_suspended() {
+fn sat1_phase_correction_requires_command_relative_proof() {
     assert!(rules("phase")
         .policies_for(Domain::Sat1)
         .any(|p| p.domains == [Domain::Sat1] && p.text.contains("suspended")));
-    // Held SAT1 phase programs bind no sled mechanism bundle.
+    // Assignment-only fixtures do not bind the complete SAT1 command graph.
     let (direct, swapped) = split_word(false);
     for (a, b) in [(&direct, &swapped), (&swapped, &direct)] {
         assert_eq!(phase_plan("SAT 1050", a, b), Err(Error::Unsupported));

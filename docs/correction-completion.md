@@ -38,10 +38,33 @@ relocated and emitted through h8-asm. Routine specialization preserves proved
 caller semantics; reclaimed loader suffixes require exact component evidence.
 Unproved growth or resource ownership refuses preparation.
 
+The earlier `transplant_reusing_reader` helper remains a limited stage proof: its
+Normal-only reference scan does not establish resident or indirect entry
+ownership. Production planning now tries native in-place specialization and a
+Kernel-checked retired-loader suffix instead of stopping at the original
+no-reservation transplant. Those paths pass the full UD03/UD04 target-image
+conversions with the UD02 donor. They do not rely on the weaker reader helper as
+an unchecked fallback. The previously removed empty source-helper calls remain
+removed; no additional source-routine storage is needed for the eight references.
+
+The integrated reference proofs cover all eight original-image directions,
+including XD08 and XS08U independently of their tray-filter refusal. Runtime
+generated PR1MLA 1.60 and S08 1.50 conventions also pass the phase planner and
+original-codec round trips in both directions. The reverse generated transition
+requires eight exact existing calibration words (`0x30..0x37`), checked read-only.
+Computed-loader direction changes have shared-runner tests with a controlled
+native fixture; the held computed images share the same observed convention.
+Encoder and calibration adapters have separate native execution proofs. Those
+stage proofs do not establish complete generated/computed-to-plain composition;
+that integration remains unfinished.
+
 Parameter `0x28F == 1`, when required by the bound mechanism, is read-only. The
 executor checks it before transfer and never selects or writes it. Independent
 phase proofs do not waive tray inputs, storage layout or other filter failures.
-SAT1 phase correction remains suspended. M32C and V850 retain their supported
+SAT1 complete command-relative graphs now pass bidirectional shared phase-runner
+checks and 61,440 native execution comparisons. The original-codec test is written
+but has not run at this checkpoint; other SAT1 graphs remain unsupported.
+M32C and V850 retain their supported
 architecture-specific native output/checksum proofs.
 
 ## Startup correction
@@ -52,8 +75,12 @@ accepted word and retains the complete conditional predicate. It declares the
 live word as a read-only prerequisite. Preparation composes the image effect
 with other owners; verification rebinds the resulting native comparison.
 
-Exact component preservation needs no comparison rewrite. Other transitions
-require the startup owner's positive native evidence; an unresolved finding
+Exact component preservation needs no comparison rewrite. For a missing fixed
+comparison, a startup-owned verify-only operation can certify preservation of
+the native rejection predicates and their incoming edges, parameter-reader
+layout and protected sinks. It rechecks that certificate after other owners'
+image edits and invents no live-word requirement. Other transitions require the
+startup owner's positive native evidence; an unresolved finding
 never authorizes a neutral `0x009F = 0xFFFF` choice. Missing resident getters and
 ambiguous predicates remain refusals. Standalone historical selection APIs do
 not authorize receiver preparation to issue persistent parameter writes.
@@ -106,8 +133,8 @@ owner registration, typed comparison and refusal boundaries. Three SAT1003
 layouts require the unavailable exact resident reader at 0x404622; their other
 five hardware findings are recognized, and no layout mismatch is established.
 Historical isolated phase file-operation counts are not current release
-admission evidence. In particular, the former SAT1 file proofs do not override
-the current suspension. Full mechanism conversions require the actual shared
+admission evidence. In particular, historical SAT1 file proofs do not replace
+the new command-relative graph and exact-Kernel requirements. Full mechanism conversions require the actual shared
 planner, composition, prerequisites and original-codec verification; an operand
 reversal alone is insufficient. Invalid files and missing exact Kernels refuse.
 

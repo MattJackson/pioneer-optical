@@ -7,6 +7,9 @@
 /// Native calibration-word reader convention and image-only rewrite.
 pub mod calibration;
 
+/// Native arithmetic services in an explicitly mapped resident-code image.
+pub mod arithmetic;
+
 /// Bounded source-word exchange stage for complete native paired programs.
 pub mod sources;
 

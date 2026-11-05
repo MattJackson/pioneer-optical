@@ -1528,3 +1528,173 @@ fn computed_loader_dsp_contracts_cover_held_native_images() {
         "computed-loader coverage unexpectedly shrank"
     );
 }
+
+#[test]
+fn native_arithmetic_services_follow_mapped_call_targets() {
+    let fixtures: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/phase-native-arithmetic.json")).unwrap();
+    for f in fixtures.as_array().unwrap() {
+        let base = f["base"].as_u64().unwrap() as u32;
+        let multiply = f["multiply"].as_u64().unwrap() as u32;
+        let divide = f["divide"].as_u64().unwrap() as u32;
+        let mut image = vec![0xff; f["size"].as_u64().unwrap() as usize];
+        for span in f["spans"].as_array().unwrap() {
+            let at = span[0].as_u64().unwrap() as usize;
+            let bytes = hex(span[1].as_str().unwrap());
+            image[at..at + bytes.len()].copy_from_slice(&bytes);
+        }
+        let binding = native::arithmetic::observe(&image, base, multiply, divide).unwrap();
+        assert_eq!(binding.multiply.len(), 24);
+        assert_eq!(binding.signed_divide.len(), 38);
+        assert_eq!(binding.unsigned_divide.len(), 60);
+        for span in [
+            &binding.multiply,
+            &binding.signed_divide,
+            &binding.unsigned_divide,
+        ] {
+            for at in span.clone() {
+                let mut broken = image.clone();
+                broken[at] ^= 2;
+                assert!(
+                    native::arithmetic::observe(&broken, base, multiply, divide).is_none(),
+                    "mutation {at:#x}"
+                );
+            }
+        }
+        assert!(native::arithmetic::observe(&image, base + 2, multiply, divide).is_none());
+        assert!(native::arithmetic::observe(&image, base, multiply + 1, divide).is_none());
+        assert!(
+            native::arithmetic::observe(&image[..image.len() - 1], base, multiply, divide)
+                .is_none()
+        );
+        // Relocation is accepted by native linkage, never by an address registry.
+        let offset = binding.signed_divide.start + 19;
+        let relocated_core = base + binding.unsigned_divide.start as u32 + 0x200;
+        image[offset..offset + 3].copy_from_slice(&relocated_core.to_be_bytes()[1..]);
+        assert_eq!(
+            native::arithmetic::observe(&image, base + 0x200, multiply + 0x200, divide + 0x200),
+            Some(binding)
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires PIONEER_HOARD; independently guarded arithmetic dump spans"]
+fn native_arithmetic_spans_match_original_drive_dumps() {
+    let root = std::path::PathBuf::from(std::env::var("PIONEER_HOARD").unwrap());
+    let fixtures: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/phase-native-arithmetic.json")).unwrap();
+    for f in fixtures.as_array().unwrap() {
+        let hash = f["original_sha256"].as_str().unwrap();
+        let original = std::fs::read(root.join("originals").join(hash).join("dump.bin")).unwrap();
+        assert_eq!(format!("{:x}", Sha256::digest(&original)), hash);
+        let base = f["base"].as_u64().unwrap() as usize;
+        for span in f["spans"].as_array().unwrap() {
+            let at = base + span[0].as_u64().unwrap() as usize;
+            let bytes = hex(span[1].as_str().unwrap());
+            assert_eq!(&original[at..at + bytes.len()], bytes.as_slice());
+        }
+        native::arithmetic::observe(
+            &original,
+            0,
+            f["multiply"].as_u64().unwrap() as u32,
+            f["divide"].as_u64().unwrap() as u32,
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn native_multiply_instructions_match_wrapping_u32_products() {
+    use h8_asm::{
+        isa::{decode_insn, Operand as O, Reg},
+        Mode, Target,
+    };
+    let fixtures: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/phase-native-arithmetic.json")).unwrap();
+    let f = &fixtures[0];
+    let offset = f["multiply"].as_u64().unwrap() - f["base"].as_u64().unwrap();
+    let span = f["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s[0].as_u64() == Some(offset))
+        .unwrap();
+    let bytes = hex(span[1].as_str().unwrap());
+    let mut program = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        let decoded = decode_insn(&bytes[at..], Target::H8S2000, Mode::Advanced).unwrap();
+        program.push(decoded.insn);
+        at += decoded.len;
+    }
+    fn word(registers: &[u32; 8], n: u8) -> u32 {
+        (registers[(n % 8) as usize] >> if n < 8 { 0 } else { 16 }) & 0xffff
+    }
+    fn set_word(registers: &mut [u32; 8], n: u8, value: u32) {
+        let shift = if n < 8 { 0 } else { 16 };
+        let r = &mut registers[(n % 8) as usize];
+        *r = (*r & !(0xffff << shift)) | ((value & 0xffff) << shift);
+    }
+    let run = |a: u32, b: u32| {
+        let mut registers = [0x1357_9bdf; 8];
+        registers[0] = a;
+        registers[1] = b;
+        let mut saved = Vec::new();
+        for insn in &program {
+            match (insn.mnemonic, insn.operands) {
+                ("STM", [O::Registers { first, last }, _, _]) => {
+                    saved.push(registers[first as usize..=last as usize].to_vec());
+                }
+                ("LDM", [_, O::Registers { first, last }, _]) => {
+                    registers[first as usize..=last as usize]
+                        .copy_from_slice(&saved.pop().unwrap());
+                }
+                ("MOV", [O::Register(Reg::Word(from)), O::Register(Reg::Word(to)), _]) => {
+                    let value = word(&registers, from);
+                    set_word(&mut registers, to, value);
+                }
+                ("MULXU", [O::Register(Reg::Word(from)), O::Register(Reg::Long(to)), _]) => {
+                    registers[to as usize] = word(&registers, from) * word(&registers, to);
+                }
+                ("ADD", [O::Register(Reg::Word(from)), O::Register(Reg::Word(to)), _]) => {
+                    let value = word(&registers, from) + word(&registers, to);
+                    set_word(&mut registers, to, value);
+                }
+                ("RTS", _) => {
+                    assert!(saved.is_empty());
+                    assert_eq!(registers[1], b);
+                    assert!(registers[2..].iter().all(|r| *r == 0x1357_9bdf));
+                    return registers[0];
+                }
+                other => panic!("unexpected multiply instruction {other:?}"),
+            }
+        }
+        panic!("missing return")
+    };
+    let edges = [
+        0,
+        1,
+        2,
+        0x7fff,
+        0x8000,
+        0xffff,
+        0x10000,
+        0x7fff_ffff,
+        0x8000_0000,
+        u32::MAX,
+    ];
+    for a in edges {
+        for b in edges {
+            assert_eq!(run(a, b), a.wrapping_mul(b));
+        }
+    }
+    let mut random = 0x9e37_79b9u32;
+    for word in 0..=u16::MAX {
+        random ^= random << 13;
+        random ^= random >> 17;
+        random ^= random << 5;
+        let a = (u32::from(word) << 16) | u32::from(!word);
+        assert_eq!(run(a, random), a.wrapping_mul(random));
+    }
+}

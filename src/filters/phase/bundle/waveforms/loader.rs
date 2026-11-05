@@ -268,8 +268,13 @@ pub fn transplant_plain(
         } else {
             return Err(Error::ResourceMismatch);
         };
-        code[field.at..field.at + field.width]
-            .copy_from_slice(&address.to_be_bytes()[4 - field.width..]);
+        crate::filters::phase::native::encoding::retarget_field(
+            &mut code,
+            field.at,
+            field.width,
+            address,
+        )
+        .ok_or(Error::ResourceMismatch)?;
     }
     let destination = if code.len() <= before.program.len() {
         before.program.clone()
@@ -374,8 +379,13 @@ pub fn transplant_computed(normal: &[u8], donor: &[u8], table: u32) -> Result<Ve
             FieldKind::Literal if field.at == shape.writer => before.writer,
             _ => return Err(Error::ResourceMismatch),
         };
-        code[field.at..field.at + field.width]
-            .copy_from_slice(&address.to_be_bytes()[4 - field.width..]);
+        crate::filters::phase::native::encoding::retarget_field(
+            &mut code,
+            field.at,
+            field.width,
+            address,
+        )
+        .ok_or(Error::ResourceMismatch)?;
     }
     if calls.next().is_some() || code.len() != before.program.len() {
         return Err(Error::VerificationFailed);

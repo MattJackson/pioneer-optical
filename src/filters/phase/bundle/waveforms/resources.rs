@@ -6,6 +6,8 @@ use crate::filters::phase::native;
 use crate::image::layout::Observation;
 use alloc::vec::Vec;
 use core::ops::Range;
+/// Native generated-waveform basis and evaluator relationships.
+pub mod evaluators;
 mod shapes;
 /// Software-table dispatch and selector observation; generation proof is separate.
 pub mod software;

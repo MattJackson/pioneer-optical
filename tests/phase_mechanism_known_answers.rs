@@ -129,6 +129,69 @@ fn computed_loader_rewrite_retains_scaling_calls_and_valid_native_control_flow()
 }
 
 #[test]
+fn generated_evaluators_bind_basis_and_preserve_distinct_calibration_sources() {
+    use bundle::waveforms::resources::evaluators;
+    let first = native_spans("8037cdb3ae67e04a82aa3e9b7a0f52202e17f1e39d1f50b894158d9be0cec898");
+    let second = native_spans("99ba77ae1cedc967096c770b21c066d04a5163f1c5a4aa82f27584c6faced796");
+    let a = evaluators::observe(&first).unwrap();
+    let b = evaluators::observe(&second).unwrap();
+    assert_eq!(a.basis, 0x24eece..0x24efce);
+    assert_eq!(b.basis, 0x1891b6..0x1892b6);
+    assert_eq!(a.calibration_getter, 0x5d6fd0);
+    assert_eq!(b.calibration_getter, 0x542ad4);
+    // Held native data establishes a quarter-cycle basis difference; this is
+    // not a claim that their calibration readers or complete mechanisms agree.
+    for row in 0..64 {
+        let x = a.basis.start + ((row + 48) % 64) * 4;
+        let y = b.basis.start + row * 4;
+        assert_eq!(&first[x..x + 4], &second[y..y + 4]);
+    }
+    assert_eq!(
+        evaluators::calibration(&second, &b).unwrap().1,
+        evaluators::Calibration::Constants([675, 1481, -646, -1476, 675, 1476, -657, -1486])
+    );
+    assert_eq!(
+        evaluators::calibration(&first, &a).unwrap().1,
+        evaluators::Calibration::Parameters {
+            indices: [0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37],
+            defaults: [474, 1106, -523, -1205, 481, 1135, -495, -1136],
+            helpers: [0x5ec50c, 0x5ecbfa],
+        }
+    );
+    for (target, installed, binding, shift) in
+        [(&first, &second, &a, 48), (&second, &first, &b, 16)]
+    {
+        let changed = evaluators::rewrite_basis(target, installed).unwrap();
+        let mut expected = target.clone();
+        for row in 0..64 {
+            let from = binding.basis.start + ((row + shift) % 64) * 4;
+            let to = binding.basis.start + row * 4;
+            expected[to..to + 4].copy_from_slice(&target[from..from + 4]);
+        }
+        assert_eq!(changed, expected);
+        assert_eq!(
+            evaluators::calibration(&changed, binding).unwrap(),
+            evaluators::calibration(target, binding).unwrap()
+        );
+    }
+    for (image, binding, jump, helper) in [(&first, a, 33, 65), (&second, b, 43, 75)] {
+        let program = binding.programs.last().unwrap();
+        // Split form's last body has offsets four bytes later than its first.
+        let (jump, helper) = if program.len() == 212 {
+            (jump + 2, helper + 4)
+        } else {
+            (jump, helper)
+        };
+        let mut broken = image.clone();
+        broken[program.start + jump + 2] ^= 2;
+        assert!(evaluators::observe(&broken).is_err());
+        let mut broken = image.clone();
+        broken[program.start + helper + 2] ^= 2;
+        assert!(evaluators::observe(&broken).is_err());
+    }
+}
+
+#[test]
 fn native_xd04_motion_roles_do_not_require_an_assumed_dsp_program() {
     let image = native_spans("4b390d0e70e2d1006b58b4a3c7653f4b0a77f6fcf1c752cbc21f3d420b2cea5c");
     let motion = bundle::waveforms::resources::observe_literal_motion(&image).unwrap();

@@ -2,6 +2,8 @@
 use crate::filters::phase::bundle::{sites, Loader, Template};
 use alloc::vec::Vec;
 use core::ops::Range;
+/// Complete computed-to-plain native coefficient transfer.
+pub mod coefficient_bridge;
 /// Complete computed/scaled DSP graph and native direction transformation.
 pub mod computed;
 /// Complete DSP read-helper ABI proof.

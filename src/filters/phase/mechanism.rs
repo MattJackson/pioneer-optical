@@ -11,6 +11,7 @@ pub(super) struct Mechanism {
     specialized: bool,
     generated: bool,
     generated_words: Vec<Word>,
+    sat1_kernel: Option<Vec<u8>>,
 }
 impl Mechanism {
     pub(super) fn plan(
@@ -57,6 +58,7 @@ impl Mechanism {
             specialized,
             generated: false,
             generated_words: Vec::new(),
+            sat1_kernel: None,
         })
     }
     pub(super) fn plan_generated(transition: &Transition<'_, '_>) -> Result<Self, Error> {
@@ -74,6 +76,36 @@ impl Mechanism {
             specialized: false,
             generated: true,
             generated_words: plan.required_words,
+            sat1_kernel: None,
+        })
+    }
+    pub(super) fn plan_sat1(transition: &Transition<'_, '_>) -> Result<Self, Error> {
+        let target_kernel = transition
+            .target
+            .firmware
+            .kernel
+            .ok_or(Error::Unsupported)?;
+        let donor_kernel = transition
+            .installed
+            .firmware
+            .kernel
+            .ok_or(Error::Unsupported)?;
+        let donor = transition.installed.firmware.normal.to_vec();
+        let image = super::native::sat1::transplant(
+            transition.target.firmware.normal,
+            target_kernel,
+            &donor,
+            donor_kernel,
+        )
+        .map_err(|_| Error::Unsupported)?;
+        Ok(Self {
+            donor,
+            image,
+            selection_required: false,
+            specialized: false,
+            generated: false,
+            generated_words: Vec::new(),
+            sat1_kernel: Some(donor_kernel.to_vec()),
         })
     }
     pub(super) fn required_words(&self) -> Vec<Word> {
@@ -123,6 +155,16 @@ impl Mechanism {
             if !(16..20).contains(&at) && before != expected && actual != expected {
                 return Err(Error::VerificationFailed);
             }
+        }
+        if let Some(donor_kernel) = &self.sat1_kernel {
+            return super::native::sat1::verify(
+                context.target.normal,
+                context.target.kernel.ok_or(Error::VerificationFailed)?,
+                &self.donor,
+                donor_kernel,
+                normal,
+            )
+            .map_err(|_| Error::VerificationFailed);
         }
         if self.generated {
             return bundle::waveforms::resources::generated::verify_with_kernel(

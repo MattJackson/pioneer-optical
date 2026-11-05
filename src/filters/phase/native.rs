@@ -7,6 +7,9 @@
 /// Native calibration-word reader convention and image-only rewrite.
 pub mod calibration;
 
+/// Complete command-relative SAT1 mechanism binding and correction.
+pub mod sat1;
+
 /// Native arithmetic services in an explicitly mapped resident-code image.
 pub mod arithmetic;
 
@@ -869,6 +872,16 @@ pub fn discover(normal: &[u8]) -> Observation<Phase> {
         }),
         _ => None,
     };
+    if let Ok(graph) = sat1::observe_normal(normal) {
+        let found = Phase {
+            assignment: graph.assignment,
+            interface: Interface::SplitWord,
+        };
+        if result.is_some_and(|value| value != found) {
+            return Observation::Conflicting;
+        }
+        result = Some(found);
+    }
     for t in templates::TEMPLATES {
         let prefix = [Some(t.bytes[0]), Some(t.bytes[1])];
         for at in super::bundle::sites(normal, &regions.stored, &prefix) {

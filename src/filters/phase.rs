@@ -264,7 +264,7 @@ static RULES: super::Rules = super::Rules {
         },
         super::Policy {
             domains: &[super::identity::Domain::Sat1],
-            text: "SAT1 phase correction is suspended pending command-relative phase proof: any assignment change refuses on every interface.",
+            text: "SAT1 phase correction requires a complete command-relative native graph, exact paired Kernel leaves, table ownership and caller/output verification. Other assignment changes remain suspended.",
         },
         super::Policy {
             domains: &[super::identity::Domain::H8Sat],
@@ -395,8 +395,31 @@ fn mechanism_gate(
     from: NativePhase,
     required: NativePhase,
 ) -> Result<Option<mechanism::Mechanism>, Error> {
-    // The hardware matrix suspends every SAT1 phase correction claim pending
-    // command-relative phase proof, whatever the native interface.
+    // Complete command-relative SAT1 graphs establish their own authority;
+    // hardware spelling is not a positive correction recipe. Equal coil facts
+    // still require table comparison, and every change binds both exact Kernels.
+    match (
+        native::sat1::observe_normal(transition.installed.firmware.normal),
+        native::sat1::observe_normal(transition.target.firmware.normal),
+    ) {
+        (Ok(source), Ok(target)) => {
+            if source.assignment != required.assignment || target.assignment != from.assignment {
+                return Err(Error::UnresolvedIdentity);
+            }
+            if source.assignment == target.assignment
+                && source.tables.iter().zip(&target.tables).all(|(a, b)| {
+                    transition.installed.firmware.normal[a.clone()]
+                        == transition.target.firmware.normal[b.clone()]
+                })
+            {
+                return Ok(None);
+            }
+            return mechanism::Mechanism::plan_sat1(transition).map(Some);
+        }
+        (Ok(_), Err(_)) | (Err(_), Ok(_)) => return Err(Error::Unsupported),
+        _ => {}
+    }
+    // Other SAT1 programs remain suspended without command-relative proof.
     let sat1 = |firmware: Firmware<'_>| {
         super::identity::Domain::from_hardware(firmware.hardware)
             == Some(super::identity::Domain::Sat1)

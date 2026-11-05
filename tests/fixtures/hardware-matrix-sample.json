@@ -228,7 +228,7 @@
           "platforms": [
             "SAT 1xxx"
           ],
-          "text": "SAT1 phase correction is suspended pending command-relative phase proof: any assignment change refuses on every interface."
+          "text": "SAT1 phase correction requires a complete command-relative native graph, exact paired Kernel leaves, table ownership and caller/output verification. Other assignment changes remain suspended."
         },
         {
           "platforms": [

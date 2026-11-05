@@ -92,6 +92,30 @@ fn bind(normal: &[u8]) -> Result<(Binding, &'static Shape), Error> {
             if coefficient != get(shape.coefficient[1])? {
                 return Err(Error::ResourceMismatch);
             }
+            let leaf = coefficient
+                .checked_sub(0x410000)
+                .ok_or(Error::ResourceMismatch)? as usize;
+            if normal.get(leaf..leaf + 4) != Some(&[0x0c, 0x08, 0x54, 0x70][..])
+                || !regions.stored.iter().any(|region| {
+                    let start = region.as_ptr() as usize - normal.as_ptr() as usize;
+                    leaf >= start && leaf + 4 <= start + region.len()
+                })
+            {
+                return Err(Error::ResourceMismatch);
+            }
+            if shape.computed {
+                // Both channels share the table, mode inputs and arithmetic
+                // helpers; address-range checks alone do not prove this graph.
+                if get(13)? != get(21)?
+                    || get(84)? != get(162)?
+                    || get(84)? != get(182)?
+                    || get(49)? != get(95)?
+                    || get(49)? != get(199)?
+                    || [115, 207, 219].into_iter().any(|at| get(at) != get(103))
+                {
+                    return Err(Error::ResourceMismatch);
+                }
+            }
             let writer = get(shape.writer)?;
             let readback = get(shape.readback)?;
             // Both address-selected and direct-call writers have the same ABI.

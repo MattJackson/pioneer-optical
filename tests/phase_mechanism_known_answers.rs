@@ -1,7 +1,7 @@
 //! Independent 0.17.3 reviewed outputs, never production correction recipes.
 //! References: the reviewed definitions removed by e922789, recovered from
-//! e922789^:src/filters/phase/mechanism/contracts.rs. This checks recognition
-//! and bounded coil edits of those outputs, not full mechanism conversion.
+//! e922789^:src/filters/phase/mechanism/contracts.rs. Sparse native fixtures run
+//! in CI; optional corpus tests also prove complete original/output SHA values.
 #![cfg(feature = "envelope")]
 use pioneer_optical::filters::phase::{bundle, native};
 use sha2::{Digest, Sha256};
@@ -11,6 +11,158 @@ fn hex(text: &str) -> Vec<u8> {
         .step_by(2)
         .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
         .collect()
+}
+
+fn native_spans(hash: &str) -> Vec<u8> {
+    let fixtures: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/phase-native-spans.json")).unwrap();
+    let fixture = fixtures
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["original_sha256"].as_str() == Some(hash))
+        .unwrap();
+    let mut image = vec![0xff; fixture["size"].as_u64().unwrap() as usize];
+    for span in fixture["spans"].as_array().unwrap() {
+        let at = span[0].as_u64().unwrap() as usize;
+        let bytes = hex(span[1].as_str().unwrap());
+        image[at..at + bytes.len()].copy_from_slice(&bytes);
+    }
+    image
+}
+
+fn test_space() -> bundle::composition::Space {
+    bundle::composition::Space {
+        conversions: [Some(0x400..0x440), Some(0x440..0x484), Some(0x484..0x4b8)],
+        calibration: Some(0x4b8..0x4fc),
+        sources: Some(0x4fc..0x52c),
+    }
+}
+
+#[test]
+fn native_sparse_composition_matches_every_reviewed_changed_byte_in_ci() {
+    // Native held code/data spans remain at their original addresses. All other
+    // bytes are erased: these are incomplete test images, never flash inputs.
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/phase-mechanism-known-answers.json")).unwrap();
+    for case in cases.as_array().unwrap() {
+        let target = native_spans(case["target"].as_str().unwrap());
+        let installed = native_spans(case["calibration_donor"].as_str().unwrap());
+        let actual = bundle::composition::rewrite(&target, &installed, test_space())
+            .unwrap_or_else(|e| panic!("{}: {e:?}", case["id"]));
+        let mut expected = target.clone();
+        for replacement in case["reps"].as_array().unwrap() {
+            let at = replacement[0].as_u64().unwrap() as usize;
+            let before = hex(replacement[1].as_str().unwrap());
+            let after = hex(replacement[2].as_str().unwrap());
+            assert_eq!(
+                target[at..at + before.len()],
+                before,
+                "{}: native guard",
+                case["id"]
+            );
+            expected[at..at + after.len()].copy_from_slice(&after);
+        }
+        assert_eq!(
+            actual, expected,
+            "{}: all output bytes and diff whitelist",
+            case["id"]
+        );
+    }
+}
+
+#[test]
+fn native_sparse_sat9_composes_both_directions_without_other_filter_admission() {
+    let images = [
+        native_spans("3711cd5cdde5b5e7f288ccd7bc7fe1100eb6de5e40f3d0ffdcc528fb93ebeb46"),
+        native_spans("c93736b1fc66c7ada2d586044bf5d8a50a622b65e2f1fe6e74ad212f254adc1b"),
+    ];
+    for (target, installed) in [(&images[0], &images[1]), (&images[1], &images[0])] {
+        let actual = bundle::composition::rewrite(target, installed, test_space()).unwrap();
+        let desired = bundle::bind(installed).unwrap();
+        let observed = bundle::bind(&actual).unwrap();
+        assert_eq!(
+            observed,
+            bundle::Bundle {
+                loader: if desired.loader == bundle::Loader::AscendingNegated17 {
+                    bundle::Loader::Ascending
+                } else {
+                    desired.loader
+                },
+                ..desired
+            }
+        );
+        assert_eq!(actual[..24], target[..24]);
+        let roles = bundle::waveforms::resources::observe(target).unwrap();
+        let donor = bundle::waveforms::resources::observe(installed).unwrap();
+        for (to, from) in roles.selected.motion.iter().zip(donor.selected.motion) {
+            assert_eq!(actual[to.clone()], installed[from]);
+        }
+    }
+}
+
+#[test]
+fn native_sparse_resources_refuse_changed_branches_aliases_and_ambiguous_consumers() {
+    let target = native_spans("84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750");
+    let roles = bundle::waveforms::resources::observe(&target).unwrap();
+    let initializer = roles.initializer.unwrap();
+    for (offset, bytes) in [
+        (roles.dispatch.start + 16, vec![0x59]),
+        (initializer.start + 74, vec![0, 0, 0x31, 0x24]),
+    ] {
+        let mut changed = target.clone();
+        changed[offset..offset + bytes.len()].copy_from_slice(&bytes);
+        assert!(bundle::waveforms::resources::observe(&changed).is_err());
+    }
+    let mut duplicate = target.clone();
+    duplicate[0x10000..0x10000 + roles.dispatch.len()]
+        .copy_from_slice(&target[roles.dispatch.clone()]);
+    assert!(bundle::waveforms::resources::observe(&duplicate).is_err());
+
+    let installed =
+        native_spans("87e8152f1de1d3be53eb4ad9144c1bb0c45a9be6f78713a0b7487a637f989bf1");
+    let mut occupied = test_space();
+    occupied.sources = Some(roles.selected.motion[0].clone());
+    assert_eq!(
+        bundle::composition::rewrite(&target, &installed, occupied),
+        Err(bundle::composition::Error::VerificationFailed)
+    );
+}
+
+#[test]
+fn native_sparse_bundle_uses_complete_loader_negation_and_checks_resource_relationships() {
+    for (hash, computed) in [
+        (
+            "368543ee7e7edb433c6378a0b75b9e761e810f97413bb9f617bbef421663c725",
+            false,
+        ),
+        (
+            "84b76c71728dd9c27d27c3cb974f062b55c59a7a26145c858dc45cc1a79db66a",
+            true,
+        ),
+    ] {
+        let image = native_spans(hash);
+        let loader = bundle::waveforms::loader::observe(&image).unwrap();
+        assert_eq!(loader.computed, computed);
+        assert_eq!(loader.loader, bundle::Loader::AscendingNegated17);
+        assert_eq!(bundle::bind(&image).unwrap().loader, loader.loader);
+        let mut bad_leaf = image.clone();
+        bad_leaf[loader.coefficient_getter as usize - 0x410000] ^= 1;
+        assert_eq!(
+            bundle::waveforms::loader::observe(&bad_leaf),
+            Err(bundle::waveforms::loader::Error::ResourceMismatch)
+        );
+        if computed {
+            for offset in [23, 165, 201, 221] {
+                let mut mismatched = image.clone();
+                mismatched[loader.program.start + offset] ^= 2;
+                assert_eq!(
+                    bundle::waveforms::loader::observe(&mismatched),
+                    Err(bundle::waveforms::loader::Error::ResourceMismatch)
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -353,6 +505,151 @@ fn sat9_parameter_conversion_stage_works_in_both_directions_without_family_admis
 
 #[path = "../examples/hardware_matrix/page.rs"]
 mod page;
+
+#[test]
+#[ignore = "requires PIONEER_NORMAL_CORPUS with the held phase references"]
+fn native_table_roles_match_reviewed_data_without_model_or_address_recipes() {
+    let root = std::path::PathBuf::from(std::env::var("PIONEER_NORMAL_CORPUS").unwrap());
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/phase-mechanism-known-answers.json")).unwrap();
+    for case in cases.as_array().unwrap() {
+        let read = |key: &str| {
+            let hash = case[key].as_str().unwrap();
+            let bytes = std::fs::read(root.join(format!("{hash}.bin"))).unwrap();
+            assert_eq!(format!("{:x}", Sha256::digest(&bytes)), hash);
+            bytes
+        };
+        let target = read("target");
+        let installed = read("calibration_donor");
+        let mut composed = bundle::composition::rewrite(
+            &target,
+            &installed,
+            bundle::composition::Space {
+                conversions: [Some(0x400..0x440), Some(0x440..0x484), Some(0x484..0x4b8)],
+                calibration: Some(0x4b8..0x4fc),
+                sources: Some(0x4fc..0x52c),
+            },
+        )
+        .unwrap_or_else(|e| panic!("{}: {e:?}", case["id"]));
+        composed[16..20].fill(0);
+        let sum = composed.chunks_exact(4).fold(0u32, |s, w| {
+            s.wrapping_add(u32::from_be_bytes(w.try_into().unwrap()))
+        });
+        composed[16..20].copy_from_slice(&sum.wrapping_neg().to_be_bytes());
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&composed)),
+            case["output"].as_str().unwrap(),
+            "{}: complete composed image",
+            case["id"]
+        );
+        let target_roles = bundle::waveforms::resources::observe(&target).unwrap();
+        let installed_roles = bundle::waveforms::resources::observe(&installed).unwrap();
+        let original = target.clone();
+        let mut bad = target.clone();
+        // A changed branch must invalidate the complete dispatch grammar.
+        bad[target_roles.dispatch.start + 16] ^= 1;
+        assert!(bundle::waveforms::resources::observe(&bad).is_err());
+        assert_eq!(target, original);
+        // Keep both callers and complete native templates present, but change
+        // one motion-pointer initializer store. Its relationship must fail.
+        if let Some(initializer) = &target_roles.initializer {
+            let mut bad = target.clone();
+            bad[initializer.start + 77] ^= 2;
+            assert_eq!(
+                bundle::waveforms::resources::observe(&bad),
+                Err(bundle::waveforms::resources::Error::ResourceMismatch)
+            );
+        }
+        let replacements = case["reps"].as_array().unwrap();
+        let waveforms = bundle::waveforms::rewrite(&target, &installed).unwrap();
+        let loader = bundle::waveforms::loader::observe(&target).unwrap();
+        let allowed: Vec<_> = std::iter::once(loader.program)
+            .chain(
+                std::iter::once(&target_roles.selected)
+                    .chain(&target_roles.erased_parameter)
+                    .flat_map(|t| t.motion.clone()),
+            )
+            .chain(target_roles.selected.coefficients.clone())
+            .collect();
+        let mut reviewed = target.clone();
+        for replacement in replacements {
+            let at = replacement[0].as_u64().unwrap() as usize;
+            let bytes = hex(replacement[2].as_str().unwrap());
+            reviewed[at..at + bytes.len()].copy_from_slice(&bytes);
+        }
+        reviewed[16..20].copy_from_slice(&composed[16..20]);
+        assert_eq!(
+            composed, reviewed,
+            "{}: every complete output byte",
+            case["id"]
+        );
+        for range in &allowed {
+            assert_eq!(
+                waveforms[range.clone()],
+                reviewed[range.clone()],
+                "{}: waveform span {range:?}",
+                case["id"]
+            );
+        }
+        for (at, (before, after)) in target.iter().zip(&waveforms).enumerate() {
+            assert!(
+                before == after || allowed.iter().any(|range| range.contains(&at)),
+                "{}: waveform escaped whitelist at {at:#x}",
+                case["id"]
+            );
+        }
+        for roles in std::iter::once(&target_roles.selected).chain(&target_roles.erased_parameter) {
+            for (i, span) in roles.motion.iter().enumerate() {
+                let replacement = replacements
+                    .iter()
+                    .find(|r| {
+                        r[0].as_u64().unwrap() as usize == span.start
+                            && hex(r[1].as_str().unwrap()).len() == span.len()
+                    })
+                    .expect("motion role has a reviewed replacement");
+                assert_eq!(target[span.clone()], hex(replacement[1].as_str().unwrap()));
+                assert_eq!(
+                    installed[installed_roles.selected.motion[i].clone()],
+                    hex(replacement[2].as_str().unwrap()),
+                    "{}: motion role {i}",
+                    case["id"]
+                );
+            }
+        }
+        if target_roles.initializer.is_none() {
+            let convention = bundle::waveforms::loader::observe(&installed)
+                .unwrap()
+                .loader;
+            for (i, span) in target_roles.selected.coefficients.iter().enumerate() {
+                let replacement = replacements
+                    .iter()
+                    .find(|r| {
+                        r[0].as_u64().unwrap() as usize == span.start
+                            && hex(r[1].as_str().unwrap()).len() == span.len()
+                    })
+                    .expect("coefficient role has a reviewed replacement");
+                let donor: &[u8; 72] = installed[installed_roles.selected.coefficients[i].clone()]
+                    .try_into()
+                    .unwrap();
+                assert_eq!(
+                    bundle::waveforms::plain_coefficients(donor, convention).as_slice(),
+                    hex(replacement[2].as_str().unwrap())
+                );
+            }
+        }
+    }
+    for hash in [
+        "3711cd5cdde5b5e7f288ccd7bc7fe1100eb6de5e40f3d0ffdcc528fb93ebeb46",
+        "c93736b1fc66c7ada2d586044bf5d8a50a622b65e2f1fe6e74ad212f254adc1b",
+    ] {
+        let bytes = std::fs::read(root.join(format!("{hash}.bin"))).unwrap();
+        let binding = bundle::waveforms::resources::observe(&bytes).unwrap();
+        assert!(
+            binding.initializer.is_none(),
+            "held SAT9 uses literal tables"
+        );
+    }
+}
 
 #[test]
 #[ignore = "requires PIONEER_HOARD"]

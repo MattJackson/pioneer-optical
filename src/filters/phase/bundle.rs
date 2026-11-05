@@ -15,6 +15,8 @@
 //! more than one template, or more than one site where exactly one is native,
 //! are unresolved. No element is ever defaulted.
 
+/// Atomic composition of native mechanism rewrite stages.
+pub mod composition;
 /// Native parameter-conversion rewrite stage; full mechanism composition is separate.
 pub mod conversions;
 
@@ -329,7 +331,9 @@ pub fn bind(normal: &[u8]) -> Result<Bundle, Unbound> {
     };
     let stored = &regions.stored;
     let step_minus_source = step_source(normal, stored, &coil)?;
-    let loader = {
+    let loader = if let Ok(program) = waveforms::loader::observe(normal) {
+        program.loader
+    } else {
         let mut up = sites(normal, stored, LOADER_ASCENDING);
         up.extend(sites(normal, stored, LOADER_ASCENDING_PADDED));
         let down = sites(normal, stored, LOADER_DESCENDING);

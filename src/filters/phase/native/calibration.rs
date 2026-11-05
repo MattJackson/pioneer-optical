@@ -1,5 +1,5 @@
 //! Native interpretation of the unit's existing 0x112/0x113 calibration words.
-//! Only reader code changes; no persistent calibration value is copied or written.
+//! Only reader/consumer code changes; no persistent calibration value is copied or written.
 use super::*;
 use core::ops::Range;
 
@@ -102,9 +102,15 @@ fn bind(normal: &[u8]) -> Result<Reader, Error> {
     }
     found.ok_or(Error::Unresolved)
 }
-/// Observe only after binding the complete reader and matching getter operands.
+/// Observe the complete reader and matching getter operands. A recognized
+/// four-mode consumer may select packed bytes from a whole-word reader.
 pub fn observe(normal: &[u8]) -> Result<Convention, Error> {
-    Ok(bind(normal)?.convention)
+    let reader = bind(normal)?;
+    if callers::observe_optional(normal)?.is_some_and(|caller| caller.high_byte_modes) {
+        Ok(Convention::PackedBytes)
+    } else {
+        Ok(reader.convention)
+    }
 }
 
 /// Preserve the installed storage interpretation at byte-consuming calibration
@@ -273,6 +279,22 @@ pub fn transplant(
         return Err(Error::VerificationFailed);
     }
     Ok(changed)
+}
+
+/// Preserve the installed byte interpretation at the positively bound four-mode
+/// caller. A whole-word target already returns both packed bytes, so selecting
+/// its existing high-byte results avoids reader growth entirely.
+pub fn transplant_effective(target: &[u8], donor: &[u8]) -> Result<Vec<u8>, Error> {
+    if observe(target)? == observe(donor)? {
+        return Ok(target.to_vec());
+    }
+    let before = bind(target)?;
+    let required = observe(donor)?;
+    if before.convention == Convention::WholeWord && !before.packed_shape {
+        callers::select_bytes(target, donor, required == Convention::PackedBytes)
+    } else {
+        transplant(target, donor, None)
+    }
 }
 
 /// Identify the tail retired by a shrinking, complete OEM reader transplant.

@@ -28,21 +28,23 @@ metadata for older callers.
 The shared runner validates the full operation set before mutation, rejects
 overlap, composes disjoint non-checksum edits, applies one agreed integrity
 repair, and runs each owner's verifier. The receiver retains codec rebuilding,
-authentication, live read/change/verify/rollback and transport execution.
-Phase correction belongs to the phase owner. Persistent parameter layout is
+authentication, read-only prerequisite enforcement and transport execution.
+Phase and startup correction each belong to their registered owner. Persistent parameter layout is
 never corrected; a known difference refuses.
 
-## Live parameter actions
+## Read-only correction prerequisites
 
-Each owner's `parameters()` method supplies its target-selected `ParameterAction`
-values. The registry collects every owner's actions automatically; adding an
-action requires no separate receiver or settings dispatch table. Each action
-retains its owner, semantic ID, selected physical word/value and native
-assessment. Native assessment and explicit selection policy remain distinct.
-The shared transactional executor deduplicates equal physical-word requests and
-refuses conflicting requests before I/O. It owns read/change/verify and rollback
-of the actual before-value. A Known ATA D9 predicate does not grant H8's A0 word
-write command or another unproved writable surface.
+Each selected `Operation::required_words()` supplies the existing live values
+its correction requires. The shared collector retains filter ownership,
+deduplicates equal requests and rejects conflicts before I/O. The receiver reads
+and checks these requirements before firmware transfer. This includes phase's
+`0x28F == 1` and bound startup words; it never writes either requirement.
+
+Historical `ParameterAction` and standalone settings APIs remain separate from
+release image correction. Receiver preparation rejects nonempty parameter
+actions rather than turning them into persistent writes. Temporary Kernel
+marker restoration remains an image effect. A Known ATA D9 predicate does not
+grant H8's A0 word-write command or another unproved writable surface.
 
 Detection coverage is not correction coverage. For example, a native phase
 contract can be Known while an unavailable codec or Kernel prevents file
@@ -51,9 +53,9 @@ identity remains unresolved because initialization is unsupported. Similarly,
 a bounded initialization block is not complete downstream reset or resident
 acceptance proof. Each owner reports its exact scope and obligations.
 
-The 722-image native replay reports 626 complete identities, 96 unresolved and
+The earlier 722-image native replay reported 626 complete identities, 96 unresolved and
 two previous groups split by additional native findings. Tests cover owner
 registration, typed recognition, canonical identity ordering, unknown refusal,
-operation composition, postcondition verification and parameter transactions.
+operation composition, postcondition verification and read-only prerequisites.
 The Hardware Matrix ([generated from code](hardware-matrix.md)) exposes native
 findings, required unknowns and correction capability separately. See [v7 identity](family-v7.md) for canonical serialization.

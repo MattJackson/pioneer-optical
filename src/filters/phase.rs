@@ -411,8 +411,13 @@ fn mechanism_gate(
     }
     let installed = bundle::bind(transition.installed.firmware.normal);
     let target = bundle::bind(transition.target.firmware.normal);
+    let calibration_change = matches!(
+        (native::calibration::observe(transition.installed.firmware.normal),
+         native::calibration::observe(transition.target.firmware.normal)),
+        (Ok(a), Ok(b)) if a != b
+    );
     match (installed, target) {
-        (Ok(a), Ok(b)) if a.without_coil() == b.without_coil() => {
+        (Ok(a), Ok(b)) if a.without_coil() == b.without_coil() && !calibration_change => {
             if a.coil != required.assignment || b.coil != from.assignment {
                 return Err(Error::UnresolvedIdentity);
             }

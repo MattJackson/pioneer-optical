@@ -17,9 +17,9 @@ patches. Matching candidate identities alone do not authorize an update.
 `compatibility` invokes the registered owners for installed and requested
 firmware. Each owner enumerates its own supported effects, and the shared runner
 produces component-bound plans. Every unrelated required filter
-must match. Firmware operands and startup selections remain distinct effects
-within that workflow. The receiver owns execution and rechecks each stage's
-live requirements before settings, bridge or firmware writes. Planning performs no device I/O.
+must match. Phase and startup are guarded image corrections within that same
+workflow. The receiver owns execution and checks each selected operation's
+read-only requirements before firmware writes. Planning performs no device I/O.
 
 Normal edits validate all original operands and reject overlap before mutation.
 They apply to owned bytes, compensate the checksum once, and re-extract the
@@ -30,36 +30,38 @@ support for a transfer representation it otherwise refuses.
 
 ## Phase correction
 
-SAT8/SAT9 use native output-pair correction. SAT1 has explicit operand edits on
-thirteen complete native forms. M32C and V850 use architecture-specific native
-output and checksum proofs. Unsupported or conflicting forms refuse correction.
-Same assignment produces no edit; changed assignment must preserve every other
-required filter. Published SAT1 and ATA candidate keys retain phase even when
-an individual transition has a supported correction.
+SAT8/SAT9 bind the native output interface and the complete supported sled
+mechanism convention. A differing convention can require source exchange,
+calibration reader/caller changes, conversion routines and DSP waveform edits,
+even when coil assignments match. OEM donor code and tables are recognized,
+relocated and emitted through h8-asm. Routine specialization preserves proved
+caller semantics; reclaimed loader suffixes require exact component evidence.
+Unproved growth or resource ownership refuses preparation.
 
-There is no mechanism or settings recipe layer. Firmware whose registered
-hardware filters differ, other than by a supported native correction, is refused.
+Parameter `0x28F == 1`, when required by the bound mechanism, is read-only. The
+executor checks it before transfer and never selects or writes it. Independent
+phase proofs do not waive tray inputs, storage layout or other filter failures.
+SAT1 phase correction remains suspended. M32C and V850 retain their supported
+architecture-specific native output/checksum proofs.
 
-## Startup selection
+## Startup correction
 
-`compatibility::startup` records the selected word and its evidence. A bound
-native comparison selects its accepted 0x009F value through the recognized
-getter and correct R0/R1 argument convention. A recognized but unbound or
-ambiguous comparison refuses selection.
+The startup filter implements the same `Operation` contract as phase. For a
+bound H8 comparison, it corrects the target Normal to preserve the installed
+accepted word and retains the complete conditional predicate. It declares the
+live word as a read-only prerequisite. Preparation composes the image effect
+with other owners; verification rebinds the resulting native comparison.
 
-`StartupPolicy::NeutralSelection` deliberately selects 0x009F = 0xFFFF when no
-comparison is recognized. `Evidence::NeutralSelection` retains the separate
-native assessment. This is the real neutral startup choice, not a claim that
-native code accepts every value. `NativeEvidenceOnly` admission remains
-unresolved without a complete positive selection. Bounded Normal-to-Kernel-
-handoff evidence retains obligations for callees, getter inputs, cache aliases,
-queued callbacks and later Kernel execution; it does not prove global absence
-of additional startup requirements.
+Exact component preservation needs no comparison rewrite. Other transitions
+require the startup owner's positive native evidence; an unresolved finding
+never authorizes a neutral `0x009F = 0xFFFF` choice. Missing resident getters and
+ambiguous predicates remain refusals. Standalone historical selection APIs do
+not authorize receiver preparation to issue persistent parameter writes.
 
-The settings transaction reads the actual before-value, changes it only when
-needed, verifies the selected value and preserves the before-value for rollback.
-No firmware edit represents a live startup write, and 0xFFFF is never invented
-as a restoration value.
+The image-correction pipeline performs no separate settings, NVRAM, calibration
+or bank writes. Kernel bridges only retain their existing temporary image
+changes and restoration. Read-only prerequisites cannot be waived by a family
+override.
 
 ## Persistent parameter layout
 
@@ -91,7 +93,7 @@ These existing bridges do not authorize new persistent-layout Kernel edits.
 
 ## Registry validation and limits
 
-The registered v7 corpus replay passes over all 722 distinct Normal images:
+The earlier v7 corpus replay covered 722 distinct Normal images:
 626 have complete identities and 96 retain required unresolved findings. All
 seven owners report on every image; hardware entries are sorted by stable ID,
 and operational startup evidence is retained separately. Two previous SAT1
@@ -103,14 +105,15 @@ Native filter, identity, runner and layout tests verify recognition, complete
 owner registration, typed comparison and refusal boundaries. Three SAT1003
 layouts require the unavailable exact resident reader at 0x404622; their other
 five hardware findings are recognized, and no layout mismatch is established.
-The independent phase operation proofs retain their exact scope: 58 SAT1 file
-plans, 346 paired SAT8/SAT9 signed file plans, 98 M32C files and 49 exact-Kernel
-V850 pairs. A file-operation proof does not override a required unknown field
-or grant full update admission. Invalid files and missing exact Kernels refuse.
+Historical isolated phase file-operation counts are not current release
+admission evidence. In particular, the former SAT1 file proofs do not override
+the current suspension. Full mechanism conversions require the actual shared
+planner, composition, prerequisites and original-codec verification; an operand
+reversal alone is insufficient. Invalid files and missing exact Kernels refuse.
 
 The startup owner independently recognizes 85 M32C `0x00D9 == 0xFFFF`
-comparisons. H8's deliberate neutral `0x009F = 0xFFFF` choice uses its own
-transaction; ATA/SCSI never inherit it. A native requirement is not fabricated
+comparisons. These remain native read-only requirements; ATA/SCSI do not
+inherit an H8 selection policy. No requirement or accepted value is fabricated
 from a missing pattern. Actual SAT1/SAT9 layout pairs and SAT8 format conversion
 remain blocked; file preparation does not expand receiver transport support.
 

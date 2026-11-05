@@ -391,6 +391,84 @@ pub fn transplant_plain(
     Ok(changed)
 }
 
+/// Specialize the target's complete plain loader to a donor's ascending DSP
+/// addresses. The donor's wrapped even coefficients must be normalized by the
+/// caller. All helper calls, loop bounds, clipping and readback remain target
+/// OEM instructions; only the two address computations change in place.
+/// No pointer cell or executable reservation is needed.
+pub fn specialize_ascending(normal: &[u8], donor: &[u8]) -> Result<Vec<u8>, Error> {
+    use crate::filters::phase::{bundle, native::encoding};
+    use h8_asm::{
+        isa::{decode_insn, encode_insn, Operand},
+        Mode, Target,
+    };
+    let (before, _, code) = bind(normal)?;
+    let (source, _, source_code) = bind(donor)?;
+    if before.computed
+        || source.computed
+        || before.spans.len() != 1
+        || !matches!(before.loader, Loader::Descending | Loader::Ascending)
+        || source.loader != Loader::AscendingNegated17
+        || !matches!(before.tables, Some([Table::Literal(_), Table::Literal(_)]))
+    {
+        return Err(Error::ResourceMismatch);
+    }
+    readback::observe(normal, before.readback, before.writer)?;
+    readback::observe(donor, source.readback, source.writer)?;
+    if before.loader == Loader::Ascending {
+        return Ok(normal.to_vec());
+    }
+    let destination = sites(&code, &[&code], bundle::LOADER_DESCENDING);
+    let origins = sites(&source_code, &[&source_code], bundle::LOADER_ASCENDING);
+    let ([at], [from]) = (destination.as_slice(), origins.as_slice()) else {
+        return Err(Error::Unresolved);
+    };
+    // The target's subtraction names its loop-index word. Retarget the donor's
+    // immediately preceding MOV index,R0 to that word. Copy its two ADD operands
+    // verbatim; the existing target branch lengths still join at the same byte.
+    let index = decode_insn(&code[*at + 8..], Target::H8S2000, Mode::Advanced)
+        .map_err(|_| Error::Unresolved)?
+        .insn;
+    let mut load = decode_insn(
+        source_code
+            .get(from.checked_sub(2).ok_or(Error::Unresolved)?..)
+            .ok_or(Error::Unresolved)?,
+        Target::H8S2000,
+        Mode::Advanced,
+    )
+    .map_err(|_| Error::Unresolved)?
+    .insn;
+    if index.mnemonic != "SUB"
+        || load.mnemonic != "MOV"
+        || !matches!(index.operands[0], Operand::Register(_))
+        || index.operands[1] != load.operands[1]
+    {
+        return Err(Error::ResourceMismatch);
+    }
+    load.operands[0] = index.operands[0];
+    let load = encode_insn(load, Target::H8S2000, Mode::Advanced).map_err(|_| Error::Unresolved)?;
+    if load.len() != 2 {
+        return Err(Error::Unresolved);
+    }
+    let mut changed = normal.to_vec();
+    let at = before.program.start + at;
+    for (to, origin) in [(at + 4, from + 4), (at + 12, from + 10)] {
+        changed[to..to + 2].copy_from_slice(&load);
+        changed[to + 2..to + 6].copy_from_slice(&source_code[origin..origin + 4]);
+    }
+    encoding::nops(&mut changed[at + 18..at + 22]).ok_or(Error::Unresolved)?;
+    let after = observe(&changed)?;
+    if after
+        != (Binding {
+            loader: Loader::Ascending,
+            ..before
+        })
+    {
+        return Err(Error::VerificationFailed);
+    }
+    Ok(changed)
+}
+
 /// Transplant a complete OEM computed loader with target helper addresses.
 /// The native fetch convention and arithmetic are copied byte-for-byte except
 /// declared address operands. The caller owns the unchanged-format table data.

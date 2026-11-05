@@ -168,6 +168,55 @@ pub fn transplant(
     Ok(changed)
 }
 
+/// Carry the donor's effective ascending waveform through a target plain
+/// loader. The native address block comes from the donor; wrapped coefficient
+/// rows are represented as plain rows, preserving every loaded word.
+pub fn specialize_ascending(target: &[u8], installed: &[u8]) -> Result<Vec<u8>, Error> {
+    let destination = resources::observe(target).map_err(Error::Resources)?;
+    let source = resources::observe(installed).map_err(Error::Resources)?;
+    let source_loader = loader::observe(installed).map_err(Error::Loader)?;
+    let target_loader = loader::observe(target).map_err(Error::Loader)?;
+    let protected = core::iter::once(&destination.dispatch)
+        .chain(&target_loader.spans)
+        .chain(&destination.initializer)
+        .collect::<Vec<_>>();
+    let mut writes = Vec::new();
+    for tables in core::iter::once(&destination.selected).chain(&destination.erased_parameter) {
+        for (to, from) in tables.motion.iter().zip(&source.selected.motion) {
+            writes.push((to.clone(), installed[from.clone()].to_vec()));
+        }
+        for (to, from) in tables
+            .coefficients
+            .iter()
+            .zip(&source.selected.coefficients)
+        {
+            let coefficients = installed[from.clone()]
+                .try_into()
+                .map_err(|_| Error::VerificationFailed)?;
+            writes.push((
+                to.clone(),
+                plain_coefficients(coefficients, source_loader.loader).to_vec(),
+            ));
+        }
+    }
+    let mut changed = loader::specialize_ascending(target, installed).map_err(Error::Loader)?;
+    for (i, (range, bytes)) in writes.iter().enumerate() {
+        if protected
+            .iter()
+            .any(|code| range.start < code.end && code.start < range.end)
+            || writes[..i].iter().any(|(other, data)| {
+                range.start < other.end
+                    && other.start < range.end
+                    && (range != other || bytes != data)
+            })
+        {
+            return Err(Error::VerificationFailed);
+        }
+        changed[range.clone()].copy_from_slice(bytes);
+    }
+    Ok(changed)
+}
+
 /// Convert an eighteen-row coefficient table for the plain paired-word fetch.
 ///
 /// Plain ascending/descending loaders read row i's odd word first and even word

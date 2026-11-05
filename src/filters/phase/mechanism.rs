@@ -8,6 +8,7 @@ pub(super) struct Mechanism {
     donor: Vec<u8>,
     image: Vec<u8>,
     selection_required: bool,
+    specialized: bool,
 }
 impl Mechanism {
     pub(super) fn plan(
@@ -15,19 +16,43 @@ impl Mechanism {
         selection_required: bool,
     ) -> Result<Self, Error> {
         let donor = transition.installed.firmware.normal.to_vec();
-        // No unowned erased space or retired span is admitted by this owner.
-        // Growing compositions remain refused until their placement is proved.
-        let image = bundle::composition::transplant(
+        // Prefer in-place native specialization. Growth may use only a bound
+        // replaced loader suffix with exact resident-component reference proof.
+        let direct = bundle::composition::transplant(
             transition.target.firmware.normal,
             &donor,
             bundle::composition::Space::default(),
             None,
-        )
-        .map_err(|_| Error::Unsupported)?;
+        );
+        let (image, specialized) = match direct {
+            Ok(image) => (image, false),
+            Err(_) => {
+                let image = bundle::composition::transplant_specialized_with_kernel(
+                    transition.target.firmware.normal,
+                    &donor,
+                    transition.target.firmware.kernel,
+                )
+                .or_else(|_| {
+                    let kernel = transition
+                        .target
+                        .firmware
+                        .kernel
+                        .ok_or(bundle::composition::Error::ComponentOwnership)?;
+                    bundle::composition::transplant_reusing_loader(
+                        transition.target.firmware.normal,
+                        &donor,
+                        kernel,
+                    )
+                })
+                .map_err(|_| Error::Unsupported)?;
+                (image, true)
+            }
+        };
         Ok(Self {
             donor,
             image,
             selection_required,
+            specialized,
         })
     }
     pub(super) fn required_words(&self) -> Vec<Word> {
@@ -44,7 +69,10 @@ impl Mechanism {
         #[cfg(feature = "envelope")]
         if let Some(normal) = context.normal {
             use crate::envelope::Layout;
-            if !matches!(normal.info().layout, Layout::Normal | Layout::NormalReverse) {
+            if !matches!(
+                normal.info().layout,
+                Layout::Normal | Layout::NormalReverse | Layout::NormalScaledKey
+            ) {
                 return Err(Error::Unsupported);
             }
             normal
@@ -72,7 +100,13 @@ impl Mechanism {
                 return Err(Error::VerificationFailed);
             }
         }
-        bundle::composition::verify_result(context.target.normal, &self.donor, normal)
-            .map_err(|_| Error::VerificationFailed)
+        bundle::composition::verify_effective_result(
+            context.target.normal,
+            &self.donor,
+            normal,
+            self.specialized,
+            context.target.kernel,
+        )
+        .map_err(|_| Error::VerificationFailed)
     }
 }

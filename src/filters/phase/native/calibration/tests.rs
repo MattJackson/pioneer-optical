@@ -302,3 +302,115 @@ fn reader_binding_and_rewrite_refuse_partial_ambiguous_or_mismatched_getter_code
         );
     }
 }
+
+#[test]
+fn whole_reader_consumers_select_packed_bytes_without_growth_for_every_word() {
+    fn native_fixture(hash: &str) -> Vec<u8> {
+        let fixtures: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/phase-native-spans.json"
+        )))
+        .unwrap();
+        let fixture = fixtures
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["original_sha256"].as_str() == Some(hash))
+            .unwrap();
+        let mut image = vec![0xff; fixture["size"].as_u64().unwrap() as usize];
+        for span in fixture["spans"].as_array().unwrap() {
+            let at = span[0].as_u64().unwrap() as usize;
+            let text = span[1].as_str().unwrap();
+            for i in 0..text.len() / 2 {
+                image[at + i] = u8::from_str_radix(&text[2 * i..2 * i + 2], 16).unwrap();
+            }
+        }
+        image
+    }
+    let target = native_fixture("84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750");
+    let donor = native_fixture("87e8152f1de1d3be53eb4ad9144c1bb0c45a9be6f78713a0b7487a637f989bf1");
+    let changed = transplant_effective(&target, &donor).unwrap();
+    let caller = callers::observe(&changed).unwrap();
+    assert!(caller.high_byte_modes);
+    assert_eq!(observe(&changed), Ok(Convention::PackedBytes));
+    assert_eq!(
+        bind(&changed).unwrap().body.bytes,
+        bind(&target).unwrap().body.bytes
+    );
+    let changes: Vec<_> = target
+        .iter()
+        .zip(&changed)
+        .enumerate()
+        .filter_map(|(at, (a, b))| (a != b).then_some(at))
+        .collect();
+    assert_eq!(changes, [11, 13, 29].map(|i| caller.program.start + i));
+    assert_eq!(transplant_effective(&changed, &donor).unwrap(), changed);
+    assert_eq!(transplant_effective(&changed, &target).unwrap(), target);
+    assert_eq!(transplant_effective(&target, &changed).unwrap(), changed);
+    let mut raw = program(&target);
+    let mut packed = program(&donor);
+    // Model the same bound word-getter contract while executing each OEM
+    // reader's actual instruction stream and both of its persistent addresses.
+    for program in [&mut raw, &mut packed] {
+        for (insn, _) in program.instructions.values_mut() {
+            if insn.mnemonic == "JSR" {
+                insn.operands[0] = Operand::Address(Ea::Absolute {
+                    value: 0x410600,
+                    bits: 24,
+                });
+            }
+        }
+    }
+    let selects: Vec<_> = [10, 12, 20, 28]
+        .into_iter()
+        .map(|i| {
+            isa::decode_insn(
+                &changed[caller.program.start + i..],
+                Target::H8S2000,
+                Mode::Advanced,
+            )
+            .unwrap()
+            .insn
+        })
+        .collect();
+    for word in 0..=u16::MAX {
+        for mode in 0..4 {
+            let words = [word, !word];
+            let (full, reads) = Reader::run(&raw, mode, words);
+            let (expected, expected_reads) = Reader::run(&packed, mode, words);
+            assert_eq!(reads, expected_reads);
+            let mut cpu = Reader {
+                registers: [0xa55a_5aa5; 8],
+                saved: vec![],
+                reads: vec![],
+                words,
+                zero: false,
+            };
+            cpu.set(Reg::Word(0), full.into());
+            let instructions: &[Insn] = match mode {
+                0 => &selects[..2],
+                1 => &selects[2..3],
+                2 => &selects[3..],
+                _ => &[],
+            };
+            for insn in instructions {
+                assert_eq!(insn.mnemonic, "MOV");
+                let Operand::Register(destination) = insn.operands[1] else {
+                    panic!("byte destination")
+                };
+                cpu.set(destination, cpu.value(insn.operands[0]));
+                assert_eq!(cpu.get(destination), u32::from(expected & 255));
+            }
+            if mode == 3 {
+                assert_eq!(full & 255, expected & 255);
+            }
+        }
+    }
+    // A partial source-operand edit must never masquerade as either convention.
+    for at in changes {
+        let mut broken = changed.clone();
+        broken[at] = target[at];
+        assert!(callers::observe(&broken).is_err());
+        assert!(observe(&broken).is_err());
+    }
+}

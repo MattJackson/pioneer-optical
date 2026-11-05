@@ -7,8 +7,8 @@
 //! words 0x127/0x128, the sign of the mode-one 0x127 consumer and the
 //! controller 0xEC mode bit; some images also select waveform tables through
 //! parameter 0x28F. A coil-only rewrite leaves every other element in the
-//! target's convention, so phase is only correctable when every element is
-//! bound and all elements other than the coil mapping already agree.
+//! target's convention. Correction therefore binds every element and either
+//! establishes agreement or composes the complete donor convention.
 //!
 //! Each element is bound by an exact native code template (call targets are
 //! holes) from the stored Normal regions. Zero matches is unbound; matches of

@@ -28,7 +28,47 @@ fn native_spans(hash: &str) -> Vec<u8> {
         let bytes = hex(span[1].as_str().unwrap());
         image[at..at + bytes.len()].copy_from_slice(&bytes);
     }
+    for (address, bytes) in compact_proof_spans(hash) {
+        if let Some(at) = address.checked_sub(0x410000) {
+            image[at..at + bytes.len()].copy_from_slice(&bytes);
+        }
+    }
     image
+}
+
+fn compact_proof_spans(hash: &str) -> Vec<(usize, Vec<u8>)> {
+    let fixtures: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/phase-compact-arithmetic.json")).unwrap();
+    fixtures
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|fixture| fixture["normal"].as_str() == Some(hash))
+        .map(|fixture| {
+            fixture["spans"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|span| {
+                    (
+                        span[0].as_u64().unwrap() as usize,
+                        hex(span[1].as_str().unwrap()),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn native_kernel_spans(hash: &str) -> Vec<u8> {
+    let mut kernel = vec![0xff; 0x10000];
+    for (address, bytes) in compact_proof_spans(hash) {
+        if (0x400000..0x410000).contains(&address) {
+            let at = address - 0x400000;
+            kernel[at..at + bytes.len()].copy_from_slice(&bytes);
+        }
+    }
+    kernel
 }
 
 #[test]
@@ -1334,6 +1374,9 @@ fn export_reference_normals_from_hoard() {
         let hash = format!("{:x}", Sha256::digest(&decoded.normal.image));
         if needed.remove(&hash) {
             std::fs::write(output.join(format!("{hash}.bin")), &decoded.normal.image).unwrap();
+            if let Some(kernel) = &decoded.kernel {
+                std::fs::write(output.join(format!("{hash}.kernel.bin")), &kernel.image).unwrap();
+            }
         }
         if needed.is_empty() {
             break;
@@ -1535,6 +1578,36 @@ fn native_oem_compositions_round_trip_original_envelopes() {
         )
         .unwrap();
         let mut variants = vec![("explicit reservation", changed)];
+        {
+            let installed = filters::Context::new(Firmware {
+                hardware: &originals[&donor_hash].0,
+                normal: &donor.normal.image,
+                kernel: donor.kernel.as_ref().map(|kernel| kernel.image.as_slice()),
+            });
+            let destination = filters::Context::new(Firmware {
+                hardware,
+                normal: &target.normal.image,
+                kernel: target.kernel.as_ref().map(|kernel| kernel.image.as_slice()),
+            });
+            let registry: &[&dyn filters::Filter] = &[&filters::phase::FILTER];
+            let plan = filters::runner::plan_with(
+                &installed,
+                &destination,
+                filters::runner::Policy::Strict,
+                registry,
+            )
+            .unwrap_or_else(|e| panic!("{id}: native phase plan {e:?}"));
+            let context = filters::Preparation {
+                target: destination.firmware,
+                normal: Some(&target.normal),
+                kernel: target.kernel.as_ref(),
+            };
+            let corrected = plan.prepare_with(&context, registry).unwrap().unwrap();
+            plan.verify_with(&context, &corrected, registry).unwrap();
+            let words = plan.required_words().unwrap();
+            filters::prerequisites::check(&words, |_| Ok::<_, ()>(1)).unwrap();
+            variants.push(("production phase planner", corrected));
+        }
         if donor_hash == "84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750"
             && matches!(
                 target_hash.as_str(),
@@ -1561,7 +1634,12 @@ fn native_oem_compositions_round_trip_original_envelopes() {
                 normal: Some(&target.normal),
                 kernel: target.kernel.as_ref(),
             };
-            let corrected = (filters::be32_normal_integrity().repair)(&context, &changed).unwrap();
+            let corrected = if placement == "production phase planner" {
+                // The shared runner has already applied its checksum authority.
+                changed.clone()
+            } else {
+                (filters::be32_normal_integrity().repair)(&context, &changed).unwrap()
+            };
             assert_eq!(sum(&target.normal.image), 0, "{id}: original checksum");
             assert_eq!(sum(&corrected), 0, "{id}: output checksum");
             assert_eq!(&corrected[..16], &changed[..16]);
@@ -2294,4 +2372,216 @@ fn mechanism_filter_plans_equal_coil_control_changes_and_checks_all_effects() {
         assert_eq!(operation.prepare(&wrong), Err(Error::ComponentMismatch));
     }
     assert_eq!(checked, 8);
+}
+
+#[test]
+fn complete_mechanisms_plan_prepare_verify_all_eight_native_directions() {
+    use pioneer_optical::{
+        compatibility::Firmware,
+        filters::{self, Filter},
+    };
+    let mut checked = 0;
+    for (id, target_hash, donor_hash) in native_oem_pairs() {
+        let mut target = native_spans(&target_hash);
+        let donor = native_spans(&donor_hash);
+        let ascending = bundle::bind(&donor).unwrap().loader == bundle::Loader::AscendingNegated17;
+        let kernel = native_kernel_spans(&target_hash);
+        target[16..20].fill(0);
+        let sum = target.chunks_exact(4).fold(0u32, |sum, word| {
+            sum.wrapping_add(u32::from_be_bytes(word.try_into().unwrap()))
+        });
+        target[16..20].copy_from_slice(&sum.wrapping_neg().to_be_bytes());
+        let installed = filters::Context::new(Firmware {
+            hardware: "SAT 8000",
+            normal: &donor,
+            kernel: None,
+        });
+        let destination = filters::Context::new(Firmware {
+            hardware: "SAT 8000",
+            normal: &target,
+            kernel: Some(&kernel),
+        });
+        let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
+        let plan = filters::runner::plan_with(
+            &installed,
+            &destination,
+            filters::runner::Policy::Strict,
+            registry,
+        )
+        .unwrap_or_else(|e| panic!("{id}: {e:?}"));
+        let context = filters::Preparation {
+            target: destination.firmware,
+            normal: None,
+            kernel: None,
+        };
+        let changed = plan.prepare_with(&context, registry).unwrap().unwrap();
+        plan.verify_with(&context, &changed, registry).unwrap();
+        if !ascending {
+            let missing = filters::Context::new(Firmware {
+                kernel: None,
+                ..destination.firmware
+            });
+            assert!(
+                filters::runner::plan_with(
+                    &installed,
+                    &missing,
+                    filters::runner::Policy::Strict,
+                    registry
+                )
+                .is_err(),
+                "{id}: missing resident evidence"
+            );
+            let before = bundle::waveforms::loader::observe(&target).unwrap();
+            let after = bundle::waveforms::loader::observe(&changed).unwrap();
+            let tail_address = (0x410000 + after.program.end) as u32;
+            for resident in [false, true] {
+                let mut bad_normal = target.clone();
+                let mut bad_kernel = kernel.clone();
+                let bytes = if resident {
+                    &mut bad_kernel
+                } else {
+                    &mut bad_normal
+                };
+                bytes[0x701..0x705].copy_from_slice(&tail_address.to_be_bytes());
+                assert_eq!(
+                    bundle::composition::transplant_reusing_loader(
+                        &bad_normal,
+                        &donor,
+                        &bad_kernel
+                    ),
+                    Err(bundle::composition::Error::ComponentOwnership),
+                    "{id}: tail reference resident={resident}"
+                );
+            }
+            assert!(after.program.end < before.program.end);
+        }
+        assert_eq!(&changed[..16], &target[..16]);
+        assert_eq!(
+            &changed[20..0x1000],
+            &target[20..0x1000],
+            "no header gap allocation"
+        );
+        assert_eq!(
+            bundle::bind(&changed).unwrap().loader,
+            if ascending {
+                bundle::Loader::Ascending
+            } else {
+                bundle::Loader::Descending
+            }
+        );
+        let original_loader = bundle::waveforms::loader::observe(&target).unwrap();
+        let actual_loader = bundle::waveforms::loader::observe(&changed).unwrap();
+        if ascending {
+            assert_eq!(actual_loader.spans, original_loader.spans);
+            assert_eq!(actual_loader.tables, original_loader.tables);
+        } else {
+            assert_eq!(actual_loader.program.start, original_loader.program.start);
+            assert!(actual_loader.program.end < original_loader.program.end);
+        }
+        assert_eq!(
+            actual_loader.coefficient_getter,
+            original_loader.coefficient_getter
+        );
+        assert_eq!(actual_loader.writer, original_loader.writer);
+        assert_eq!(actual_loader.readback, original_loader.readback);
+        let again = bundle::composition::transplant_specialized_with_kernel(
+            &changed,
+            &donor,
+            Some(&kernel),
+        )
+        .unwrap();
+        assert_eq!(again, changed);
+        let words = plan.required_words().unwrap();
+        assert_eq!(
+            words.len(),
+            usize::from(
+                bundle::bind(&donor).unwrap().table_select_0x28f
+                    || bundle::bind(&target).unwrap().table_select_0x28f
+            )
+        );
+        filters::prerequisites::check(&words, |_| Ok::<_, ()>(1)).unwrap();
+        let graph = bundle::waveforms::resources::observe(&changed).unwrap();
+        let mut broken = changed.clone();
+        broken[graph.selected.coefficients[0].start] ^= 1;
+        assert!(plan.verify_with(&context, &broken, registry).is_err());
+        checked += 1;
+    }
+    assert_eq!(checked, 8);
+}
+
+#[test]
+fn identical_coil_and_math_still_correct_different_calibration_interpretation() {
+    use pioneer_optical::{
+        compatibility::Firmware,
+        filters::{self, Filter},
+    };
+    let whole = native_spans("95664992a098ff6c3c8a9c4bae228209d956f4a1462c238fb37863b910b72149");
+    let packed = native_spans("e6bdfa9bd0220f618d3e4bf722a590c2e1cf4216431869ab399561b94c71f515");
+    assert_eq!(
+        bundle::bind(&whole).unwrap(),
+        bundle::bind(&packed).unwrap()
+    );
+    for (donor, original) in [(&whole, &packed), (&packed, &whole)] {
+        let mut target = original.clone();
+        target[16..20].fill(0);
+        let sum = target.chunks_exact(4).fold(0u32, |sum, word| {
+            sum.wrapping_add(u32::from_be_bytes(word.try_into().unwrap()))
+        });
+        target[16..20].copy_from_slice(&sum.wrapping_neg().to_be_bytes());
+        let installed = filters::Context::new(Firmware {
+            hardware: "SAT 8000",
+            normal: donor,
+            kernel: None,
+        });
+        let destination = filters::Context::new(Firmware {
+            hardware: "SAT 8000",
+            normal: &target,
+            kernel: None,
+        });
+        let filter = &filters::phase::FILTER;
+        let operation = filter
+            .plan(
+                &filters::Transition {
+                    installed: &installed,
+                    target: &destination,
+                },
+                &filter.inspect(&installed),
+                &filter.inspect(&destination),
+            )
+            .unwrap()
+            .expect("equal coil/bundle must not hide calibration interpretation");
+        let context = filters::Preparation {
+            target: destination.firmware,
+            normal: None,
+            kernel: None,
+        };
+        let changed = operation.prepare(&context).unwrap().unwrap();
+        operation.verify(&context, &changed).unwrap();
+        assert_eq!(
+            native::calibration::observe(&changed),
+            native::calibration::observe(donor)
+        );
+        assert_eq!(
+            bundle::bind(&changed).unwrap(),
+            bundle::bind(donor).unwrap()
+        );
+        assert!(operation.required_words().is_empty());
+    }
+}
+
+#[test]
+#[ignore = "requires PIONEER_NORMAL_CORPUS and its exact exported Kernels"]
+fn native_reverse_mechanisms_use_owned_loader_suffixes() {
+    let root = std::path::PathBuf::from(std::env::var("PIONEER_NORMAL_CORPUS").unwrap());
+    for (id, target_hash, donor_hash) in native_oem_pairs() {
+        let target = std::fs::read(root.join(format!("{target_hash}.bin"))).unwrap();
+        let donor = std::fs::read(root.join(format!("{donor_hash}.bin"))).unwrap();
+        if bundle::bind(&donor).unwrap().loader != bundle::Loader::Descending {
+            continue;
+        }
+        let kernel = std::fs::read(root.join(format!("{target_hash}.kernel.bin"))).unwrap();
+        let result = bundle::composition::transplant_reusing_loader(&target, &donor, &kernel);
+        println!("{id}: {:?}", result.as_ref().map(|_| ()));
+        result.unwrap();
+    }
 }

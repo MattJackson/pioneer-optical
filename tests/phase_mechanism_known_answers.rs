@@ -56,6 +56,73 @@ fn native_oem_all_reference_pairs_compose_with_small_conversion_spills() {
 }
 
 #[test]
+fn corrected_table_graph_rebinds_literal_and_image_pointer_loaders() {
+    use bundle::waveforms::{
+        loader::{self, Table},
+        resources,
+    };
+    for (id, target_hash, donor_hash) in native_oem_pairs() {
+        let target = native_spans(&target_hash);
+        let donor = native_spans(&donor_hash);
+        let changed =
+            bundle::composition::transplant(&target, &donor, test_space(), Some(0x600..0x700))
+                .unwrap();
+        let repeated = bundle::waveforms::transplant(&changed, &donor, None)
+            .unwrap_or_else(|e| panic!("{id}: repeated waveform correction: {e:?}"));
+        assert_eq!(repeated, changed, "{id}: waveform correction is idempotent");
+        let repeated = bundle::composition::transplant(
+            &changed,
+            &donor,
+            bundle::composition::Space::default(),
+            None,
+        )
+        .unwrap_or_else(|e| panic!("{id}: repeated composition: {e:?}"));
+        assert_eq!(
+            repeated, changed,
+            "{id}: complete composition is idempotent"
+        );
+        let graph = resources::observe(&changed).unwrap_or_else(|e| panic!("{id}: {e:?}"));
+        let source = resources::observe(&donor).unwrap();
+        for tables in std::iter::once(&graph.selected).chain(&graph.erased_parameter) {
+            for (to, from) in tables.motion.iter().chain(&tables.coefficients).zip(
+                source
+                    .selected
+                    .motion
+                    .iter()
+                    .chain(&source.selected.coefficients),
+            ) {
+                assert_eq!(
+                    &changed[to.clone()],
+                    &donor[from.clone()],
+                    "{id}: consumed data"
+                );
+            }
+        }
+        if let Some(tables) = loader::observe(&changed).unwrap().tables {
+            for table in tables {
+                if let Table::Pointer(cell) = table {
+                    if cell < 0x410000 {
+                        continue;
+                    }
+                    let at = (cell - 0x410000) as usize;
+                    let mut broken = changed.clone();
+                    broken[at..at + 4].copy_from_slice(&u32::MAX.to_be_bytes());
+                    assert!(
+                        resources::observe(&broken).is_err(),
+                        "{id}: bad image pointer"
+                    );
+                    broken[at..at + 4].copy_from_slice(&cell.to_be_bytes());
+                    assert!(
+                        resources::observe(&broken).is_err(),
+                        "{id}: pointer cell overlaps consumed coefficient data"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn native_oem_ud02_composition_relocates_indirect_loads_without_new_instructions() {
     use bundle::waveforms::{loader, resources};
     let cases: serde_json::Value =

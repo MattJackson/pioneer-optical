@@ -104,6 +104,25 @@ pub fn transplant(
         }
     }
     let actual = super::bind(&changed).map_err(Error::Bundle)?;
+    let after_resources = waveforms::resources::observe(&changed)
+        .map_err(|e| Error::Waveforms(waveforms::Error::Resources(e)))?;
+    let donor_resources = waveforms::resources::observe(installed)
+        .map_err(|e| Error::Waveforms(waveforms::Error::Resources(e)))?;
+    for tables in
+        core::iter::once(&after_resources.selected).chain(&after_resources.erased_parameter)
+    {
+        for (to, from) in tables.motion.iter().chain(&tables.coefficients).zip(
+            donor_resources
+                .selected
+                .motion
+                .iter()
+                .chain(&donor_resources.selected.coefficients),
+        ) {
+            if changed[to.clone()] != installed[from.clone()] {
+                return Err(Error::VerificationFailed);
+            }
+        }
+    }
     // The target retains its motion-pointer initializer. Its DSP loader now
     // uses explicit coefficient addresses; the read-only selection is external.
     let expected = Bundle {

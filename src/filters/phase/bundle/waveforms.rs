@@ -45,6 +45,14 @@ pub fn transplant(
         Some([loader::Table::Literal(_), loader::Table::Literal(_)]) => {
             addresses.map(loader::Table::Literal)
         }
+        Some([loader::Table::Pointer(_), loader::Table::Pointer(_)])
+            if matches!(target_loader.tables, Some([loader::Table::Pointer(a), loader::Table::Pointer(b)])
+                if a >= 0x410000 && b >= 0x410000) =>
+        {
+            // Resource observation has already resolved these stored cells to
+            // the destination coefficient tables. Keep their values unchanged.
+            target_loader.tables.ok_or(Error::VerificationFailed)?
+        }
         Some([loader::Table::Pointer(_), loader::Table::Pointer(_)]) => {
             // Preserve both native indirect-load instructions. Their relocated
             // operands read image-resident pointer cells rather than donor RAM.
@@ -102,10 +110,21 @@ pub fn transplant(
     {
         writes.push((to.clone(), installed[from.clone()].to_vec()));
     }
+    let cells: Vec<_> = tables
+        .into_iter()
+        .filter_map(|table| match table {
+            loader::Table::Pointer(address) => {
+                let at = address.checked_sub(0x410000)? as usize;
+                Some(at..at + 4)
+            }
+            loader::Table::Literal(_) => None,
+        })
+        .collect();
     let protected = core::iter::once(&destination.dispatch)
         .chain(core::iter::once(&target_loader.program))
         .chain(destination.initializer.as_ref())
         .chain(reservation.as_ref())
+        .chain(&cells)
         .collect::<Vec<_>>();
     for (i, (range, bytes)) in writes.iter().enumerate() {
         if protected

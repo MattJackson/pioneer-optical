@@ -32,6 +32,75 @@ fn native_spans(hash: &str) -> Vec<u8> {
 }
 
 #[test]
+fn native_oem_ud02_composition_relocates_indirect_loads_without_new_instructions() {
+    use bundle::waveforms::{loader, resources};
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/phase-mechanism-known-answers.json")).unwrap();
+    for case in cases.as_array().unwrap() {
+        let target = native_spans(case["target"].as_str().unwrap());
+        let donor = native_spans(case["calibration_donor"].as_str().unwrap());
+        let source = loader::observe(&donor).unwrap();
+        let destination = resources::observe(&target).unwrap();
+        let changed =
+            bundle::composition::transplant(&target, &donor, test_space(), Some(0x600..0x700))
+                .unwrap_or_else(|error| panic!("{}: {error:?}", case["id"]));
+        let after = loader::observe(&changed).unwrap();
+        assert_eq!(after.loader, source.loader);
+        let mut expected = bundle::bind(&donor).unwrap();
+        expected.table_select_0x28f = bundle::bind(&target).unwrap().table_select_0x28f;
+        assert_eq!(bundle::bind(&changed).unwrap(), expected);
+        for (role, table) in after.tables.unwrap().iter().enumerate() {
+            let address = match table {
+                loader::Table::Literal(address) => *address,
+                loader::Table::Pointer(slot) => {
+                    let at = (*slot - 0x410000) as usize;
+                    assert!((0x6f8..0x700).contains(&at));
+                    u32::from_be_bytes(changed[at..at + 4].try_into().unwrap())
+                }
+            };
+            assert_eq!(
+                address as usize - 0x410000,
+                destination.selected.coefficients[role].start
+            );
+        }
+        // Read-only initialization predicate bytes are retained verbatim.
+        if let Some(initializer) = destination.initializer {
+            assert_eq!(&changed[initializer.clone()], &target[initializer]);
+        }
+        if matches!(source.tables, Some([loader::Table::Pointer(_), _])) {
+            for bad in [
+                0x600..0x608,
+                0x600..0x6fe,
+                0x400..0x700,
+                0x600..target.len() + 4,
+            ] {
+                assert!(
+                    bundle::composition::transplant(&target, &donor, test_space(), Some(bad))
+                        .is_err()
+                );
+            }
+            assert_eq!(
+                loader::observe(&changed).unwrap().program.len(),
+                source.program.len()
+            );
+            let mut expected = donor[source.program.clone()].to_vec();
+            let before = loader::observe(&target).unwrap();
+            for (field, address) in [(18, 0x4106f8u32), (28, 0x4106fc), (132, before.writer)] {
+                expected[field..field + 4].copy_from_slice(&address.to_be_bytes());
+            }
+            for (field, address) in [
+                (67, before.coefficient_getter),
+                (107, before.coefficient_getter),
+                (179, before.readback),
+            ] {
+                expected[field..field + 3].copy_from_slice(&address.to_be_bytes()[1..]);
+            }
+            assert_eq!(&changed[after.program], &expected);
+        }
+    }
+}
+
+#[test]
 fn native_oem_composition_preserves_donor_conventions_in_both_sat9_directions() {
     let images = [
         native_spans("3711cd5cdde5b5e7f288ccd7bc7fe1100eb6de5e40f3d0ffdcc528fb93ebeb46"),
@@ -1154,4 +1223,161 @@ fn generated_basis_stage_covers_every_held_runtime_producer() {
         "held runtime-table coverage unexpectedly shrank"
     );
     assert!(parameters >= 68);
+}
+
+#[test]
+#[ignore = "requires PIONEER_NORMAL_CORPUS; OEM full-image boundary proof"]
+fn native_oem_full_images_match_guarded_sparse_patch_spans() {
+    let root = std::path::PathBuf::from(std::env::var("PIONEER_NORMAL_CORPUS").unwrap());
+    let pairs = native_oem_pairs();
+    for (id, target_hash, donor_hash) in pairs {
+        let read = |hash: &str| {
+            let image = std::fs::read(root.join(format!("{hash}.bin"))).unwrap();
+            assert_eq!(format!("{:x}", Sha256::digest(&image)), hash);
+            image
+        };
+        let target = read(&target_hash);
+        let donor = read(&donor_hash);
+        let sparse_target = native_spans(&target_hash);
+        let sparse_donor = native_spans(&donor_hash);
+        let sparse_output = bundle::composition::transplant(
+            &sparse_target,
+            &sparse_donor,
+            test_space(),
+            Some(0x600..0x700),
+        )
+        .unwrap();
+        // The stage tests independently compare copied bodies against donor
+        // instructions and tables. Here verify the same guarded differences in
+        // full images, including untouched bytes omitted from sparse fixtures.
+        let mut expected = target.clone();
+        let mut count = 0;
+        for (at, (old, new)) in sparse_target.iter().zip(&sparse_output).enumerate() {
+            if old != new {
+                assert_eq!(target[at], *old, "{id}: original guard at {at:#x}");
+                expected[at] = *new;
+                count += 1;
+            }
+        }
+        let changed =
+            bundle::composition::transplant(&target, &donor, test_space(), Some(0x600..0x700))
+                .unwrap();
+        assert_eq!(changed, expected, "{id}: full-image diff");
+        assert_eq!(&changed[..24], &target[..24]);
+        println!(
+            "{id}: {count} changed bytes before checksum; SHA256 {:x}",
+            Sha256::digest(&changed)
+        );
+    }
+}
+
+fn native_oem_pairs() -> Vec<(String, String, String)> {
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/phase-mechanism-known-answers.json")).unwrap();
+    let mut pairs: Vec<(String, String, String)> = cases
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|case| {
+            (
+                case["id"].as_str().unwrap().to_owned(),
+                case["target"].as_str().unwrap().to_owned(),
+                case["calibration_donor"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    let sat9 = [
+        "3711cd5cdde5b5e7f288ccd7bc7fe1100eb6de5e40f3d0ffdcc528fb93ebeb46",
+        "c93736b1fc66c7ada2d586044bf5d8a50a622b65e2f1fe6e74ad212f254adc1b",
+    ];
+    pairs.push(("SAT9 forward".into(), sat9[0].into(), sat9[1].into()));
+    pairs.push(("SAT9 reverse".into(), sat9[1].into(), sat9[0].into()));
+    pairs
+}
+
+#[test]
+#[ignore = "requires PIONEER_HOARD; eight OEM compositions through original codecs"]
+fn native_oem_compositions_round_trip_original_envelopes() {
+    use pioneer_optical::{compatibility::Firmware, envelope::Envelope, filters};
+    let root = std::path::PathBuf::from(std::env::var("PIONEER_HOARD").unwrap());
+    let pairs = native_oem_pairs();
+    let mut needed: std::collections::BTreeSet<_> = pairs
+        .iter()
+        .flat_map(|(_, target, donor)| [target.clone(), donor.clone()])
+        .collect();
+    let mut originals = std::collections::BTreeMap::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let (packages, _) = page::hoard_packages(&root).unwrap();
+    for package in packages {
+        if !seen.insert(package.component.clone()) {
+            continue;
+        }
+        let Ok(decoded) = page::decode(&root, &package) else {
+            continue;
+        };
+        let hash = format!("{:x}", Sha256::digest(&decoded.normal.image));
+        if needed.remove(&hash) {
+            originals.insert(hash, (package.hardware, decoded));
+        }
+        if needed.is_empty() {
+            break;
+        }
+    }
+    assert!(needed.is_empty(), "missing original envelopes: {needed:?}");
+    let sum = |image: &[u8]| {
+        image.chunks_exact(4).fold(0u32, |s, w| {
+            s.wrapping_add(u32::from_be_bytes(w.try_into().unwrap()))
+        })
+    };
+    for (id, target_hash, donor_hash) in pairs {
+        let (hardware, target) = &originals[&target_hash];
+        let donor = &originals[&donor_hash].1;
+        // Test reservations do not establish production code-space ownership.
+        let changed = bundle::composition::transplant(
+            &target.normal.image,
+            &donor.normal.image,
+            test_space(),
+            Some(0x600..0x700),
+        )
+        .unwrap();
+        let context = filters::Preparation {
+            target: Firmware {
+                hardware,
+                normal: &target.normal.image,
+                kernel: target.kernel.as_ref().map(|k| k.image.as_slice()),
+            },
+            normal: Some(&target.normal),
+            kernel: target.kernel.as_ref(),
+        };
+        let corrected = (filters::be32_normal_integrity().repair)(&context, &changed).unwrap();
+        assert_eq!(sum(&target.normal.image), 0, "{id}: original checksum");
+        assert_eq!(sum(&corrected), 0, "{id}: output checksum");
+        assert_eq!(&corrected[..16], &changed[..16]);
+        assert_eq!(&corrected[20..], &changed[20..]);
+        let original_word = u32::from_be_bytes(changed[16..20].try_into().unwrap());
+        assert_eq!(
+            &corrected[16..20],
+            &original_word.wrapping_sub(sum(&changed)).to_be_bytes()
+        );
+        let file = target
+            .normal
+            .repack(&corrected)
+            .expect("original codec must preserve modified image");
+        let decoded = match &target.kernel {
+            Some(kernel) => Envelope::load_with_kernel(&file, kernel),
+            None => Envelope::load(&file),
+        }
+        .unwrap();
+        assert_eq!(decoded.image, corrected, "{id}: every decoded output byte");
+        assert_eq!(
+            decoded.repack(&decoded.image).unwrap(),
+            file,
+            "{id}: stable encoded output"
+        );
+        assert_eq!(decoded.info().layout, target.normal.info().layout);
+        println!(
+            "{id}: checksum and {:?} envelope round-trip passed",
+            decoded.info().layout
+        );
+    }
 }

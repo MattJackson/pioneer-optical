@@ -31,7 +31,7 @@ struct Shape {
 pub enum Table {
     /// Image-resident table at its native CPU address.
     Literal(u32),
-    /// Pointer loaded from a native RAM slot; initialization must be bound separately.
+    /// Pointer loaded from a memory slot; RAM initialization or image-cell contents must be bound separately.
     Pointer(u32),
 }
 /// Complete native loader and its local resource relationships.

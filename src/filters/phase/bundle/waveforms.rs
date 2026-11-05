@@ -85,8 +85,9 @@ pub fn rewrite(target: &[u8], installed: &[u8]) -> Result<Vec<u8>, Error> {
 
 /// Transplant OEM waveform data and its original noncomputed loader body.
 /// Unlike normalization, this preserves the donor's native fetch convention.
-/// Direct-table donor loaders are supported here; pointer-selected donor code
-/// needs its pointer resources established separately before transplantation.
+/// Indirect donor loads use relocated read-only pointer cells in the reserved
+/// Normal span. Selecting donor tables still requires the caller's live proof;
+/// this stage neither reads nor changes a persistent parameter.
 pub fn transplant(
     target: &[u8],
     installed: &[u8],
@@ -95,17 +96,61 @@ pub fn transplant(
     let destination = resources::observe(target).map_err(Error::Resources)?;
     let source = resources::observe(installed).map_err(Error::Resources)?;
     let target_loader = loader::observe(target).map_err(Error::Loader)?;
-    let mut changed = loader::transplant_plain(
-        target,
-        installed,
-        destination
-            .selected
-            .coefficients
-            .clone()
-            .map(|range| loader::Table::Literal(0x410000 + range.start as u32)),
-        reservation.clone(),
-    )
-    .map_err(Error::Loader)?;
+    let source_loader = loader::observe(installed).map_err(Error::Loader)?;
+    let addresses = destination
+        .selected
+        .coefficients
+        .clone()
+        .map(|range| 0x410000 + range.start as u32);
+    let mut loader_space = reservation.clone();
+    let mut pointer_cells = None;
+    let tables = match source_loader.tables {
+        Some([loader::Table::Literal(_), loader::Table::Literal(_)]) => {
+            addresses.map(loader::Table::Literal)
+        }
+        Some([loader::Table::Pointer(_), loader::Table::Pointer(_)]) => {
+            // Preserve both native indirect-load instructions. Their relocated
+            // operands read image-resident pointer cells rather than donor RAM.
+            let space = reservation
+                .as_ref()
+                .ok_or(Error::Loader(loader::Error::SpaceRequired))?;
+            let regions = crate::image::regions(target).ok_or(Error::VerificationFailed)?;
+            if space.start > space.end
+                || space.len() < 8
+                || space.end & 3 != 0
+                || !regions.stored.iter().any(|region| {
+                    let at = region.as_ptr() as usize - target.as_ptr() as usize;
+                    space.start >= at && space.end <= at + region.len()
+                })
+                || !target
+                    .get(space.clone())
+                    .is_some_and(|bytes| bytes.iter().all(|b| *b == 0xff))
+            {
+                return Err(Error::Loader(loader::Error::InvalidSpace));
+            }
+            let cells = space.end - 8..space.end;
+            let first = 0x410000usize
+                .checked_add(cells.start)
+                .filter(|address| *address <= 0xfffff8)
+                .ok_or(Error::Loader(loader::Error::InvalidSpace))? as u32;
+            let bytes = addresses
+                .into_iter()
+                .flat_map(u32::to_be_bytes)
+                .collect::<Vec<_>>();
+            loader_space = Some(space.start..cells.start);
+            pointer_cells = Some((cells, bytes));
+            [
+                loader::Table::Pointer(first),
+                loader::Table::Pointer(first + 4),
+            ]
+        }
+        _ => return Err(Error::VerificationFailed),
+    };
+    let mut changed =
+        loader::transplant_plain(target, installed, tables, loader_space).map_err(Error::Loader)?;
+    if let Some((cells, bytes)) = pointer_cells {
+        changed[cells].copy_from_slice(&bytes);
+    }
     let mut writes = Vec::new();
     for tables in core::iter::once(&destination.selected).chain(&destination.erased_parameter) {
         for (to, from) in tables.motion.iter().zip(&source.selected.motion) {

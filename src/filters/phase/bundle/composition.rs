@@ -44,7 +44,7 @@ pub fn rewrite(target: &[u8], installed: &[u8], space: Space) -> Result<Vec<u8>,
 
 /// Compose actual OEM donor routines and tables, with target helper relocation.
 /// The caller owns all executable reservations and live read prerequisites.
-/// The waveform donor currently requires direct coefficient-table addressing.
+/// Indirect donor table loads use read-only pointer cells in loader_space.
 pub fn transplant(
     target: &[u8],
     installed: &[u8],

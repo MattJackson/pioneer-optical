@@ -1426,3 +1426,53 @@ fn native_oem_loader_rejects_changed_writer_abi() {
         );
     }
 }
+
+#[test]
+fn native_oem_loader_binds_readback_writer_shadow_and_clear_helper() {
+    use bundle::waveforms::loader::{self, readback};
+    for (_, target_hash, donor_hash) in native_oem_pairs() {
+        let target = native_spans(&target_hash);
+        let donor = native_spans(&donor_hash);
+        for normal in [&target, &donor] {
+            let loader = loader::observe(normal).unwrap();
+            let reader = readback::observe(normal, loader.readback, loader.writer).unwrap();
+            let (shadow, call) = if reader.clear.is_some() {
+                (90, 111)
+            } else {
+                (46, 69)
+            };
+            for offset in [0, shadow + 3, call + 2, reader.program.len() - 1] {
+                let mut broken = normal.clone();
+                broken[reader.program.start + offset] ^= 2;
+                assert!(readback::observe(&broken, loader.readback, loader.writer).is_err());
+                assert_eq!(
+                    loader::transplant_plain(
+                        &broken,
+                        normal,
+                        loader.tables.unwrap(),
+                        Some(0x600..0x700)
+                    ),
+                    Err(loader::Error::ResourceMismatch)
+                );
+                assert_eq!(
+                    loader::transplant_plain(
+                        normal,
+                        &broken,
+                        loader.tables.unwrap(),
+                        Some(0x600..0x700)
+                    ),
+                    Err(loader::Error::ResourceMismatch)
+                );
+            }
+            if let Some(clear) = reader.clear {
+                let mut broken = normal.clone();
+                broken[clear.end - 1] ^= 2;
+                assert!(readback::observe(&broken, loader.readback, loader.writer).is_err());
+                broken = normal.clone();
+                // Two calls to different clear helpers do not establish this contract.
+                broken[reader.program.start + 35] ^= 2;
+                assert!(readback::observe(&broken, loader.readback, loader.writer).is_err());
+            }
+        }
+    }
+}

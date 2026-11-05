@@ -2,6 +2,8 @@
 use crate::filters::phase::bundle::{sites, Loader, Template};
 use alloc::vec::Vec;
 use core::ops::Range;
+/// Complete DSP read-helper ABI proof.
+pub mod readback;
 mod shapes;
 /// Complete DSP write-helper ABI proof.
 pub mod writer;
@@ -318,8 +320,8 @@ pub fn transplant_plain(
     if before.computed || source.computed {
         return Err(Error::ComputedUnsupported);
     }
-    writer::observe(normal, before.writer)?;
-    writer::observe(donor, source.writer)?;
+    readback::observe(normal, before.readback, before.writer)?;
+    readback::observe(donor, source.readback, source.writer)?;
     let source_tables = source.tables.ok_or(Error::ResourceMismatch)?;
     let regions = crate::image::regions(normal).ok_or(Error::Unresolved)?;
     let contains = |span: &Range<usize>| {

@@ -158,11 +158,11 @@ impl<T: Transport> Transport for FlashTransport<'_, T> {
     }
 }
 
-fn read<T: Transport>(t: &mut T, parameter: u16) -> Result<u16, drive::Error<T::Error>> {
+pub(crate) fn read<T: Transport>(t: &mut T, parameter: u16) -> Result<u16, drive::Error<T::Error>> {
     let mut bytes = [0; 2];
     drive::read(
         t,
-        &crate::cdb::read_parameter_word(parameter).expect("bounded parameter"),
+        &crate::cdb::read_parameter_word(parameter).ok_or(drive::Error::InvalidProtocol)?,
         &mut bytes,
         2,
     )?;

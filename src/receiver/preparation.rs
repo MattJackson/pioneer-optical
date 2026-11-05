@@ -127,12 +127,29 @@ impl Receiver {
         kernel: &Envelope,
         check_family: bool,
     ) -> Result<Option<crate::compatibility::PreparedCorrection>, PreparationError> {
+        if !check_family {
+            self.prepare_startup_with_policy(
+                &normal.image,
+                Some(&kernel.image),
+                crate::startup::checks::Policy::ExplicitCrossflash,
+            )?;
+        }
         let plan = self.plan_native_correction(normal, kernel, check_family)?;
-        Ok(plan
+        let required_words = plan
+            .required_words()
+            .map_err(PreparationError::PhaseCorrection)?;
+        let image = plan
             .prepare_image(normal, Some(kernel))
-            .map_err(PreparationError::PhaseCorrection)?
+            .map_err(PreparationError::PhaseCorrection)?;
+        // A read-only obligation still needs a receiver handoff even if no bytes change.
+        Ok(image
+            .or_else(|| (!required_words.is_empty()).then(|| normal.image.clone()))
             .map(|image| {
-                crate::compatibility::PreparedCorrection::native(image, plan.corrections())
+                crate::compatibility::PreparedCorrection::native(
+                    image,
+                    plan.corrections(),
+                    required_words,
+                )
             }))
     }
 
@@ -192,6 +209,7 @@ impl Receiver {
             .map_err(PreparationError::PhaseCorrection)
     }
 
+    #[cfg(test)]
     fn startup_selection_for(
         context: &crate::filters::Context<'_>,
     ) -> Result<Option<crate::compatibility::startup::Plan>, PreparationError> {
@@ -223,12 +241,16 @@ impl Receiver {
             normal: &normal.image,
             kernel: Some(&kernel.image),
         });
-        let selection = Self::startup_selection_for(&context)?;
         let actions = crate::filters::parameter_actions(&context)
             .map_err(PreparationError::PhaseCorrection)?;
-        crate::settings::update::Plan::from_startup(selection, restore)
-            .with_filter_actions(actions)
-            .map_err(PreparationError::PhaseCorrection)
+        // Startup adaptation belongs to the verified image operation. Never
+        // turn a target observation into a separate persistent-word write.
+        if !actions.is_empty() {
+            return Err(PreparationError::PhaseCorrection(
+                crate::compatibility::Error::Unsupported,
+            ));
+        }
+        Ok(crate::settings::update::Plan::from_startup(None, restore))
     }
     #[cfg(test)]
     fn startup_setting_for(

@@ -483,6 +483,40 @@ fn decode(code: &Code<'_>, start: usize, end: usize) -> Option<Body> {
         instructions,
     })
 }
+/// Bind the complete saved-register C initializer at the actual Normal vector.
+/// This narrower root is useful for native copy/clear contracts independently
+/// of whether later hardware/cache initializer shapes are currently supported.
+pub fn c_startup(normal: &[u8]) -> Observation<Function> {
+    let unknown = || Observation::Unresolved(Unresolved::ReaderNotRecognized);
+    let Some(regions) = crate::image::regions(normal) else {
+        return unknown();
+    };
+    let code = Code {
+        normal,
+        stored: regions
+            .stored
+            .iter()
+            .map(|b| {
+                let at = b.as_ptr() as usize - normal.as_ptr() as usize;
+                (at, at + b.len())
+            })
+            .collect(),
+    };
+    if !code.contains(0x2000, 0x2004) {
+        return unknown();
+    }
+    let Some([0x5a, a, b, c]) = normal.get(0x2000..0x2004) else {
+        return unknown();
+    };
+    let Some(entry) = code.offset(u32::from_be_bytes([0, *a, *b, *c])) else {
+        return unknown();
+    };
+    match code.body(entry, super::boot_shapes::C_STARTUP) {
+        Some(body) => Observation::Known(body.function),
+        None => unknown(),
+    }
+}
+
 /// Bind a complete native startup chain to the actual Normal vector and proven
 /// bulk cache. A known result supplies local shape/CFG witnesses with explicit
 /// external dependencies; it does not establish a complete no-009F certificate.

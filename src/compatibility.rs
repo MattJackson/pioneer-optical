@@ -26,6 +26,7 @@ pub(crate) struct PreparedCorrection {
     pub id: String,
     pub image: Vec<u8>,
     pub corrections: Vec<Correction>,
+    pub required_words: Vec<crate::filters::prerequisites::OwnedWord>,
 }
 
 #[cfg(feature = "envelope")]
@@ -33,6 +34,7 @@ pub(crate) struct PreparedCorrection {
 pub(crate) struct CorrectionRequirements {
     pub id: String,
     pub corrections: Vec<Correction>,
+    pub required_words: Vec<crate::filters::prerequisites::OwnedWord>,
 }
 
 #[cfg(feature = "envelope")]
@@ -41,17 +43,23 @@ impl From<PreparedCorrection> for CorrectionRequirements {
         Self {
             id: a.id,
             corrections: a.corrections,
+            required_words: a.required_words,
         }
     }
 }
 
 #[cfg(feature = "envelope")]
 impl PreparedCorrection {
-    pub(crate) fn native(image: Vec<u8>, corrections: &[Correction]) -> Self {
+    pub(crate) fn native(
+        image: Vec<u8>,
+        corrections: &[Correction],
+        required_words: Vec<crate::filters::prerequisites::OwnedWord>,
+    ) -> Self {
         Self {
             id: "pioneer.native-correction.v1".into(),
             image,
             corrections: corrections.to_vec(),
+            required_words,
         }
     }
 }
@@ -184,6 +192,12 @@ impl CorrectionPlan<'_> {
     /// Native corrections selected by their registered owners.
     pub fn corrections(&self) -> &[Correction] {
         &self.corrections
+    }
+
+    /// Read-only live requirements supplied by the selected correction owners.
+    /// The receiver must verify these before transferring any firmware stage.
+    pub fn required_words(&self) -> Result<Vec<crate::filters::prerequisites::OwnedWord>, Error> {
+        self.runner.required_words()
     }
 
     /// Every registered owner result, including operational requirements and
@@ -393,6 +407,11 @@ mod tests {
     fn normal(variant: u8) -> Vec<u8> {
         let mut bytes = alloc::vec![0xff; 0x2000];
         crate::image::matrix::install_test_contract(&mut bytes, variant);
+        bytes[0x680..0x694].copy_from_slice(&[
+            0x79, 0, 0, 0x9f, 0x5e, 0x41, 0x10, 0, 0x79, 0x20, 0xfe, 0x24, 0x47, 6, 0xf8, 1, 0x5e,
+            0x41, 0x06, 0xa0,
+        ]);
+        bytes[0x6a0..0x6a6].copy_from_slice(&[0x5e, 0x40, 0x0a, 0x1a, 0x54, 0x70]);
         bytes[..16].copy_from_slice(b"PIONEER TEST    ");
         bytes[16..20].fill(0);
         bytes[20..24].copy_from_slice(&0x2000u32.to_be_bytes());
@@ -416,16 +435,22 @@ mod tests {
         let direct = normal(0);
         let swapped = phase::correct_normal(&direct, phase::Assignment::Swapped).unwrap();
         let unchanged = plan(context(&direct), context(&direct)).unwrap();
-        assert!(unchanged.corrections().is_empty());
+        assert!(unchanged.corrections().iter().all(|effect| matches!(
+            effect, Correction::Registered { filter: "startup-prerequisite", from, to } if from == to
+        )));
+        assert_eq!(
+            unchanged.required_words().unwrap()[0].word,
+            crate::filters::prerequisites::Word {
+                parameter: 0x9f,
+                value: 0xfe24
+            }
+        );
         assert_eq!(unchanged.prepare_normal(), Ok(None));
         let planned = plan(context(&direct), context(&swapped)).unwrap();
-        assert_eq!(
-            planned.corrections(),
-            &[Correction::Phase {
-                from: phase::Assignment::Swapped,
-                to: phase::Assignment::Direct,
-            }]
-        );
+        assert!(planned.corrections().contains(&Correction::Phase {
+            from: phase::Assignment::Swapped,
+            to: phase::Assignment::Direct,
+        }));
         assert_eq!(planned.prepare_normal(), Ok(Some(direct.clone())));
         assert_eq!(prepare_phase(context(&direct), context(&direct)), Ok(None));
         assert_eq!(

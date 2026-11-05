@@ -234,7 +234,7 @@
           "platforms": [
             "SAT 8xxx/9xxx"
           ],
-          "text": "A split-word (F910-F913) coil rewrite is planned only when the complete sled mechanism bundle is bound in both images and identical apart from the coil. Otherwise it refuses as Unsupported, which the Recovery family override does not waive."
+          "text": "Split-word (F910-F913) corrections bind the complete sled mechanism bundle. Differing bundles use OEM routines and tables through the phase operation, with full resource and caller verification; equal coil assignments do not suppress required mechanism correction. Growth without proved placement remains Unsupported and cannot be waived by Recovery. Bound 0x28F selection requires the existing word to equal 1; the operation never writes it."
         },
         {
           "platforms": [
@@ -252,8 +252,8 @@
       "role": "Hardware"
     },
     {
-      "correctability": "Operational",
-      "correction": "Planned against the requested firmware. SAT platforms select a live 0x009F value with read/change/verify and rollback; other platforms have read-only prerequisites and no file edit.",
+      "correctability": "Guarded",
+      "correction": "H8 startup comparisons are corrected in the Normal image to preserve the installed accepted word, with a read-only live-word prerequisite. Conditional predicates remain intact. Other platforms retain their independent native prerequisites.",
       "description": "Identifies what the firmware requires before it starts: the accepted value of H8 startup word 0x009F, the ATA 0x00D9 predicate, the V850 expected Kernel identity, or the SCSI resident checksum and image-pair header. Evaluated on every image and planned per update; never part of the hardware family.",
       "id": "startup-prerequisite",
       "name": "Startup prerequisite",
@@ -263,7 +263,7 @@
             "SAT 1xxx",
             "SAT 8xxx/9xxx"
           ],
-          "text": "Selection uses the bound accepted word, otherwise the deliberate neutral 0x009F = 0xFFFF. It refuses, including the neutral value, when Normal reads persistent words through a Kernel-resident getter whose Kernel is not supplied."
+          "text": "A differing native H8 comparison is corrected only with both complete getter bindings. Missing evidence never selects FFFF. An unresolved installed comparison can admit an unchanged bound target only with equal Normal-owned reader layouts and a read-only target-word prerequisite. Bound native loader-flag inventories preserve unchanged startup requirements through the shared correction verifier, while host command, image checksum, generation marker and persistent-bank predicates retain their independent owners. Exact component preservation needs no correction; other unresolved transitions refuse. A missing Kernel-resident getter remains unresolved and cannot use the read-only fallback. Persistent banks and independent hardware checks remain required."
         },
         {
           "platforms": [

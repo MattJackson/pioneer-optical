@@ -7,6 +7,9 @@ use crate::compatibility::{Error, Firmware};
 use crate::image::matrix::{AtaEvidence, SatEvidence, SatPlatform};
 use alloc::{boxed::Box, string::String, vec::Vec};
 
+/// Read-only device prerequisites owned by correction operations.
+pub mod prerequisites;
+
 /// Native, explicitly sized values used by filter-owned contracts.
 /// Presentation labels and source coordinates never become identity bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -328,10 +331,32 @@ pub fn be32_normal_integrity() -> Integrity {
         if original.len() < 24
             || original.len() % 4 != 0
             || image.len() != original.len()
-            || !original.starts_with(b"PIONEER ")
             || sum(original) != 0
             || image[16..20] != original[16..20]
+            || image[..16] != original[..16]
+            || image[20..24] != original[20..24]
         {
+            return Err(Error::Representation);
+        }
+        #[cfg(feature = "envelope")]
+        if let Some(normal) = context.normal {
+            use crate::{envelope::Layout, ComponentKind};
+            if normal.image != original
+                || normal.info().hardware_version != context.target.hardware
+                || normal.info().kind != ComponentKind::Normal
+                || !matches!(
+                    normal.info().layout,
+                    Layout::Normal | Layout::NormalReverse | Layout::NormalScaledKey
+                )
+            {
+                return Err(Error::Representation);
+            }
+            return normal
+                .repair_image_checksum(image)
+                .filter(|repaired| sum(repaired) == 0)
+                .ok_or(Error::Representation);
+        }
+        if !original.starts_with(b"PIONEER ") {
             return Err(Error::Representation);
         }
         let mut repaired = image.to_vec();
@@ -356,6 +381,11 @@ pub trait Operation: core::fmt::Debug + Send + Sync {
     fn filter_id(&self) -> &'static str;
     /// Prepare corrected decoded Normal bytes under exact component/codec guards.
     fn prepare(&self, context: &Preparation<'_>) -> Result<Option<Vec<u8>>, Error>;
+    /// Device words that must already have these values before any transfer.
+    /// This is a read-only condition, never authorization to change a word.
+    fn required_words(&self) -> Vec<prerequisites::Word> {
+        Vec::new()
+    }
     /// Native checksum contract for atomic composition with another owner.
     /// Absence never authorizes guessing a checksum field or algorithm.
     fn integrity(&self) -> Option<Integrity> {

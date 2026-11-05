@@ -183,6 +183,12 @@ impl Plan {
             .as_ref()
             .map_or(&[], |c| c.corrections.as_slice())
     }
+    /// Filter-owned existing values that must be checked before any update stage.
+    pub fn required_words(&self) -> &[crate::filters::prerequisites::OwnedWord] {
+        self.correction
+            .as_ref()
+            .map_or(&[], |c| c.required_words.as_slice())
+    }
     /// Settings in deterministic execution/reporting order.
     pub fn entries(&self) -> &[Setting] {
         &self.entries

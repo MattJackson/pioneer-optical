@@ -139,7 +139,7 @@ fn matches(code: &[u8], shape: &[u8], links: &[(usize, usize)]) -> bool {
 /// FE23 selection intact and provides no unconditional acceptance of FE09.
 pub(super) fn discover(normal: &[u8], bound: &crate::startup::BoundSelection) -> Option<Evidence> {
     if bound.requirement.parameter != 0x9f
-        || bound.requirement.required != 0xfe23
+        || bound.requirement.required == 0xfe09
         || bound.requirement.argument_register != 0
     {
         return None;
@@ -161,8 +161,12 @@ pub(super) fn discover(normal: &[u8], bound: &crate::startup::BoundSelection) ->
     };
     let gate_address = bound.requirement.check_address;
     let gate = at(gate_address, GATE.len())?;
-    if !matches(gate, GATE, &[(5, 3), (23, 3), (45, 3), (51, 3), (57, 3)])
-        || be24(gate, 5)? != bound.requirement.getter_address
+    if !matches(
+        gate,
+        GATE,
+        &[(5, 3), (10, 2), (23, 3), (45, 3), (51, 3), (57, 3)],
+    ) || be24(gate, 5)? != bound.requirement.getter_address
+        || be16(gate, 10)? != bound.requirement.required
     {
         return None;
     }
@@ -329,13 +333,13 @@ pub(super) fn discover(normal: &[u8], bound: &crate::startup::BoundSelection) ->
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn put24(bytes: &mut [u8], at: usize, address: u32) {
         bytes[at..at + 3].copy_from_slice(&address.to_be_bytes()[1..]);
     }
-    fn fixture(getter: usize, predicate: usize, range: usize) -> Vec<u8> {
+    pub(crate) fn fixture(getter: usize, predicate: usize, range: usize) -> Vec<u8> {
         let mut normal = vec![0xff; 0x8000];
         crate::image::layout::install_test_layout_variant(&mut normal, getter, 5);
         let mut gate = GATE.to_vec();

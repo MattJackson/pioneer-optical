@@ -129,35 +129,32 @@ The `compatibility` planner compares registered v7 hardware filters and selects
 supported native corrections automatically from the installed and requested
 firmware. Phase output assignment is checked on every preparation; it changes
 only when required. Persistent parameter layout and storage geometry remain
-independent required filters. A narrowly proven address-only Normal variant
-can be corrected without moving retained data; different record formats and
-unproven variants refuse preparation. See [family identity](docs/family-v7.md)
-and [correction workflow](docs/correction-completion.md).
+independent required filters and are never corrected or migrated. See
+[family identity](docs/family-v7.md) and [correction workflow](docs/correction-completion.md).
 
-`PreparedUpdate::flash` uses one stage executor, with live receiver binding,
-settings migration, transfer and verification at each transition. Parameter 0x9F
-is a stage setting, not a separate flashing path. `prepare_normal` uses the same
-executor without a Kernel transfer. The full sequence is validated before its
-first mutation.
+Phase and startup use the same filter-owned plan, prepare and verify pipeline.
+Each owner supplies its native image edits and read-only prerequisites. The
+shared runner composes disjoint edits, repairs image integrity once, and verifies
+all owners against the resulting image. Startup corrects a bound Normal
+comparison to preserve the installed accepted word, including its conditional
+predicate; missing evidence never selects a neutral `0xFFFF` value.
+
+`PreparedUpdate::flash` uses one stage executor with live receiver binding,
+read-only prerequisite checks, transfer and verification at each transition.
+`prepare_normal` uses the same executor without a Kernel transfer. The full
+sequence is validated before its first mutation. No separate persistent
+settings, NVRAM, calibration or bank migration is part of image correction.
 
 Each receiver exposes `startup_checks()`: the native parameter comparisons and
-persistent bank requirements recovered from its Kernel and Normal. One startup
-planner checks the complete set for every prepared stage. Its evidence is
-available through `settings().startup_plan()`. The selected startup word and
-its provenance are exposed separately by `settings().startup_selection()`.
-Neutral startup selection deliberately uses `0xFFFF` when no comparison is
-recognized; recognized comparisons must bind to their native getter. Older bank initialization,
-state-header and Kernel-owned sequence schemes retain their own contracts.
-Missing evidence refuses preparation; family overrides do not waive these checks.
-Different persistent formats are refused under every policy, including the
-Recovery family override; there is no bank format conversion (for example,
-BDR-212U and BDR-213U banks are never converted in either direction). The
-planner does not rewrite a header marker.
+persistent bank requirements recovered from its Kernel and Normal. Preparation
+checks these for every stage; family overrides cannot waive them. The shared
+operation prerequisites are checked against the actual live words before any
+firmware transfer. Different persistent formats remain refused under every
+policy, including Recovery; BDR-212U and BDR-213U banks are never converted.
 
 `ExecutionError::completed_stages()` retains earlier completion when a later
 stage fails, including a refusal before its first write. No failing firmware
-write is retried. Settings may roll back only before that stage enters firmware
-update mode. Recovery and rollback require evidence of the firmware actually
+write is retried. Recovery and restoration require evidence of the firmware actually
 installed; an original backup is not automatically a valid Current reference
 after a handoff bridge. New handoff bridges still require physical hardware
 qualification.

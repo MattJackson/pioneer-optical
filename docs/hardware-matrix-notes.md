@@ -41,15 +41,14 @@ them (see CHANGELOG 1.6.0):
 - SAT1 phase: "Phase remains in both published family keys." The matching
   (candidate) family drops the assignment for H8 programs with a complete paired-word
   grammar; only the as-is identity keeps it.
-- SAT8/SAT9 phase: "Specialized mechanism adaptations retain their separate
-  prerequisites", and the conversion overview's "Specialized UD mechanism
-  conversions retain their exact-image guards". The UD02/UD03/UD04 recipes were
-  removed. A split-word coil rewrite needs identical bound sled mechanism bundles;
-  UD02D against UD03/UD04/SBC/SBW/Slimtype share a matching family but ship
-  mirrored bundles and are refused. XS08U no longer shares a family with
-  XD08/AD08/XD08U, because their tray input predicates differ.
-- "An exact UD02-to-UD04 image transformation reproduces its expected digest."
-  No UD02-to-UD04 transformation is implemented or planned.
+- SAT8/SAT9 phase: historical exact-image recipes are replaced by the phase
+  filter's native mechanism composition. Differing bound bundles can be corrected
+  with OEM instructions/tables and read-only prerequisites. The complete update
+  still requires every other filter; XS08U and XD08 have different tray inputs.
+  Native reference conversion evidence does not establish every family-wide pair.
+- Startup: historical neutral FFFF selection and persistent word transactions
+  are superseded by filter-owned image correction and read-only prerequisites.
+  Missing native evidence remains a refusal.
 - Persistent parameter layout: "A conditional Normal-only address-equivalence
   engine exists" and the "Normal-only address corrector accepts only variants..."
   prose. Layout is never corrected; that corrector was removed.
@@ -58,8 +57,9 @@ them (see CHANGELOG 1.6.0):
 
 ## Archived text from the hand-made page
 
-The counts below were correct for the 722-image corpus that page was built from.
-The generated page recomputes every count.
+The text and counts below describe the historical 722-image page and are not
+current admission or correction rules. The generated page recomputes every count
+and reads its current policies directly from the filter owners.
 
 All seven filters run on every image. Two correction types apply to the held firmware: phase and H8 startup word 0x009F. Required hardware unknowns produce no family ID; startup requirements are planned separately. Counts are distinct Normal images.
 

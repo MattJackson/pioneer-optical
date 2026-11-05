@@ -6,8 +6,8 @@ fn fixture() -> Vec<u8> {
 /// Coil functions plus every other bound mechanism element.
 fn bundled(convention: bundle::tests::Convention) -> Vec<u8> {
     let mut raw = crate::image::phase::tests::fixture(false);
-    raw.resize(0x400, 0xff);
-    bundle::tests::install(&mut raw, 0x200, 0x300, [32, 160], convention);
+    raw.resize(0x500, 0xff);
+    bundle::tests::install(&mut raw, 0x200, 0x380, [32, 160], convention);
     raw
 }
 fn context<'a>(normal: &'a [u8]) -> Context<'a> {
@@ -299,7 +299,10 @@ fn mirrored_mechanism_bundle_refuses_coil_only_correction_in_both_directions() {
     )
     .unwrap();
     for (installed, target) in [(&direct, &mirrored), (&mirrored, &direct)] {
-        assert!(matches!(plan_pair(installed, target), Err(Error::Unsupported)));
+        assert!(matches!(
+            plan_pair(installed, target),
+            Err(Error::Unsupported)
+        ));
     }
     // Same coil mapping does not hide differing bound elements.
     let mirrored_same_coil = bundled(bundle::tests::Convention::Mirrored);
@@ -332,7 +335,7 @@ fn coil_only_difference_with_identical_bundle_round_trips_byte_exact() {
 #[test]
 fn unbound_bundle_refuses_correction_but_not_an_identical_coil_mapping() {
     let mut raw = crate::image::phase::tests::fixture(false);
-    raw.resize(0x400, 0xff);
+    raw.resize(0x500, 0xff);
     let swapped = native::correct_pair(&raw, native::Assignment::Swapped).unwrap();
     assert!(bundle::bind(&raw).is_err());
     assert!(matches!(plan_pair(&raw, &swapped), Err(Error::Unsupported)));
@@ -340,7 +343,10 @@ fn unbound_bundle_refuses_correction_but_not_an_identical_coil_mapping() {
     assert!(matches!(plan_pair(&raw, &raw), Ok(None)));
     // One side bound, the other not: still no coil-only correction.
     let bound = fixture();
-    assert!(matches!(plan_pair(&bound, &swapped), Err(Error::Unsupported)));
+    assert!(matches!(
+        plan_pair(&bound, &swapped),
+        Err(Error::Unsupported)
+    ));
 }
 
 #[test]

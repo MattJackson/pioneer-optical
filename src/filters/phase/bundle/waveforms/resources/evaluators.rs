@@ -205,10 +205,14 @@ pub enum Calibration {
 
 /// Bind the complete calibration getter called by the evaluators.
 pub fn calibration(normal: &[u8], binding: &Binding) -> Result<(Range<usize>, Calibration), Error> {
-    let at = binding
-        .calibration_getter
-        .checked_sub(0x410000)
-        .ok_or(Error::Unresolved)? as usize;
+    calibration_at(normal, binding.calibration_getter)
+}
+
+/// Bind the same native eight-mode getter at a positively bound consumer call.
+/// This establishes the getter program and its source operands; parameter helper
+/// bodies and resident arithmetic remain separate contracts.
+pub fn calibration_at(normal: &[u8], address: u32) -> Result<(Range<usize>, Calibration), Error> {
+    let at = address.checked_sub(0x410000).ok_or(Error::Unresolved)? as usize;
     let read = |body: &[u8], offset| u16::from_be_bytes([body[offset], body[offset + 1]]);
     for shape in [CONSTANT_CALIBRATION, PARAMETER_CALIBRATION] {
         let Some(body) = normal.get(at..at + shape.len()) else {
@@ -221,7 +225,7 @@ pub fn calibration(normal: &[u8], binding: &Binding) -> Result<(Range<usize>, Ca
         {
             continue;
         }
-        let program = table(normal, binding.calibration_getter, shape.len())?;
+        let program = table(normal, address, shape.len())?;
         if shape.len() == CONSTANT_CALIBRATION.len() {
             return Ok((
                 program,
@@ -237,7 +241,7 @@ pub fn calibration(normal: &[u8], binding: &Binding) -> Result<(Range<usize>, Ca
             || context[0] == getter[0]
             || [71, 101, 131]
                 .into_iter()
-                .any(|offset| call(body, offset) != binding.calibration_getter + 264)
+                .any(|offset| call(body, offset) != address + 264)
         {
             return Err(Error::ResourceMismatch);
         }

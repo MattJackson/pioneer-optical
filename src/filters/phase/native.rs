@@ -10,6 +10,9 @@ pub mod calibration;
 /// Native arithmetic services in an explicitly mapped resident-code image.
 pub mod arithmetic;
 
+/// Proved native output representations and whole OEM caller adaptation.
+pub mod encoders;
+
 /// Bounded source-word exchange stage for complete native paired programs.
 pub mod sources;
 

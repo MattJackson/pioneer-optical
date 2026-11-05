@@ -409,6 +409,63 @@ fn mechanism_gate(
     if !matches!(from.interface, Interface::H8SplitWord { .. }) {
         return Ok(None);
     }
+    let generated = bundle::waveforms::resources::generated::observe;
+    if let (Ok(a), Ok(b), installed_loader, target_loader) = (
+        generated(transition.installed.firmware.normal),
+        generated(transition.target.firmware.normal),
+        bundle::waveforms::loader::observe(transition.installed.firmware.normal),
+        bundle::waveforms::loader::observe(transition.target.firmware.normal),
+    ) {
+        let matching_loaders = match (&installed_loader, &target_loader) {
+            (Err(_), Err(_)) => true,
+            (Ok(a), Ok(b)) if a.computed && b.computed => {
+                let computed = bundle::waveforms::loader::computed::observe;
+                match (
+                    computed(transition.installed.firmware.normal),
+                    computed(transition.target.firmware.normal),
+                ) {
+                    (Ok(source), Ok(target)) => {
+                        a.loader == b.loader
+                            && source.calibration == target.calibration
+                            && source.arithmetic == target.arithmetic
+                            && transition.installed.firmware.normal[source.basis]
+                                == transition.target.firmware.normal[target.basis]
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+        // Preserve the existing no-op when the actual generated convention
+        // agrees. Relocated calibration services alone request no phase edit.
+        use bundle::waveforms::resources::evaluators::Calibration;
+        let calibration_agrees = match (&a.calibration.1, &b.calibration.1) {
+            (Calibration::Constants(a), Calibration::Constants(b)) => a == b,
+            (
+                Calibration::Parameters {
+                    indices: ai,
+                    defaults: ad,
+                    ..
+                },
+                Calibration::Parameters {
+                    indices: bi,
+                    defaults: bd,
+                    ..
+                },
+            ) => ai == bi && ad == bd,
+            _ => false,
+        };
+        if matching_loaders
+            && calibration_agrees
+            && a.coils.assignment == b.coils.assignment
+            && a.step_minus_source == b.step_minus_source
+            && transition.installed.firmware.normal[a.evaluator.basis.clone()]
+                == transition.target.firmware.normal[b.evaluator.basis.clone()]
+        {
+            return Ok(None);
+        }
+        return mechanism::Mechanism::plan_generated(transition).map(Some);
+    }
     let installed = bundle::bind(transition.installed.firmware.normal);
     let target = bundle::bind(transition.target.firmware.normal);
     let calibration_change = matches!(

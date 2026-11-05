@@ -190,3 +190,61 @@ pub fn observe_producer(normal: &[u8]) -> Result<Producer, Error> {
     }
     found.ok_or(Error::Unresolved)
 }
+
+/// Carry the donor's native mode-to-buffer roles into the target's existing
+/// four generated buffers. Selector predicates, producer predicates and all
+/// startup mode arguments change together through their decoded OEM operands.
+/// Buffer addresses, evaluator calls and per-role native scale constants stay
+/// target-owned; neither a new RAM resource nor a persistent write is added.
+pub fn transplant_modes(target: &[u8], donor: &[u8]) -> Result<Vec<u8>, Error> {
+    use h8_asm::{
+        isa::{decode_insn, encode_insn, Operand},
+        Mode, Target,
+    };
+    let a = observe(target)?;
+    let b = observe(donor)?;
+    let pa = observe_producer(target)?;
+    let pb = observe_producer(donor)?;
+    let mut changed = target.to_vec();
+    for (to, from) in [
+        (a.selector.start + 6, b.selector.start + 6),
+        (a.selector.start + 10, b.selector.start + 10),
+        (a.selector.start + 14, b.selector.start + 14),
+        (pa.program.start + 36, pb.program.start + 36),
+        (pa.program.start + 40, pb.program.start + 40),
+        (pa.initializer.start + 12, pb.initializer.start + 12),
+        (pa.initializer.start + 18, pb.initializer.start + 18),
+    ] {
+        let original = decode_insn(&target[to..], Target::H8S2000, Mode::Advanced)
+            .map_err(|_| Error::Unresolved)?;
+        let source = decode_insn(&donor[from..], Target::H8S2000, Mode::Advanced)
+            .map_err(|_| Error::Unresolved)?;
+        let mut insn = original.insn;
+        if original.len != 2
+            || source.len != 2
+            || insn.mnemonic != source.insn.mnemonic
+            || insn.size != source.insn.size
+            || insn.operands[1..] != source.insn.operands[1..]
+            || !matches!(insn.operands[0], Operand::Immediate { bits: 8, .. })
+            || !matches!(source.insn.operands[0], Operand::Immediate { bits: 8, .. })
+        {
+            return Err(Error::ResourceMismatch);
+        }
+        insn.operands[0] = source.insn.operands[0];
+        let bytes =
+            encode_insn(insn, Target::H8S2000, Mode::Advanced).map_err(|_| Error::Unresolved)?;
+        if bytes.len() != original.len {
+            return Err(Error::ResourceMismatch);
+        }
+        changed[to..to + original.len].copy_from_slice(&bytes);
+    }
+    let after = observe(&changed)?;
+    let mut expected = a;
+    for (choice, source) in expected.choices.iter_mut().zip(&b.choices) {
+        choice.0 = source.0;
+    }
+    if after != expected || observe_producer(&changed)? != pa {
+        return Err(Error::ResourceMismatch);
+    }
+    Ok(changed)
+}

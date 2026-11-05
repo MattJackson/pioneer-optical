@@ -89,6 +89,9 @@ pub enum Loader {
     AscendingNegated17,
     /// Entry i written to 0x613−i / 0x132−i+9.
     Descending,
+    /// Descending DSP addresses with the computed loader's native wrapped
+    /// coefficient fetch and negated final row retained.
+    DescendingNegated17,
 }
 
 impl Bundle {
@@ -98,6 +101,7 @@ impl Bundle {
             Loader::Ascending => 0,
             Loader::AscendingNegated17 => 1,
             Loader::Descending => 2,
+            Loader::DescendingNegated17 => 3,
         };
         [
             self.step_minus_source,

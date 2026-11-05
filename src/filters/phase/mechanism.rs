@@ -9,6 +9,8 @@ pub(super) struct Mechanism {
     image: Vec<u8>,
     selection_required: bool,
     specialized: bool,
+    generated: bool,
+    generated_words: Vec<Word>,
 }
 impl Mechanism {
     pub(super) fn plan(
@@ -53,9 +55,31 @@ impl Mechanism {
             image,
             selection_required,
             specialized,
+            generated: false,
+            generated_words: Vec::new(),
+        })
+    }
+    pub(super) fn plan_generated(transition: &Transition<'_, '_>) -> Result<Self, Error> {
+        let donor = transition.installed.firmware.normal.to_vec();
+        let plan = bundle::waveforms::resources::generated::plan_with_kernel(
+            transition.target.firmware.normal,
+            &donor,
+            transition.target.firmware.kernel,
+        )
+        .map_err(|_| Error::Unsupported)?;
+        Ok(Self {
+            donor,
+            image: plan.image,
+            selection_required: false,
+            specialized: false,
+            generated: true,
+            generated_words: plan.required_words,
         })
     }
     pub(super) fn required_words(&self) -> Vec<Word> {
+        if self.generated {
+            return self.generated_words.clone();
+        }
         if self.selection_required {
             vec![Word {
                 parameter: 0x28f,
@@ -99,6 +123,15 @@ impl Mechanism {
             if !(16..20).contains(&at) && before != expected && actual != expected {
                 return Err(Error::VerificationFailed);
             }
+        }
+        if self.generated {
+            return bundle::waveforms::resources::generated::verify_with_kernel(
+                context.target.normal,
+                &self.donor,
+                normal,
+                context.target.kernel,
+            )
+            .map_err(|_| Error::VerificationFailed);
         }
         bundle::composition::verify_effective_result(
             context.target.normal,

@@ -6,8 +6,12 @@ use crate::filters::phase::native;
 use crate::image::layout::Observation;
 use alloc::vec::Vec;
 use core::ops::Range;
+/// Transfer a complete native calibration source without persistent writes.
+pub mod calibration_bridge;
 /// Native generated-waveform basis and evaluator relationships.
 pub mod evaluators;
+/// Complete generated-table phase graph and convention transfer.
+pub mod generated;
 mod shapes;
 /// Software-table dispatch and selector observation; generation proof is separate.
 pub mod software;

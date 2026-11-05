@@ -2,6 +2,8 @@
 use crate::filters::phase::bundle::{sites, Loader, Template};
 use alloc::vec::Vec;
 use core::ops::Range;
+/// Complete computed/scaled DSP graph and native direction transformation.
+pub mod computed;
 /// Complete DSP read-helper ABI proof.
 pub mod readback;
 mod shapes;
@@ -14,12 +16,15 @@ enum FieldKind {
     Literal,
     Ram,
     Data,
+    Constant,
 }
+#[derive(Clone, Copy)]
 struct Field {
     at: usize,
     width: usize,
     kind: FieldKind,
 }
+#[derive(Clone, Copy)]
 struct Shape {
     loader: Loader,
     computed: bool,
@@ -149,6 +154,10 @@ fn bind(normal: &[u8]) -> Result<(Binding, &'static Shape, Vec<u8>), Error> {
             // Bind every fixed call at the writer's repeated selection sites.
             for field in shape.fields {
                 let address = get(field.at)?;
+                if matches!(field.kind, FieldKind::Constant) {
+                    computed::validate_fold(normal, get(13)?, address as u16)?;
+                    continue;
+                }
                 if address & 1 != 0 {
                     return Err(Error::ResourceMismatch);
                 }

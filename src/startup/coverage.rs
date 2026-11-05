@@ -9,8 +9,12 @@ pub mod assessment;
 /// Native Normal boot-chain bodies and opaque handoff dependencies.
 pub mod boot;
 mod boot_shapes;
+/// Native copied checksum routine used by startup rejection predicates.
+pub mod copied_checksum;
 /// Native Normal control-flow graph with conditional call-return frontiers.
 pub mod native_flow;
+/// Native rejection sink ownership and independently owned predicates.
+pub mod sinks;
 
 /// Bounded local parameter-index dataflow.
 pub mod argument;

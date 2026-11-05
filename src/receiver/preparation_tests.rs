@@ -68,6 +68,25 @@ fn startup_selection_uses_target_even_when_installed_surface_is_unknown() {
     );
 }
 
+#[test]
+fn receiver_settings_never_select_persistent_startup_writes() {
+    let installed = update(false, 1, 0x12, true);
+    let receiver = Receiver::from_installed(&installed).unwrap();
+    for restore in [false, true] {
+        let settings = receiver
+            .settings_plan_for(installed.normal(), installed.kernel(), restore)
+            .unwrap();
+        assert!(settings.startup_setting().is_none());
+        assert!(settings.startup_selection().is_none());
+        assert!(settings.filter_actions().is_empty());
+        assert_eq!(settings.entries().len(), usize::from(restore));
+        assert!(settings.entries().iter().all(|entry| matches!(
+            entry.effect(),
+            crate::settings::update::Effect::TemporaryKernelMarker
+        )));
+    }
+}
+
 pub(in crate::receiver) fn update(gated: bool, marker: u8, family: u8, entry: bool) -> Update {
     let mut kernel = front_kernel();
     crate::image::handoff_fixture(&mut kernel);
@@ -110,6 +129,25 @@ pub(in crate::receiver) fn update(gated: bool, marker: u8, family: u8, entry: bo
     Update::load(&pair.kernel, &pair.normal).unwrap()
 }
 
+fn update_with_bound_startup(gated: bool, marker: u8, family: u8, entry: bool) -> Update {
+    let original = update(gated, marker, family, entry);
+    let mut normal = original.normal().image.clone();
+    normal[0x680..0x694].copy_from_slice(&[
+        0x79, 0, 0, 0x9f, 0x5e, 0x41, 0x10, 0, 0x79, 0x20, 0xfe, 0x24, 0x47, 6, 0xf8, 1, 0x5e,
+        0x41, 0x06, 0xa0,
+    ]);
+    normal[0x6a0..0x6a6].copy_from_slice(&[0x5e, 0x40, 0x0a, 0x1a, 0x54, 0x70]);
+    fix_sum(&mut normal);
+    let mut wire = original.normal().repack(&normal).unwrap();
+    let mut key = [0; 20];
+    key[19] = 5;
+    SigningKey::from_bytes(key)
+        .unwrap()
+        .sign_normal(&mut wire)
+        .unwrap();
+    Update::load(original.kernel_transfer(), &wire).unwrap()
+}
+
 #[test]
 fn ordinary_preparation_keeps_the_receivers_bank_checks() {
     use crate::startup::{bank, checks};
@@ -125,12 +163,8 @@ fn ordinary_preparation_keeps_the_receivers_bank_checks() {
         startup_plan.target_checks(),
         checks::Checks::discover(&installed.normal().image, Some(&installed.kernel().image))
     );
-    let selection = baseline.settings().startup_selection().unwrap();
-    assert_eq!(selection.setting(), startup_plan.word_setting());
-    assert!(matches!(
-        selection.evidence(),
-        crate::compatibility::startup::Evidence::NeutralSelection { .. }
-    ));
+    assert!(baseline.settings().startup_selection().is_none());
+    assert!(baseline.settings().startup_setting().is_none());
     assert_eq!(receiver.startup_checks().iter().count(), 2);
     let normal_only = receiver
         .prepare_normal(installed.normal_transfer())
@@ -143,14 +177,8 @@ fn ordinary_preparation_keeps_the_receivers_bank_checks() {
             .target_checks(),
         startup_plan.target_checks()
     );
-    assert!(matches!(
-        normal_only
-            .settings()
-            .startup_selection()
-            .unwrap()
-            .evidence(),
-        crate::compatibility::startup::Evidence::NeutralSelection { .. }
-    ));
+    assert!(normal_only.settings().startup_selection().is_none());
+    assert!(normal_only.settings().startup_setting().is_none());
 
     let mut normal = installed.normal().image.clone();
     for at in [0x180a, 0x190a] {
@@ -509,7 +537,7 @@ fn ungated_receiver_preserves_every_marker_without_a_second_pass() {
 
 #[test]
 fn refuses_missing_installed_evidence_and_unproven_restoration() {
-    let installed = update(true, 1, 0x12, true);
+    let installed = update_with_bound_startup(true, 1, 0x12, true);
     let entry_only = Receiver::detect(installed.normal()).unwrap();
     assert_eq!(
         entry_only.prepare(installed.clone()).unwrap_err(),
@@ -517,15 +545,19 @@ fn refuses_missing_installed_evidence_and_unproven_restoration() {
     );
     let receiver = Receiver::from_installed(&installed).unwrap();
     assert_eq!(
-        receiver.prepare(update(true, 0, 0x12, true)).unwrap_err(),
+        receiver
+            .prepare(update_with_bound_startup(true, 0, 0x12, true))
+            .unwrap_err(),
         PreparationError::UnsupportedFinalStage
     );
     assert_eq!(
-        receiver.prepare(update(false, 0, 0x12, false)).unwrap_err(),
+        receiver
+            .prepare(update_with_bound_startup(false, 0, 0x12, false))
+            .unwrap_err(),
         PreparationError::FinalStageEntry(Error::Unsupported)
     );
     assert!(matches!(
-        entry_only.prepare(update(false, 0, 0x13, true)),
+        entry_only.prepare(update_with_bound_startup(false, 0, 0x13, true)),
         Err(PreparationError::Compatibility(
             Error::FamilyMismatch { .. }
         ))
@@ -604,21 +636,21 @@ fn captured_receiver_evidence_does_not_require_a_distribution_signature() {
 
 #[test]
 fn explicit_family_override_does_not_waive_receiver_or_restore_checks() {
-    let installed = update(true, 1, 0x12, true);
+    let installed = update_with_bound_startup(true, 1, 0x12, true);
     let receiver = Receiver::from_installed(&installed).unwrap();
     assert!(receiver
-        .prepare_without_family_check(update(false, 0, 0x13, true))
+        .prepare_without_family_check(update_with_bound_startup(false, 0, 0x13, true))
         .is_ok());
     assert_eq!(
         receiver
-            .prepare_without_family_check(update(true, 0, 0x13, true))
+            .prepare_without_family_check(update_with_bound_startup(true, 0, 0x13, true))
             .unwrap_err(),
         PreparationError::UnsupportedFinalStage
     );
     let entry_only = Receiver::detect(installed.normal()).unwrap();
     assert_eq!(
         entry_only
-            .prepare_without_family_check(update(false, 0, 0x13, true))
+            .prepare_without_family_check(update_with_bound_startup(false, 0, 0x13, true))
             .unwrap_err(),
         PreparationError::UnknownInstalledKernel
     );
@@ -648,9 +680,9 @@ fn normal_only_uses_installed_kernel_without_selecting_a_kernel_write() {
 
 #[test]
 fn normal_only_force_waives_family_but_not_authentication_or_missing_evidence() {
-    let installed = update(false, 0, 0x12, true);
+    let installed = update_with_bound_startup(false, 0, 0x12, true);
     let receiver = Receiver::from_installed(&installed).unwrap();
-    let other = update(false, 0, 0x13, true);
+    let other = update_with_bound_startup(false, 0, 0x13, true);
     assert!(matches!(
         receiver.prepare_normal(other.normal_transfer()),
         Err(PreparationError::Compatibility(
@@ -887,7 +919,7 @@ fn handoff_bridge_signs_unsigned_capture_without_accepting_invalid_signatures() 
 #[test]
 fn native_phase_preparation_is_bidirectional_for_full_and_normal_only_updates() {
     use crate::image::phase::{correct_normal, Assignment};
-    let direct = update(false, 1, 0x12, true);
+    let direct = update_with_bound_startup(false, 1, 0x12, true);
     let swapped_image = correct_normal(&direct.normal().image, Assignment::Swapped).unwrap();
     let mut bytes = direct.normal().repack(&swapped_image).unwrap();
     SigningKey::random()
@@ -951,7 +983,8 @@ fn native_phase_preparation_is_bidirectional_for_full_and_normal_only_updates() 
             Some("pioneer.native-correction.v1")
         );
     }
-    let receiver = Receiver::from_installed(&update(false, 1, 0x13, true)).unwrap();
+    let receiver =
+        Receiver::from_installed(&update_with_bound_startup(false, 1, 0x13, true)).unwrap();
     assert!(matches!(
         receiver.prepare(swapped),
         Err(PreparationError::Compatibility(
@@ -1124,7 +1157,7 @@ fn startup_selection_uses_exact_architecture_and_never_gives_ata_or_scsi_h8_acti
 }
 
 #[test]
-fn forced_full_and_normal_only_never_relocate_layout_but_keep_phase_effects() {
+fn family_override_does_not_admit_unproved_startup_across_layouts() {
     use crate::image::{layout, phase};
     fn file(base: &Update, image: &[u8]) -> Update {
         let mut key = [0; 20];
@@ -1211,34 +1244,39 @@ fn forced_full_and_normal_only_never_relocate_layout_but_keep_phase_effects() {
         .candidate
     };
     assert_ne!(candidate(&installed), candidate(&target));
-    // The recovery override waives the non-correctable layout difference; it
-    // never relocates. Only the coil mapping is aligned to the installed one.
+    // A family override cannot substitute an unproved startup contract. The
+    // independent phase rewrite still preserves the requested layout bytes.
     for (installed, target) in [(&installed, &target), (&target, &installed)] {
         let receiver = Receiver::from_installed(installed).unwrap();
-        let full = receiver
-            .prepare_without_family_check(target.clone())
-            .unwrap();
-        let normal = receiver
-            .prepare_normal_without_family_check(target.normal_transfer())
-            .unwrap();
-        let crate::image::layout::Observation::Known(required) =
-            phase::discover(&installed.normal().image)
+        for result in [
+            receiver
+                .prepare_without_family_check(target.clone())
+                .map(|_| ()),
+            receiver
+                .prepare_normal_without_family_check(target.normal_transfer())
+                .map(|_| ()),
+        ] {
+            assert!(matches!(
+                result,
+                Err(PreparationError::PhaseCorrection(
+                    crate::compatibility::Error::UnresolvedIdentity
+                ))
+            ));
+        }
+        let layout::Observation::Known(required) = phase::discover(&installed.normal().image)
         else {
             panic!("installed phase");
         };
-        let expected = phase::correct_normal(&target.normal().image, required.assignment).unwrap();
-        assert_ne!(expected, installed.normal().image);
-        assert_eq!(full.target.normal().image, expected);
-        assert_eq!(normal.normal_image(), expected);
-        assert_eq!(full.target.kernel().image, target.kernel().image);
-        assert!(full
-            .settings()
-            .firmware_corrections()
-            .iter()
-            .all(|effect| matches!(effect, crate::compatibility::Correction::Phase { .. })));
-        assert_eq!(
-            full.settings().firmware_corrections(),
-            normal.settings().firmware_corrections()
-        );
+        let changed = phase::correct_normal(&target.normal().image, required.assignment).unwrap();
+        let layout::Observation::Known(before_layout) =
+            layout::normal_reader(&target.normal().image)
+        else {
+            panic!("target reader");
+        };
+        let layout::Observation::Known(after_layout) = layout::normal_reader(&changed) else {
+            panic!("corrected reader");
+        };
+        assert_eq!(before_layout, after_layout);
+        assert_ne!(changed, installed.normal().image);
     }
 }

@@ -4,6 +4,7 @@
 //! interfaces remain part of identity even when source assignment is normalized.
 /// Sled mechanism convention bundle bound from native code.
 pub mod bundle;
+mod mechanism;
 /// Native phase recognition, operand corrections and instruction contracts.
 pub mod native;
 
@@ -267,7 +268,7 @@ static RULES: super::Rules = super::Rules {
         },
         super::Policy {
             domains: &[super::identity::Domain::H8Sat],
-            text: "A split-word (F910-F913) coil rewrite is planned only when the complete sled mechanism bundle is bound in both images and identical apart from the coil. Otherwise it refuses as Unsupported, which the Recovery family override does not waive.",
+            text: "Split-word (F910-F913) corrections bind the complete sled mechanism bundle. Differing bundles use OEM routines and tables through the phase operation, with full resource and caller verification; equal coil assignments do not suppress required mechanism correction. Growth without proved placement remains Unsupported and cannot be waived by Recovery. Bound 0x28F selection requires the existing word to equal 1; the operation never writes it.",
         },
         super::Policy {
             domains: &[super::identity::Domain::Ata],
@@ -371,8 +372,8 @@ impl Filter for PhaseFilter {
         {
             return Err(Error::UnresolvedIdentity);
         }
-        mechanism_gate(transition, from, required)?;
-        if from == required {
+        let mechanism = mechanism_gate(transition, from, required)?;
+        if from == required && mechanism.is_none() {
             return Ok(None);
         }
         Ok(Some(Box::new(PhaseOperation {
@@ -381,19 +382,19 @@ impl Filter for PhaseFilter {
             kernel: transition.target.firmware.kernel.map(<[u8]>::to_vec),
             from,
             required,
+            mechanism,
         })))
     }
 }
 /// Split-word coil mapping is one element of the sled mechanism convention.
-/// A coil rewrite is only planned when every other bundle element is bound in
-/// both images and already identical; equal coil mappings must not hide a
-/// differing bound element. Refusal is `Unsupported`, which a family override
-/// cannot waive: flashing as-is would drive the sled in the wrong convention.
+/// Differing bundles require a complete mechanism operation, even with equal
+/// coil mappings. Missing composition or placement proof remains Unsupported
+/// and cannot be waived by a family override.
 fn mechanism_gate(
     transition: &Transition<'_, '_>,
     from: NativePhase,
     required: NativePhase,
-) -> Result<(), Error> {
+) -> Result<Option<mechanism::Mechanism>, Error> {
     // The hardware matrix suspends every SAT1 phase correction claim pending
     // command-relative phase proof, whatever the native interface.
     let sat1 = |firmware: Firmware<'_>| {
@@ -406,20 +407,88 @@ fn mechanism_gate(
         return Err(Error::Unsupported);
     }
     if !matches!(from.interface, Interface::H8SplitWord { .. }) {
-        return Ok(());
+        return Ok(None);
+    }
+    let generated = bundle::waveforms::resources::generated::observe;
+    if let (Ok(a), Ok(b), installed_loader, target_loader) = (
+        generated(transition.installed.firmware.normal),
+        generated(transition.target.firmware.normal),
+        bundle::waveforms::loader::observe(transition.installed.firmware.normal),
+        bundle::waveforms::loader::observe(transition.target.firmware.normal),
+    ) {
+        let matching_loaders = match (&installed_loader, &target_loader) {
+            (Err(_), Err(_)) => true,
+            (Ok(a), Ok(b)) if a.computed && b.computed => {
+                let computed = bundle::waveforms::loader::computed::observe;
+                match (
+                    computed(transition.installed.firmware.normal),
+                    computed(transition.target.firmware.normal),
+                ) {
+                    (Ok(source), Ok(target)) => {
+                        a.loader == b.loader
+                            && source.calibration == target.calibration
+                            && source.arithmetic == target.arithmetic
+                            && transition.installed.firmware.normal[source.basis]
+                                == transition.target.firmware.normal[target.basis]
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+        // Preserve the existing no-op when the actual generated convention
+        // agrees. Relocated calibration services alone request no phase edit.
+        use bundle::waveforms::resources::evaluators::Calibration;
+        let calibration_agrees = match (&a.calibration.1, &b.calibration.1) {
+            (Calibration::Constants(a), Calibration::Constants(b)) => a == b,
+            (
+                Calibration::Parameters {
+                    indices: ai,
+                    defaults: ad,
+                    ..
+                },
+                Calibration::Parameters {
+                    indices: bi,
+                    defaults: bd,
+                    ..
+                },
+            ) => ai == bi && ad == bd,
+            _ => false,
+        };
+        if matching_loaders
+            && calibration_agrees
+            && a.coils.assignment == b.coils.assignment
+            && a.step_minus_source == b.step_minus_source
+            && transition.installed.firmware.normal[a.evaluator.basis.clone()]
+                == transition.target.firmware.normal[b.evaluator.basis.clone()]
+        {
+            return Ok(None);
+        }
+        return mechanism::Mechanism::plan_generated(transition).map(Some);
     }
     let installed = bundle::bind(transition.installed.firmware.normal);
     let target = bundle::bind(transition.target.firmware.normal);
+    let calibration_change = matches!(
+        (native::calibration::observe(transition.installed.firmware.normal),
+         native::calibration::observe(transition.target.firmware.normal)),
+        (Ok(a), Ok(b)) if a != b
+    );
     match (installed, target) {
-        (Ok(a), Ok(b)) if a.without_coil() == b.without_coil() => {
+        (Ok(a), Ok(b)) if a.without_coil() == b.without_coil() && !calibration_change => {
             if a.coil != required.assignment || b.coil != from.assignment {
                 return Err(Error::UnresolvedIdentity);
             }
-            Ok(())
+            Ok(None)
         }
-        (Ok(_), Ok(_)) => Err(Error::Unsupported),
+        (Ok(a), Ok(b)) => {
+            if a.coil != required.assignment || b.coil != from.assignment {
+                return Err(Error::UnresolvedIdentity);
+            }
+            mechanism::Mechanism::plan(transition, a.table_select_0x28f || b.table_select_0x28f)
+                .map(Some)
+        }
         _ if from.assignment != required.assignment => Err(Error::Unsupported),
-        _ => Ok(()),
+        _ => Ok(None),
     }
 }
 
@@ -436,6 +505,7 @@ struct PhaseOperation {
     kernel: Option<Vec<u8>>,
     from: NativePhase,
     required: NativePhase,
+    mechanism: Option<mechanism::Mechanism>,
 }
 impl core::fmt::Debug for PhaseOperation {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -506,11 +576,19 @@ impl Operation for PhaseOperation {
             to: self.required.assignment,
         })
     }
+    fn required_words(&self) -> Vec<super::prerequisites::Word> {
+        self.mechanism
+            .as_ref()
+            .map_or_else(Vec::new, mechanism::Mechanism::required_words)
+    }
     fn integrity(&self) -> Option<Integrity> {
         (self.from.architecture == Architecture::H8).then(super::be32_normal_integrity)
     }
     fn prepare(&self, context: &Preparation<'_>) -> Result<Option<Vec<u8>>, Error> {
         self.bound(context)?;
+        if let Some(mechanism) = &self.mechanism {
+            return self.prepared(context, mechanism.prepare(context)?);
+        }
         let mut image = match self.from.architecture {
             Architecture::H8 => {
                 #[cfg(feature = "envelope")]
@@ -585,6 +663,9 @@ impl Operation for PhaseOperation {
         self.bound(context)?;
         if normal.len() != self.normal.len() {
             return Err(Error::VerificationFailed);
+        }
+        if let Some(mechanism) = &self.mechanism {
+            mechanism.verify(context, normal)?;
         }
         let firmware = Firmware {
             normal,

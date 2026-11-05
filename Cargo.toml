@@ -106,3 +106,10 @@ required-features = ["analysis"]
 [[example]]
 name = "pioneer_startup_checks"
 required-features = ["image"]
+
+# Native instruction proofs exhaust complete word domains. Optimize the test
+# interpreter while retaining the debug checks used by the full CI matrix.
+[profile.test]
+opt-level = 2
+debug-assertions = true
+overflow-checks = true

@@ -1,8 +1,10 @@
-//! Read-only observation of the output pair left on drives by the removed
-//! pre-1.6 mechanism adaptation. Only the four output operands vary. This
-//! identifies installed firmware; it never prepares or corrects such an image.
+//! Complete padded and inline H8 output pair grammar.
+//!
+//! The first source calls the bound identity/high-byte leaf; the second inlines
+//! those same operations. Padding and leaf bodies are part of the proof. Only
+//! the four physical register operands are correction sites.
 
-use super::{Assignment, Interface, Phase};
+use super::{Assignment, PairedPhase};
 
 const PAIR: &[u8] = &[
     0x01, 0x00, 0x6d, 0xf3, 0x1a, 0xb3, 0x0c, 0x8b, 0x10, 0x73, 0x0a, 0x93, 0x69, 0x30, 0x00, 0x00,
@@ -56,10 +58,14 @@ fn bind(normal: &[u8], at: usize, stored: &[&[u8]]) -> Option<Assignment> {
     })
 }
 
-pub(super) fn observe(normal: &[u8], at: usize, stored: &[&[u8]]) -> Option<Phase> {
-    bind(normal, at, stored).map(|assignment| Phase {
+pub(super) fn paired(normal: &[u8], at: usize, stored: &[&[u8]]) -> Option<PairedPhase> {
+    let assignment = bind(normal, at, stored)?;
+    let first = [at + OPERANDS[0], at + OPERANDS[1]];
+    let second = [at + OPERANDS[2], at + OPERANDS[3]];
+    Some(PairedPhase {
         assignment,
-        interface: Interface::SplitWord,
+        functions: [at, at + 48],
+        operands: [first, second],
     })
 }
 
@@ -75,7 +81,7 @@ mod tests {
         pair[35..38].copy_from_slice(&[0x41, 1, 0x82]);
         raw[32..32 + PAIR.len()].copy_from_slice(&pair);
         raw[384..390].copy_from_slice(&[0x54, 0x70, 0x0c, 8, 0x54, 0x70]);
-        assert!(observe(&raw, 32, &[&raw]).is_some());
+        assert!(paired(&raw, 32, &[&raw]).is_some());
         assert_eq!(
             discover(&raw).compare(&Observation::Known(Phase {
                 assignment: Assignment::Direct,
@@ -83,19 +89,24 @@ mod tests {
             })),
             Some(true)
         );
-        assert_eq!(
-            correct_pair(&raw, Assignment::Swapped),
-            Err(CorrectionError::Unresolved)
-        );
+        let corrected = correct_pair(&raw, Assignment::Swapped).unwrap();
+        assert_eq!(correct_pair(&corrected, Assignment::Direct).unwrap(), raw);
+        let differences: Vec<_> = raw
+            .iter()
+            .zip(&corrected)
+            .enumerate()
+            .filter_map(|(i, (a, b))| (a != b).then_some(i))
+            .collect();
+        assert_eq!(differences, OPERANDS.map(|at| at + 32));
         for offset in (32..32 + PAIR.len()).chain(384..390) {
             raw[offset] ^= 1;
-            assert!(observe(&raw, 32, &[&raw]).is_none(), "offset {offset}");
+            assert!(paired(&raw, 32, &[&raw]).is_none(), "offset {offset}");
             raw[offset] ^= 1;
         }
-        assert!(observe(&raw, 32, &[&raw[..384]]).is_none());
+        assert!(paired(&raw, 32, &[&raw[..384]]).is_none());
     }
     #[test]
-    fn observed_adapted_pair_is_never_corrected() {
+    fn complete_padded_pair_correction_preserves_checksum_and_round_trips() {
         let mut raw = alloc::vec![0xff; 512];
         raw[32..32 + PAIR.len()].copy_from_slice(PAIR);
         raw[49..52].copy_from_slice(&[0x41, 1, 0x80]);
@@ -109,10 +120,9 @@ mod tests {
         raw[16..20].copy_from_slice(&compensation.to_be_bytes());
         assert!(matches!(discover(&raw), Observation::Known(_)));
         for target in [Assignment::Direct, Assignment::Swapped] {
-            assert_eq!(
-                correct_normal(&raw, target),
-                Err(CorrectionError::Unresolved)
-            );
+            let corrected = correct_normal(&raw, target).unwrap();
+            assert_eq!(super::super::checksum(&corrected), 0);
+            assert_eq!(correct_normal(&corrected, Assignment::Direct).unwrap(), raw);
         }
     }
 }

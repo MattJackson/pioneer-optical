@@ -53,9 +53,9 @@ assignment while retaining architecture and physical output interface; other
 forms retain assignment until their own projection is proven. Candidate
 projection does not authorize a checksum repair, a live setting or an update.
 
-## Current corpus and coverage
+## Recorded corpus and coverage
 
-The 722-image replay reports 626 complete identities and 96 unresolved images
+The earlier 722-image replay reported 626 complete identities and 96 unresolved images
 from 723 package records. SAT1 has 70 complete images and 11 families; SAT8 has
 391 images and 10 candidate families; SAT9 has 66 images and three candidate
 families; ATA has 99 complete M32C images and six candidate families. No SCSI
@@ -71,10 +71,11 @@ supported contract. Together with the 22 already incomplete V850 images, all
 that missing initialization field.
 
 Operational startup findings include 85 M32C comparisons for parameter
-`0x00D9 == 0xFFFF`. Those are distinct from H8 neutral startup selection
-`0x009F = 0xFFFF`. H8 selects its bound accepted value when recognized and
-otherwise deliberately selects neutral FFFF; ATA/SCSI do not inherit that write
-command. Native absence remains unproved when coverage is incomplete.
+`0x00D9 == 0xFFFF`. H8 startup is a guarded correctable filter: a bound comparison
+can be rewritten in Normal to preserve the installed accepted value, with a
+read-only live prerequisite. Missing comparisons never select neutral FFFF.
+ATA/SCSI do not inherit an H8 write command. Native absence remains unproved
+when coverage is incomplete.
 
 The native corpus replay checks all 722 images and retains all seven findings
 per image. Owner, identity, runner and layout tests verify the typed findings,

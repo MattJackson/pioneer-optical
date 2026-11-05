@@ -1,0 +1,20 @@
+[
+  {
+    "original_sha256": "8037cdb3ae67e04a82aa3e9b7a0f52202e17f1e39d1f50b894158d9be0cec898",
+    "spans": [
+      [
+        2040208,
+        "54700c085470"
+      ]
+    ]
+  },
+  {
+    "original_sha256": "99ba77ae1cedc967096c770b21c066d04a5163f1c5a4aa82f27584c6faced796",
+    "spans": [
+      [
+        1502298,
+        "54700c085470"
+      ]
+    ]
+  }
+]

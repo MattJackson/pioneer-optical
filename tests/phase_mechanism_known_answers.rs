@@ -40,6 +40,7 @@ fn native_oem_all_reference_pairs_compose_with_small_conversion_spills() {
         // Each reservation is smaller than every complete conversion routine.
         // Whole-body detours cannot satisfy this placement contract.
         space.conversions = [Some(0x400..0x418), Some(0x440..0x458), Some(0x484..0x49c)];
+        space.calibration = Some(0x4b8..0x4ee);
         let changed = bundle::composition::transplant(&target, &donor, space, Some(0x600..0x700))
             .unwrap_or_else(|e| panic!("{id}: {e:?}"));
         let mut expected = bundle::bind(&donor).unwrap();

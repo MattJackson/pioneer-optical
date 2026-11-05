@@ -40,6 +40,7 @@ struct Reader {
     convention: Convention,
     packed_shape: bool,
     getter: [u8; 3],
+    body: super::placement::Body,
 }
 fn bind(normal: &[u8]) -> Result<Reader, Error> {
     let regions = crate::image::regions(normal).ok_or(Error::Unresolved)?;
@@ -61,8 +62,11 @@ fn bind(normal: &[u8]) -> Result<Reader, Error> {
                 }
             })
             .collect();
-        for at in crate::filters::phase::bundle::sites(normal, &regions.stored, &pattern) {
-            let bytes = &normal[at..at + template.len()];
+        for at in crate::filters::phase::bundle::sites(normal, &regions.stored, &pattern[..2]) {
+            let Some(body) = super::placement::read(normal, &regions.stored, at, &pattern) else {
+                continue;
+            };
+            let bytes = &body.bytes;
             let convention = if packed {
                 match &bytes[56..58] {
                     [0x0c, 8] => Convention::PackedBytes,
@@ -89,6 +93,7 @@ fn bind(normal: &[u8]) -> Result<Reader, Error> {
                 convention,
                 packed_shape: packed,
                 getter,
+                body,
             });
         }
     }
@@ -109,20 +114,24 @@ pub fn rewrite(
     installed: &[u8],
     reservation: Option<Range<usize>>,
 ) -> Result<Vec<u8>, Error> {
-    let required = bind(installed)?.convention;
+    let donor = bind(installed)?;
+    let required = donor.convention;
     let before = bind(target)?;
     let mut changed = target.to_vec();
     if before.convention == required {
         return Ok(changed);
     }
+    if before.body.spans.len() != 1 {
+        return transplant(target, installed, reservation);
+    }
     if before.packed_shape {
-        changed[before.at + 56..before.at + 58].copy_from_slice(
-            if required == Convention::WholeWord {
-                &[0, 0]
-            } else {
-                &[0x0c, 8]
-            },
-        );
+        let slot = &mut changed[before.at + 56..before.at + 58];
+        if required == Convention::WholeWord {
+            super::encoding::nops(slot).ok_or(Error::Unresolved)?;
+        } else {
+            // Copy the actual bound OEM high-byte selection instruction.
+            slot.copy_from_slice(&donor.body.bytes[56..58]);
+        }
     } else {
         let space = reservation.ok_or(Error::SpaceRequired)?;
         let regions = crate::image::regions(target).ok_or(Error::Unresolved)?;
@@ -142,7 +151,7 @@ pub fn rewrite(
         {
             return Err(Error::InvalidSpace);
         }
-        let mut program = PACKED.to_vec();
+        let mut program = donor.body.bytes.clone();
         for at in [43, 53] {
             super::encoding::retarget_call(
                 &mut program,
@@ -179,14 +188,7 @@ pub fn transplant(
 ) -> Result<Vec<u8>, Error> {
     let before = bind(target)?;
     let source = bind(donor)?;
-    let size = |reader: &Reader| {
-        if reader.packed_shape {
-            PACKED.len()
-        } else {
-            WHOLE.len()
-        }
-    };
-    let mut code = donor[source.at..source.at + size(&source)].to_vec();
+    let mut code = source.body.bytes.clone();
     let fields: &[usize] = if source.packed_shape {
         &[43, 53]
     } else {
@@ -200,14 +202,24 @@ pub fn transplant(
         )
         .ok_or(Error::Unresolved)?;
     }
-    let original = before.at..before.at + size(&before);
+    if code == before.body.bytes {
+        return Ok(target.to_vec());
+    }
+    let original = before.body.spans[0].clone();
+    let prior_spill = before.body.spans.get(1);
     let mut changed = target.to_vec();
     if code.len() <= original.len() {
         crate::filters::phase::native::encoding::nops(&mut changed[original.clone()])
             .ok_or(Error::InvalidSpace)?;
         changed[original.start..original.start + code.len()].copy_from_slice(&code);
+        if let Some(retired) = prior_spill {
+            super::encoding::nops(&mut changed[retired.clone()]).ok_or(Error::InvalidSpace)?;
+        }
     } else {
-        let space = reservation.ok_or(Error::SpaceRequired)?;
+        let space = reservation
+            .or_else(|| prior_spill.cloned())
+            .ok_or(Error::SpaceRequired)?;
+        let reusing_spill = prior_spill == Some(&space);
         let regions = crate::image::regions(target).ok_or(Error::Unresolved)?;
         let stored = regions.stored.iter().any(|region| {
             let at = region.as_ptr() as usize - target.as_ptr() as usize;
@@ -216,12 +228,14 @@ pub fn transplant(
         if space.start & 1 != 0
             || space.end & 1 != 0
             || space.start > space.end
-            || space.len() < code.len()
             || !stored
             || (space.start < original.end && original.start < space.end)
-            || !target
-                .get(space.clone())
-                .is_some_and(|bytes| bytes.iter().all(|b| *b == 0xff))
+            || (!reusing_spill
+                && !target
+                    .get(space.clone())
+                    .is_some_and(|bytes| bytes.iter().all(|b| *b == 0xff)))
+            || prior_spill
+                .is_some_and(|p| !reusing_spill && space.start < p.end && p.start < space.end)
         {
             return Err(Error::InvalidSpace);
         }
@@ -229,12 +243,24 @@ pub fn transplant(
             .checked_add(space.start)
             .filter(|a| *a <= 0xffffff)
             .ok_or(Error::InvalidSpace)? as u32;
-        crate::filters::phase::native::encoding::nops(&mut changed[space.clone()])
-            .ok_or(Error::InvalidSpace)?;
-        changed[space.start..space.start + code.len()].copy_from_slice(&code);
-        changed[original.start..original.start + 4].copy_from_slice(
-            &crate::filters::phase::native::encoding::jump(address).ok_or(Error::InvalidSpace)?,
-        );
+        let original_address = u32::try_from(
+            0x410000usize
+                .checked_add(original.start)
+                .ok_or(Error::InvalidSpace)?,
+        )
+        .map_err(|_| Error::InvalidSpace)?;
+        let (prefix, spill) =
+            super::placement::split_closed(&code, original_address, original.len(), address)
+                .ok_or(Error::Unresolved)?;
+        if spill.len() > space.len() {
+            return Err(Error::InvalidSpace);
+        }
+        super::encoding::nops(&mut changed[space.clone()]).ok_or(Error::InvalidSpace)?;
+        changed[original].copy_from_slice(&prefix);
+        changed[space.start..space.start + spill.len()].copy_from_slice(&spill);
+        if let Some(retired) = prior_spill.filter(|_| !reusing_spill) {
+            super::encoding::nops(&mut changed[retired.clone()]).ok_or(Error::InvalidSpace)?;
+        }
     }
     let actual = bind(&changed)?;
     if actual.convention != source.convention

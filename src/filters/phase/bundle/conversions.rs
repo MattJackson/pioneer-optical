@@ -26,7 +26,7 @@ struct Program {
     templates: &'static [Template],
     variant: u8,
     at: usize,
-    body: native::linear::Body,
+    body: native::placement::Body,
 }
 fn programs(normal: &[u8]) -> Result<Vec<Program>, Error> {
     let regions = crate::image::regions(normal).ok_or(Error::InvalidProgram)?;
@@ -56,7 +56,7 @@ pub(super) fn locate(
     stored: &[&[u8]],
     templates: &[Template],
     element: Element,
-) -> Result<(u8, usize, native::linear::Body), Unbound> {
+) -> Result<(u8, usize, native::placement::Body), Unbound> {
     let mut found = None;
     for (variant, template) in templates.iter().enumerate() {
         // Search a complete first instruction, including any address holes.
@@ -65,7 +65,7 @@ pub(super) fn locate(
             h8_asm::isa::decode_insn(&concrete, h8_asm::Target::H8S2000, h8_asm::Mode::Advanced)
                 .map_err(|_| Unbound::Missing(element))?;
         for at in sites(normal, stored, &template[..first.len]) {
-            if let Some(body) = native::linear::read(normal, stored, at, template) {
+            if let Some(body) = native::placement::read(normal, stored, at, template) {
                 if found.is_some() {
                     return Err(Unbound::Ambiguous(element));
                 }
@@ -237,8 +237,17 @@ fn rewrite_with_layout(
                     .checked_add(space.start)
                     .and_then(|a| u32::try_from(a).ok())
                     .ok_or(Error::InvalidSpace)?;
-                let (prefix, mut spill) = native::linear::split(&bytes, original.len(), address)
-                    .ok_or(Error::InvalidProgram)?;
+                let original_address = BASE_ADDRESS
+                    .checked_add(original.start)
+                    .and_then(|a| u32::try_from(a).ok())
+                    .ok_or(Error::InvalidSpace)?;
+                let (prefix, mut spill) = native::placement::split_closed(
+                    &bytes,
+                    original_address,
+                    original.len(),
+                    address,
+                )
+                .ok_or(Error::InvalidProgram)?;
                 if spill.len() > space.len() {
                     return Err(Error::InvalidSpace);
                 }

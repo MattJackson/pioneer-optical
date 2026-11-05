@@ -53,7 +53,7 @@ impl Reader {
             _ => panic!("{operand:?}"),
         }
     }
-    fn run(program: &BTreeMap<usize, (Insn, usize)>, mode: u8, words: [u16; 2]) -> (u16, Vec<u16>) {
+    fn run(program: &Program, mode: u8, words: [u16; 2]) -> (u16, Vec<u16>) {
         let mut cpu = Self {
             registers: [0xa55a_5aa5; 8],
             saved: Vec::new(),
@@ -63,9 +63,9 @@ impl Reader {
         };
         cpu.set(Reg::Byte(8), mode.into());
         let original_r3 = cpu.registers[3];
-        let mut at = 0;
+        let mut at = program.entry;
         for _ in 0..64 {
-            let (i, len) = program[&at];
+            let (i, len) = program.instructions[&at];
             let [a, b, _] = i.operands;
             let next = at + len;
             at = next;
@@ -95,6 +95,7 @@ impl Reader {
                         at = next.wrapping_add_signed(value as isize);
                     }
                 }
+                ("JMP", Operand::Address(Ea::Absolute { value, .. }), _) => at = value as usize,
                 ("JSR", Operand::Address(Ea::Absolute { value, .. }), _) => {
                     assert_eq!(value, 0x410600);
                     let index = cpu.get(Reg::Word(0)) as u16;
@@ -132,17 +133,22 @@ fn fixture(packed: bool, address: u32) -> Vec<u8> {
     normal[0x100..0x100 + code.len()].copy_from_slice(&code);
     normal
 }
-fn program(normal: &[u8]) -> BTreeMap<usize, (Insn, usize)> {
+struct Program {
+    entry: usize,
+    instructions: BTreeMap<usize, (Insn, usize)>,
+}
+fn program(normal: &[u8]) -> Program {
     let bound = bind(normal).unwrap();
-    instructions(
-        &normal[bound.at
-            ..bound.at
-                + if bound.packed_shape {
-                    PACKED.len()
-                } else {
-                    WHOLE.len()
-                }],
-    )
+    let mut decoded = BTreeMap::new();
+    for span in &bound.body.spans {
+        for (offset, instruction) in instructions(&normal[span.clone()]) {
+            decoded.insert(0x410000 + span.start + offset, instruction);
+        }
+    }
+    Program {
+        entry: 0x410000 + bound.at,
+        instructions: decoded,
+    }
 }
 
 #[test]
@@ -176,7 +182,7 @@ fn rewritten_readers_preserve_consumed_calibration_bytes_for_every_word_and_mode
                 .iter()
                 .any(|field| (*field..*field + 3).contains(&offset))
             {
-                assert_eq!(changed[after.at + offset], donor[source.at + offset]);
+                assert_eq!(after.body.bytes[offset], source.body.bytes[offset]);
             }
         }
         for (at, (old, new)) in target.iter().zip(changed).enumerate() {
@@ -222,6 +228,40 @@ fn rewritten_readers_preserve_consumed_calibration_bytes_for_every_word_and_mode
             assert!(reads.is_empty());
         }
     }
+}
+
+#[test]
+fn split_calibration_reuses_prefix_and_refuses_a_branch_crossing_the_split() {
+    let whole = fixture(false, 0x410600);
+    let packed = fixture(true, 0x410700);
+    // 54 bytes holds only the packed reader's suffix, not its complete 66 bytes.
+    let changed = transplant(&whole, &packed, Some(0x300..0x336)).unwrap();
+    let bound = bind(&changed).unwrap();
+    assert_eq!(bound.at, 0x100);
+    assert_eq!(bound.body.spans, [0x100..0x110, 0x300..0x336]);
+    assert_eq!(&changed[0x100..0x10c], &packed[0x100..0x10c]);
+    assert_eq!(transplant(&changed, &packed, None).unwrap(), changed);
+    let restored = transplant(&changed, &whole, None).unwrap();
+    assert_eq!(observe(&restored), Ok(Convention::WholeWord));
+    for mode in 0..=255 {
+        for word in [0, 1, 0xff, 0x100, 0x55aa, 0xffff] {
+            assert_eq!(
+                Reader::run(&program(&restored), mode, [word, !word]),
+                Reader::run(&program(&whole), mode, [word, !word])
+            );
+        }
+    }
+    // An otherwise byte-identical reader split after the first conditional
+    // branch would make that branch land in overwritten original bytes.
+    let mut invalid = whole;
+    let mut body = packed[0x100..0x100 + PACKED.len()].to_vec();
+    for call in [42, 52] {
+        super::super::encoding::retarget_call(&mut body, call, 0x410600).unwrap();
+    }
+    invalid[0x100..0x114].copy_from_slice(&body[..20]);
+    invalid[0x114..0x118].copy_from_slice(&super::super::encoding::jump(0x410300).unwrap());
+    invalid[0x300..0x300 + body.len() - 20].copy_from_slice(&body[20..]);
+    assert_eq!(observe(&invalid), Err(Error::Unresolved));
 }
 
 #[test]

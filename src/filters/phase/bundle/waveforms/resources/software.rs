@@ -101,3 +101,92 @@ pub fn observe(normal: &[u8]) -> Result<Binding, Error> {
     }
     selected.ok_or(Error::Unresolved)
 }
+
+/// Native producer wiring for runtime tables. Evaluator arithmetic is separate.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Producer {
+    /// Complete producer, including its mode-zero reporting tail.
+    pub program: Range<usize>,
+    /// Startup sequence invoking the producer once for every selected mode.
+    pub initializer: Range<usize>,
+    /// Native evaluator entries for the first and second words of each row.
+    pub evaluators: [u32; 2],
+}
+
+/// Bind runtime writes to the selector's four buffers and startup invocations.
+/// This proves the generation loop and its resource relationships, not the
+/// evaluator arithmetic or equivalence to a different phase convention.
+pub fn observe_producer(normal: &[u8]) -> Result<Producer, Error> {
+    let consumer = observe(normal)?;
+    if consumer
+        .choices
+        .iter()
+        .any(|(_, source)| !matches!(source, Source::Runtime(_)))
+    {
+        return Err(Error::ResourceMismatch);
+    }
+    let regions = crate::image::regions(normal).ok_or(Error::Unresolved)?;
+    let mut found = None;
+    for template in [shapes::GENERATED_LOG, shapes::GENERATED_REPORT] {
+        for at in sites(normal, &regions.stored, template) {
+            let bytes = &normal[at..at + template.len()];
+            let roles = [
+                (Some(1), 82),
+                (Some(bytes[41]), 46),
+                (Some(bytes[37]), 70),
+                (None, 58),
+            ];
+            if roles
+                .iter()
+                .zip(&consumer.choices)
+                .any(|((mode, offset), (selected, source))| {
+                    mode != selected || *source != Source::Runtime(word(bytes, *offset))
+                })
+            {
+                continue;
+            }
+            let buffers = roles.map(|(_, offset)| word(bytes, offset));
+            for (i, left) in buffers.iter().enumerate() {
+                let end = left.checked_add(256).ok_or(Error::ResourceMismatch)?;
+                if buffers[i + 1..]
+                    .iter()
+                    .any(|right| *left < right.saturating_add(256) && *right < end)
+                    || (*left < consumer.pointer.saturating_add(4) && consumer.pointer < end)
+                {
+                    return Err(Error::ResourceMismatch);
+                }
+            }
+            let evaluators = [call(bytes, 97), call(bytes, 123)];
+            if evaluators[0] == evaluators[1] {
+                return Err(Error::ResourceMismatch);
+            }
+            for address in evaluators {
+                table(normal, address, 2)?;
+            }
+            let initializers = sites(normal, &regions.stored, shapes::GENERATED_INITIALIZER)
+                .into_iter()
+                .filter(|start| {
+                    let body = &normal[*start..*start + shapes::GENERATED_INITIALIZER.len()];
+                    body[7] == 1
+                        && body[13] == bytes[37]
+                        && body[19] == bytes[41]
+                        && [3, 9, 15, 21]
+                            .into_iter()
+                            .all(|field| call(body, field) == 0x410000 + at as u32)
+                })
+                .collect::<Vec<_>>();
+            let [start] = initializers.as_slice() else {
+                return Err(Error::Unresolved);
+            };
+            if found.is_some() {
+                return Err(Error::Unresolved);
+            }
+            found = Some(Producer {
+                program: at..at + template.len(),
+                initializer: *start..*start + shapes::GENERATED_INITIALIZER.len(),
+                evaluators,
+            });
+        }
+    }
+    found.ok_or(Error::Unresolved)
+}

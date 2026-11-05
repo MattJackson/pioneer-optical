@@ -5,6 +5,8 @@
 #![cfg(feature = "envelope")]
 use pioneer_optical::filters::phase::{bundle, native};
 use sha2::{Digest, Sha256};
+#[path = "support/phase_loader_cpu.rs"]
+mod phase_loader_cpu;
 
 fn hex(text: &str) -> Vec<u8> {
     (0..text.len())
@@ -80,30 +82,48 @@ fn computed_loader_rewrite_retains_scaling_calls_and_valid_native_control_flow()
         assert!(targets
             .into_iter()
             .all(|target| boundaries.contains(&target)));
+        // Execute emitted address arithmetic, including the added NEG and both
+        // branch arms, instead of duplicating the emitter's scalar formula.
         for i in 0u16..18 {
-            let actual = if direction == bundle::Loader::Descending {
-                i.wrapping_neg()
-                    .wrapping_add(if i < 9 { 0x13b } else { 0x613 })
-            } else {
-                i + if i < 9 { 0x12a } else { 0x602 }
-            };
+            use h8_asm::isa::Reg;
+            let mut cpu = phase_loader_cpu::Cpu::new(i);
+            cpu.run(&new[248..266], (table, &[]));
             let expected = match direction {
-                bundle::Loader::Ascending => {
-                    if i < 9 {
-                        0x12a + i
-                    } else {
-                        0x602 + i
-                    }
-                }
+                bundle::Loader::Ascending => i + if i < 9 { 0x12a } else { 0x602 },
                 _ => {
                     if i < 9 {
-                        0x132 + 9 - i
+                        0x13b - i
                     } else {
                         0x613 - i
                     }
                 }
             };
-            assert_eq!(actual, expected);
+            assert_eq!(cpu.get(Reg::Word(0)), u32::from(expected));
+            for seed in [0u16, 1, 0x7ffe, 0x7fff, 0x8000, 0x8001, 0xfffe, 0xffff] {
+                let mut raw = [0u8; 72];
+                for (j, word) in raw.chunks_exact_mut(2).enumerate() {
+                    word.copy_from_slice(
+                        &seed
+                            .wrapping_add((j as u16).wrapping_mul(7919))
+                            .to_be_bytes(),
+                    );
+                }
+                let plain = bundle::waveforms::plain_coefficients(&raw, before.loader);
+                let mut native = phase_loader_cpu::Cpu::new(i);
+                let mut corrected = phase_loader_cpu::Cpu::new(i);
+                native.run(&old[156..188], (table, &raw));
+                corrected.run(&new[156..186], (table, &plain));
+                assert_eq!(
+                    native.get(Reg::Word(8)),
+                    corrected.get(Reg::Word(8)),
+                    "row {i}, seed {seed:#x}"
+                );
+                // The first (odd-word) channel is unchanged by normalization.
+                assert_eq!(
+                    &raw[i as usize * 4 + 2..i as usize * 4 + 4],
+                    &plain[i as usize * 4 + 2..i as usize * 4 + 4]
+                );
+            }
         }
     }
 }
@@ -293,6 +313,19 @@ fn native_sparse_software_dispatch_distinguishes_image_choices_from_runtime_prod
                     Source::Image(at..at + 256)
                 }
             );
+        }
+        if runtime {
+            let producer = software::observe_producer(&image).unwrap();
+            assert!(matches!(producer.program.len(), 274 | 328));
+            let mut broken = image.clone();
+            broken[producer.program.start + 125] ^= 1;
+            assert!(software::observe_producer(&broken).is_err());
+            let mut broken = image.clone();
+            broken[producer.initializer.start + 13] ^= 1;
+            assert!(software::observe_producer(&broken).is_err());
+            let mut broken = image.clone();
+            broken[producer.program.start + 46] ^= 1;
+            assert!(software::observe_producer(&broken).is_err());
         }
         let mut mismatch = image.clone();
         let store = binding.selector.end - 3;

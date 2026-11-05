@@ -430,6 +430,8 @@ pub fn transplant_plain(
 /// Transplant a complete OEM computed loader with target helper addresses.
 /// The native fetch convention and arithmetic are copied byte-for-byte except
 /// declared address operands. The caller owns the unchanged-format table data.
+/// DSP writer/readback bodies are verified. Arithmetic and calibration helper
+/// semantics remain a separate prerequisite for whole-mechanism composition.
 /// This stage cannot synthesize a loader direction absent from the donor.
 pub fn transplant_computed(normal: &[u8], donor: &[u8], table: u32) -> Result<Vec<u8>, Error> {
     let (before, original) = bind(normal)?;
@@ -442,6 +444,8 @@ pub fn transplant_computed(normal: &[u8], donor: &[u8], table: u32) -> Result<Ve
     {
         return Err(Error::ComputedUnsupported);
     }
+    readback::observe(normal, before.readback, before.writer)?;
+    readback::observe(donor, source.readback, source.writer)?;
     let start = table.checked_sub(0x410000).ok_or(Error::InvalidSpace)? as usize;
     let regions = crate::image::regions(normal).ok_or(Error::Unresolved)?;
     if table & 1 != 0

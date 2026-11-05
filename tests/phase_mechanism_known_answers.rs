@@ -292,6 +292,18 @@ fn computed_loader_transplant_retains_oem_instructions_and_target_calls() {
         loader::transplant_computed(&original, &donor, table).unwrap(),
         original
     );
+    for address in [before.writer, before.readback] {
+        let mut broken = original.clone();
+        broken[(address - 0x410000) as usize] ^= 2;
+        assert_eq!(
+            loader::transplant_computed(&broken, &original, table),
+            Err(loader::Error::ResourceMismatch)
+        );
+        assert_eq!(
+            loader::transplant_computed(&original, &broken, table),
+            Err(loader::Error::ResourceMismatch)
+        );
+    }
     for direction in [bundle::Loader::Ascending, bundle::Loader::Descending] {
         assert_eq!(
             loader::rewrite(&original, direction, [table; 2], None),
@@ -1475,4 +1487,44 @@ fn native_oem_loader_binds_readback_writer_shadow_and_clear_helper() {
             }
         }
     }
+}
+
+#[test]
+#[ignore = "requires PIONEER_HOARD; computed-loader DSP helper coverage"]
+fn computed_loader_dsp_contracts_cover_held_native_images() {
+    use bundle::waveforms::loader::{self, Table};
+    let root = std::path::PathBuf::from(std::env::var("PIONEER_HOARD").unwrap());
+    let (packages, _) = page::hoard_packages(&root).unwrap();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut checked = 0;
+    for package in packages {
+        if !seen.insert(package.component.clone()) {
+            continue;
+        }
+        let Ok(decoded) = page::decode(&root, &package) else {
+            continue;
+        };
+        let image = &decoded.normal.image;
+        let Ok(binding) = loader::observe(image) else {
+            continue;
+        };
+        if !binding.computed {
+            continue;
+        }
+        let Some([Table::Literal(table), _]) = binding.tables else {
+            panic!("computed table")
+        };
+        loader::readback::observe(image, binding.readback, binding.writer)
+            .unwrap_or_else(|e| panic!("{} {}: {e:?}", package.hardware, package.component));
+        assert_eq!(
+            loader::transplant_computed(image, image, table).unwrap(),
+            *image
+        );
+        checked += 1;
+    }
+    println!("{checked} computed-loader images retain native DSP helper contracts");
+    assert!(
+        checked >= 76,
+        "computed-loader coverage unexpectedly shrank"
+    );
 }

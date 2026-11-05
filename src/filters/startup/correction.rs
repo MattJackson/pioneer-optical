@@ -160,6 +160,11 @@ pub(super) fn plan(transition: &Transition<'_, '_>) -> Result<Option<Box<dyn Ope
     if transition.installed.sat.is_none() {
         return Err(Error::UnresolvedIdentity);
     }
+    if Gate::bind(target.normal).is_err() {
+        if let Some(operation) = PreservationOperation::bind(transition) {
+            return Ok(Some(Box::new(operation)));
+        }
+    }
     // Exact component preservation proves no new startup requirement even if
     // this architecture's comparison is not recognized. This is not an absence
     // proof and supplies no guessed live word.
@@ -207,6 +212,99 @@ pub(super) fn plan(transition: &Transition<'_, '_>) -> Result<Option<Box<dyn Ope
         gate,
         required,
     })))
+}
+
+/// A native requirement-preservation certificate participates in the same
+/// prepare/verify transaction as a comparison edit, including after phase edits.
+#[derive(Debug)]
+struct PreservationOperation {
+    hardware: String,
+    normal: Vec<u8>,
+    kernel: Option<Vec<u8>>,
+    certificate: startup::coverage::sinks::Certificate,
+}
+impl PreservationOperation {
+    fn bind(transition: &Transition<'_, '_>) -> Option<Self> {
+        let source = transition.installed.firmware;
+        let target = transition.target.firmware;
+        let Observation::Known(installed_reader) = layout::discover_h8_reader(source.normal, None)
+        else {
+            return None;
+        };
+        let Observation::Known(target_reader) = layout::discover_h8_reader(target.normal, None)
+        else {
+            return None;
+        };
+        if installed_reader.component != H8ReaderComponent::Normal
+            || target_reader.component != H8ReaderComponent::Normal
+            || installed_reader.layout != target_reader.layout
+        {
+            return None;
+        }
+        let installed_certificate = startup::coverage::sinks::discover(source.normal)?;
+        let certificate = startup::coverage::sinks::discover(target.normal)?;
+        if source
+            .kernel
+            .is_some_and(|kernel| !installed_certificate.accepts_kernel(kernel))
+            || target
+                .kernel
+                .is_some_and(|kernel| !certificate.accepts_kernel(kernel))
+        {
+            return None;
+        }
+        Some(Self {
+            hardware: target.hardware.into(),
+            normal: target.normal.to_vec(),
+            kernel: target.kernel.map(<[u8]>::to_vec),
+            certificate,
+        })
+    }
+    fn bound(&self, context: &Preparation<'_>) -> Result<(), Error> {
+        if context.target.hardware != self.hardware
+            || context.target.normal != self.normal
+            || context.target.kernel != self.kernel.as_deref()
+        {
+            return Err(Error::ComponentMismatch);
+        }
+        #[cfg(feature = "envelope")]
+        {
+            if context.normal.is_some_and(|image| {
+                image.image != self.normal
+                    || image.info().kind != crate::ComponentKind::Normal
+                    || image.info().hardware_version != self.hardware
+            }) || context.kernel.is_some_and(|image| {
+                Some(image.image.as_slice()) != self.kernel.as_deref()
+                    || image.info().kind != crate::ComponentKind::Kernel
+                    || image.info().hardware_version != self.hardware
+            }) {
+                return Err(Error::ComponentMismatch);
+            }
+        }
+        Ok(())
+    }
+}
+impl Operation for PreservationOperation {
+    fn filter_id(&self) -> &'static str {
+        ID
+    }
+    fn prepare(&self, context: &Preparation<'_>) -> Result<Option<Vec<u8>>, Error> {
+        self.verify(context, &self.normal)?;
+        Ok(None)
+    }
+    fn verify(&self, context: &Preparation<'_>, normal: &[u8]) -> Result<(), Error> {
+        self.bound(context)?;
+        if normal.len() != self.normal.len()
+            || self
+                .certificate
+                .protected
+                .iter()
+                .any(|span| normal.get(span.clone()) != self.normal.get(span.clone()))
+            || startup::coverage::sinks::discover(normal).as_ref() != Some(&self.certificate)
+        {
+            return Err(Error::VerificationFailed);
+        }
+        Ok(())
+    }
 }
 
 struct StartupOperation {

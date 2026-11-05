@@ -29,7 +29,7 @@ static RULES: super::Rules = super::Rules {
     policies: &[
         super::Policy {
             domains: &[super::identity::Domain::Sat1, super::identity::Domain::H8Sat],
-            text: "A differing native H8 comparison is corrected only with both complete getter bindings. Missing evidence never selects FFFF. An unresolved installed comparison can admit an unchanged bound target only with equal Normal-owned reader layouts and a read-only target-word prerequisite. Exact component preservation needs no correction; other unresolved transitions refuse. A missing Kernel-resident getter remains unresolved and cannot use the read-only fallback. Persistent banks and independent hardware checks remain required.",
+            text: "A differing native H8 comparison is corrected only with both complete getter bindings. Missing evidence never selects FFFF. An unresolved installed comparison can admit an unchanged bound target only with equal Normal-owned reader layouts and a read-only target-word prerequisite. Bound native loader-flag inventories preserve unchanged startup requirements through the shared correction verifier, while host command, image checksum, generation marker and persistent-bank predicates retain their independent owners. Exact component preservation needs no correction; other unresolved transitions refuse. A missing Kernel-resident getter remains unresolved and cannot use the read-only fallback. Persistent banks and independent hardware checks remain required.",
         },
         super::Policy {
             domains: &[super::identity::Domain::Sat1, super::identity::Domain::H8Sat],

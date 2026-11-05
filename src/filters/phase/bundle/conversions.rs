@@ -69,18 +69,23 @@ fn calls(template: Template) -> Result<Vec<usize>, Error> {
     }
     Ok(found)
 }
-fn emit(normal: &[u8], from: &Program, desired: u8) -> Result<Vec<u8>, Error> {
+fn emit(normal: &[u8], from: &Program, donor: &[u8], desired: &Program) -> Result<Vec<u8>, Error> {
     let before = from.templates[from.variant as usize];
-    let after = from
-        .templates
-        .get(desired as usize)
-        .ok_or(Error::InvalidProgram)?;
+    if from.element != desired.element {
+        return Err(Error::InvalidProgram);
+    }
+    let after = desired.templates[desired.variant as usize];
     let old_calls = calls(before)?;
     let new_calls = calls(after)?;
     if old_calls.len() != new_calls.len() {
         return Err(Error::InvalidProgram);
     }
-    let mut bytes: Vec<_> = after.iter().map(|b| b.unwrap_or(0)).collect();
+    // Transplant the actual recognized OEM body. Templates establish its
+    // semantics; they are not a source of newly assembled replacement code.
+    let mut bytes = donor
+        .get(desired.at..desired.at + after.len())
+        .ok_or(Error::InvalidProgram)?
+        .to_vec();
     for (old, new) in old_calls.into_iter().zip(new_calls) {
         let operand = normal
             .get(from.at + old..from.at + old + 3)
@@ -97,7 +102,7 @@ fn overlaps(a: &Range<usize>, b: &Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
 }
 
-/// Carry installed base/offset/step conversion conventions into a copy of target.
+/// Transplant installed base/offset/step routines, retaining target helper calls.
 ///
 /// A growing program requires its corresponding explicit reservation. The
 /// reservation's complete range is checked and zero-padded; the original entry
@@ -124,7 +129,7 @@ pub fn rewrite(
         if program.variant == desired.variant {
             continue;
         }
-        let bytes = emit(target, program, desired.variant)?;
+        let bytes = emit(target, program, installed, desired)?;
         let original = program.at..program.at + program.templates[program.variant as usize].len();
         if bytes.len() <= original.len() {
             let mut padded = bytes;
@@ -287,6 +292,23 @@ mod tests {
                             changed[p.at + call..p.at + call + 3],
                             (0x410600 + i as u32 * 2).to_be_bytes()[1..]
                         );
+                    }
+                }
+                let donor_programs = programs(&donor).unwrap();
+                for (p, source) in actual.iter().zip(&donor_programs) {
+                    let template = source.templates[source.variant as usize];
+                    let relocations = calls(template).unwrap();
+                    for offset in 0..template.len() {
+                        if !relocations
+                            .iter()
+                            .any(|at| (*at..*at + 3).contains(&offset))
+                        {
+                            assert_eq!(
+                                changed[p.at + offset],
+                                donor[source.at + offset],
+                                "non-relocation OEM byte {offset}, {a:?} -> {b:?}"
+                            );
+                        }
                     }
                 }
                 // The checksum/header bytes belong to the shared composer.

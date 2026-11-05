@@ -204,8 +204,8 @@ pub fn observe(normal: &[u8]) -> Result<Binding, Error> {
 
 /// Emit the plain paired-word loader using target's own getter/writer/reader.
 /// The caller supplies already-normalized image-resident tables in mode order
-/// and separately owns their data. Computed programs retain their native scale
-/// and calibration arithmetic and require one shared table. No table, checksum,
+/// and separately owns their data. Computed programs require an explicit native
+/// donor via `transplant_computed`. No table, checksum,
 /// or persistent setting is written by this stage.
 pub fn rewrite(
     normal: &[u8],
@@ -215,7 +215,7 @@ pub fn rewrite(
 ) -> Result<Vec<u8>, Error> {
     let before = observe(normal)?;
     if before.computed {
-        return rewrite_computed(normal, direction, tables);
+        return Err(Error::ComputedUnsupported);
     }
     let shape = shapes::SHAPES
         .iter()
@@ -301,20 +301,144 @@ pub fn rewrite(
     Ok(changed)
 }
 
-fn rewrite_computed(normal: &[u8], direction: Loader, tables: [u32; 2]) -> Result<Vec<u8>, Error> {
-    let (before, original) = bind(normal)?;
-    // The native computed program has one shared coefficient table. Different
-    // per-mode tables require a separate, proved selector transformation.
-    if tables[0] != tables[1] || direction == Loader::AscendingNegated17 {
+/// Transplant a recognized noncomputed OEM loader without changing its fetch
+/// algorithm. Only declared helper/table address operands are relocated. Pointer
+/// slots retain pointer semantics; their initialization and live prerequisites
+/// belong to the caller. Table bytes and image integrity are not changed here.
+pub fn transplant_plain(
+    normal: &[u8],
+    donor: &[u8],
+    tables: [Table; 2],
+    reservation: Option<Range<usize>>,
+) -> Result<Vec<u8>, Error> {
+    let before = observe(normal)?;
+    let (source, shape) = bind(donor)?;
+    if before.computed || source.computed {
         return Err(Error::ComputedUnsupported);
     }
-    let shape = shapes::SHAPES
-        .iter()
-        .find(|shape| shape.computed && shape.loader == direction)
-        .ok_or(Error::ComputedUnsupported)?;
-    let start = tables[0].checked_sub(0x410000).ok_or(Error::InvalidSpace)? as usize;
+    let source_tables = source.tables.ok_or(Error::ResourceMismatch)?;
     let regions = crate::image::regions(normal).ok_or(Error::Unresolved)?;
-    if tables[0] & 1 != 0
+    let contains = |span: &Range<usize>| {
+        regions.stored.iter().any(|r| {
+            let at = r.as_ptr() as usize - normal.as_ptr() as usize;
+            span.start >= at && span.end <= at + r.len()
+        })
+    };
+    for (old, new) in source_tables.into_iter().zip(tables) {
+        match (old, new) {
+            (Table::Literal(_), Table::Literal(address)) => {
+                let at = address.checked_sub(0x410000).ok_or(Error::InvalidSpace)? as usize;
+                if address & 1 != 0 || !contains(&(at..at + 72)) {
+                    return Err(Error::InvalidSpace);
+                }
+            }
+            (Table::Pointer(_), Table::Pointer(address)) if address != 0 && address & 3 == 0 => {}
+            _ => return Err(Error::ResourceMismatch),
+        }
+    }
+    if source_tables[0] == source_tables[1] && tables[0] != tables[1] {
+        return Err(Error::ResourceMismatch);
+    }
+    let mut code = donor[source.program.clone()].to_vec();
+    for field in shape.fields {
+        let address = if shape.tables.contains(&field.at) {
+            let old = value(donor, source.program.start, shape, field.at)?;
+            let role = source_tables
+                .iter()
+                .position(|table| match table {
+                    Table::Literal(address) | Table::Pointer(address) => *address == old,
+                })
+                .ok_or(Error::ResourceMismatch)?;
+            match tables[role] {
+                Table::Literal(address) | Table::Pointer(address) => address,
+            }
+        } else if shape.coefficient.contains(&field.at) {
+            before.coefficient_getter
+        } else if field.at == shape.readback {
+            before.readback
+        } else if value(donor, source.program.start, shape, field.at)? == source.writer {
+            before.writer
+        } else {
+            return Err(Error::ResourceMismatch);
+        };
+        code[field.at..field.at + field.width]
+            .copy_from_slice(&address.to_be_bytes()[4 - field.width..]);
+    }
+    let destination = if code.len() <= before.program.len() {
+        before.program.clone()
+    } else {
+        reservation.clone().ok_or(Error::SpaceRequired)?
+    };
+    for table in tables {
+        if let Table::Literal(address) = table {
+            let at = (address - 0x410000) as usize;
+            if destination.start < at + 72 && at < destination.end {
+                return Err(Error::InvalidSpace);
+            }
+        }
+    }
+    let mut changed = normal.to_vec();
+    if code.len() <= before.program.len() {
+        changed[before.program.clone()].fill(0);
+        changed[before.program.start..before.program.start + code.len()].copy_from_slice(&code);
+    } else {
+        let space = reservation.ok_or(Error::SpaceRequired)?;
+        if space.start & 1 != 0
+            || space.end & 1 != 0
+            || space.start > space.end
+            || space.len() < code.len()
+            || !contains(&space)
+            || (space.start < before.program.end && before.program.start < space.end)
+            || !normal
+                .get(space.clone())
+                .is_some_and(|bytes| bytes.iter().all(|b| *b == 0xff))
+        {
+            return Err(Error::InvalidSpace);
+        }
+        let address = 0x410000usize
+            .checked_add(space.start)
+            .filter(|a| *a <= 0xffffff)
+            .ok_or(Error::InvalidSpace)? as u32;
+        changed[before.program.start..before.program.start + 4].copy_from_slice(&[
+            0x5a,
+            address.to_be_bytes()[1],
+            address.to_be_bytes()[2],
+            address.to_be_bytes()[3],
+        ]);
+        changed[space.clone()].fill(0);
+        changed[space.start..space.start + code.len()].copy_from_slice(&code);
+    }
+    let after = observe(&changed)?;
+    if after.computed
+        || after.loader != source.loader
+        || after.tables != Some(tables)
+        || after.coefficient_getter != before.coefficient_getter
+        || after.writer != before.writer
+        || after.readback != before.readback
+    {
+        return Err(Error::VerificationFailed);
+    }
+    Ok(changed)
+}
+
+/// Transplant a complete OEM computed loader with target helper addresses.
+/// The native fetch convention and arithmetic are copied byte-for-byte except
+/// declared address operands. The caller owns the unchanged-format table data.
+/// This stage cannot synthesize a loader direction absent from the donor.
+pub fn transplant_computed(normal: &[u8], donor: &[u8], table: u32) -> Result<Vec<u8>, Error> {
+    let (before, original) = bind(normal)?;
+    let (source, shape) = bind(donor)?;
+    if !before.computed
+        || !source.computed
+        || source.loader != Loader::AscendingNegated17
+        || before.loader != source.loader
+        || original.bytes != shape.bytes
+    {
+        return Err(Error::ComputedUnsupported);
+    }
+    let start = table.checked_sub(0x410000).ok_or(Error::InvalidSpace)? as usize;
+    let regions = crate::image::regions(normal).ok_or(Error::Unresolved)?;
+    if table & 1 != 0
         || !regions.stored.iter().any(|region| {
             let at = region.as_ptr() as usize - normal.as_ptr() as usize;
             start >= at
@@ -332,11 +456,11 @@ fn rewrite_computed(normal: &[u8], direction: Loader, tables: [u32; 2]) -> Resul
         .map(|f| value(normal, before.program.start, original, f.at))
         .collect::<Result<_, _>>()?;
     let mut calls = calls.into_iter();
-    let mut code: Vec<_> = shape.bytes.iter().map(|byte| byte.unwrap_or(0)).collect();
+    let mut code = donor[source.program.clone()].to_vec();
     for field in shape.fields {
         let address = match field.kind {
             FieldKind::Call => calls.next().ok_or(Error::ResourceMismatch)?,
-            FieldKind::Data => tables[0],
+            FieldKind::Data => table,
             FieldKind::Literal if field.at == shape.writer => before.writer,
             _ => return Err(Error::ResourceMismatch),
         };
@@ -350,9 +474,9 @@ fn rewrite_computed(normal: &[u8], direction: Loader, tables: [u32; 2]) -> Resul
     changed[before.program.clone()].copy_from_slice(&code);
     let after = observe(&changed)?;
     if !after.computed
-        || after.loader != direction
+        || after.loader != source.loader
         || after.program != before.program
-        || after.tables != Some(tables.map(Table::Literal))
+        || after.tables != Some([Table::Literal(table); 2])
         || after.coefficient_getter != before.coefficient_getter
         || after.writer != before.writer
         || after.readback != before.readback

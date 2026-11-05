@@ -5,8 +5,6 @@
 #![cfg(feature = "envelope")]
 use pioneer_optical::filters::phase::{bundle, native};
 use sha2::{Digest, Sha256};
-#[path = "support/phase_loader_cpu.rs"]
-mod phase_loader_cpu;
 
 fn hex(text: &str) -> Vec<u8> {
     (0..text.len())
@@ -34,97 +32,90 @@ fn native_spans(hash: &str) -> Vec<u8> {
 }
 
 #[test]
-fn computed_loader_rewrite_retains_scaling_calls_and_valid_native_control_flow() {
+fn native_plain_loader_transplants_oem_bytes_with_only_address_relocations() {
     use bundle::waveforms::loader::{self, Table};
-    use h8_asm::{
-        isa::{decode_insn, Ea, Operand},
-        Mode, Target,
-    };
+    let images = [
+        native_spans("3711cd5cdde5b5e7f288ccd7bc7fe1100eb6de5e40f3d0ffdcc528fb93ebeb46"),
+        native_spans("c93736b1fc66c7ada2d586044bf5d8a50a622b65e2f1fe6e74ad212f254adc1b"),
+    ];
+    for (target, donor) in [(&images[0], &images[1]), (&images[1], &images[0])] {
+        let before = loader::observe(target).unwrap();
+        let source = loader::observe(donor).unwrap();
+        let changed =
+            loader::transplant_plain(target, donor, before.tables.unwrap(), Some(0x600..0x700))
+                .unwrap();
+        let after = loader::observe(&changed).unwrap();
+        assert_eq!(after.loader, source.loader);
+        let mut expected = donor[source.program.clone()].to_vec();
+        let mut relocations = vec![
+            (source.coefficient_getter, before.coefficient_getter, 3),
+            (source.writer, before.writer, 4),
+            (source.readback, before.readback, 3),
+        ];
+        for (from, to) in source
+            .tables
+            .unwrap()
+            .into_iter()
+            .zip(before.tables.unwrap())
+        {
+            let (Table::Literal(from), Table::Literal(to)) = (from, to) else {
+                panic!("literal SAT9 tables");
+            };
+            relocations.push((from, to, 4));
+        }
+        // These held native bodies contain only the listed address operands.
+        // Match against the immutable donor so relocation values cannot cascade.
+        let original = expected.clone();
+        for (from, to, width) in relocations {
+            let from = from.to_be_bytes();
+            let to = to.to_be_bytes();
+            let mut count = 0;
+            for at in 0..=original.len() - width {
+                if original[at..at + width] == from[4 - width..] {
+                    expected[at..at + width].copy_from_slice(&to[4 - width..]);
+                    count += 1;
+                }
+            }
+            assert!(count > 0);
+        }
+        assert_eq!(&changed[after.program.clone()], &expected);
+        for (at, (old, new)) in target.iter().zip(&changed).enumerate() {
+            if old != new {
+                assert!(before.program.contains(&at) || (0x600..0x700).contains(&at));
+            }
+        }
+        assert_eq!(&changed[..24], &target[..24]);
+    }
+}
+
+#[test]
+fn computed_loader_transplant_retains_oem_instructions_and_target_calls() {
+    use bundle::waveforms::loader::{self, Table};
     let original = native_spans("84b76c71728dd9c27d27c3cb974f062b55c59a7a26145c858dc45cc1a79db66a");
     let before = loader::observe(&original).unwrap();
     let Some([Table::Literal(table), _]) = before.tables else {
         panic!("computed table");
     };
+    assert_eq!(
+        loader::transplant_computed(&original, &original, table).unwrap(),
+        original
+    );
+    // Relocate the donor's multiply helper consistently, proving its addresses
+    // are not transplanted into the target. No algorithm bytes are regenerated.
+    let mut donor = original.clone();
+    for field in [49, 95, 199] {
+        donor[before.program.start + field + 2] ^= 2;
+    }
+    loader::observe(&donor).unwrap();
+    assert_eq!(
+        loader::transplant_computed(&original, &donor, table).unwrap(),
+        original
+    );
     for direction in [bundle::Loader::Ascending, bundle::Loader::Descending] {
-        let changed = loader::rewrite(&original, direction, [table; 2], None).unwrap();
-        let after = loader::observe(&changed).unwrap();
-        assert!(after.computed);
-        assert_eq!(after.loader, direction);
-        let old = &original[before.program.clone()];
-        let new = &changed[before.program.clone()];
-        // Native scale arithmetic, clipping and calibration calls are retained
-        // exactly. Only fetch representation and DSP destination order change.
-        assert_eq!(&new[..156], &old[..156]);
-        assert_eq!(&new[186..250], &old[188..252]);
-        assert_eq!(&new[266..], &old[266..]);
         assert_eq!(
-            &changed[..before.program.start],
-            &original[..before.program.start]
+            loader::rewrite(&original, direction, [table; 2], None),
+            Err(loader::Error::ComputedUnsupported)
         );
-        assert_eq!(
-            &changed[before.program.end..],
-            &original[before.program.end..]
-        );
-        let mut boundaries = std::collections::BTreeSet::new();
-        let mut targets = Vec::new();
-        let mut pc = 0;
-        while pc < new.len() {
-            boundaries.insert(pc);
-            let decoded = decode_insn(&new[pc..], Target::H8S2600, Mode::Advanced).unwrap();
-            for operand in decoded.insn.operands {
-                if let Operand::Address(Ea::PcRelative { value, .. }) = operand {
-                    targets.push((pc + decoded.len).wrapping_add_signed(value as isize));
-                }
-            }
-            pc += decoded.len;
-        }
-        assert_eq!(pc, new.len());
-        assert!(targets
-            .into_iter()
-            .all(|target| boundaries.contains(&target)));
-        // Execute emitted address arithmetic, including the added NEG and both
-        // branch arms, instead of duplicating the emitter's scalar formula.
-        for i in 0u16..18 {
-            use h8_asm::isa::Reg;
-            let mut cpu = phase_loader_cpu::Cpu::new(i);
-            cpu.run(&new[248..266], (table, &[]));
-            let expected = match direction {
-                bundle::Loader::Ascending => i + if i < 9 { 0x12a } else { 0x602 },
-                _ => {
-                    if i < 9 {
-                        0x13b - i
-                    } else {
-                        0x613 - i
-                    }
-                }
-            };
-            assert_eq!(cpu.get(Reg::Word(0)), u32::from(expected));
-            for seed in [0u16, 1, 0x7ffe, 0x7fff, 0x8000, 0x8001, 0xfffe, 0xffff] {
-                let mut raw = [0u8; 72];
-                for (j, word) in raw.chunks_exact_mut(2).enumerate() {
-                    word.copy_from_slice(
-                        &seed
-                            .wrapping_add((j as u16).wrapping_mul(7919))
-                            .to_be_bytes(),
-                    );
-                }
-                let plain = bundle::waveforms::plain_coefficients(&raw, before.loader);
-                let mut native = phase_loader_cpu::Cpu::new(i);
-                let mut corrected = phase_loader_cpu::Cpu::new(i);
-                native.run(&old[156..188], (table, &raw));
-                corrected.run(&new[156..186], (table, &plain));
-                assert_eq!(
-                    native.get(Reg::Word(8)),
-                    corrected.get(Reg::Word(8)),
-                    "row {i}, seed {seed:#x}"
-                );
-                // The first (odd-word) channel is unchanged by normalization.
-                assert_eq!(
-                    &raw[i as usize * 4 + 2..i as usize * 4 + 4],
-                    &plain[i as usize * 4 + 2..i as usize * 4 + 4]
-                );
-            }
-        }
     }
 }
 
@@ -977,4 +968,78 @@ fn export_reference_normals_from_hoard() {
         needed.is_empty(),
         "Missing decoded reference images: {needed:?}"
     );
+}
+
+#[test]
+#[ignore = "requires PIONEER_HOARD; targeted generated-waveform stage coverage"]
+fn generated_basis_stage_covers_every_held_runtime_producer() {
+    use bundle::waveforms::resources::{evaluators, software};
+    let root = std::path::PathBuf::from(std::env::var("PIONEER_HOARD").unwrap());
+    let (packages, _) = page::hoard_packages(&root).unwrap();
+    let donors = [
+        native_spans("8037cdb3ae67e04a82aa3e9b7a0f52202e17f1e39d1f50b894158d9be0cec898"),
+        native_spans("99ba77ae1cedc967096c770b21c066d04a5163f1c5a4aa82f27584c6faced796"),
+    ];
+    let bases: Vec<_> = donors
+        .iter()
+        .map(|image| {
+            let binding = evaluators::observe(image).unwrap();
+            image[binding.basis].to_vec()
+        })
+        .collect();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut tested = 0;
+    let mut parameters = 0;
+    for package in packages {
+        if !(package.hardware.starts_with("SAT 8") || package.hardware.starts_with("SAT 9"))
+            || !seen.insert(package.component.clone())
+        {
+            continue;
+        }
+        let decoded = page::decode(&root, &package).unwrap();
+        let target = &decoded.normal.image;
+        let Ok(consumer) = software::observe(target) else {
+            continue;
+        };
+        if !consumer
+            .choices
+            .iter()
+            .any(|(_, source)| matches!(source, software::Source::Runtime(_)))
+        {
+            continue;
+        }
+        let binding = evaluators::observe(target)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", package.component));
+        let calibration = evaluators::calibration(target, &binding).unwrap();
+        parameters += usize::from(matches!(
+            calibration.1,
+            evaluators::Calibration::Parameters { .. }
+        ));
+        for (donor, basis) in donors.iter().zip(&bases) {
+            let changed = evaluators::rewrite_basis(target, donor)
+                .unwrap_or_else(|error| panic!("{}: {error:?}", package.component));
+            assert_eq!(&changed[binding.basis.clone()], basis);
+            assert_eq!(
+                &changed[..binding.basis.start],
+                &target[..binding.basis.start]
+            );
+            assert_eq!(&changed[binding.basis.end..], &target[binding.basis.end..]);
+            assert_eq!(
+                evaluators::calibration(&changed, &binding).unwrap(),
+                calibration
+            );
+            let restored = evaluators::rewrite_basis(&changed, target).unwrap();
+            assert_eq!(restored, *target);
+        }
+        tested += 1;
+    }
+    println!(
+        "generated basis stage: {tested} images, {parameters} parameter-backed, {} image-constant",
+        tested - parameters
+    );
+    assert!(
+        tested >= 162,
+        "held runtime-table coverage unexpectedly shrank"
+    );
+    assert!(parameters >= 68);
 }

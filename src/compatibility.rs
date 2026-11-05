@@ -26,6 +26,7 @@ pub(crate) struct PreparedCorrection {
     pub id: String,
     pub image: Vec<u8>,
     pub corrections: Vec<Correction>,
+    pub required_words: Vec<crate::filters::prerequisites::OwnedWord>,
 }
 
 #[cfg(feature = "envelope")]
@@ -33,6 +34,7 @@ pub(crate) struct PreparedCorrection {
 pub(crate) struct CorrectionRequirements {
     pub id: String,
     pub corrections: Vec<Correction>,
+    pub required_words: Vec<crate::filters::prerequisites::OwnedWord>,
 }
 
 #[cfg(feature = "envelope")]
@@ -41,17 +43,23 @@ impl From<PreparedCorrection> for CorrectionRequirements {
         Self {
             id: a.id,
             corrections: a.corrections,
+            required_words: a.required_words,
         }
     }
 }
 
 #[cfg(feature = "envelope")]
 impl PreparedCorrection {
-    pub(crate) fn native(image: Vec<u8>, corrections: &[Correction]) -> Self {
+    pub(crate) fn native(
+        image: Vec<u8>,
+        corrections: &[Correction],
+        required_words: Vec<crate::filters::prerequisites::OwnedWord>,
+    ) -> Self {
         Self {
             id: "pioneer.native-correction.v1".into(),
             image,
             corrections: corrections.to_vec(),
+            required_words,
         }
     }
 }

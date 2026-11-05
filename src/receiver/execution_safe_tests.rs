@@ -47,6 +47,8 @@ struct State {
     stage_normals: Vec<Vec<u8>>,
     kernels: Vec<Vec<u8>>,
     parameter: u16,
+    prerequisite_reads: usize,
+    fail_prerequisite_read: bool,
     parameter_writes: Vec<u16>,
     entries: usize,
     finishes: usize,
@@ -160,7 +162,13 @@ impl Transport for Port {
                 if command[0] == 0x3c && s.finishes > 0 {
                     s.readback_reads += 1;
                 }
-                if command == cdb::read_parameter_word(0x9f).unwrap() {
+                if command == cdb::read_parameter_word(0x28f).unwrap() {
+                    s.prerequisite_reads += 1;
+                    if s.fail_prerequisite_read {
+                        return Err("prerequisite read failed");
+                    }
+                    bytes.copy_from_slice(&s.parameter.to_be_bytes());
+                } else if command == cdb::read_parameter_word(0x9f).unwrap() {
                     bytes.copy_from_slice(&s.parameter.to_be_bytes());
                 } else if command[0] == 0x12 || command == cdb::vendor_identity() {
                     let identity = if s.finishes == 0 {
@@ -1484,4 +1492,156 @@ fn explicit_crossflash_all_firmware_write_failures_stop_without_retry() {
         assert_eq!(state.borrow().writes, fail, "unexpected retry at {fail}");
         assert_eq!(state.borrow().parameter_writes, [0xffff]);
     }
+}
+
+#[test]
+fn final_filter_requirement_is_checked_before_any_bridge_write() {
+    use crate::filters::prerequisites::{OwnedWord, Word};
+    for (actual, read_failure) in [(0, false), (1, true), (1, false)] {
+        let (plan, state) = setup(true);
+        let mut stages = plan.stages().to_vec();
+        assert!(stages.len() > 1);
+        let last = stages.last_mut().unwrap();
+        last.settings = last.settings.clone().with_correction(Some(
+            crate::compatibility::PreparedCorrection::native(
+                last.normal.image.clone(),
+                &[],
+                vec![OwnedWord {
+                    filter: "phase",
+                    word: Word {
+                        parameter: 0x28f,
+                        value: 1,
+                    },
+                }],
+            ),
+        ));
+        state.borrow_mut().parameter = actual;
+        state.borrow_mut().fail_prerequisite_read = read_failure;
+        let result = execute_stages(
+            &stages,
+            FlashTransport {
+                reads: &mut Port(state.clone()),
+                writes: &mut Port(state.clone()),
+            },
+            &mut Clock::default(),
+            ExecutionMode::Flash,
+        );
+        let s = state.borrow();
+        assert_eq!(s.prerequisite_reads, 1);
+        if actual != 1 || read_failure {
+            let error = result.unwrap_err();
+            assert!(matches!(error, ExecutionError::BeforeWrite(_)));
+            assert!(!error.write_started());
+            assert_eq!(s.writes, 0);
+            assert_eq!(s.entries, 0);
+            assert!(s.parameter_writes.is_empty());
+        } else {
+            assert!(result.is_ok(), "{result:?}");
+        }
+    }
+}
+
+#[test]
+fn read_only_requirement_cannot_be_overwritten_by_settings() {
+    use crate::filters::prerequisites::{OwnedWord, Word};
+    let (plan, state) = setup(true);
+    let mut stages = plan.stages().to_vec();
+    let last = stages.last_mut().unwrap();
+    last.settings = last.settings.clone().with_correction(Some(
+        crate::compatibility::PreparedCorrection::native(
+            last.normal.image.clone(),
+            &[],
+            vec![OwnedWord {
+                filter: "startup",
+                word: Word {
+                    parameter: 0x9f,
+                    value: 1,
+                },
+            }],
+        ),
+    ));
+    let error = execute_stages(
+        &stages,
+        FlashTransport {
+            reads: &mut Port(state.clone()),
+            writes: &mut Port(state.clone()),
+        },
+        &mut Clock::default(),
+        ExecutionMode::Flash,
+    )
+    .unwrap_err();
+    assert!(!error.write_started());
+    assert_eq!(state.borrow().writes, 0);
+    assert_eq!(state.borrow().descriptor_reads, 0);
+}
+
+#[test]
+fn conflicting_stage_requirements_refuse_before_device_io() {
+    use crate::filters::prerequisites::{OwnedWord, Word};
+    let (plan, state) = setup(true);
+    let mut stages = plan.stages().to_vec();
+    for (index, stage) in stages.iter_mut().enumerate() {
+        stage.settings = stage.settings.clone().with_correction(Some(
+            crate::compatibility::PreparedCorrection::native(
+                stage.normal.image.clone(),
+                &[],
+                vec![OwnedWord {
+                    filter: "phase",
+                    word: Word {
+                        parameter: 0x28f,
+                        value: index as u16,
+                    },
+                }],
+            ),
+        ));
+    }
+    let error = execute_stages(
+        &stages,
+        FlashTransport {
+            reads: &mut Port(state.clone()),
+            writes: &mut Port(state.clone()),
+        },
+        &mut Clock::default(),
+        ExecutionMode::Flash,
+    )
+    .unwrap_err();
+    assert!(!error.write_started());
+    assert_eq!(state.borrow().writes, 0);
+    assert_eq!(state.borrow().prerequisite_reads, 0);
+    assert_eq!(state.borrow().descriptor_reads, 0);
+}
+
+#[test]
+fn recovery_loader_does_not_bypass_read_only_filter_requirements() {
+    use crate::filters::prerequisites::{OwnedWord, Word};
+    let (plan, state) = setup(true);
+    let mut stages = plan.stages().to_vec();
+    let last = stages.last_mut().unwrap();
+    last.settings = last.settings.clone().with_correction(Some(
+        crate::compatibility::PreparedCorrection::native(
+            last.normal.image.clone(),
+            &[],
+            vec![OwnedWord {
+                filter: "phase",
+                word: Word {
+                    parameter: 0x28f,
+                    value: 1,
+                },
+            }],
+        ),
+    ));
+    state.borrow_mut().loader = true;
+    let error = execute_stages(
+        &stages,
+        FlashTransport {
+            reads: &mut Port(state.clone()),
+            writes: &mut Port(state.clone()),
+        },
+        &mut Clock::default(),
+        ExecutionMode::Recovery,
+    )
+    .unwrap_err();
+    assert!(!error.write_started());
+    assert_eq!(state.borrow().writes, 0);
+    assert_eq!(state.borrow().prerequisite_reads, 0);
 }

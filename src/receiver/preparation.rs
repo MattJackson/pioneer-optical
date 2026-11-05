@@ -128,11 +128,21 @@ impl Receiver {
         check_family: bool,
     ) -> Result<Option<crate::compatibility::PreparedCorrection>, PreparationError> {
         let plan = self.plan_native_correction(normal, kernel, check_family)?;
-        Ok(plan
+        let required_words = plan
+            .required_words()
+            .map_err(PreparationError::PhaseCorrection)?;
+        let image = plan
             .prepare_image(normal, Some(kernel))
-            .map_err(PreparationError::PhaseCorrection)?
+            .map_err(PreparationError::PhaseCorrection)?;
+        // A read-only obligation still needs a receiver handoff even if no bytes change.
+        Ok(image
+            .or_else(|| (!required_words.is_empty()).then(|| normal.image.clone()))
             .map(|image| {
-                crate::compatibility::PreparedCorrection::native(image, plan.corrections())
+                crate::compatibility::PreparedCorrection::native(
+                    image,
+                    plan.corrections(),
+                    required_words,
+                )
             }))
     }
 

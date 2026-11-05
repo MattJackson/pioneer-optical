@@ -80,6 +80,8 @@ pub enum ExecutionError<E> {
     VerificationIncomplete(FlashOutcome),
     /// Firmware did not establish an unambiguous executable plan.
     Plan(&'static str),
+    /// A filter-owned read-only condition failed before any update stage.
+    Prerequisite(crate::filters::prerequisites::CheckError<drive::Error<E>>),
     /// Identity could not be obtained at a required boundary.
     IdentityRead {
         /// Stage whose boundary could not be checked.
@@ -120,6 +122,9 @@ impl<E: core::fmt::Debug> core::fmt::Display for ExecutionError<E> {
             Self::VerificationIncomplete(_) => {
                 f.write_str("target firmware started, but complete Normal readback is unavailable")
             }
+            Self::Prerequisite(source) => {
+                write!(f, "read-only correction prerequisite: {source:?}")
+            }
             Self::Plan(reason) => {
                 write!(f, "update plan refused before firmware transfer: {reason}")
             }
@@ -159,7 +164,10 @@ impl<E: core::fmt::Debug + 'static> std::error::Error for ExecutionError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::BeforeWrite(source) | Self::AfterStage { source, .. } => Some(source),
-            Self::IdentityRead { source, .. } => Some(source),
+            Self::IdentityRead { source, .. }
+            | Self::Prerequisite(crate::filters::prerequisites::CheckError::Read(source)) => {
+                Some(source)
+            }
             Self::Flash(source) => Some(source),
             Self::Startup(source) => Some(source),
             _ => None,
@@ -190,7 +198,7 @@ impl<E> ExecutionError<E> {
             Self::BeforeWrite(_) => false,
             Self::AfterStage { .. } => true,
             Self::VerificationIncomplete(_) => true,
-            Self::Plan(_) => false,
+            Self::Plan(_) | Self::Prerequisite(_) => false,
             Self::IdentityRead { stage, target, .. }
             | Self::IdentityMismatch { stage, target, .. } => {
                 *target || stage.completed_stages() > 0
@@ -243,7 +251,7 @@ impl<E> ExecutionError<E> {
             Self::BeforeWrite(_) => "preflight",
             Self::AfterStage { source, .. } => source.phase(),
             Self::VerificationIncomplete(_) => "Normal readback",
-            Self::Plan(_) => "preflight",
+            Self::Plan(_) | Self::Prerequisite(_) => "preflight",
             Self::IdentityRead { target, .. } | Self::IdentityMismatch { target, .. } => {
                 if *target {
                     "target startup"
@@ -301,7 +309,7 @@ impl<E> crate::CodedError for ExecutionError<E> {
         match self {
             Self::BeforeWrite(source) | Self::AfterStage { source, .. } => source.code(),
             Self::VerificationIncomplete(_) => "pioneer.execute.verification_incomplete",
-            Self::Plan(_) => "pioneer.execute.plan",
+            Self::Plan(_) | Self::Prerequisite(_) => "pioneer.execute.plan",
             Self::IdentityRead { .. } => "pioneer.execute.identity_read",
             Self::IdentityMismatch { .. } => "pioneer.execute.identity_mismatch",
             Self::Flash(error) => error.code(),
@@ -653,6 +661,49 @@ fn preflight_stages<E>(stages: &[PreparedStage]) -> Result<(), ExecutionError<E>
     Ok(())
 }
 
+fn preflight_requirements<T: Transport, H: ExecutionRuntime<T::Error>>(
+    stages: &[PreparedStage],
+    reads: &mut T,
+    runtime: &mut H,
+    mode: ExecutionMode,
+) -> Result<(), ExecutionError<T::Error>> {
+    let requirements: Vec<_> = stages
+        .iter()
+        .flat_map(|stage| stage.settings.required_words().iter().cloned())
+        .collect();
+    if requirements.is_empty() {
+        return Ok(());
+    }
+    for required in &requirements {
+        if required.filter.is_empty()
+            || required.word.parameter >= 0x400
+            || requirements.iter().any(|other| {
+                other.word.parameter == required.word.parameter
+                    && other.word.value != required.word.value
+            })
+        {
+            return Err(ExecutionError::Plan(
+                "invalid or conflicting read-only requirements",
+            ));
+        }
+        if stages.iter().flat_map(|stage| stage.settings.entries()).any(|entry|
+            matches!(entry.effect(), crate::settings::update::Effect::ParameterWord {parameter, ..}
+                if parameter == required.word.parameter)) {
+            return Err(ExecutionError::Plan("settings write overlaps a read-only requirement"));
+        }
+    }
+    let (updating, _) = stages[0].bind_stage(reads, runtime, mode, FlashStage::at(0), None)?;
+    if updating {
+        return Err(ExecutionError::Plan(
+            "loader cannot establish read-only correction requirements",
+        ));
+    }
+    crate::filters::prerequisites::check(&requirements, |parameter| {
+        crate::startup::migration::read(reads, parameter)
+    })
+    .map_err(ExecutionError::Prerequisite)
+}
+
 fn execute_stages<R, W, H>(
     stages: &[PreparedStage],
     io: FlashTransport<'_, R, W>,
@@ -668,6 +719,8 @@ where
         return Err(ExecutionError::Plan("empty update sequence"));
     }
     preflight_stages(stages)?;
+    preflight_requirements(stages, io.reads, runtime, mode)
+        .map_err(|source| ExecutionError::BeforeWrite(Box::new(source)))?;
     let mut result: Option<FlashOutcome> = None;
     for (index, stage) in stages.iter().enumerate() {
         // A marker-only intermediate already applied the same Normal's settings.

@@ -41,6 +41,54 @@ pub struct Binding {
     pub erased_parameter: Option<Tables>,
 }
 
+/// Motion roles established without assuming a DSP loader is present.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiteralMotion {
+    /// Whole native step dispatcher.
+    pub dispatch: Range<usize>,
+    /// Ordinary dispatch table, separate from the two special motion roles.
+    pub ordinary: Range<usize>,
+    /// Motion tables selected by the two native predicates.
+    pub motion: [Range<usize>; 2],
+}
+
+/// Bind a complete literal-table dispatcher independently of DSP discovery.
+/// This observation proves table consumers, not that other mechanism elements
+/// are absent or that the complete phase convention can be corrected.
+pub fn observe_literal_motion(normal: &[u8]) -> Result<LiteralMotion, Error> {
+    let Observation::Known(coils) = native::discover_pair(normal) else {
+        return Err(Error::Unresolved);
+    };
+    let regions = crate::image::regions(normal).ok_or(Error::Unresolved)?;
+    bundle::step_source(normal, &regions.stored, &coils).map_err(|_| Error::Unresolved)?;
+    let matches = sites(normal, &regions.stored, shapes::STATIC_DISPATCH);
+    let [at] = matches.as_slice() else {
+        return Err(Error::Unresolved);
+    };
+    let body = &normal[*at..*at + shapes::STATIC_DISPATCH.len()];
+    let first = bundle::resolve_call(normal, call(body, 79)).ok_or(Error::ResourceMismatch)?;
+    let last = bundle::resolve_call(normal, call(body, 159)).ok_or(Error::ResourceMismatch)?;
+    if first == last
+        || !coils.functions.contains(&first)
+        || !coils.functions.contains(&last)
+        || [99, 135]
+            .into_iter()
+            .any(|offset| bundle::resolve_call(normal, call(body, offset)) != Some(first))
+        || word(body, 68) != word(body, 126)
+    {
+        return Err(Error::ResourceMismatch);
+    }
+    ram(word(body, 68))?;
+    Ok(LiteralMotion {
+        dispatch: *at..*at + shapes::STATIC_DISPATCH.len(),
+        ordinary: table(normal, word(body, 40), 256)?,
+        motion: [
+            table(normal, word(body, 56), 256)?,
+            table(normal, word(body, 90), 256)?,
+        ],
+    })
+}
+
 fn word(bytes: &[u8], at: usize) -> u32 {
     u32::from_be_bytes(bytes[at..at + 4].try_into().expect("bound field"))
 }

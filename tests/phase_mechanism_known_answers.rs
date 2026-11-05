@@ -31,6 +31,95 @@ fn native_spans(hash: &str) -> Vec<u8> {
     image
 }
 
+#[test]
+fn computed_loader_rewrite_retains_scaling_calls_and_valid_native_control_flow() {
+    use bundle::waveforms::loader::{self, Table};
+    use h8_asm::{
+        isa::{decode_insn, Ea, Operand},
+        Mode, Target,
+    };
+    let original = native_spans("84b76c71728dd9c27d27c3cb974f062b55c59a7a26145c858dc45cc1a79db66a");
+    let before = loader::observe(&original).unwrap();
+    let Some([Table::Literal(table), _]) = before.tables else {
+        panic!("computed table");
+    };
+    for direction in [bundle::Loader::Ascending, bundle::Loader::Descending] {
+        let changed = loader::rewrite(&original, direction, [table; 2], None).unwrap();
+        let after = loader::observe(&changed).unwrap();
+        assert!(after.computed);
+        assert_eq!(after.loader, direction);
+        let old = &original[before.program.clone()];
+        let new = &changed[before.program.clone()];
+        // Native scale arithmetic, clipping and calibration calls are retained
+        // exactly. Only fetch representation and DSP destination order change.
+        assert_eq!(&new[..156], &old[..156]);
+        assert_eq!(&new[186..250], &old[188..252]);
+        assert_eq!(&new[266..], &old[266..]);
+        assert_eq!(
+            &changed[..before.program.start],
+            &original[..before.program.start]
+        );
+        assert_eq!(
+            &changed[before.program.end..],
+            &original[before.program.end..]
+        );
+        let mut boundaries = std::collections::BTreeSet::new();
+        let mut targets = Vec::new();
+        let mut pc = 0;
+        while pc < new.len() {
+            boundaries.insert(pc);
+            let decoded = decode_insn(&new[pc..], Target::H8S2600, Mode::Advanced).unwrap();
+            for operand in decoded.insn.operands {
+                if let Operand::Address(Ea::PcRelative { value, .. }) = operand {
+                    targets.push((pc + decoded.len).wrapping_add_signed(value as isize));
+                }
+            }
+            pc += decoded.len;
+        }
+        assert_eq!(pc, new.len());
+        assert!(targets
+            .into_iter()
+            .all(|target| boundaries.contains(&target)));
+        for i in 0u16..18 {
+            let actual = if direction == bundle::Loader::Descending {
+                i.wrapping_neg()
+                    .wrapping_add(if i < 9 { 0x13b } else { 0x613 })
+            } else {
+                i + if i < 9 { 0x12a } else { 0x602 }
+            };
+            let expected = match direction {
+                bundle::Loader::Ascending => {
+                    if i < 9 {
+                        0x12a + i
+                    } else {
+                        0x602 + i
+                    }
+                }
+                _ => {
+                    if i < 9 {
+                        0x132 + 9 - i
+                    } else {
+                        0x613 - i
+                    }
+                }
+            };
+            assert_eq!(actual, expected);
+        }
+    }
+}
+
+#[test]
+fn native_xd04_motion_roles_do_not_require_an_assumed_dsp_program() {
+    let image = native_spans("4b390d0e70e2d1006b58b4a3c7653f4b0a77f6fcf1c752cbc21f3d420b2cea5c");
+    let motion = bundle::waveforms::resources::observe_literal_motion(&image).unwrap();
+    assert_eq!(motion.dispatch, 0x1c3f22..0x1c3fcc);
+    assert_eq!(motion.ordinary, 0x24b3ee..0x24b4ee);
+    assert_eq!(motion.motion, [0x24b4ee..0x24b5ee, 0x24b5ee..0x24b6ee]);
+    let mut changed = image.clone();
+    changed[motion.dispatch.start + 137] ^= 2;
+    assert!(bundle::waveforms::resources::observe_literal_motion(&changed).is_err());
+}
+
 fn test_space() -> bundle::composition::Space {
     bundle::composition::Space {
         conversions: [Some(0x400..0x440), Some(0x440..0x484), Some(0x484..0x4b8)],

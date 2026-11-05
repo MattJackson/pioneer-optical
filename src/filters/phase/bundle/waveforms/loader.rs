@@ -59,7 +59,7 @@ pub enum Error {
     Unresolved,
     /// A bound resource relationship disagreed.
     ResourceMismatch,
-    /// The computed-coefficient form still needs its complete transformation.
+    /// The computed program cannot represent the requested per-mode table selection.
     ComputedUnsupported,
     /// A growing program needs explicit caller-owned code space.
     SpaceRequired,
@@ -106,12 +106,25 @@ fn bind(normal: &[u8]) -> Result<(Binding, &'static Shape), Error> {
             if shape.computed {
                 // Both channels share the table, mode inputs and arithmetic
                 // helpers; address-range checks alone do not prove this graph.
-                if get(13)? != get(21)?
-                    || get(84)? != get(162)?
-                    || get(84)? != get(182)?
-                    || get(49)? != get(95)?
-                    || get(49)? != get(199)?
-                    || [115, 207, 219].into_iter().any(|at| get(at) != get(103))
+                let calls: Vec<_> = shape
+                    .fields
+                    .iter()
+                    .filter(|f| matches!(f.kind, FieldKind::Call))
+                    .map(|f| get(f.at))
+                    .collect::<Result<_, _>>()?;
+                let data: Vec<_> = shape
+                    .fields
+                    .iter()
+                    .filter(|f| matches!(f.kind, FieldKind::Data))
+                    .map(|f| get(f.at))
+                    .collect::<Result<_, _>>()?;
+                if calls.len() != 14
+                    || data.is_empty()
+                    || calls[0] != calls[1]
+                    || data.iter().any(|address| *address != data[0])
+                    || calls[2] != calls[3]
+                    || calls[2] != calls[7]
+                    || [5, 8, 9].into_iter().any(|i| calls[i] != calls[4])
                 {
                     return Err(Error::ResourceMismatch);
                 }
@@ -154,7 +167,7 @@ fn bind(normal: &[u8]) -> Result<(Binding, &'static Shape), Error> {
                     .find(|f| f.at == *offset)
                     .ok_or(Error::ResourceMismatch)?;
                 table_reads.push(match field.kind {
-                    FieldKind::Literal => Table::Literal(get(*offset)?),
+                    FieldKind::Literal | FieldKind::Data => Table::Literal(get(*offset)?),
                     FieldKind::Ram => Table::Pointer(get(*offset)?),
                     _ => return Err(Error::ResourceMismatch),
                 });
@@ -191,9 +204,9 @@ pub fn observe(normal: &[u8]) -> Result<Binding, Error> {
 
 /// Emit the plain paired-word loader using target's own getter/writer/reader.
 /// The caller supplies already-normalized image-resident tables in mode order
-/// and separately owns their data. Computed-coefficient programs are explicitly
-/// refused until their transformation is implemented. No table, checksum, or
-/// persistent setting is written by this stage.
+/// and separately owns their data. Computed programs retain their native scale
+/// and calibration arithmetic and require one shared table. No table, checksum,
+/// or persistent setting is written by this stage.
 pub fn rewrite(
     normal: &[u8],
     direction: Loader,
@@ -202,7 +215,7 @@ pub fn rewrite(
 ) -> Result<Vec<u8>, Error> {
     let before = observe(normal)?;
     if before.computed {
-        return Err(Error::ComputedUnsupported);
+        return rewrite_computed(normal, direction, tables);
     }
     let shape = shapes::SHAPES
         .iter()
@@ -278,6 +291,67 @@ pub fn rewrite(
     }
     let after = observe(&changed)?;
     if after.loader != direction
+        || after.tables != Some(tables.map(Table::Literal))
+        || after.coefficient_getter != before.coefficient_getter
+        || after.writer != before.writer
+        || after.readback != before.readback
+    {
+        return Err(Error::VerificationFailed);
+    }
+    Ok(changed)
+}
+
+fn rewrite_computed(normal: &[u8], direction: Loader, tables: [u32; 2]) -> Result<Vec<u8>, Error> {
+    let (before, original) = bind(normal)?;
+    // The native computed program has one shared coefficient table. Different
+    // per-mode tables require a separate, proved selector transformation.
+    if tables[0] != tables[1] || direction == Loader::AscendingNegated17 {
+        return Err(Error::ComputedUnsupported);
+    }
+    let shape = shapes::SHAPES
+        .iter()
+        .find(|shape| shape.computed && shape.loader == direction)
+        .ok_or(Error::ComputedUnsupported)?;
+    let start = tables[0].checked_sub(0x410000).ok_or(Error::InvalidSpace)? as usize;
+    let regions = crate::image::regions(normal).ok_or(Error::Unresolved)?;
+    if tables[0] & 1 != 0
+        || !regions.stored.iter().any(|region| {
+            let at = region.as_ptr() as usize - normal.as_ptr() as usize;
+            start >= at
+                && start
+                    .checked_add(72)
+                    .is_some_and(|end| end <= at + region.len())
+        })
+    {
+        return Err(Error::InvalidSpace);
+    }
+    let calls: Vec<_> = original
+        .fields
+        .iter()
+        .filter(|f| matches!(f.kind, FieldKind::Call))
+        .map(|f| value(normal, before.program.start, original, f.at))
+        .collect::<Result<_, _>>()?;
+    let mut calls = calls.into_iter();
+    let mut code: Vec<_> = shape.bytes.iter().map(|byte| byte.unwrap_or(0)).collect();
+    for field in shape.fields {
+        let address = match field.kind {
+            FieldKind::Call => calls.next().ok_or(Error::ResourceMismatch)?,
+            FieldKind::Data => tables[0],
+            FieldKind::Literal if field.at == shape.writer => before.writer,
+            _ => return Err(Error::ResourceMismatch),
+        };
+        code[field.at..field.at + field.width]
+            .copy_from_slice(&address.to_be_bytes()[4 - field.width..]);
+    }
+    if calls.next().is_some() || code.len() != before.program.len() {
+        return Err(Error::VerificationFailed);
+    }
+    let mut changed = normal.to_vec();
+    changed[before.program.clone()].copy_from_slice(&code);
+    let after = observe(&changed)?;
+    if !after.computed
+        || after.loader != direction
+        || after.program != before.program
         || after.tables != Some(tables.map(Table::Literal))
         || after.coefficient_getter != before.coefficient_getter
         || after.writer != before.writer

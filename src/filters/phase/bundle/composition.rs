@@ -47,11 +47,14 @@ pub fn transplant(
 ) -> Result<Vec<u8>, Error> {
     let before = super::bind(target).map_err(Error::Bundle)?;
     let required = super::bind(installed).map_err(Error::Bundle)?;
+    let calibration_caller = calibration::callers::observe(target).map_err(Error::Calibration)?;
+    calibration::callers::observe(installed).map_err(Error::Calibration)?;
     let resources = waveforms::resources::observe(target)
         .map_err(|e| Error::Waveforms(waveforms::Error::Resources(e)))?;
     let loader = waveforms::loader::observe(target)
         .map_err(|e| Error::Waveforms(waveforms::Error::Loader(e)))?;
     let protected: Vec<_> = core::iter::once(&resources.dispatch)
+        .chain(core::iter::once(&calibration_caller.program))
         .chain(core::iter::once(&loader.program))
         .chain(resources.initializer.as_ref())
         .chain(
@@ -129,7 +132,8 @@ pub fn transplant(
         table_select_0x28f: before.table_select_0x28f,
         ..required
     };
-    if actual != expected
+    if calibration::callers::observe(&changed).map_err(Error::Calibration)? != calibration_caller
+        || actual != expected
         || calibration::observe(&changed).map_err(Error::Calibration)?
             != calibration::observe(installed).map_err(Error::Calibration)?
         || changed[..24] != target[..24]

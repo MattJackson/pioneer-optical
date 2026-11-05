@@ -3,6 +3,9 @@
 use super::*;
 use core::ops::Range;
 
+/// Native four-mode caller and low-byte return contract.
+pub mod callers;
+
 /// Interpretation established by the complete native reader program.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Convention {

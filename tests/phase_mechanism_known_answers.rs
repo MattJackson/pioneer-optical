@@ -1814,3 +1814,114 @@ fn native_multiply_instructions_match_wrapping_u32_products() {
         assert_eq!(run(a, random), a.wrapping_mul(random));
     }
 }
+
+#[test]
+fn calibration_caller_binds_four_modes_and_rejects_high_byte_consumption() {
+    use h8_asm::{
+        isa::{decode_insn, encode_insn, Operand, Reg},
+        Mode, Target,
+    };
+    for (id, target_hash, donor_hash) in native_oem_pairs() {
+        let target = native_spans(&target_hash);
+        let donor = native_spans(&donor_hash);
+        let before = native::calibration::callers::observe(&target)
+            .unwrap_or_else(|e| panic!("{id}: {e:?}"));
+        let changed =
+            bundle::composition::transplant(&target, &donor, test_space(), Some(0x600..0x700))
+                .unwrap();
+        assert_eq!(
+            native::calibration::callers::observe(&changed).unwrap(),
+            before,
+            "{id}"
+        );
+        let mut extra = target.clone();
+        let call =
+            decode_insn(&target[before.calls[0]..], Target::H8S2000, Mode::Advanced).unwrap();
+        let encoded = encode_insn(call.insn, Target::H8S2000, Mode::Advanced).unwrap();
+        extra[0x800..0x800 + encoded.len()].copy_from_slice(&encoded);
+        assert!(
+            native::calibration::callers::observe(&extra).is_err(),
+            "{id}: unproved extra caller"
+        );
+        let at = before.calls[0];
+        let call = decode_insn(&target[at..], Target::H8S2000, Mode::Advanced).unwrap();
+        let at = at + call.len;
+        let mut mov = decode_insn(&target[at..], Target::H8S2000, Mode::Advanced)
+            .unwrap()
+            .insn;
+        assert_eq!(mov.operands[0], Operand::Register(Reg::Byte(8)));
+        mov.operands[0] = Operand::Register(Reg::Byte(0));
+        let encoded = encode_insn(mov, Target::H8S2000, Mode::Advanced).unwrap();
+        let mut broken = target.clone();
+        broken[at..at + encoded.len()].copy_from_slice(&encoded);
+        assert!(
+            native::calibration::callers::observe(&broken).is_err(),
+            "{id}: high byte consumer"
+        );
+        let at = before.calls[3];
+        let mut call = decode_insn(&target[at..], Target::H8S2000, Mode::Advanced)
+            .unwrap()
+            .insn;
+        match &mut call.operands[0] {
+            Operand::Address(h8_asm::isa::Ea::Absolute { value, .. }) => *value += 2,
+            Operand::Address(h8_asm::isa::Ea::PcRelative { value, .. }) => *value += 2,
+            _ => panic!("unexpected call"),
+        }
+        let encoded = encode_insn(call, Target::H8S2000, Mode::Advanced).unwrap();
+        let mut broken = target;
+        broken[at..at + encoded.len()].copy_from_slice(&encoded);
+        assert!(
+            native::calibration::callers::observe(&broken).is_err(),
+            "{id}: fourth call target"
+        );
+    }
+}
+
+#[test]
+#[ignore = "exports OEM caller spans from PIONEER_NORMAL_CORPUS into sparse CI fixtures"]
+fn export_calibration_callers_from_reference_normals() {
+    let root = std::path::PathBuf::from(std::env::var("PIONEER_NORMAL_CORPUS").unwrap());
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/phase-native-spans.json");
+    let mut fixtures: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let hashes: std::collections::BTreeSet<_> = native_oem_pairs()
+        .into_iter()
+        .flat_map(|(_, a, b)| [a, b])
+        .collect();
+    for hash in hashes {
+        let image = std::fs::read(root.join(format!("{hash}.bin"))).unwrap();
+        assert_eq!(format!("{:x}", Sha256::digest(&image)), hash);
+        let binding = native::calibration::callers::observe(&image).unwrap();
+        let fixture = fixtures
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|f| f["original_sha256"].as_str() == Some(&hash))
+            .unwrap();
+        let spans = fixture["spans"].as_array_mut().unwrap();
+        for span in spans.iter() {
+            let at = span[0].as_u64().unwrap() as usize;
+            let bytes = hex(span[1].as_str().unwrap());
+            assert_eq!(&image[at..at + bytes.len()], bytes);
+        }
+        let covered = spans.iter().any(|span| {
+            let at = span[0].as_u64().unwrap() as usize;
+            at <= binding.program.start
+                && at + span[1].as_str().unwrap().len() / 2 >= binding.program.end
+        });
+        if !covered {
+            let bytes: String = image[binding.program.clone()]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            spans.push(serde_json::json!([binding.program.start, bytes]));
+            spans.sort_by_key(|span| span[0].as_u64().unwrap());
+        }
+    }
+    std::fs::write(
+        path,
+        format!("{}\n", serde_json::to_string_pretty(&fixtures).unwrap()),
+    )
+    .unwrap();
+}

@@ -46,11 +46,15 @@ pub fn transplant(
             addresses.map(loader::Table::Literal)
         }
         Some([loader::Table::Pointer(_), loader::Table::Pointer(_)])
-            if matches!(target_loader.tables, Some([loader::Table::Pointer(a), loader::Table::Pointer(b)])
-                if a >= 0x410000 && b >= 0x410000) =>
+            if matches!(
+                target_loader.tables,
+                Some([loader::Table::Pointer(_), loader::Table::Pointer(_)])
+            ) =>
         {
-            // Resource observation has already resolved these stored cells to
-            // the destination coefficient tables. Keep their values unchanged.
+            // Resource observation has resolved these cells, including a bound
+            // RAM initializer, to the destination coefficient tables. Both
+            // initializer branches receive the donor data below. The owner
+            // carries the read-only selection prerequisite.
             target_loader.tables.ok_or(Error::VerificationFailed)?
         }
         Some([loader::Table::Pointer(_), loader::Table::Pointer(_)]) => {
@@ -118,17 +122,15 @@ pub fn transplant(
     }
     let mut writes = Vec::new();
     for tables in core::iter::once(&destination.selected).chain(&destination.erased_parameter) {
-        for (to, from) in tables.motion.iter().zip(&source.selected.motion) {
+        for (to, from) in tables.motion.iter().chain(&tables.coefficients).zip(
+            source
+                .selected
+                .motion
+                .iter()
+                .chain(&source.selected.coefficients),
+        ) {
             writes.push((to.clone(), installed[from.clone()].to_vec()));
         }
-    }
-    for (to, from) in destination
-        .selected
-        .coefficients
-        .iter()
-        .zip(&source.selected.coefficients)
-    {
-        writes.push((to.clone(), installed[from.clone()].to_vec()));
     }
     let cells: Vec<_> = tables
         .into_iter()

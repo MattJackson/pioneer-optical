@@ -2179,3 +2179,119 @@ fn ud02_retired_reader_space_in_full_images() {
         }
     }
 }
+
+#[test]
+fn mechanism_filter_plans_equal_coil_control_changes_and_checks_all_effects() {
+    use pioneer_optical::{
+        compatibility::{Error, Firmware},
+        filters::{self, Filter},
+    };
+    let mut checked = 0;
+    for (_, target_hash, donor_hash) in native_oem_pairs() {
+        let donor = native_spans(&donor_hash);
+        let other = native_spans(&target_hash);
+        // An isolated native mode/controller difference exercises the full
+        // operation without assuming ownership of any extra code reservation.
+        let mut target = bundle::conversions::rewrite_controls(&donor, &other).unwrap();
+        target[16..20].fill(0);
+        let sum = target.chunks_exact(4).fold(0u32, |sum, word| {
+            sum.wrapping_add(u32::from_be_bytes(word.try_into().unwrap()))
+        });
+        target[16..20].copy_from_slice(&sum.wrapping_neg().to_be_bytes());
+        if bundle::bind(&target).unwrap() == bundle::bind(&donor).unwrap() {
+            continue;
+        }
+        checked += 1;
+        let installed = filters::Context::new(Firmware {
+            hardware: "SAT 8000",
+            normal: &donor,
+            kernel: None,
+        });
+        let target_context = filters::Context::new(Firmware {
+            hardware: "SAT 8000",
+            normal: &target,
+            kernel: None,
+        });
+        let filter = &filters::phase::FILTER;
+        let operation = filter
+            .plan(
+                &filters::Transition {
+                    installed: &installed,
+                    target: &target_context,
+                },
+                &filter.inspect(&installed),
+                &filter.inspect(&target_context),
+            )
+            .unwrap()
+            .expect("different bundle needs operation even with equal coils");
+        let preparation = filters::Preparation {
+            target: target_context.firmware,
+            normal: None,
+            kernel: None,
+        };
+        let changed = operation.prepare(&preparation).unwrap().unwrap();
+        operation.verify(&preparation, &changed).unwrap();
+        let registry: &[&dyn Filter] = &[filter];
+        let plan = filters::runner::plan_with(
+            &installed,
+            &target_context,
+            filters::runner::Policy::Strict,
+            registry,
+        )
+        .unwrap();
+        let composed = plan.prepare_with(&preparation, registry).unwrap().unwrap();
+        plan.verify_with(&preparation, &composed, registry).unwrap();
+        let words = plan.required_words().unwrap();
+        assert_eq!(
+            words.iter().map(|w| w.word).collect::<Vec<_>>(),
+            operation.required_words()
+        );
+        assert!(words.iter().all(|w| w.filter == "phase"));
+        filters::prerequisites::check(&words, |_| Ok::<_, ()>(1)).unwrap();
+        if !words.is_empty() {
+            assert!(matches!(
+                filters::prerequisites::check(&words, |_| Ok::<_, ()>(0)),
+                Err(filters::prerequisites::CheckError::Mismatch { .. })
+            ));
+        }
+
+        assert_eq!(
+            operation.verify(&preparation, &target),
+            Err(Error::VerificationFailed)
+        );
+        assert_eq!(
+            operation.required_words(),
+            if bundle::bind(&donor).unwrap().table_select_0x28f {
+                vec![filters::prerequisites::Word {
+                    parameter: 0x28f,
+                    value: 1,
+                }]
+            } else {
+                vec![]
+            }
+        );
+        let altered = target
+            .iter()
+            .zip(&changed)
+            .position(|(a, b)| a != b)
+            .unwrap();
+        let mut damaged = changed.clone();
+        damaged[altered] = target[altered];
+        assert_eq!(
+            operation.verify(&preparation, &damaged),
+            Err(Error::VerificationFailed)
+        );
+        let mut substituted = target.clone();
+        substituted[30] ^= 1;
+        let wrong = filters::Preparation {
+            target: Firmware {
+                normal: &substituted,
+                ..target_context.firmware
+            },
+            normal: None,
+            kernel: None,
+        };
+        assert_eq!(operation.prepare(&wrong), Err(Error::ComponentMismatch));
+    }
+    assert_eq!(checked, 8);
+}

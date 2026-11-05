@@ -106,8 +106,17 @@ pub fn transplant(
             }
         }
     }
-    let actual = super::bind(&changed).map_err(Error::Bundle)?;
-    let after_resources = waveforms::resources::observe(&changed)
+    verify_result(target, installed, &changed)?;
+    Ok(changed)
+}
+
+/// Rebind the complete convention, callers and consumed data after composition.
+pub(crate) fn verify_result(target: &[u8], installed: &[u8], changed: &[u8]) -> Result<(), Error> {
+    let before = super::bind(target).map_err(Error::Bundle)?;
+    let required = super::bind(installed).map_err(Error::Bundle)?;
+    let calibration_caller = calibration::callers::observe(target).map_err(Error::Calibration)?;
+    let actual = super::bind(changed).map_err(Error::Bundle)?;
+    let after_resources = waveforms::resources::observe(changed)
         .map_err(|e| Error::Waveforms(waveforms::Error::Resources(e)))?;
     let donor_resources = waveforms::resources::observe(installed)
         .map_err(|e| Error::Waveforms(waveforms::Error::Resources(e)))?;
@@ -132,15 +141,16 @@ pub fn transplant(
         table_select_0x28f: before.table_select_0x28f,
         ..required
     };
-    if calibration::callers::observe(&changed).map_err(Error::Calibration)? != calibration_caller
+    if calibration::callers::observe(changed).map_err(Error::Calibration)? != calibration_caller
         || actual != expected
-        || calibration::observe(&changed).map_err(Error::Calibration)?
+        || calibration::observe(changed).map_err(Error::Calibration)?
             != calibration::observe(installed).map_err(Error::Calibration)?
-        || changed[..24] != target[..24]
+        || changed.get(..16) != target.get(..16)
+        || changed.get(20..24) != target.get(20..24)
     {
         return Err(Error::VerificationFailed);
     }
-    Ok(changed)
+    Ok(())
 }
 
 /// Compose without an external code reservation by reusing the tail of a

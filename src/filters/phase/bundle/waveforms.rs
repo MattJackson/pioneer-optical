@@ -121,7 +121,7 @@ pub fn transplant(
         })
         .collect();
     let protected = core::iter::once(&destination.dispatch)
-        .chain(core::iter::once(&target_loader.program))
+        .chain(&target_loader.spans)
         .chain(destination.initializer.as_ref())
         .chain(reservation.as_ref())
         .chain(&cells)

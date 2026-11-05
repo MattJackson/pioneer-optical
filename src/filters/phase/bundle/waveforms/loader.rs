@@ -1,4 +1,4 @@
-//! Complete native H8 DSP waveform-loader binding and canonical emission.
+//! Complete native H8 DSP waveform-loader binding and OEM transplantation.
 use crate::filters::phase::bundle::{sites, Loader, Template};
 use alloc::vec::Vec;
 use core::ops::Range;
@@ -41,8 +41,10 @@ pub enum Table {
 /// Complete native loader and its local resource relationships.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Binding {
-    /// Exact stored program range in decoded Normal.
+    /// First stored program span in decoded Normal.
     pub program: Range<usize>,
+    /// Physical instruction spans, including a single overflow fragment when split.
+    pub spans: Vec<Range<usize>>,
     /// Native fetch/address convention.
     pub loader: Loader,
     /// Table for zero and nonzero mode arguments, respectively.
@@ -83,15 +85,23 @@ fn value(normal: &[u8], start: usize, shape: &Shape, at: usize) -> Result<u32, E
         .ok_or(Error::ResourceMismatch)?;
     Ok(bytes.iter().fold(0, |v, b| (v << 8) | u32::from(*b)))
 }
-fn bind(normal: &[u8]) -> Result<(Binding, &'static Shape), Error> {
+fn bind(normal: &[u8]) -> Result<(Binding, &'static Shape, Vec<u8>), Error> {
     let regions = crate::image::regions(normal).ok_or(Error::Unresolved)?;
     let mut found = None;
     for shape in shapes::SHAPES {
-        for at in sites(normal, &regions.stored, shape.bytes) {
+        for at in sites(normal, &regions.stored, &shape.bytes[..12]) {
+            let Some(body) = crate::filters::phase::native::placement::read(
+                normal,
+                &regions.stored,
+                at,
+                shape.bytes,
+            ) else {
+                continue;
+            };
             if found.is_some() {
                 return Err(Error::Unresolved);
             }
-            let get = |offset| value(normal, at, shape, offset);
+            let get = |offset| value(&body.bytes, 0, shape, offset);
             let coefficient = get(shape.coefficient[0])?;
             if coefficient != get(shape.coefficient[1])? {
                 return Err(Error::ResourceMismatch);
@@ -157,7 +167,7 @@ fn bind(normal: &[u8]) -> Result<(Binding, &'static Shape), Error> {
                 }
                 if matches!(field.kind, FieldKind::Call)
                     && field.at >= 3
-                    && normal.get(at + field.at - 3..at + field.at - 1) == Some(&[0x0d, 0x38][..])
+                    && body.bytes.get(field.at - 3..field.at - 1) == Some(&[0x0d, 0x38][..])
                     && address != writer
                 {
                     return Err(Error::ResourceMismatch);
@@ -187,7 +197,8 @@ fn bind(normal: &[u8]) -> Result<(Binding, &'static Shape), Error> {
             };
             found = Some((
                 Binding {
-                    program: at..at + shape.bytes.len(),
+                    program: body.spans[0].clone(),
+                    spans: body.spans,
                     loader: shape.loader,
                     tables,
                     computed: shape.computed,
@@ -196,6 +207,7 @@ fn bind(normal: &[u8]) -> Result<(Binding, &'static Shape), Error> {
                     readback,
                 },
                 shape,
+                body.bytes,
             ));
         }
     }
@@ -206,18 +218,26 @@ pub fn observe(normal: &[u8]) -> Result<Binding, Error> {
     Ok(bind(normal)?.0)
 }
 
+/// Recover the complete matched OEM instruction stream, excluding a placement
+/// jump and padding. Relative branches retain their original logical offsets.
+pub fn logical_program(normal: &[u8]) -> Result<Vec<u8>, Error> {
+    Ok(bind(normal)?.2)
+}
+
 /// Transplant a recognized noncomputed OEM loader without changing its fetch
 /// algorithm. Only declared helper/table address operands are relocated. Pointer
 /// slots retain pointer semantics; their initialization and live prerequisites
-/// belong to the caller. Table bytes and image integrity are not changed here.
+/// belong to the caller. Growth retains the original prefix and uses h8-asm
+/// to jump to a caller-owned suffix; no relative branch may cross that split.
+/// Table bytes and image integrity are not changed here.
 pub fn transplant_plain(
     normal: &[u8],
     donor: &[u8],
     tables: [Table; 2],
     reservation: Option<Range<usize>>,
 ) -> Result<Vec<u8>, Error> {
-    let before = observe(normal)?;
-    let (source, shape) = bind(donor)?;
+    let (before, _, original_code) = bind(normal)?;
+    let (source, shape, mut code) = bind(donor)?;
     if before.computed || source.computed {
         return Err(Error::ComputedUnsupported);
     }
@@ -246,10 +266,9 @@ pub fn transplant_plain(
     if source_tables[0] == source_tables[1] && tables[0] != tables[1] {
         return Err(Error::ResourceMismatch);
     }
-    let mut code = donor[source.program.clone()].to_vec();
     for field in shape.fields {
         let address = if shape.tables.contains(&field.at) {
-            let old = value(donor, source.program.start, shape, field.at)?;
+            let old = value(&code, 0, shape, field.at)?;
             let role = source_tables
                 .iter()
                 .position(|table| match table {
@@ -263,7 +282,7 @@ pub fn transplant_plain(
             before.coefficient_getter
         } else if field.at == shape.readback {
             before.readback
-        } else if value(donor, source.program.start, shape, field.at)? == source.writer {
+        } else if value(&code, 0, shape, field.at)? == source.writer {
             before.writer
         } else {
             return Err(Error::ResourceMismatch);
@@ -276,48 +295,88 @@ pub fn transplant_plain(
         )
         .ok_or(Error::ResourceMismatch)?;
     }
-    let destination = if code.len() <= before.program.len() {
-        before.program.clone()
-    } else {
-        reservation.clone().ok_or(Error::SpaceRequired)?
-    };
     for table in tables {
-        if let Table::Literal(address) = table {
-            let at = (address - 0x410000) as usize;
-            if destination.start < at + 72 && at < destination.end {
+        let (address, size) = match table {
+            Table::Literal(address) => (address, 72),
+            Table::Pointer(address) => (address, 4),
+        };
+        if let Some(at) = address.checked_sub(0x410000).map(|a| a as usize) {
+            if before
+                .spans
+                .iter()
+                .any(|span| span.start < at + size && at < span.end)
+            {
                 return Err(Error::InvalidSpace);
             }
         }
     }
+    if code == original_code {
+        return Ok(normal.to_vec());
+    }
+    let prior_spill = before.spans.get(1);
     let mut changed = normal.to_vec();
     if code.len() <= before.program.len() {
         crate::filters::phase::native::encoding::nops(&mut changed[before.program.clone()])
             .ok_or(Error::InvalidSpace)?;
         changed[before.program.start..before.program.start + code.len()].copy_from_slice(&code);
+        if let Some(span) = prior_spill {
+            crate::filters::phase::native::encoding::nops(&mut changed[span.clone()])
+                .ok_or(Error::InvalidSpace)?;
+        }
     } else {
-        let space = reservation.ok_or(Error::SpaceRequired)?;
+        let space = reservation
+            .or_else(|| prior_spill.cloned())
+            .ok_or(Error::SpaceRequired)?;
+        let reusing = prior_spill == Some(&space);
         if space.start & 1 != 0
             || space.end & 1 != 0
             || space.start > space.end
-            || space.len() < code.len()
             || !contains(&space)
-            || (space.start < before.program.end && before.program.start < space.end)
-            || !normal
-                .get(space.clone())
-                .is_some_and(|bytes| bytes.iter().all(|b| *b == 0xff))
+            || before.spans.iter().any(|span| {
+                space.start < span.end
+                    && span.start < space.end
+                    && !(reusing && Some(span) == prior_spill)
+            })
+            || (!reusing
+                && !normal
+                    .get(space.clone())
+                    .is_some_and(|bytes| bytes.iter().all(|b| *b == 0xff)))
         {
             return Err(Error::InvalidSpace);
+        }
+        for table in tables {
+            let (address, size) = match table {
+                Table::Literal(address) => (address, 72),
+                Table::Pointer(address) => (address, 4),
+            };
+            if let Some(at) = address.checked_sub(0x410000).map(|a| a as usize) {
+                if space.start < at + size && at < space.end {
+                    return Err(Error::InvalidSpace);
+                }
+            }
         }
         let address = 0x410000usize
             .checked_add(space.start)
             .filter(|a| *a <= 0xffffff)
             .ok_or(Error::InvalidSpace)? as u32;
-        changed[before.program.start..before.program.start + 4].copy_from_slice(
-            &crate::filters::phase::native::encoding::jump(address).ok_or(Error::InvalidSpace)?,
-        );
+        let (prefix, spill) = crate::filters::phase::native::placement::split_closed(
+            &code,
+            (0x410000 + before.program.start) as u32,
+            before.program.len(),
+            address,
+        )
+        .ok_or(Error::InvalidSpace)?;
+        if spill.len() > space.len() {
+            return Err(Error::InvalidSpace);
+        }
+        changed[before.program.clone()].copy_from_slice(&prefix);
         crate::filters::phase::native::encoding::nops(&mut changed[space.clone()])
             .ok_or(Error::InvalidSpace)?;
-        changed[space.start..space.start + code.len()].copy_from_slice(&code);
+        changed[space.start..space.start + spill.len()].copy_from_slice(&spill);
+        if let Some(span) = prior_spill.filter(|_| !reusing) {
+            crate::filters::phase::native::encoding::nops(&mut changed[span.clone()])
+                .ok_or(Error::InvalidSpace)?;
+        }
     }
     let after = observe(&changed)?;
     if after.computed
@@ -339,13 +398,14 @@ pub fn transplant_plain(
 /// semantics remain a separate prerequisite for whole-mechanism composition.
 /// This stage cannot synthesize a loader direction absent from the donor.
 pub fn transplant_computed(normal: &[u8], donor: &[u8], table: u32) -> Result<Vec<u8>, Error> {
-    let (before, original) = bind(normal)?;
-    let (source, shape) = bind(donor)?;
+    let (before, original, original_code) = bind(normal)?;
+    let (source, shape, mut code) = bind(donor)?;
     if !before.computed
         || !source.computed
         || source.loader != Loader::AscendingNegated17
         || before.loader != source.loader
         || original.bytes != shape.bytes
+        || before.spans.len() != 1
     {
         return Err(Error::ComputedUnsupported);
     }
@@ -368,10 +428,9 @@ pub fn transplant_computed(normal: &[u8], donor: &[u8], table: u32) -> Result<Ve
         .fields
         .iter()
         .filter(|f| matches!(f.kind, FieldKind::Call))
-        .map(|f| value(normal, before.program.start, original, f.at))
+        .map(|f| value(&original_code, 0, original, f.at))
         .collect::<Result<_, _>>()?;
     let mut calls = calls.into_iter();
-    let mut code = donor[source.program.clone()].to_vec();
     for field in shape.fields {
         let address = match field.kind {
             FieldKind::Call => calls.next().ok_or(Error::ResourceMismatch)?,

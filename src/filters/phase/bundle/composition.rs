@@ -38,7 +38,7 @@ pub enum Error {
 /// Indirect donor table loads use read-only pointer cells in loader_space.
 /// Source routines, conversions and calibration readers reuse original space and spill overflow
 /// only at instruction boundaries with no relative branches crossing the split.
-/// Loader growth still requires a complete-body reservation.
+/// Loader growth also retains the original prefix and spills only its suffix.
 pub fn transplant(
     target: &[u8],
     installed: &[u8],
@@ -55,7 +55,7 @@ pub fn transplant(
         .map_err(|e| Error::Waveforms(waveforms::Error::Loader(e)))?;
     let protected: Vec<_> = core::iter::once(&resources.dispatch)
         .chain(core::iter::once(&calibration_caller.program))
-        .chain(core::iter::once(&loader.program))
+        .chain(&loader.spans)
         .chain(resources.initializer.as_ref())
         .chain(
             core::iter::once(&resources.selected)

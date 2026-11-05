@@ -302,7 +302,7 @@ pub fn observe(normal: &[u8]) -> Result<Binding, Error> {
                     }
                     let cell = table(normal, address, 4)?;
                     let protected = core::iter::once(&result.dispatch)
-                        .chain(core::iter::once(&loader.program))
+                        .chain(&loader.spans)
                         .chain(&result.initializer)
                         .chain(
                             core::iter::once(&result.selected)

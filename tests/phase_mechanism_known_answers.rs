@@ -32,7 +32,7 @@ fn native_spans(hash: &str) -> Vec<u8> {
 }
 
 #[test]
-fn native_oem_all_reference_pairs_compose_with_small_conversion_spills() {
+fn native_oem_all_reference_pairs_compose_with_small_routine_spills() {
     for (id, target_hash, donor_hash) in native_oem_pairs() {
         let target = native_spans(&target_hash);
         let donor = native_spans(&donor_hash);
@@ -42,8 +42,50 @@ fn native_oem_all_reference_pairs_compose_with_small_conversion_spills() {
         space.conversions = [Some(0x400..0x418), Some(0x440..0x458), Some(0x484..0x49c)];
         space.calibration = Some(0x4b8..0x4ee);
         space.sources = None;
-        let changed = bundle::composition::transplant(&target, &donor, space, Some(0x600..0x700))
+        use bundle::waveforms::loader;
+        let before_loader = loader::observe(&target).unwrap();
+        let source_loader = loader::observe(&donor).unwrap();
+        let loader_space = if source_loader.program.len() > before_loader.program.len() {
+            Some(
+                if matches!(source_loader.tables, Some([loader::Table::Pointer(_), _])) {
+                    0x600..0x620 // 22-byte suffix plus two four-byte pointer cells.
+                } else {
+                    0x600..0x610 // SAT9's 16-byte suffix.
+                },
+            )
+        } else {
+            None
+        };
+        let changed = bundle::composition::transplant(&target, &donor, space, loader_space.clone())
             .unwrap_or_else(|e| panic!("{id}: {e:?}"));
+        let after_loader = loader::observe(&changed).unwrap();
+        if let Some(reservation) = loader_space {
+            assert_eq!(after_loader.spans.len(), 2, "{id}");
+            assert!(after_loader.program.len() <= before_loader.program.len());
+            let spill = &after_loader.spans[1];
+            assert!(spill.len() <= 22 && spill.len() < source_loader.program.len());
+            assert!(spill.start >= reservation.start && spill.end <= reservation.end);
+            // A detour into an instruction interior must not bind as OEM code.
+            use h8_asm::{
+                isa::{decode_insn, encode_insn, Ea, Operand},
+                Mode, Target,
+            };
+            let at = after_loader.program.end - 4;
+            let mut jump = decode_insn(&changed[at..], Target::H8S2000, Mode::Advanced)
+                .unwrap()
+                .insn;
+            assert_eq!(jump.mnemonic, "JMP");
+            if let Operand::Address(Ea::Absolute { value, .. }) = &mut jump.operands[0] {
+                *value += 2;
+            }
+            let encoded = encode_insn(jump, Target::H8S2000, Mode::Advanced).unwrap();
+            let mut broken = changed.clone();
+            broken[at..at + encoded.len()].copy_from_slice(&encoded);
+            assert!(
+                loader::observe(&broken).is_err(),
+                "{id}: corrupt split target"
+            );
+        }
         let mut expected = bundle::bind(&donor).unwrap();
         expected.table_select_0x28f = bundle::bind(&target).unwrap().table_select_0x28f;
         assert_eq!(bundle::bind(&changed).unwrap(), expected, "{id}");
@@ -171,7 +213,7 @@ fn native_oem_ud02_composition_relocates_indirect_loads_without_new_instructions
                 );
             }
             assert_eq!(
-                loader::observe(&changed).unwrap().program.len(),
+                loader::logical_program(&changed).unwrap().len(),
                 source.program.len()
             );
             let mut expected = donor[source.program.clone()].to_vec();
@@ -186,7 +228,7 @@ fn native_oem_ud02_composition_relocates_indirect_loads_without_new_instructions
             ] {
                 expected[field..field + 3].copy_from_slice(&address.to_be_bytes()[1..]);
             }
-            assert_eq!(&changed[after.program], &expected);
+            assert_eq!(&loader::logical_program(&changed).unwrap(), &expected);
         }
     }
 }
@@ -400,7 +442,31 @@ fn native_plain_loader_transplants_oem_bytes_with_only_address_relocations() {
             }
             assert!(count > 0);
         }
-        assert_eq!(&changed[after.program.clone()], &expected);
+        assert_eq!(&loader::logical_program(&changed).unwrap(), &expected);
+        assert_eq!(
+            loader::transplant_plain(&changed, donor, before.tables.unwrap(), None).unwrap(),
+            changed,
+        );
+        let reverse_space = (after.spans.len() == 1).then_some(0x800..0x820);
+        let restored =
+            loader::transplant_plain(&changed, target, before.tables.unwrap(), reverse_space)
+                .unwrap();
+        assert_eq!(
+            loader::logical_program(&restored).unwrap(),
+            loader::logical_program(target).unwrap()
+        );
+        if after.spans.len() == 2 {
+            for bytes in restored[after.spans[1].clone()].chunks_exact(2) {
+                let d = h8_asm::isa::decode_insn(
+                    bytes,
+                    h8_asm::Target::H8S2000,
+                    h8_asm::Mode::Advanced,
+                )
+                .unwrap();
+                assert_eq!(d.insn.mnemonic, "NOP");
+            }
+        }
+
         for (at, (old, new)) in target.iter().zip(&changed).enumerate() {
             if old != new {
                 assert!(before.program.contains(&at) || (0x600..0x700).contains(&at));

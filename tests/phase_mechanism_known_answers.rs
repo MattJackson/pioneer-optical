@@ -41,6 +41,7 @@ fn native_oem_all_reference_pairs_compose_with_small_conversion_spills() {
         // Whole-body detours cannot satisfy this placement contract.
         space.conversions = [Some(0x400..0x418), Some(0x440..0x458), Some(0x484..0x49c)];
         space.calibration = Some(0x4b8..0x4ee);
+        space.sources = None;
         let changed = bundle::composition::transplant(&target, &donor, space, Some(0x600..0x700))
             .unwrap_or_else(|e| panic!("{id}: {e:?}"));
         let mut expected = bundle::bind(&donor).unwrap();
@@ -167,19 +168,33 @@ fn native_source_transplants_copy_donor_bodies_and_keep_target_helpers() {
     use pioneer_optical::image::layout::Observation;
     let body = |image: &[u8], start: usize| {
         let mut at = start;
+        let mut bytes = Vec::new();
         let mut calls = Vec::new();
+        let mut jumps = 0;
         loop {
             let decoded = decode_insn(&image[at..], Target::H8S2000, Mode::Advanced).unwrap();
-            if decoded.insn.mnemonic == "JSR" {
-                calls.push(at - start + 1);
+            if decoded.insn.mnemonic == "JMP" {
+                use h8_asm::isa::{Ea, Operand};
+                let Operand::Address(Ea::Absolute { value, bits: 24 }) = decoded.insn.operands[0]
+                else {
+                    panic!("jump operand");
+                };
+                jumps += 1;
+                assert_eq!(jumps, 1);
+                at = (value - 0x410000) as usize;
+                continue;
             }
+            if decoded.insn.mnemonic == "JSR" {
+                calls.push(bytes.len() + 1);
+            }
+            bytes.extend_from_slice(&image[at..at + decoded.len]);
             at += decoded.len;
             if decoded.insn.mnemonic == "RTS" {
                 break;
             }
-            assert!(at - start < 128);
+            assert!(bytes.len() < 128);
         }
-        (image[start..at].to_vec(), calls)
+        (bytes, calls)
     };
     for hashes in [
         [
@@ -199,7 +214,7 @@ fn native_source_transplants_copy_donor_bodies_and_keep_target_helpers() {
             let Observation::Known(source) = native::discover_pair(donor) else {
                 panic!("donor pair");
             };
-            let changed = native::sources::transplant(target, donor, Some(0x600..0x640)).unwrap();
+            let changed = native::sources::transplant(target, donor, None).unwrap();
             let Observation::Known(after) = native::discover_pair(&changed) else {
                 panic!("output pair");
             };
@@ -214,20 +229,56 @@ fn native_source_transplants_copy_donor_bodies_and_keep_target_helpers() {
                 let (old, old_calls) = body(target, before.functions[role]);
                 let (mut expected, donor_calls) = body(donor, source.functions[word]);
                 assert_eq!(old_calls.len(), donor_calls.len());
+                let identity_call = donor_calls[0] - 1;
                 for (from, to) in old_calls.into_iter().zip(donor_calls) {
                     expected[to..to + 3].copy_from_slice(&old[from..from + 3]);
                 }
+                let call = decode_insn(&expected[identity_call..], Target::H8S2000, Mode::Advanced)
+                    .unwrap();
+                let h8_asm::isa::Operand::Address(h8_asm::isa::Ea::Absolute { value, .. }) =
+                    call.insn.operands[0]
+                else {
+                    panic!("absolute call");
+                };
+                assert_eq!(
+                    decode_insn(
+                        &target[(value - 0x410000) as usize..],
+                        Target::H8S2000,
+                        Mode::Advanced
+                    )
+                    .unwrap()
+                    .insn
+                    .mnemonic,
+                    "RTS"
+                );
+                expected.drain(identity_call..identity_call + call.len);
                 assert_eq!(body(&changed, after.functions[word]).0, expected);
             }
+            assert_eq!(
+                native::sources::transplant(&changed, donor, None).unwrap(),
+                changed
+            );
+            let reversed = native::sources::transplant(&changed, target, None).unwrap();
+            let Observation::Known(back) = native::discover_pair(&reversed) else {
+                panic!("reverse pair");
+            };
+            assert_eq!(back.assignment, before.assignment);
+            for word in 0..2 {
+                let (mut expected, calls) = body(target, before.functions[word]);
+                let at = calls[0] - 1;
+                let d = decode_insn(&expected[at..], Target::H8S2000, Mode::Advanced).unwrap();
+                expected.drain(at..at + d.len);
+                assert_eq!(body(&reversed, back.functions[word]).0, expected);
+            }
+            assert!(changed[0x60a..0x620].iter().all(|b| *b == 0xff));
             for (at, (old, new)) in target.iter().zip(&changed).enumerate() {
                 if old != new {
                     assert!(
-                        (0x600..0x640).contains(&at)
-                            || before
-                                .functions
-                                .iter()
-                                .any(|start| (*start..*start + body(target, *start).0.len())
-                                    .contains(&at))
+                        before
+                            .functions
+                            .iter()
+                            .any(|start| (*start..*start + body(target, *start).0.len())
+                                .contains(&at))
                     );
                 }
             }

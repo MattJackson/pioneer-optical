@@ -131,6 +131,13 @@ fn bound_functions(normal: &[u8], proof: &PairedPhase) -> Result<Vec<Function>, 
             start: proof.functions[word],
             end: proof.functions[word] + if word == 0 { 48 } else { 44 },
             operands: proof.operands[word],
+            identity_call: (word == 0).then_some(16..20),
+            body: normal
+                [proof.functions[word]..proof.functions[word] + if word == 0 { 48 } else { 44 }]
+                .to_vec(),
+            spans: alloc::vec![
+                proof.functions[word]..proof.functions[word] + if word == 0 { 48 } else { 44 }
+            ],
         })
         .collect())
 }
@@ -154,6 +161,15 @@ pub fn rewrite(
         return Ok(normal.to_vec());
     }
     let functions = bound_functions(normal, &proof)?;
+    if functions.iter().any(|f| f.spans.len() != 1) {
+        let mut donor = normal.to_vec();
+        for operands in proof.operands {
+            for at in operands {
+                donor[at] ^= 1;
+            }
+        }
+        return transplant(normal, &donor, reservation);
+    }
     let regions = crate::image::regions(normal).ok_or(Error::Unresolved)?;
     let contains = |span: &Range<usize>| {
         regions.stored.iter().any(|r| {
@@ -247,7 +263,9 @@ pub fn rewrite(
 
 /// Copy complete donor channel functions, preserving physical output/control
 /// coordinates and relocating helper calls to the target. Both sides must have
-/// the same native encoder ABI. Growth requires caller-owned executable space.
+/// the same native encoder ABI. Growth reuses the original routine footprint
+/// and spills only whole-instruction overflow into caller-owned executable space.
+/// A direct call to a verified stored RTS is removed from the copied body.
 /// This stage changes no waveform data, persistent values or image integrity.
 pub fn transplant(
     normal: &[u8],
@@ -260,7 +278,7 @@ pub fn transplant(
     let Observation::Known(required) = discover_pair(donor) else {
         return Err(Error::Unresolved);
     };
-    // Exact original function bodies only: adapted synthesized forms are not
+    // Complete OEM bodies, contiguous or split: legacy synthesized forms are not
     // treated as OEM transplant sources by this entry point.
     let parse = |image: &[u8], pair: &PairedPhase| {
         pair.functions
@@ -288,11 +306,19 @@ pub fn transplant(
             })
             .ok_or(Error::Unresolved)?;
         let calls: Vec<u32> = match (function.encoder, source.encoder) {
-            (Encoder::Full(high, low), Encoder::Full(_, _)) => alloc::vec![high, low],
+            (Encoder::Full(high, low), Encoder::Full(_, _)) => {
+                if source.identity_call.is_some() {
+                    alloc::vec![high, low]
+                } else if identity_leaf(normal, high) {
+                    alloc::vec![low]
+                } else {
+                    return Err(Error::Unresolved);
+                }
+            }
             (Encoder::Short(callee), Encoder::Short(_)) => alloc::vec![callee],
             _ => return Err(Error::Unresolved),
         };
-        let mut bytes = donor[source.start..source.end].to_vec();
+        let mut bytes = source.body.clone();
         let mut next_call = calls.into_iter();
         let mut at = 0;
         while at < bytes.len() {
@@ -314,56 +340,63 @@ pub fn transplant(
         if next_call.next().is_some() {
             return Err(Error::Unresolved);
         }
-        let width = function.end - function.start;
+        if bytes == function.body {
+            continue;
+        }
+        // Elide only a complete direct call whose target is a stored RTS.
+        // Remaining bytes are copied OEM instructions; no replacement algorithm.
+        if let (Encoder::Full(high, _), Some(call)) = (function.encoder, &source.identity_call) {
+            if identity_leaf(normal, high) {
+                bytes.drain(call.clone());
+            }
+        }
+        if bytes == function.body {
+            continue;
+        }
+        let original = function.spans.first().ok_or(Error::Unresolved)?.clone();
+        let width = original.len();
+        // Retire all previously owned pieces before placing the new OEM body.
+        for span in &function.spans {
+            super::encoding::nops(&mut output[span.clone()]).ok_or(Error::InvalidSpace)?;
+        }
         if bytes.len() <= width {
-            crate::filters::phase::native::encoding::nops(
-                &mut output[function.start..function.end],
-            )
-            .ok_or(Error::InvalidSpace)?;
-            output[function.start..function.start + bytes.len()].copy_from_slice(&bytes);
+            output[original.start..original.start + bytes.len()].copy_from_slice(&bytes);
         } else {
             let space = reservation.clone().ok_or(Error::SpaceRequired)?;
+            let old_spill = function.spans.get(1);
             if used_space
                 || space.start & 1 != 0
                 || space.end & 1 != 0
-                || space.start > space.end
-                || space.len() < bytes.len()
+                || space.start >= space.end
                 || !contains(&space)
-                || functions
-                    .iter()
-                    .any(|f| space.start < f.end && f.start < space.end)
+                || functions.iter().flat_map(|f| &f.spans).any(|span| {
+                    space.start < span.end && span.start < space.end && Some(span) != old_spill
+                })
                 || !normal
                     .get(space.clone())
                     .is_some_and(|b| b.iter().all(|b| *b == 0xff))
+                    && old_spill != Some(&space)
             {
                 return Err(Error::InvalidSpace);
             }
-            let address = 0x410000usize
-                .checked_add(space.start)
+            let address = u32::try_from(space.start)
+                .ok()
+                .and_then(|a| a.checked_add(0x410000))
                 .filter(|a| *a <= 0xffffff)
-                .ok_or(Error::InvalidSpace)? as u32;
-            let mut end = function.start;
-            while end < function.start + 4 {
-                let decoded = h8_asm::isa::decode_insn(
-                    &normal[end..function.end],
-                    h8_asm::Target::H8S2000,
-                    h8_asm::Mode::Advanced,
-                )
-                .map_err(|_| Error::Unresolved)?;
-                if decoded.len == 0 {
-                    return Err(Error::Unresolved);
-                }
-                end += decoded.len;
+                .ok_or(Error::InvalidSpace)?;
+            let (prefix, spill) = super::placement::split_closed(
+                &bytes,
+                0x410000 + original.start as u32,
+                width,
+                address,
+            )
+            .ok_or(Error::InvalidSpace)?;
+            if spill.len() > space.len() {
+                return Err(Error::InvalidSpace);
             }
-            crate::filters::phase::native::encoding::nops(&mut output[function.start..end])
-                .ok_or(Error::InvalidSpace)?;
-            output[function.start..function.start + 4].copy_from_slice(
-                &crate::filters::phase::native::encoding::jump(address)
-                    .ok_or(Error::InvalidSpace)?,
-            );
-            crate::filters::phase::native::encoding::nops(&mut output[space.clone()])
-                .ok_or(Error::InvalidSpace)?;
-            output[space.start..space.start + bytes.len()].copy_from_slice(&bytes);
+            output[original].copy_from_slice(&prefix);
+            super::encoding::nops(&mut output[space.clone()]).ok_or(Error::InvalidSpace)?;
+            output[space.start..space.start + spill.len()].copy_from_slice(&spill);
             used_space = true;
         }
     }
@@ -436,5 +469,165 @@ mod tests {
             rewrite(&original, Assignment::Swapped, Some(0x300..0x340)),
             Err(Error::InvalidSpace)
         );
+    }
+}
+
+#[cfg(test)]
+mod transplant_tests {
+    use super::*;
+    #[test]
+    fn immediate_return_call_is_removed_and_source_correction_needs_no_spill() {
+        use h8_asm::{
+            isa::{decode_insn, encode_insn, Insn, Operand},
+            Mode, Target,
+        };
+        let mut original = super::super::tests::fixture(false);
+        original.resize(0x800, 0xff);
+        let rts = encode_insn(
+            Insn::new("RTS", None, [Operand::None; 3]),
+            Target::H8S2000,
+            Mode::Advanced,
+        )
+        .unwrap();
+        original[398..400].copy_from_slice(&rts);
+        for start in [32, 160] {
+            let f = full(&original, start).unwrap();
+            let mut at = start;
+            let mut high = true;
+            while at < f.end {
+                let d = decode_insn(&original[at..], Target::H8S2000, Mode::Advanced).unwrap();
+                if d.insn.mnemonic == "JSR" {
+                    super::super::encoding::retarget_call(
+                        &mut original,
+                        at,
+                        if high { 0x41018e } else { 0x410190 },
+                    )
+                    .unwrap();
+                    high = false;
+                }
+                at += d.len;
+            }
+        }
+        let Observation::Known(before) = discover_pair(&original) else {
+            panic!("pair");
+        };
+        let mut donor = original.clone();
+        for operands in before.operands {
+            for at in operands {
+                donor[at] ^= 1;
+            }
+        }
+        let changed = transplant(&original, &donor, None).unwrap();
+        let Observation::Known(after) = discover_pair(&changed) else {
+            panic!("optimized pair");
+        };
+        let functions = bound_functions(&changed, &after).unwrap();
+        assert_eq!(
+            functions.iter().map(|f| f.body.len()).collect::<Vec<_>>(),
+            [40, 44]
+        );
+        assert!(functions
+            .iter()
+            .all(|f| f.identity_call.is_none() && f.spans.len() == 1));
+        assert_eq!(transplant(&changed, &donor, None).unwrap(), changed);
+        let reversed = transplant(&changed, &original, None).unwrap();
+        assert!(
+            matches!(discover_pair(&reversed), Observation::Known(p) if p.assignment == before.assignment)
+        );
+        assert_eq!(&changed[256..], &original[256..]);
+        // One actual instruction before RTS means real work: the call stays.
+        let mut nonempty = original.clone();
+        super::super::encoding::nops(&mut nonempty[398..400]).unwrap();
+        assert_eq!(
+            transplant(&nonempty, &donor, None),
+            Err(Error::SpaceRequired)
+        );
+        let mut invalid = changed.clone();
+        super::super::encoding::nops(&mut invalid[398..400]).unwrap();
+        assert!(!matches!(discover_pair(&invalid), Observation::Known(_)));
+    }
+
+    #[test]
+    fn full_and_short_oem_bodies_spill_only_overflow_and_rebind_both_directions() {
+        for short in [false, true] {
+            let mut original = super::super::tests::fixture(short);
+            original.resize(0x800, 0xff);
+            let Observation::Known(before) = discover_pair(&original) else {
+                panic!("pair");
+            };
+            let mut donor = original.clone();
+            for operands in before.operands {
+                for at in operands {
+                    donor[at] ^= 1;
+                }
+            }
+            let spill_len = if short { 6 } else { 10 };
+            assert_eq!(
+                transplant(&original, &donor, None),
+                Err(Error::SpaceRequired)
+            );
+            assert_eq!(
+                transplant(&original, &donor, Some(0x300..0x300 + spill_len - 2)),
+                Err(Error::InvalidSpace)
+            );
+            let changed = transplant(&original, &donor, Some(0x300..0x300 + spill_len)).unwrap();
+            let Observation::Known(after) = discover_pair(&changed) else {
+                panic!("split pair");
+            };
+            assert_eq!(after.assignment, Assignment::Swapped);
+            let functions = bound_functions(&changed, &after).unwrap();
+            let split = functions.iter().find(|f| f.spans.len() == 2).unwrap();
+            assert_eq!(split.spans[1], 0x300..0x300 + spill_len);
+            assert!(before.functions.contains(&split.start));
+            // Split OEM output is also a valid donor, without copying its jump.
+            assert_eq!(
+                transplant(&original, &changed, Some(0x300..0x300 + spill_len)).unwrap(),
+                changed
+            );
+            let mut jump_at = split.start;
+            loop {
+                let d = h8_asm::isa::decode_insn(
+                    &changed[jump_at..],
+                    h8_asm::Target::H8S2000,
+                    h8_asm::Mode::Advanced,
+                )
+                .unwrap();
+                if d.insn.mnemonic == "JMP" {
+                    break;
+                }
+                jump_at += d.len;
+                assert!(jump_at < split.end);
+            }
+            for destination in [split.start, split.start + 2, 0x7fe] {
+                let mut broken = changed.clone();
+                let jump = super::super::encoding::jump(0x410000 + destination as u32).unwrap();
+                broken[jump_at..jump_at + jump.len()].copy_from_slice(&jump);
+                assert!(!matches!(discover_pair(&broken), Observation::Known(_)));
+            }
+            if !short {
+                let mut broken = changed.clone();
+                broken[split.end - 1] = 0xff;
+                assert!(!matches!(discover_pair(&broken), Observation::Known(_)));
+            }
+
+            assert_eq!(transplant(&changed, &donor, None).unwrap(), changed);
+            let reversed = transplant(&changed, &original, Some(0x320..0x320 + spill_len)).unwrap();
+            let Observation::Known(back) = discover_pair(&reversed) else {
+                panic!("reverse");
+            };
+            assert_eq!(back.assignment, before.assignment);
+            for (a, b) in bound_functions(&reversed, &back)
+                .unwrap()
+                .iter()
+                .zip(bound_functions(&original, &before).unwrap())
+            {
+                assert_eq!(a.body, b.body);
+            }
+            assert!(reversed[0x300..0x300 + spill_len].iter().all(|b| *b == 0));
+            assert_eq!(
+                &changed[0x300 + spill_len..0x320],
+                &original[0x300 + spill_len..0x320]
+            );
+        }
     }
 }

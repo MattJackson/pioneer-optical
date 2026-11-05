@@ -53,6 +53,9 @@ struct Function {
     start: usize,
     end: usize,
     operands: [usize; 2],
+    body: Vec<u8>,
+    identity_call: Option<core::ops::Range<usize>>,
+    spans: Vec<core::ops::Range<usize>>,
 }
 
 fn consume(bytes: &[u8], pos: &mut usize, expected: &[u8]) -> Option<()> {
@@ -79,8 +82,27 @@ fn call(bytes: &[u8], pos: &mut usize) -> Option<u32> {
     let target = u32::from_be_bytes([0, b[0], b[1], b[2]]);
     (target & 1 == 0).then_some(target)
 }
-fn full(raw: &[u8], at: usize) -> Option<Function> {
-    let b = raw.get(at..)?;
+fn identity_leaf(raw: &[u8], address: u32) -> bool {
+    let Some(at) = address.checked_sub(0x410000).map(|at| at as usize) else {
+        return false;
+    };
+    let Some(bytes) = raw.get(at..) else {
+        return false;
+    };
+    let Ok(d) = h8_asm::isa::decode_insn(bytes, h8_asm::Target::H8S2000, h8_asm::Mode::Advanced)
+    else {
+        return false;
+    };
+    d.insn.mnemonic == "RTS"
+        && crate::image::regions(raw).is_some_and(|regions| {
+            regions.stored.iter().any(|r| {
+                let begin = r.as_ptr() as usize - raw.as_ptr() as usize;
+                at >= begin && at + d.len <= begin + r.len()
+            })
+        })
+}
+
+fn full_body(raw: &[u8], b: &[u8], at: usize) -> Option<Function> {
     let mut p = 0;
     consume(
         b,
@@ -90,7 +112,16 @@ fn full(raw: &[u8], at: usize) -> Option<Function> {
         ],
     )?;
     let source = word(b, &mut p, 0x30)?;
-    let high = call(b, &mut p)?;
+    let call_start = p;
+    let instruction =
+        h8_asm::isa::decode_insn(b.get(p..)?, h8_asm::Target::H8S2000, h8_asm::Mode::Advanced)
+            .ok()?;
+    let high = if instruction.insn.mnemonic == "JSR" {
+        Some(call(b, &mut p)?)
+    } else {
+        None
+    };
+    let identity_call = high.map(|_| call_start..p);
     consume(
         b,
         &mut p,
@@ -103,6 +134,16 @@ fn full(raw: &[u8], at: usize) -> Option<Function> {
         return None;
     }
     let low = call(b, &mut p)?;
+    let high = match high {
+        Some(high) => high,
+        None => {
+            let high = low.checked_sub(2)?;
+            if !identity_leaf(raw, high) {
+                return None;
+            }
+            high
+        }
+    };
     if low != high.checked_add(2)?
         || high < 0x400000
         || usize::try_from(low).ok()? >= 0x410000usize.checked_add(raw.len())?
@@ -122,10 +163,12 @@ fn full(raw: &[u8], at: usize) -> Option<Function> {
         start: at,
         end: at + p,
         operands: [control_at, output_at],
+        body: b[..p].to_vec(),
+        identity_call,
+        spans: alloc::vec![at..at + p],
     })
 }
-fn short(raw: &[u8], at: usize) -> Option<Function> {
-    let b = raw.get(at..)?;
+fn short_body(raw: &[u8], b: &[u8], at: usize) -> Option<Function> {
     let mut p = 0;
     consume(b, &mut p, &[0x0c, 0x8a, 0x1a, 0x80, 0x6a, 0x80, 0xf9])?;
     let control_at = at + p;
@@ -151,7 +194,105 @@ fn short(raw: &[u8], at: usize) -> Option<Function> {
         start: at,
         end: at + p,
         operands: [control_at, output_at],
+        body: b[..p].to_vec(),
+        identity_call: None,
+        spans: alloc::vec![at..at + p],
     })
+}
+
+// Existing OEM grammars remain the authority; placement only reconstructs their
+// instruction stream across a single typed JMP. Operand coordinates remain physical.
+fn split_function(
+    raw: &[u8],
+    at: usize,
+    lengths: &[usize],
+    parse: fn(&[u8], &[u8], usize) -> Option<Function>,
+) -> Option<Function> {
+    let regions = crate::image::regions(raw)?;
+    for length in lengths {
+        let Some(mut body) = placement::read(raw, &regions.stored, at, &alloc::vec![None; *length])
+        else {
+            continue;
+        };
+        if body.spans.len() != 2 {
+            continue;
+        }
+        let Some(mut function) = parse(raw, &body.bytes, at) else {
+            continue;
+        };
+        if function.body.len() != body.bytes.len() {
+            continue;
+        }
+        let prefix = body.spans[0]
+            .len()
+            .checked_sub(encoding::jump(0x410000)?.len())?;
+        for operand in &mut function.operands {
+            let logical = operand.checked_sub(at)?;
+            *operand = if logical < prefix {
+                at + logical
+            } else {
+                body.spans[1].start + logical - prefix
+            };
+        }
+        // Full-word growth leaves a typed NOP after its detour. Require the
+        // complete canonical 44-byte entry footprint so a later replacement
+        // can reclaim that padding rather than losing two bytes per rewrite.
+        let footprint = *lengths.first()?;
+        while body.spans[0].end < at.checked_add(footprint)? {
+            let end = body.spans[0].end;
+            let nop = h8_asm::isa::decode_insn(
+                raw.get(end..)?,
+                h8_asm::Target::H8S2000,
+                h8_asm::Mode::Advanced,
+            )
+            .ok()?;
+            if nop.insn.mnemonic != "NOP"
+                || end + nop.len > at + footprint
+                || !regions.stored.iter().any(|r| {
+                    let begin = r.as_ptr() as usize - raw.as_ptr() as usize;
+                    end >= begin && end + nop.len <= begin + r.len()
+                })
+            {
+                return None;
+            }
+            body.spans[0].end += nop.len;
+        }
+        if body.spans[0].start < body.spans[1].end && body.spans[1].start < body.spans[0].end {
+            return None;
+        }
+        function.end = body.spans[0].end;
+        function.body = body.bytes;
+        function.spans = body.spans;
+        return Some(function);
+    }
+    None
+}
+fn full(raw: &[u8], at: usize) -> Option<Function> {
+    let mut f = full_body(raw, raw.get(at..)?, at)
+        .or_else(|| split_function(raw, at, &[44, 48], full_body))?;
+    if f.identity_call.is_none() && f.body.len() == 40 {
+        let mut end = f.end;
+        while end < at + 44 {
+            let d = h8_asm::isa::decode_insn(
+                raw.get(end..)?,
+                h8_asm::Target::H8S2000,
+                h8_asm::Mode::Advanced,
+            )
+            .ok()?;
+            if d.insn.mnemonic != "NOP" || end + d.len > at + 44 {
+                break;
+            }
+            end += d.len;
+        }
+        if end == at + 44 {
+            f.end = end;
+            f.spans[0].end = end;
+        }
+    }
+    Some(f)
+}
+fn short(raw: &[u8], at: usize) -> Option<Function> {
+    short_body(raw, raw.get(at..)?, at).or_else(|| split_function(raw, at, &[26, 28], short_body))
 }
 
 /// Recognize the complete paired output functions in decoded H8 Normal.
@@ -167,7 +308,12 @@ pub fn discover_pair(normal: &[u8]) -> Observation<PairedPhase> {
         let start = region.as_ptr() as usize - normal.as_ptr() as usize;
         let end = start + region.len();
         let mut candidates = Vec::new();
-        for prefix in [&[1, 0, 0x6d, 0xf3][..], &[0x0c, 0x8a, 0x1a, 0x80][..]] {
+        for prefix in [
+            &[
+                1, 0, 0x6d, 0xf3, 0x1a, 0xb3, 0x0c, 0x8b, 0x10, 0x73, 0x0a, 0x93,
+            ][..],
+            &[0x0c, 0x8a, 0x1a, 0x80][..],
+        ] {
             let pattern: Vec<_> = prefix.iter().copied().map(Some).collect();
             candidates.extend(super::bundle::sites(normal, &[*region], &pattern));
         }
@@ -215,7 +361,13 @@ pub fn discover_pair(normal: &[u8]) -> Observation<PairedPhase> {
     }
     functions.sort_by_key(|f| f.word);
     let (a, b) = (&functions[0], &functions[1]);
-    if a.word != 0 || b.word != 1 || a.encoder != b.encoder {
+    if a.word != 0
+        || b.word != 1
+        || a.encoder != b.encoder
+        || a.spans
+            .iter()
+            .any(|a| b.spans.iter().any(|b| a.start < b.end && b.start < a.end))
+    {
         return Observation::Unresolved(Unresolved::ReaderNotRecognized);
     }
     let assignment = match (a.control, a.output, b.control, b.output) {

@@ -186,6 +186,12 @@ impl CorrectionPlan<'_> {
         &self.corrections
     }
 
+    /// Read-only live requirements supplied by the selected correction owners.
+    /// The receiver must verify these before transferring any firmware stage.
+    pub fn required_words(&self) -> Result<Vec<crate::filters::prerequisites::OwnedWord>, Error> {
+        self.runner.required_words()
+    }
+
     /// Every registered owner result, including operational requirements and
     /// explicit family waivers. No platform-specific field list is applied.
     pub fn filters(&self) -> &[crate::filters::runner::Decision] {

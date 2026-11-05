@@ -7,6 +7,9 @@ use crate::compatibility::{Error, Firmware};
 use crate::image::matrix::{AtaEvidence, SatEvidence, SatPlatform};
 use alloc::{boxed::Box, string::String, vec::Vec};
 
+/// Read-only device prerequisites owned by correction operations.
+pub mod prerequisites;
+
 /// Native, explicitly sized values used by filter-owned contracts.
 /// Presentation labels and source coordinates never become identity bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -356,6 +359,11 @@ pub trait Operation: core::fmt::Debug + Send + Sync {
     fn filter_id(&self) -> &'static str;
     /// Prepare corrected decoded Normal bytes under exact component/codec guards.
     fn prepare(&self, context: &Preparation<'_>) -> Result<Option<Vec<u8>>, Error>;
+    /// Device words that must already have these values before any transfer.
+    /// This is a read-only condition, never authorization to change a word.
+    fn required_words(&self) -> Vec<prerequisites::Word> {
+        Vec::new()
+    }
     /// Native checksum contract for atomic composition with another owner.
     /// Absence never authorizes guessing a checksum field or algorithm.
     fn integrity(&self) -> Option<Integrity> {

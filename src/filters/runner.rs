@@ -71,6 +71,13 @@ impl Plan<'_> {
         self.decisions.iter().filter_map(Decision::operation)
     }
 
+    /// Collect the read-only conditions from the same selected operations that
+    /// prepare and verify image effects. Family override cannot waive them.
+    pub fn required_words(&self) -> Result<Vec<super::prerequisites::OwnedWord>, Error> {
+        self.admit()?;
+        super::prerequisites::collect(self.operations())
+    }
+
     /// Refuse any unwaived owner failure before preparing files or device I/O.
     pub fn admit(&self) -> Result<(), Error> {
         if self.policy == Policy::Strict {
@@ -89,7 +96,7 @@ impl Plan<'_> {
             .find(|error| !matches!(error, Error::Incompatible | Error::UnresolvedIdentity));
         match specific.or_else(|| self.decisions.iter().find_map(|decision| decision.blocked)) {
             Some(error) => Err(error),
-            None => Ok(()),
+            None => super::prerequisites::collect(self.operations()).map(|_| ()),
         }
     }
 
@@ -379,6 +386,64 @@ fn compose(
 mod tests {
     use super::*;
     use crate::filters::{be32_normal_integrity, Value};
+
+    #[test]
+    fn family_override_cannot_waive_conflicting_owner_read_conditions() {
+        use crate::filters::prerequisites::Word;
+        #[derive(Debug)]
+        struct ReadOwner(&'static str, u16);
+        impl Operation for ReadOwner {
+            fn filter_id(&self) -> &'static str {
+                self.0
+            }
+            fn required_words(&self) -> Vec<Word> {
+                vec![Word {
+                    parameter: 0x28f,
+                    value: self.1,
+                }]
+            }
+            fn prepare(&self, _: &Preparation<'_>) -> Result<Option<Vec<u8>>, Error> {
+                Ok(None)
+            }
+            fn verify(&self, _: &Preparation<'_>, _: &[u8]) -> Result<(), Error> {
+                Ok(())
+            }
+        }
+        let decision = |id, value| {
+            let assessment =
+                Assessment::known(id, Role::Hardware, Value::U16(value), "native condition");
+            Decision {
+                id,
+                installed: assessment.clone(),
+                target: assessment,
+                comparison: Comparison::Match,
+                waived: false,
+                operation: Some(Box::new(ReadOwner(id, value))),
+                blocked: None,
+            }
+        };
+        let mut plan = Plan {
+            target: Firmware {
+                hardware: "SAT 8600",
+                normal: &[],
+                kernel: None,
+            },
+            decisions: vec![decision("phase", 1), decision("startup", 0)],
+            domain_comparison: Comparison::Different,
+            policy: Policy::FamilyOverride,
+        };
+        assert_eq!(plan.admit(), Err(Error::VerificationFailed));
+        assert_eq!(plan.required_words(), Err(Error::VerificationFailed));
+        plan.decisions[1] = decision("startup", 1);
+        assert_eq!(plan.admit(), Ok(()));
+        let words = plan.required_words().unwrap();
+        assert_eq!(
+            words.iter().map(|w| w.filter).collect::<Vec<_>>(),
+            ["phase", "startup"]
+        );
+        plan.decisions[1].blocked = Some(Error::Unsupported);
+        assert_eq!(plan.required_words(), Err(Error::Unsupported));
+    }
 
     #[derive(Clone, Copy)]
     enum Contract {

@@ -1381,3 +1381,48 @@ fn native_oem_compositions_round_trip_original_envelopes() {
         );
     }
 }
+
+#[test]
+fn native_oem_loader_rejects_changed_writer_abi() {
+    use bundle::waveforms::loader::{self, writer};
+    for (_, target_hash, donor_hash) in native_oem_pairs() {
+        let target = native_spans(&target_hash);
+        let donor = native_spans(&donor_hash);
+        let before = loader::observe(&target).unwrap();
+        let source = loader::observe(&donor).unwrap();
+        let destination = writer::observe(&target, before.writer).unwrap();
+        let original = writer::observe(&donor, source.writer).unwrap();
+        assert_eq!(destination.program.len(), 112);
+        assert_eq!(original.program.len(), 112);
+        for i in 0..112 {
+            if (100..104).contains(&i) {
+                continue;
+            }
+            assert_eq!(
+                target[destination.program.start + i],
+                donor[original.program.start + i]
+            );
+        }
+        // A changed register, port, loop branch or return is not ABI-equivalent.
+        for offset in [4, 59, 72, 110] {
+            let mut broken = donor.clone();
+            broken[original.program.start + offset] ^= 2;
+            assert!(writer::observe(&broken, source.writer).is_err());
+            assert_eq!(
+                loader::transplant_plain(
+                    &target,
+                    &broken,
+                    source.tables.unwrap(),
+                    Some(0x600..0x700)
+                ),
+                Err(loader::Error::ResourceMismatch)
+            );
+        }
+        let mut broken = target.clone();
+        broken[destination.program.end - 1] ^= 2;
+        assert_eq!(
+            loader::transplant_plain(&broken, &donor, source.tables.unwrap(), Some(0x600..0x700)),
+            Err(loader::Error::ResourceMismatch)
+        );
+    }
+}

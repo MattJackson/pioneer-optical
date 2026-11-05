@@ -264,7 +264,8 @@ pub fn rewrite(
     }
     let mut changed = normal.to_vec();
     if code.len() <= before.program.len() {
-        changed[before.program.clone()].fill(0);
+        crate::filters::phase::native::encoding::nops(&mut changed[before.program.clone()])
+            .ok_or(Error::InvalidSpace)?;
         changed[before.program.start..before.program.start + code.len()].copy_from_slice(&code);
     } else {
         let space = reservation.ok_or(Error::SpaceRequired)?;
@@ -284,13 +285,11 @@ pub fn rewrite(
             .checked_add(space.start)
             .filter(|a| *a <= 0xffffff)
             .ok_or(Error::InvalidSpace)? as u32;
-        changed[before.program.start..before.program.start + 4].copy_from_slice(&[
-            0x5a,
-            address.to_be_bytes()[1],
-            address.to_be_bytes()[2],
-            address.to_be_bytes()[3],
-        ]);
-        changed[space.clone()].fill(0);
+        changed[before.program.start..before.program.start + 4].copy_from_slice(
+            &crate::filters::phase::native::encoding::jump(address).ok_or(Error::InvalidSpace)?,
+        );
+        crate::filters::phase::native::encoding::nops(&mut changed[space.clone()])
+            .ok_or(Error::InvalidSpace)?;
         changed[space.start..space.start + code.len()].copy_from_slice(&code);
     }
     let after = observe(&changed)?;
@@ -385,7 +384,8 @@ pub fn transplant_plain(
     }
     let mut changed = normal.to_vec();
     if code.len() <= before.program.len() {
-        changed[before.program.clone()].fill(0);
+        crate::filters::phase::native::encoding::nops(&mut changed[before.program.clone()])
+            .ok_or(Error::InvalidSpace)?;
         changed[before.program.start..before.program.start + code.len()].copy_from_slice(&code);
     } else {
         let space = reservation.ok_or(Error::SpaceRequired)?;
@@ -405,13 +405,11 @@ pub fn transplant_plain(
             .checked_add(space.start)
             .filter(|a| *a <= 0xffffff)
             .ok_or(Error::InvalidSpace)? as u32;
-        changed[before.program.start..before.program.start + 4].copy_from_slice(&[
-            0x5a,
-            address.to_be_bytes()[1],
-            address.to_be_bytes()[2],
-            address.to_be_bytes()[3],
-        ]);
-        changed[space.clone()].fill(0);
+        changed[before.program.start..before.program.start + 4].copy_from_slice(
+            &crate::filters::phase::native::encoding::jump(address).ok_or(Error::InvalidSpace)?,
+        );
+        crate::filters::phase::native::encoding::nops(&mut changed[space.clone()])
+            .ok_or(Error::InvalidSpace)?;
         changed[space.start..space.start + code.len()].copy_from_slice(&code);
     }
     let after = observe(&changed)?;

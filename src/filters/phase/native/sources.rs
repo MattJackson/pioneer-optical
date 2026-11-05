@@ -188,7 +188,10 @@ pub fn rewrite(
         );
         let width = function.end - function.start;
         if bytes.len() <= width {
-            output[function.start..function.end].fill(0);
+            crate::filters::phase::native::encoding::nops(
+                &mut output[function.start..function.end],
+            )
+            .ok_or(Error::InvalidSpace)?;
             output[function.start..function.start + bytes.len()].copy_from_slice(&bytes);
         } else {
             let space = reservation.clone().ok_or(Error::SpaceRequired)?;
@@ -224,14 +227,14 @@ pub fn rewrite(
                 }
                 end += decoded.len;
             }
-            output[function.start..end].fill(0);
-            output[function.start..function.start + 4].copy_from_slice(&[
-                0x5a,
-                address.to_be_bytes()[1],
-                address.to_be_bytes()[2],
-                address.to_be_bytes()[3],
-            ]);
-            output[space.clone()].fill(0);
+            crate::filters::phase::native::encoding::nops(&mut output[function.start..end])
+                .ok_or(Error::InvalidSpace)?;
+            output[function.start..function.start + 4].copy_from_slice(
+                &crate::filters::phase::native::encoding::jump(address)
+                    .ok_or(Error::InvalidSpace)?,
+            );
+            crate::filters::phase::native::encoding::nops(&mut output[space.clone()])
+                .ok_or(Error::InvalidSpace)?;
             output[space.start..space.start + bytes.len()].copy_from_slice(&bytes);
             used_space = true;
         }
@@ -313,7 +316,10 @@ pub fn transplant(
         }
         let width = function.end - function.start;
         if bytes.len() <= width {
-            output[function.start..function.end].fill(0);
+            crate::filters::phase::native::encoding::nops(
+                &mut output[function.start..function.end],
+            )
+            .ok_or(Error::InvalidSpace)?;
             output[function.start..function.start + bytes.len()].copy_from_slice(&bytes);
         } else {
             let space = reservation.clone().ok_or(Error::SpaceRequired)?;
@@ -349,14 +355,14 @@ pub fn transplant(
                 }
                 end += decoded.len;
             }
-            output[function.start..end].fill(0);
-            output[function.start..function.start + 4].copy_from_slice(&[
-                0x5a,
-                address.to_be_bytes()[1],
-                address.to_be_bytes()[2],
-                address.to_be_bytes()[3],
-            ]);
-            output[space.clone()].fill(0);
+            crate::filters::phase::native::encoding::nops(&mut output[function.start..end])
+                .ok_or(Error::InvalidSpace)?;
+            output[function.start..function.start + 4].copy_from_slice(
+                &crate::filters::phase::native::encoding::jump(address)
+                    .ok_or(Error::InvalidSpace)?,
+            );
+            crate::filters::phase::native::encoding::nops(&mut output[space.clone()])
+                .ok_or(Error::InvalidSpace)?;
             output[space.start..space.start + bytes.len()].copy_from_slice(&bytes);
             used_space = true;
         }

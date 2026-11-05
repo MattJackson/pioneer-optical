@@ -13,6 +13,8 @@ pub mod arithmetic;
 /// Bounded source-word exchange stage for complete native paired programs.
 pub mod sources;
 
+pub(crate) mod encoding;
+
 use crate::image::layout::{Observation, Unresolved};
 use alloc::vec::Vec;
 

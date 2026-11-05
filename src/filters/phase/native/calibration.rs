@@ -152,14 +152,12 @@ pub fn rewrite(
             .checked_add(space.start)
             .filter(|a| *a <= 0xffffff)
             .ok_or(Error::InvalidSpace)? as u32;
-        changed[space.clone()].fill(0);
+        crate::filters::phase::native::encoding::nops(&mut changed[space.clone()])
+            .ok_or(Error::InvalidSpace)?;
         changed[space.start..space.start + program.len()].copy_from_slice(&program);
-        changed[before.at..before.at + 4].copy_from_slice(&[
-            0x5a,
-            address.to_be_bytes()[1],
-            address.to_be_bytes()[2],
-            address.to_be_bytes()[3],
-        ]);
+        changed[before.at..before.at + 4].copy_from_slice(
+            &crate::filters::phase::native::encoding::jump(address).ok_or(Error::InvalidSpace)?,
+        );
     }
     if observe(&changed)? != required {
         return Err(Error::VerificationFailed);
@@ -197,7 +195,8 @@ pub fn transplant(
     let original = before.at..before.at + size(&before);
     let mut changed = target.to_vec();
     if code.len() <= original.len() {
-        changed[original.clone()].fill(0);
+        crate::filters::phase::native::encoding::nops(&mut changed[original.clone()])
+            .ok_or(Error::InvalidSpace)?;
         changed[original.start..original.start + code.len()].copy_from_slice(&code);
     } else {
         let space = reservation.ok_or(Error::SpaceRequired)?;
@@ -222,14 +221,12 @@ pub fn transplant(
             .checked_add(space.start)
             .filter(|a| *a <= 0xffffff)
             .ok_or(Error::InvalidSpace)? as u32;
-        changed[space.clone()].fill(0);
+        crate::filters::phase::native::encoding::nops(&mut changed[space.clone()])
+            .ok_or(Error::InvalidSpace)?;
         changed[space.start..space.start + code.len()].copy_from_slice(&code);
-        changed[original.start..original.start + 4].copy_from_slice(&[
-            0x5a,
-            address.to_be_bytes()[1],
-            address.to_be_bytes()[2],
-            address.to_be_bytes()[3],
-        ]);
+        changed[original.start..original.start + 4].copy_from_slice(
+            &crate::filters::phase::native::encoding::jump(address).ok_or(Error::InvalidSpace)?,
+        );
     }
     let actual = bind(&changed)?;
     if actual.convention != source.convention

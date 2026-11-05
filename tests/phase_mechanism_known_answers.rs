@@ -166,6 +166,56 @@ fn native_sparse_bundle_uses_complete_loader_negation_and_checks_resource_relati
 }
 
 #[test]
+fn native_sparse_software_dispatch_distinguishes_image_choices_from_runtime_producers() {
+    use bundle::waveforms::resources::software::{self, Source};
+    for (hash, modes, addresses, runtime) in [
+        (
+            "368543ee7e7edb433c6378a0b75b9e761e810f97413bb9f617bbef421663c725",
+            [Some(1), Some(3), Some(4), None],
+            [0x5b22b0, 0x5b23b0, 0x5b23b0, 0x5b21b0],
+            false,
+        ),
+        (
+            "8037cdb3ae67e04a82aa3e9b7a0f52202e17f1e39d1f50b894158d9be0cec898",
+            [Some(1), Some(3), Some(2), None],
+            [0xa078d6, 0xa07ad6, 0xa079d6, 0xa077d6],
+            true,
+        ),
+        (
+            "99ba77ae1cedc967096c770b21c066d04a5163f1c5a4aa82f27584c6faced796",
+            [Some(1), Some(4), Some(3), None],
+            [0xa06a2e, 0xa06c2e, 0xa06b2e, 0xa0692e],
+            true,
+        ),
+    ] {
+        let image = native_spans(hash);
+        let binding = software::observe(&image).unwrap();
+        assert_eq!(binding.choices.len(), 4);
+        for ((mode, source), (expected_mode, address)) in
+            binding.choices.iter().zip(modes.into_iter().zip(addresses))
+        {
+            assert_eq!(*mode, expected_mode);
+            assert_eq!(
+                source,
+                &if runtime {
+                    Source::Runtime(address)
+                } else {
+                    let at = (address - 0x410000) as usize;
+                    Source::Image(at..at + 256)
+                }
+            );
+        }
+        let mut mismatch = image.clone();
+        let store = binding.selector.end - 3;
+        mismatch[store] ^= 2;
+        assert!(software::observe(&mismatch).is_err());
+        let mut broken_branch = image.clone();
+        broken_branch[binding.dispatch.start + 23] ^= 2;
+        assert!(software::observe(&broken_branch).is_err());
+    }
+}
+
+#[test]
 #[ignore = "requires PIONEER_NORMAL_CORPUS with decoded Normal images named by SHA256"]
 fn reviewed_ud02_outputs_bind_and_support_operand_only_phase_round_trips() {
     let root = std::path::PathBuf::from(std::env::var("PIONEER_NORMAL_CORPUS").unwrap());

@@ -7,6 +7,8 @@ use crate::image::layout::Observation;
 use alloc::vec::Vec;
 use core::ops::Range;
 mod shapes;
+/// Software-table dispatch and selector observation; generation proof is separate.
+pub mod software;
 
 /// Why the native resource graph could not be established.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

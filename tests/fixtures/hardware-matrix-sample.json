@@ -263,7 +263,7 @@
             "SAT 1xxx",
             "SAT 8xxx/9xxx"
           ],
-          "text": "A differing native H8 comparison is corrected only with both complete getter bindings. Missing evidence never selects FFFF. An unresolved installed comparison can admit an unchanged bound target only with equal Normal-owned reader layouts and a read-only target-word prerequisite. Exact component preservation needs no correction; other unresolved transitions refuse. Persistent banks and independent hardware checks remain required."
+          "text": "A differing native H8 comparison is corrected only with both complete getter bindings. Missing evidence never selects FFFF. An unresolved installed comparison can admit an unchanged bound target only with equal Normal-owned reader layouts and a read-only target-word prerequisite. Exact component preservation needs no correction; other unresolved transitions refuse. A missing Kernel-resident getter remains unresolved and cannot use the read-only fallback. Persistent banks and independent hardware checks remain required."
         },
         {
           "platforms": [

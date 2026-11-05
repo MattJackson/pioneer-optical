@@ -470,7 +470,7 @@ mod tests {
         assert_eq!(analyze(&b), Ok(Analysis::Unknown));
     }
     #[test]
-    fn conditional_alternative_preserves_only_the_unconditional_fe23_selection() {
+    fn conditional_alternative_preserves_primary_selection_without_bypassing_fe09() {
         use crate::image::layout::{install_test_layout, Observation};
         let mut normal = alloc::vec![0xff; 0x6000];
         install_test_layout(&mut normal, 0x1000);
@@ -492,10 +492,15 @@ mod tests {
         assert!(conditional_loader_flag(&tail, &normal));
         assert_eq!(setting(&normal).unwrap().value, 0xfe23);
         assert!(matches!(bound_selection(&normal), Observation::Known(_)));
-        for value in [0x09, 0x24] {
-            normal[0x8b] = value;
-            assert_eq!(analyze(&normal), Ok(Analysis::Unknown));
-        }
+        // A rewritten primary word retains the complete FE09 predicate arm.
+        normal[0x8b] = 0x24;
+        assert!(matches!(analyze(&normal), Ok(Analysis::Required(r)) if r.required == 0xfe24));
+        assert!(
+            matches!(bound_selection(&normal), Observation::Known(b) if b.requirement.required == 0xfe24)
+        );
+        // FE09 cannot become the primary equal branch and bypass its predicate.
+        normal[0x8b] = 0x09;
+        assert_eq!(analyze(&normal), Ok(Analysis::Unknown));
         normal[0x8b] = 0x23;
         for at in 0..tail.len() {
             if [9usize, 31, 37, 43]

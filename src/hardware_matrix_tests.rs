@@ -32,12 +32,9 @@ fn every_registered_filter_declares_rules_matching_its_behaviour() {
         assert!(!rules.description.trim().is_empty(), "{}", filter.id());
         assert!(!rules.correction.trim().is_empty(), "{}", filter.id());
         assert!(rules.policies.iter().all(|p| !p.text.trim().is_empty()));
-        assert_eq!(
-            rules.correctability == Correctability::Operational,
-            rules.role == Role::Operational,
-            "{}",
-            filter.id()
-        );
+        if rules.correctability == Correctability::Operational {
+            assert_eq!(rules.role, Role::Operational, "{}", filter.id());
+        }
         for domain in Domain::ALL {
             let hardware = match domain {
                 Domain::Sat1 => "SAT 1050",
@@ -67,7 +64,7 @@ fn every_registered_filter_declares_rules_matching_its_behaviour() {
     assert_eq!(rules("phase").correctability, Correctability::Guarded);
     assert_eq!(
         rules("startup-prerequisite").correctability,
-        Correctability::Operational
+        Correctability::Guarded
     );
 }
 
@@ -229,6 +226,11 @@ fn matching_family_excludes_phase_but_unproven_correction_still_refuses() {
     let contract = |convention| {
         let mut body = alloc::vec![0xff; 0x2000];
         crate::image::matrix::install_test_contract(&mut body, 0x12);
+        body[0x680..0x694].copy_from_slice(&[
+            0x79, 0, 0, 0x9f, 0x5e, 0x41, 0x10, 0, 0x79, 0x20, 0xfe, 0x24, 0x47, 6, 0xf8, 1, 0x5e,
+            0x41, 0x06, 0xa0,
+        ]);
+        body[0x6a0..0x6a6].copy_from_slice(&[0x5e, 0x40, 0x0a, 0x1a, 0x54, 0x70]);
         body[0xc00..0xd00].fill(0xff);
         body[0xf00..0x1000].fill(0xff);
         bundle::tests::install(

@@ -32,6 +32,28 @@ fn native_spans(hash: &str) -> Vec<u8> {
 }
 
 #[test]
+fn native_oem_all_reference_pairs_compose_with_small_conversion_spills() {
+    for (id, target_hash, donor_hash) in native_oem_pairs() {
+        let target = native_spans(&target_hash);
+        let donor = native_spans(&donor_hash);
+        let mut space = test_space();
+        // Each reservation is smaller than every complete conversion routine.
+        // Whole-body detours cannot satisfy this placement contract.
+        space.conversions = [Some(0x400..0x418), Some(0x440..0x458), Some(0x484..0x49c)];
+        let changed = bundle::composition::transplant(&target, &donor, space, Some(0x600..0x700))
+            .unwrap_or_else(|e| panic!("{id}: {e:?}"));
+        let mut expected = bundle::bind(&donor).unwrap();
+        expected.table_select_0x28f = bundle::bind(&target).unwrap().table_select_0x28f;
+        assert_eq!(bundle::bind(&changed).unwrap(), expected, "{id}");
+        assert_eq!(&changed[..24], &target[..24]);
+        // The unused remainder of each old whole-body reservation stays erased.
+        for gap in [0x418..0x440, 0x458..0x484, 0x49c..0x4b8] {
+            assert_eq!(&changed[gap.clone()], &target[gap], "{id}");
+        }
+    }
+}
+
+#[test]
 fn native_oem_ud02_composition_relocates_indirect_loads_without_new_instructions() {
     use bundle::waveforms::{loader, resources};
     let cases: serde_json::Value =

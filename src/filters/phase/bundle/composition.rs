@@ -45,6 +45,8 @@ pub fn rewrite(target: &[u8], installed: &[u8], space: Space) -> Result<Vec<u8>,
 /// Compose actual OEM donor routines and tables, with target helper relocation.
 /// The caller owns all executable reservations and live read prerequisites.
 /// Indirect donor table loads use read-only pointer cells in loader_space.
+/// Straight-line conversions reuse their original space and spill only overflow;
+/// other growing routines still require reservations for their complete bodies.
 pub fn transplant(
     target: &[u8],
     installed: &[u8],
@@ -92,7 +94,12 @@ fn compose(
         }
     }
     let stages = [
-        conversions::rewrite(target, installed, space.conversions).map_err(Error::Conversions)?,
+        if native_donor {
+            conversions::rewrite_compact(target, installed, space.conversions)
+        } else {
+            conversions::rewrite(target, installed, space.conversions)
+        }
+        .map_err(Error::Conversions)?,
         conversions::rewrite_controls(target, installed).map_err(Error::Conversions)?,
         super::rewrite_step_offsets(
             target,

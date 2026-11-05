@@ -26,6 +26,7 @@ struct Program {
     templates: &'static [Template],
     variant: u8,
     at: usize,
+    body: native::linear::Body,
 }
 fn programs(normal: &[u8]) -> Result<Vec<Program>, Error> {
     let regions = crate::image::regions(normal).ok_or(Error::InvalidProgram)?;
@@ -36,16 +37,43 @@ fn programs(normal: &[u8]) -> Result<Vec<Program>, Error> {
     ]
     .into_iter()
     .map(|(element, templates)| {
-        let (variant, at) =
-            one_of(normal, &regions.stored, templates, element).map_err(Error::Unbound)?;
+        let (variant, at, body) =
+            locate(normal, &regions.stored, templates, element).map_err(Error::Unbound)?;
         Ok(Program {
             element,
             templates,
             variant,
             at,
+            body,
         })
     })
     .collect()
+}
+
+/// Bind contiguous or single-spill OEM conversions through h8-asm searches.
+pub(super) fn locate(
+    normal: &[u8],
+    stored: &[&[u8]],
+    templates: &[Template],
+    element: Element,
+) -> Result<(u8, usize, native::linear::Body), Unbound> {
+    let mut found = None;
+    for (variant, template) in templates.iter().enumerate() {
+        // Search a complete first instruction, including any address holes.
+        let concrete: Vec<_> = template.iter().map(|b| b.unwrap_or(0)).collect();
+        let first =
+            h8_asm::isa::decode_insn(&concrete, h8_asm::Target::H8S2000, h8_asm::Mode::Advanced)
+                .map_err(|_| Unbound::Missing(element))?;
+        for at in sites(normal, stored, &template[..first.len]) {
+            if let Some(body) = native::linear::read(normal, stored, at, template) {
+                if found.is_some() {
+                    return Err(Unbound::Ambiguous(element));
+                }
+                found = Some((variant as u8, at, body));
+            }
+        }
+    }
+    found.ok_or(Unbound::Missing(element))
 }
 
 // Every hole in these complete templates is a 24-bit absolute JSR operand.
@@ -69,7 +97,7 @@ fn calls(template: Template) -> Result<Vec<usize>, Error> {
     }
     Ok(found)
 }
-fn emit(normal: &[u8], from: &Program, donor: &[u8], desired: &Program) -> Result<Vec<u8>, Error> {
+fn emit(normal: &[u8], from: &Program, _donor: &[u8], desired: &Program) -> Result<Vec<u8>, Error> {
     let before = from.templates[from.variant as usize];
     if from.element != desired.element {
         return Err(Error::InvalidProgram);
@@ -82,13 +110,12 @@ fn emit(normal: &[u8], from: &Program, donor: &[u8], desired: &Program) -> Resul
     }
     // Transplant the actual recognized OEM body. Templates establish its
     // semantics; they are not a source of newly assembled replacement code.
-    let mut bytes = donor
-        .get(desired.at..desired.at + after.len())
-        .ok_or(Error::InvalidProgram)?
-        .to_vec();
+    let mut bytes = desired.body.bytes.clone();
     for (old, new) in old_calls.into_iter().zip(new_calls) {
-        let operand = normal
-            .get(from.at + old..from.at + old + 3)
+        let operand = from
+            .body
+            .bytes
+            .get(old..old + 3)
             .ok_or(Error::InvalidProgram)?;
         let address = u32::from_be_bytes([0, operand[0], operand[1], operand[2]]);
         if address & 1 != 0 || address < 0x400000 || address >= 0x410000 + normal.len() as u32 {
@@ -133,6 +160,25 @@ pub fn rewrite(
     installed: &[u8],
     reservations: [Option<Range<usize>>; 3],
 ) -> Result<Vec<u8>, Error> {
+    rewrite_with_layout(target, installed, reservations, false)
+}
+
+/// Reuse the replaced routine's space and spill only whole-instruction overflow.
+/// Reservations still require independent ownership and entry-point proof.
+pub fn rewrite_compact(
+    target: &[u8],
+    installed: &[u8],
+    reservations: [Option<Range<usize>>; 3],
+) -> Result<Vec<u8>, Error> {
+    rewrite_with_layout(target, installed, reservations, true)
+}
+
+fn rewrite_with_layout(
+    target: &[u8],
+    installed: &[u8],
+    reservations: [Option<Range<usize>>; 3],
+    compact: bool,
+) -> Result<Vec<u8>, Error> {
     let from = programs(target)?;
     let required = programs(installed)?;
     let regions = crate::image::regions(target).ok_or(Error::InvalidProgram)?;
@@ -148,31 +194,63 @@ pub fn rewrite(
             continue;
         }
         let bytes = emit(target, program, installed, desired)?;
-        let original = program.at..program.at + program.templates[program.variant as usize].len();
+        if !compact && program.body.spans.len() != 1 {
+            return Err(Error::InvalidProgram);
+        }
+        let original = program.body.spans[0].clone();
+        let prior_spill = program.body.spans.get(1);
         if bytes.len() <= original.len() {
             let mut padded = bytes;
             pad_nops(&mut padded, original.len())?;
             writes.push((original, padded));
+            if let Some(retired) = prior_spill {
+                let mut padding = Vec::new();
+                pad_nops(&mut padding, retired.len())?;
+                writes.push((retired.clone(), padding));
+            }
         } else {
             let space = reservations[i]
                 .clone()
+                .or_else(|| if compact { prior_spill.cloned() } else { None })
                 .ok_or(Error::SpaceRequired(program.element))?;
+            let reusing_spill = compact && prior_spill == Some(&space);
             if space.start & 1 != 0
                 || space.end & 1 != 0
                 || space.end < space.start
-                || space.len() < bytes.len()
+                || (!compact && space.len() < bytes.len())
                 || !contains(&space)
-                || !target
-                    .get(space.clone())
-                    .is_some_and(|b| b.iter().all(|b| *b == 0xff))
+                || (!reusing_spill
+                    && !target
+                        .get(space.clone())
+                        .is_some_and(|b| b.iter().all(|b| *b == 0xff)))
                 || from.iter().any(|p| {
-                    overlaps(
-                        &space,
-                        &(p.at..p.at + p.templates[p.variant as usize].len()),
-                    )
+                    p.body.spans.iter().any(|span| {
+                        overlaps(&space, span)
+                            && !(reusing_spill && p.at == program.at && Some(span) == prior_spill)
+                    })
                 })
             {
                 return Err(Error::InvalidSpace);
+            }
+            if compact {
+                let address = BASE_ADDRESS
+                    .checked_add(space.start)
+                    .and_then(|a| u32::try_from(a).ok())
+                    .ok_or(Error::InvalidSpace)?;
+                let (prefix, mut spill) = native::linear::split(&bytes, original.len(), address)
+                    .ok_or(Error::InvalidProgram)?;
+                if spill.len() > space.len() {
+                    return Err(Error::InvalidSpace);
+                }
+                pad_nops(&mut spill, space.len())?;
+                writes.push((original, prefix));
+                writes.push((space, spill));
+                if let Some(retired) = prior_spill.filter(|_| !reusing_spill) {
+                    let mut padding = Vec::new();
+                    pad_nops(&mut padding, retired.len())?;
+                    writes.push((retired.clone(), padding));
+                }
+                continue;
             }
             let mut end = program.at;
             while end < program.at + 4 {
@@ -300,6 +378,90 @@ mod tests {
     }
     fn spaces() -> [Option<Range<usize>>; 3] {
         [Some(0x500..0x580), Some(0x580..0x600), Some(0x600..0x680)]
+    }
+
+    #[test]
+    fn compact_conversion_spills_only_overflow_and_preserves_oem_instruction_order() {
+        for a in [[0, 0, 0], [1, 1, 1], [1, 2, 2]] {
+            for b in [[0, 0, 0], [1, 1, 1], [1, 2, 2]] {
+                let target = fixture(a, 0x410780);
+                let donor = fixture(b, 0x410790);
+                let reservations = [Some(0x500..0x518), Some(0x520..0x538), Some(0x540..0x558)];
+                let changed = rewrite_compact(&target, &donor, reservations.clone()).unwrap();
+                let actual = programs(&changed).unwrap();
+                for (i, p) in actual.iter().enumerate() {
+                    let template = p.templates[b[i]];
+                    assert_eq!(p.variant as usize, b[i]);
+                    assert_eq!(p.at, (i + 1) * 0x100);
+                    let source = &donor[p.at..p.at + template.len()];
+                    for (offset, byte) in template.iter().enumerate() {
+                        if byte.is_some() {
+                            assert_eq!(p.body.bytes[offset], source[offset]);
+                        }
+                    }
+                    for (n, field) in calls(template).unwrap().into_iter().enumerate() {
+                        assert_eq!(
+                            p.body.bytes[field..field + 3],
+                            (0x410780 + n as u32 * 2).to_be_bytes()[1..]
+                        );
+                    }
+                    if template.len() > p.templates[a[i]].len() {
+                        assert_eq!(p.body.spans.len(), 2);
+                        assert!(p.body.spans[0].len() <= p.templates[a[i]].len());
+                        assert!(p.body.spans[1].len() <= reservations[i].as_ref().unwrap().len());
+                        assert!(p.body.spans[1].len() < template.len());
+                    }
+                }
+                assert_eq!(
+                    rewrite_compact(&changed, &donor, [None, None, None]).unwrap(),
+                    changed
+                );
+                let reverse = rewrite_compact(
+                    &changed,
+                    &target,
+                    [Some(0x600..0x620), Some(0x620..0x640), Some(0x640..0x660)],
+                )
+                .unwrap();
+                let restored = programs(&reverse).unwrap();
+                for (i, p) in restored.iter().enumerate() {
+                    assert_eq!(p.variant as usize, a[i]);
+                    assert_eq!(p.body.bytes, programs(&target).unwrap()[i].body.bytes);
+                }
+                for (offset, (old, new)) in target.iter().zip(&changed).enumerate() {
+                    if old != new {
+                        assert!(
+                            (0..3).any(|i| ((i + 1) * 0x100
+                                ..(i + 1) * 0x100
+                                    + [BASE.as_slice(), OFFSET.as_slice(), STEP.as_slice()][i]
+                                        [a[i]]
+                                        .len())
+                                .contains(&offset))
+                                || reservations.iter().flatten().any(|r| r.contains(&offset))
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compact_reader_rejects_wrong_overflow_targets_and_corruption() {
+        let target = fixture([0, 0, 0], 0x410780);
+        let donor = fixture([1, 1, 1], 0x410790);
+        let changed = rewrite_compact(&target, &donor, spaces()).unwrap();
+        let bound = programs(&changed).unwrap();
+        let jump_at = bound[0].body.spans[0].end - 4;
+        for destination in [0x410100, 0x410501, 0x410800, 0x400000] {
+            let mut bad = changed.clone();
+            bad[jump_at..jump_at + 4]
+                .copy_from_slice(&native::encoding::jump(destination).unwrap());
+            assert!(programs(&bad).is_err());
+        }
+        let mut bad = changed;
+        let at = bound[0].body.spans[1].start;
+        bad[at] ^= 0x80;
+        assert!(programs(&bad).is_err());
+        assert!(rewrite_compact(&target, &donor, [Some(0x500..0x502), None, None]).is_err());
     }
 
     #[test]

@@ -14,6 +14,7 @@ pub mod arithmetic;
 pub mod sources;
 
 pub(crate) mod encoding;
+pub(crate) mod linear;
 
 use crate::image::layout::{Observation, Unresolved};
 use alloc::vec::Vec;

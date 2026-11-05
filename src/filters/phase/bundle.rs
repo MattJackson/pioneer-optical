@@ -233,6 +233,13 @@ fn one_of(
     templates: &[Template],
     element: Element,
 ) -> Result<(u8, usize), Unbound> {
+    if matches!(
+        element,
+        Element::CalibrationBase | Element::CalibrationOffset | Element::CalibrationStep
+    ) {
+        return conversions::locate(normal, stored, templates, element)
+            .map(|(variant, at, _)| (variant, at));
+    }
     let mut hit = None;
     for (index, template) in templates.iter().enumerate() {
         for at in sites(normal, stored, template) {

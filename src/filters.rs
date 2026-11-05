@@ -331,10 +331,32 @@ pub fn be32_normal_integrity() -> Integrity {
         if original.len() < 24
             || original.len() % 4 != 0
             || image.len() != original.len()
-            || !original.starts_with(b"PIONEER ")
             || sum(original) != 0
             || image[16..20] != original[16..20]
+            || image[..16] != original[..16]
+            || image[20..24] != original[20..24]
         {
+            return Err(Error::Representation);
+        }
+        #[cfg(feature = "envelope")]
+        if let Some(normal) = context.normal {
+            use crate::{envelope::Layout, ComponentKind};
+            if normal.image != original
+                || normal.info().hardware_version != context.target.hardware
+                || normal.info().kind != ComponentKind::Normal
+                || !matches!(
+                    normal.info().layout,
+                    Layout::Normal | Layout::NormalReverse | Layout::NormalScaledKey
+                )
+            {
+                return Err(Error::Representation);
+            }
+            return normal
+                .repair_image_checksum(image)
+                .filter(|repaired| sum(repaired) == 0)
+                .ok_or(Error::Representation);
+        }
+        if !original.starts_with(b"PIONEER ") {
             return Err(Error::Representation);
         }
         let mut repaired = image.to_vec();

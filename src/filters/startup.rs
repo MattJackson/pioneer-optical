@@ -1,4 +1,4 @@
-//! Native startup prerequisites and the separately selected startup-word action.
+//! Native startup prerequisites and filter-owned image correction.
 //! These are operational requirements; they do not become hardware ID bytes.
 use super::{
     Assessment, Context, Filter, Finding, Operation, ParameterAction, Role, Transition, Value,
@@ -8,6 +8,7 @@ use alloc::{boxed::Box, format, vec};
 
 #[cfg(all(test, feature = "envelope"))]
 mod corpus;
+mod correction;
 mod h8_conditional;
 mod m32c;
 mod scsi;
@@ -23,12 +24,12 @@ pub static FILTER: Startup = Startup;
 static RULES: super::Rules = super::Rules {
     description: "Identifies what the firmware requires before it starts: the accepted value of H8 startup word 0x009F, the ATA 0x00D9 predicate, the V850 expected Kernel identity, or the SCSI resident checksum and image-pair header. Evaluated on every image and planned per update; never part of the hardware family.",
     role: super::Role::Operational,
-    correctability: super::Correctability::Operational,
-    correction: "Planned against the requested firmware. SAT platforms select a live 0x009F value with read/change/verify and rollback; other platforms have read-only prerequisites and no file edit.",
+    correctability: super::Correctability::Guarded,
+    correction: "H8 startup comparisons are corrected in the Normal image to preserve the installed accepted word, with a read-only live-word prerequisite. Conditional predicates remain intact. Other platforms retain their independent native prerequisites.",
     policies: &[
         super::Policy {
             domains: &[super::identity::Domain::Sat1, super::identity::Domain::H8Sat],
-            text: "Selection uses the bound accepted word, otherwise the deliberate neutral 0x009F = 0xFFFF. It refuses, including the neutral value, when Normal reads persistent words through a Kernel-resident getter whose Kernel is not supplied.",
+            text: "A differing native H8 comparison is corrected only with both complete getter bindings. Missing evidence never selects FFFF. An unresolved installed comparison can admit an unchanged bound target only with equal Normal-owned reader layouts and a read-only target-word prerequisite. Exact component preservation needs no correction; other unresolved transitions refuse. Persistent banks and independent hardware checks remain required.",
         },
         super::Policy {
             domains: &[super::identity::Domain::Sat1, super::identity::Domain::H8Sat],
@@ -54,7 +55,7 @@ fn h8_value(
     if let Some(conditional) = h8_conditional::discover(normal, bound) {
         return (Value::Variant(2, vec![Value::U16(requirement.parameter), Value::U16(requirement.required),
             Value::U16(0xfe09), conditional.predicate_value()]),
-            format!("Native FE23 is accepted unconditionally. FE09 additionally requires the complete bound predicate at {:#x} (gate {:#x}), range helper {:#x} and getter {:#x}; source spans {:?}. The fixed multiplication service is abstracted within the audited field assembly; arbitrary callee execution is not asserted", conditional.predicate, conditional.gate, conditional.range_helper, conditional.getter, conditional.source_spans));
+            format!("Native {:#06x} is accepted unconditionally. FE09 additionally requires the complete bound predicate at {:#x} (gate {:#x}), range helper {:#x} and getter {:#x}; source spans {:?}. The fixed multiplication service is abstracted within the audited field assembly; arbitrary callee execution is not asserted", requirement.required, conditional.predicate, conditional.gate, conditional.range_helper, conditional.getter, conditional.source_spans));
     }
     (Value::Variant(1, vec![Value::U16(requirement.parameter), Value::U16(requirement.required)]),
         format!("Accepted native word comparison at {:#x}, bound to complete getter {:#x} with R{} argument and exact parameter layout. Positive selection does not establish absence of other conditions", requirement.check_address, requirement.getter_address, requirement.argument_register))
@@ -192,16 +193,13 @@ impl Filter for Startup {
     fn inspect(&self, context: &Context<'_>) -> Assessment {
         inspect(context)
     }
-    fn parameters(&self, context: &Context<'_>) -> Result<alloc::vec::Vec<ParameterAction>, Error> {
-        Ok(match selection(context)? {
-            Some(plan) => vec![ParameterAction {
-                id: "pioneer.startup.word",
-                filter: ID,
-                selected: plan.setting(),
-                assessment: inspect(context),
-            }],
-            None => vec![],
-        })
+    fn parameters(
+        &self,
+        _context: &Context<'_>,
+    ) -> Result<alloc::vec::Vec<ParameterAction>, Error> {
+        // Startup is an image correction with read-only prerequisites. It never
+        // schedules a separate persistent settings transaction.
+        Ok(vec![])
     }
     fn plan(
         &self,
@@ -219,11 +217,8 @@ impl Filter for Startup {
         if inspect(transition.installed) != *installed || inspect(transition.target) != *target {
             return Err(Error::ComponentMismatch);
         }
-        // H8 settings are an external operational stage, with native findings
-        // retained above. They require no Normal edit from this owner.
         if transition.target.sat.is_some() {
-            selection(transition.target)?;
-            return Ok(None);
+            return correction::plan(transition);
         }
         match &target.finding {
             Finding::Known(Value::Variant(10, _)) => {
@@ -328,15 +323,7 @@ mod tests {
             crate::compatibility::startup::StartupPolicy::NativeEvidenceOnly
         )
         .is_err());
-        let actions = FILTER.parameters(&context).unwrap();
-        assert_eq!(actions.len(), 1);
-        let action = &actions[0];
-        assert_eq!((action.id, action.filter), ("pioneer.startup.word", ID));
-        assert_eq!(action.selected, plan.setting());
-        assert!(!action.selected.explicit);
-        assert!(matches!(action.assessment.finding, Finding::Unresolved(_)));
-        assert_eq!(action.assessment.role, Role::Operational);
-        assert_eq!(action.assessment, inspect(&context));
+        assert!(FILTER.parameters(&context).unwrap().is_empty());
     }
     #[test]
     fn bound_h8_comparison_is_known_and_ambiguous_or_unbound_is_not_selected() {
@@ -360,18 +347,7 @@ mod tests {
             selection(&context).unwrap().unwrap().setting().value,
             0xfe24
         );
-        let actions = FILTER.parameters(&context).unwrap();
-        assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0].id, "pioneer.startup.word");
-        assert_eq!(actions[0].filter, ID);
-        assert_eq!(actions[0].selected.parameter, 0x9f);
-        assert_eq!(actions[0].selected.value, 0xfe24);
-        assert!(actions[0].selected.explicit);
-        assert!(matches!(
-            actions[0].assessment.finding,
-            Finding::Known(Value::Variant(1, _))
-        ));
-        assert_eq!(actions[0].assessment, inspect(&context));
+        assert!(FILTER.parameters(&context).unwrap().is_empty());
         let copy = normal[0x80..0x94].to_vec();
         normal[0xa0..0xb4].copy_from_slice(&copy);
         let context = Context::new(Firmware {
@@ -381,7 +357,7 @@ mod tests {
         });
         assert!(matches!(inspect(&context).finding, Finding::Conflicting(_)));
         assert!(selection(&context).is_err());
-        assert!(FILTER.parameters(&context).is_err());
+        assert!(FILTER.parameters(&context).unwrap().is_empty());
     }
     fn plan_between(
         installed: &Context<'_>,
@@ -430,7 +406,10 @@ mod tests {
             other => panic!("{other:?}"),
         };
         // Balance the checksummed Normal ranges to the required accumulator.
-        let missing = scsi(&normal).accumulator.1.wrapping_sub(scsi(&normal).normal_checksum);
+        let missing = scsi(&normal)
+            .accumulator
+            .1
+            .wrapping_sub(scsi(&normal).normal_checksum);
         normal[0x900..0x902].copy_from_slice(&missing.to_le_bytes());
         assert_eq!(scsi(&normal).normal_checksum, scsi(&normal).accumulator.1);
         let context = |normal| {
@@ -504,6 +483,6 @@ mod tests {
             normal: &[],
             kernel: None,
         });
-        assert!(FILTER.parameters(&empty_sat).is_err());
+        assert!(FILTER.parameters(&empty_sat).unwrap().is_empty());
     }
 }

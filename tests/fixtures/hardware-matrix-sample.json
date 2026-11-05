@@ -252,8 +252,8 @@
       "role": "Hardware"
     },
     {
-      "correctability": "Operational",
-      "correction": "Planned against the requested firmware. SAT platforms select a live 0x009F value with read/change/verify and rollback; other platforms have read-only prerequisites and no file edit.",
+      "correctability": "Guarded",
+      "correction": "H8 startup comparisons are corrected in the Normal image to preserve the installed accepted word, with a read-only live-word prerequisite. Conditional predicates remain intact. Other platforms retain their independent native prerequisites.",
       "description": "Identifies what the firmware requires before it starts: the accepted value of H8 startup word 0x009F, the ATA 0x00D9 predicate, the V850 expected Kernel identity, or the SCSI resident checksum and image-pair header. Evaluated on every image and planned per update; never part of the hardware family.",
       "id": "startup-prerequisite",
       "name": "Startup prerequisite",
@@ -263,7 +263,7 @@
             "SAT 1xxx",
             "SAT 8xxx/9xxx"
           ],
-          "text": "Selection uses the bound accepted word, otherwise the deliberate neutral 0x009F = 0xFFFF. It refuses, including the neutral value, when Normal reads persistent words through a Kernel-resident getter whose Kernel is not supplied."
+          "text": "A differing native H8 comparison is corrected only with both complete getter bindings. Missing evidence never selects FFFF. An unresolved installed comparison can admit an unchanged bound target only with equal Normal-owned reader layouts and a read-only target-word prerequisite. Exact component preservation needs no correction; other unresolved transitions refuse. Persistent banks and independent hardware checks remain required."
         },
         {
           "platforms": [

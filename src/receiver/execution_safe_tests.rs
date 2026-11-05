@@ -316,7 +316,7 @@ fn complete_flash_owns_migration_both_passes_and_exact_component_verification() 
             .unwrap();
         assert_eq!((waiting.done, waiting.total), (None, None));
         assert_eq!(result.completed_stages, if restore { 2 } else { 1 });
-        assert_eq!(state.borrow().parameter_writes, [0xffff]);
+        assert!(state.borrow().parameter_writes.is_empty());
         assert_eq!(state.borrow().finishes, result.completed_stages);
     }
 }
@@ -351,13 +351,7 @@ fn unsupported_medium_does_not_hide_recovery_mismatches() {
     }
     let error = run(&plan, &state, ExecutionMode::Recovery).unwrap_err();
     assert!(
-        matches!(
-            &error,
-            ExecutionError::Startup(source)
-                if matches!(source.as_ref(), crate::startup::migration::Error::Flash {
-                    source: ExecutionError::NormalMismatch { .. }, ..
-                })
-        ),
+        matches!(&error, ExecutionError::NormalMismatch { .. }),
         "got {error:?}"
     );
 
@@ -371,10 +365,7 @@ fn unsupported_medium_does_not_hide_recovery_mismatches() {
     assert!(
         matches!(
             &error,
-            ExecutionError::Startup(source)
-                if matches!(source.as_ref(), crate::startup::migration::Error::Flash {
-                    source: ExecutionError::IdentityMismatch { target: true, .. }, ..
-                })
+            ExecutionError::IdentityMismatch { target: true, .. }
         ),
         "got {error:?}"
     );
@@ -386,13 +377,7 @@ fn flash_still_times_out_on_unsupported_medium_before_readback() {
     state.borrow_mut().unsupported_medium = Some((2, 0x30, 0));
     let error = run(&plan, &state, ExecutionMode::Flash).unwrap_err();
     assert!(
-        matches!(
-            &error,
-            ExecutionError::Startup(source)
-                if matches!(source.as_ref(), crate::startup::migration::Error::Flash {
-                    source: ExecutionError::Flash(FlashError::Update { .. }), ..
-                })
-        ),
+        matches!(&error, ExecutionError::Flash(FlashError::Update { .. })),
         "got {error:?}"
     );
     assert_eq!(state.borrow().readback_reads, 0);
@@ -404,13 +389,7 @@ fn recovery_does_not_advance_on_other_medium_sense_codes() {
     state.borrow_mut().unsupported_medium = Some((2, 0x30, 1));
     let error = run(&plan, &state, ExecutionMode::Recovery).unwrap_err();
     assert!(
-        matches!(
-            &error,
-            ExecutionError::Startup(source)
-                if matches!(source.as_ref(), crate::startup::migration::Error::Flash {
-                    source: ExecutionError::Flash(FlashError::Update { .. }), ..
-                })
-        ),
+        matches!(&error, ExecutionError::Flash(FlashError::Update { .. })),
         "got {error:?}"
     );
     assert_eq!(state.borrow().readback_reads, 0);
@@ -514,22 +493,21 @@ fn normal_mismatch_is_fatal_and_stops_restoration() {
     assert_eq!(state.borrow().finishes, 1);
 }
 #[test]
-fn descriptor_change_after_parameter_change_stops_before_entry_and_restores_parameter() {
+fn descriptor_change_stops_before_entry_without_parameter_writes() {
     let (plan, state) = setup(false);
-    state.borrow_mut().change_descriptor_at = Some(3);
+    state.borrow_mut().change_descriptor_at = Some(2);
     let error = run(&plan, &state, ExecutionMode::Flash).unwrap_err();
-    assert!(error.write_started());
+    assert!(!error.write_started());
     assert!(!error.firmware_write_started());
     assert_eq!(state.borrow().entries, 0);
-    assert_eq!(state.borrow().parameter_writes, [0xffff, 0xfe24]);
+    assert!(state.borrow().parameter_writes.is_empty());
 }
 #[test]
 fn every_complete_operation_write_failure_is_terminal_without_retry() {
     let (plan, state) = setup(true);
     run(&plan, &state, ExecutionMode::Flash).unwrap();
     let count = state.borrow().writes;
-    for fail in 2..=count {
-        // parameter rollback itself is independently covered
+    for fail in 1..=count {
         let (plan, state) = setup(true);
         state.borrow_mut().fail_write = Some(fail);
         assert!(
@@ -540,7 +518,7 @@ fn every_complete_operation_write_failure_is_terminal_without_retry() {
     }
 }
 #[test]
-fn normal_only_also_migrates_and_verifies_exact_target() {
+fn normal_only_preserves_parameters_and_verifies_exact_target() {
     let installed = fixture(false, 1);
     let plan = Receiver::from_installed(&installed)
         .unwrap()
@@ -558,7 +536,7 @@ fn normal_only_also_migrates_and_verifies_exact_target() {
         .unwrap();
     assert!(!result.kernel_verified);
     assert!(result.normal_verified);
-    assert_eq!(state.borrow().parameter_writes, [0xffff]);
+    assert!(state.borrow().parameter_writes.is_empty());
     let (_, state) = setup(false);
     state.borrow_mut().wrong_target = Some(2);
     assert_eq!(
@@ -616,7 +594,7 @@ fn unreadable_early_span_cannot_hide_a_readable_later_mismatch() {
 }
 
 #[test]
-fn changed_host_policy_after_parameter_migration_refuses_transfer_and_restores_setting() {
+fn changed_host_policy_refuses_transfer_without_parameter_writes() {
     let (plan, state) = setup(false);
     let mut clock = Clock {
         deny_check: Some(2),
@@ -633,7 +611,7 @@ fn changed_host_policy_after_parameter_migration_refuses_transfer_and_restores_s
         .unwrap_err();
     assert!(!error.firmware_write_started());
     assert_eq!(state.borrow().entries, 0);
-    assert_eq!(state.borrow().parameter_writes, [0xffff, 0xfe24]);
+    assert!(state.borrow().parameter_writes.is_empty());
 }
 
 // Change only envelope identity fields; the independent instruction/body
@@ -798,9 +776,20 @@ fn recovery_loader_may_reveal_its_serial_only_after_normal_starts() {
     assert_eq!(result.identity.serial(), "ORIGINAL");
 }
 
+fn startup_fixture(gated: bool, marker: u8) -> Update {
+    let original = fixture(gated, marker);
+    let mut normal = original.normal().image.clone();
+    normal[0x680..0x694].copy_from_slice(&[
+        0x79, 0, 0, 0x9f, 0x5e, 0x41, 0x10, 0, 0x79, 0x20, 0xfe, 0x24, 0x47, 6, 0xf8, 1, 0x5e,
+        0x41, 0x06, 0xa0,
+    ]);
+    normal[0x6a0..0x6a6].copy_from_slice(&[0x5e, 0x40, 0x0a, 0x1a, 0x54, 0x70]);
+    workflow_repack(&original, original.kernel().image.clone(), normal)
+}
+
 fn setup_handoff_bridge(marker: bool) -> (PreparedUpdate, Rc<RefCell<State>>) {
-    let source = fixture(marker, 1);
-    let original = fixture(false, if marker { 0 } else { 1 });
+    let source = startup_fixture(marker, 1);
+    let original = startup_fixture(false, if marker { 0 } else { 1 });
     let mut kernel = original.kernel().image.clone();
     kernel.copy_within(0x20..0x30, 0x2a);
     kernel[0x20..0x2a].fill(0);
@@ -904,7 +893,7 @@ fn later_stage_settings_roll_back_locally_without_erasing_earlier_completion() {
     let initial = state.borrow().clone();
     let result = run(&plan, &state, ExecutionMode::Flash).unwrap();
     assert_eq!(result.completed_stages, 2);
-    assert_eq!(state.borrow().parameter_writes, [0xffff, 0xfe34]);
+    assert_eq!(state.borrow().parameter_writes, [0xfe34]);
 
     let state = Rc::new(RefCell::new(initial));
     let error = plan
@@ -924,7 +913,7 @@ fn later_stage_settings_roll_back_locally_without_erasing_earlier_completion() {
     assert!(error.firmware_write_started());
     assert_eq!(state.borrow().entries, 1);
     assert_eq!(state.borrow().finishes, 1);
-    assert_eq!(state.borrow().parameter_writes, [0xffff, 0xfe34, 0xffff]);
+    assert_eq!(state.borrow().parameter_writes, [0xfe34, 0xfe24]);
     let ExecutionError::AfterStage { source, .. } = error else {
         panic!("lost completed bridge")
     };
@@ -954,24 +943,23 @@ fn workflow_repack(pair: &Update, mut kernel: Vec<u8>, mut normal: Vec<u8>) -> U
 }
 
 #[test]
-fn native_phase_correction_can_recover_without_parameter_writes() {
+fn native_phase_correction_executes_without_parameter_writes() {
     use crate::compatibility::Correction;
     use crate::image::phase::{correct_normal, Assignment};
-    let source = fixture(false, 1);
+    let source = startup_fixture(false, 1);
     let swapped = correct_normal(&source.normal().image, Assignment::Swapped).unwrap();
     let target = workflow_repack(&source, source.kernel().image.clone(), swapped);
     let (plan, state) = setup_updates(source.clone(), target);
-    assert_eq!(
-        plan.settings().firmware_corrections(),
-        &[Correction::Phase {
+    assert!(plan
+        .settings()
+        .firmware_corrections()
+        .contains(&Correction::Phase {
             from: Assignment::Swapped,
             to: Assignment::Direct,
-        }]
-    );
+        }));
     assert_eq!(plan.target.normal().image, source.normal().image);
     {
         let mut state = state.borrow_mut();
-        state.loader = true;
         state.normal = plan.target.normal().image.clone();
     }
     let result = run(&plan, &state, ExecutionMode::Recovery).unwrap();
@@ -1444,7 +1432,7 @@ fn setup_explicit_crossflash(restore: bool) -> (PreparedUpdate, Rc<RefCell<State
 }
 
 #[test]
-fn explicit_crossflash_preserves_settings_transaction_and_bridge_policy() {
+fn explicit_crossflash_preserves_parameters_and_bridge_policy() {
     for restore in [false, true] {
         for mode in [ExecutionMode::Flash, ExecutionMode::Recovery] {
             let (plan, state) = setup_explicit_crossflash(restore);
@@ -1454,26 +1442,26 @@ fn explicit_crossflash_preserves_settings_transaction_and_bridge_policy() {
                     startup.policy(),
                     crate::startup::checks::Policy::ExplicitCrossflash
                 );
-                assert_eq!(startup.word_setting().parameter, 0x9f);
-                assert_eq!(startup.word_setting().value, 0xffff);
+                assert!(stage.settings.startup_setting().is_none());
+                assert!(stage.settings.startup_selection().is_none());
             }
             let result = run(&plan, &state, mode).unwrap();
             assert!(result.kernel_verified && result.normal_verified);
             assert_eq!(result.completed_stages, if restore { 2 } else { 1 });
-            assert_eq!(state.borrow().parameter_writes, [0xffff]);
+            assert!(state.borrow().parameter_writes.is_empty());
         }
     }
 }
 
 #[test]
-fn explicit_crossflash_rolls_back_word_before_firmware_entry_on_descriptor_change() {
+fn explicit_crossflash_descriptor_change_refuses_without_parameter_writes() {
     for restore in [false, true] {
         let (plan, state) = setup_explicit_crossflash(restore);
-        state.borrow_mut().change_descriptor_at = Some(3);
+        state.borrow_mut().change_descriptor_at = Some(2);
         let error = run(&plan, &state, ExecutionMode::Flash).unwrap_err();
         assert!(!error.firmware_write_started());
         assert_eq!(state.borrow().entries, 0);
-        assert_eq!(state.borrow().parameter_writes, [0xffff, 0xfe24]);
+        assert!(state.borrow().parameter_writes.is_empty());
     }
 }
 
@@ -1482,7 +1470,7 @@ fn explicit_crossflash_all_firmware_write_failures_stop_without_retry() {
     let (plan, state) = setup_explicit_crossflash(true);
     run(&plan, &state, ExecutionMode::Flash).unwrap();
     let count = state.borrow().writes;
-    for fail in 2..=count {
+    for fail in 1..=count {
         let (plan, state) = setup_explicit_crossflash(true);
         state.borrow_mut().fail_write = Some(fail);
         assert!(
@@ -1490,7 +1478,7 @@ fn explicit_crossflash_all_firmware_write_failures_stop_without_retry() {
             "write {fail}"
         );
         assert_eq!(state.borrow().writes, fail, "unexpected retry at {fail}");
-        assert_eq!(state.borrow().parameter_writes, [0xffff]);
+        assert!(state.borrow().parameter_writes.is_empty());
     }
 }
 
@@ -1547,6 +1535,14 @@ fn read_only_requirement_cannot_be_overwritten_by_settings() {
     let (plan, state) = setup(true);
     let mut stages = plan.stages().to_vec();
     let last = stages.last_mut().unwrap();
+    last.settings = crate::settings::update::Plan::target(
+        Some(crate::startup::Setting {
+            parameter: 0x9f,
+            value: 1,
+            explicit: true,
+        }),
+        false,
+    );
     last.settings = last.settings.clone().with_correction(Some(
         crate::compatibility::PreparedCorrection::native(
             last.normal.image.clone(),

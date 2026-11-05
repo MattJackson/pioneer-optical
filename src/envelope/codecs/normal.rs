@@ -7,6 +7,22 @@ const KEY: usize = 0x10000;
 const PREFIX: usize = 64;
 const WORD: usize = 4;
 
+fn repair_whole_normal(original: &[u8], image: &[u8]) -> Option<Vec<u8>> {
+    if original.len() < 24
+        || original.len() % WORD != 0
+        || original.len() != image.len()
+        || super::super::be32_sum(original) != 0
+        || original[..24] != image[..24]
+    {
+        return None;
+    }
+    let mut corrected = image.to_vec();
+    let old = u32::from_be_bytes(original[16..20].try_into().ok()?);
+    let value = old.wrapping_sub(super::super::be32_sum(image));
+    corrected[16..20].copy_from_slice(&value.to_be_bytes());
+    (super::super::be32_sum(&corrected) == 0).then_some(corrected)
+}
+
 fn keyed(
     data: &[u8],
     header: &HeaderInfo,
@@ -45,6 +61,9 @@ fn keyed(
 
 pub(super) struct Keyed;
 impl EnvelopeCodec for Keyed {
+    fn repair_decoded(&self, original: &[u8], image: &[u8]) -> Option<Vec<u8>> {
+        repair_whole_normal(original, image)
+    }
     fn decoded_checksum(&self, image: &[u8]) -> Option<u32> {
         Some(super::super::be32_sum(image))
     }
@@ -72,6 +91,9 @@ impl EnvelopeCodec for Keyed {
 }
 pub(super) struct Reverse;
 impl EnvelopeCodec for Reverse {
+    fn repair_decoded(&self, original: &[u8], image: &[u8]) -> Option<Vec<u8>> {
+        repair_whole_normal(original, image)
+    }
     fn decoded_checksum(&self, image: &[u8]) -> Option<u32> {
         Some(super::super::be32_sum(image))
     }
@@ -106,20 +128,7 @@ impl EnvelopeCodec for Scaled {
         Some(super::super::be32_sum(image))
     }
     fn repair_decoded(&self, original: &[u8], image: &[u8]) -> Option<Vec<u8>> {
-        if original.len() < 24
-            || original.len() % 4 != 0
-            || original.len() != image.len()
-            || !original.starts_with(b"PIONEER ")
-            || super::super::be32_sum(original) != 0
-            || original[16..20] != image[16..20]
-        {
-            return None;
-        }
-        let mut corrected = image.to_vec();
-        let old = u32::from_be_bytes(original[16..20].try_into().ok()?);
-        let value = old.wrapping_sub(super::super::be32_sum(image));
-        corrected[16..20].copy_from_slice(&value.to_be_bytes());
-        (super::super::be32_sum(&corrected) == 0).then_some(corrected)
+        repair_whole_normal(original, image)
     }
     fn normal_transfer(&self, envelope: &super::super::DecodedEnvelope) -> Option<Vec<u8>> {
         continuous_transfer(self, envelope)
@@ -174,6 +183,29 @@ fn continuous_transfer(
 #[cfg(test)]
 mod scaled_tests {
     use super::*;
+
+    #[test]
+    fn established_keyed_codecs_repair_oem_descriptors_without_changing_headers() {
+        let mut original = vec![0u8; 64];
+        original[..16].copy_from_slice(b"SXLT     BDR-211");
+        original[20..24].copy_from_slice(&64u32.to_be_bytes());
+        let sum = super::super::super::be32_sum(&original);
+        original[16..20].copy_from_slice(&sum.wrapping_neg().to_be_bytes());
+        for codec in [&Keyed as &dyn EnvelopeCodec, &Reverse, &Scaled] {
+            let mut changed = original.clone();
+            changed[32] = 1;
+            let repaired = codec.repair_decoded(&original, &changed).unwrap();
+            assert_eq!(super::super::super::be32_sum(&repaired), 0);
+            assert_eq!(&repaired[..16], &original[..16]);
+            assert_eq!(&repaired[20..], &changed[20..]);
+            for at in [0, 16, 20] {
+                let mut damaged = changed.clone();
+                damaged[at] ^= 1;
+                assert!(codec.repair_decoded(&original, &damaged).is_none());
+            }
+            assert!(codec.repair_decoded(&changed, &changed).is_none());
+        }
+    }
 
     #[test]
     fn legacy_scaled_checksum_repairs_operands_without_assuming_modern_header_length() {

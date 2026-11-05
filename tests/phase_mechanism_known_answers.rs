@@ -1589,7 +1589,8 @@ fn native_oem_compositions_round_trip_original_envelopes() {
                 normal: &target.normal.image,
                 kernel: target.kernel.as_ref().map(|kernel| kernel.image.as_slice()),
             });
-            let registry: &[&dyn filters::Filter] = &[&filters::phase::FILTER, &filters::startup::FILTER];
+            let registry: &[&dyn filters::Filter] =
+                &[&filters::phase::FILTER, &filters::startup::FILTER];
             let plan = filters::runner::plan_with(
                 &installed,
                 &destination,

@@ -98,6 +98,23 @@ fn emit(normal: &[u8], from: &Program, donor: &[u8], desired: &Program) -> Resul
     }
     Ok(bytes)
 }
+fn pad_nops(bytes: &mut Vec<u8>, length: usize) -> Result<(), Error> {
+    use h8_asm::isa::{encode_insn, Insn, Operand};
+    let nop = encode_insn(
+        Insn::new("NOP", None, [Operand::None; 3]),
+        h8_asm::Target::H8S2000,
+        h8_asm::Mode::Advanced,
+    )
+    .map_err(|_| Error::InvalidProgram)?;
+    if length < bytes.len() || (length - bytes.len()) % nop.len() != 0 {
+        return Err(Error::InvalidProgram);
+    }
+    while bytes.len() < length {
+        bytes.extend_from_slice(&nop);
+    }
+    Ok(())
+}
+
 fn overlaps(a: &Range<usize>, b: &Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
 }
@@ -133,7 +150,7 @@ pub fn rewrite(
         let original = program.at..program.at + program.templates[program.variant as usize].len();
         if bytes.len() <= original.len() {
             let mut padded = bytes;
-            padded.resize(original.len(), 0);
+            pad_nops(&mut padded, original.len())?;
             writes.push((original, padded));
         } else {
             let space = reservations[i]
@@ -173,15 +190,27 @@ pub fn rewrite(
                 .checked_add(space.start)
                 .filter(|a| *a <= 0xffffff)
                 .ok_or(Error::InvalidSpace)? as u32;
-            let mut detour = alloc::vec![0; end-program.at];
-            detour[..4].copy_from_slice(&[
-                0x5a,
-                address.to_be_bytes()[1],
-                address.to_be_bytes()[2],
-                address.to_be_bytes()[3],
-            ]);
+            use h8_asm::isa::{encode_insn, Ea, Insn, Operand};
+            let mut detour = encode_insn(
+                Insn::new(
+                    "JMP",
+                    None,
+                    [
+                        Operand::Address(Ea::Absolute {
+                            value: address,
+                            bits: 24,
+                        }),
+                        Operand::None,
+                        Operand::None,
+                    ],
+                ),
+                h8_asm::Target::H8S2000,
+                h8_asm::Mode::Advanced,
+            )
+            .map_err(|_| Error::InvalidProgram)?;
+            pad_nops(&mut detour, end - program.at)?;
             let mut relocated = bytes;
-            relocated.resize(space.len(), 0);
+            pad_nops(&mut relocated, space.len())?;
             writes.push((program.at..end, detour));
             writes.push((space, relocated));
         }

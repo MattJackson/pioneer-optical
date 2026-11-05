@@ -148,7 +148,7 @@ fn emit(insn: h8_asm::isa::Insn) -> Result<Vec<u8>, Error> {
 /// clipping, mode scaling, call order, saved registers and stack ABI stay intact.
 ///
 /// Space comes from constant-folding the target's native signed-word expression
-/// cal[1]-2*cal[0]. Its next SUB.L ER1,ER1 kills temporary R1 and flags before the
+/// `cal[1]-2*cal[0]`. Its next SUB.L ER1,ER1 kills temporary R1 and flags before the
 /// unchanged opaque multiply. Both getter calls remain. No ROM arithmetic model
 /// or calibration writes are introduced. Exact Normal+Kernel ownership is checked
 /// before moving instructions. A parameter-backed getter cannot be folded.

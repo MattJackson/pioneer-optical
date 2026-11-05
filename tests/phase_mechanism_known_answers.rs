@@ -32,6 +32,118 @@ fn native_spans(hash: &str) -> Vec<u8> {
 }
 
 #[test]
+fn native_oem_composition_preserves_donor_conventions_in_both_sat9_directions() {
+    let images = [
+        native_spans("3711cd5cdde5b5e7f288ccd7bc7fe1100eb6de5e40f3d0ffdcc528fb93ebeb46"),
+        native_spans("c93736b1fc66c7ada2d586044bf5d8a50a622b65e2f1fe6e74ad212f254adc1b"),
+    ];
+    for (target, donor) in [(&images[0], &images[1]), (&images[1], &images[0])] {
+        let changed =
+            bundle::composition::transplant(target, donor, test_space(), Some(0x600..0x700))
+                .unwrap();
+        let mut expected = bundle::bind(donor).unwrap();
+        expected.table_select_0x28f = bundle::bind(target).unwrap().table_select_0x28f;
+        assert_eq!(bundle::bind(&changed).unwrap(), expected);
+        assert_eq!(
+            native::calibration::observe(&changed).unwrap(),
+            native::calibration::observe(donor).unwrap()
+        );
+        assert_eq!(&changed[..24], &target[..24]);
+        let destination = bundle::waveforms::resources::observe(target).unwrap();
+        let source = bundle::waveforms::resources::observe(donor).unwrap();
+        for (to, from) in destination
+            .selected
+            .motion
+            .iter()
+            .chain(&destination.selected.coefficients)
+            .zip(
+                source
+                    .selected
+                    .motion
+                    .iter()
+                    .chain(&source.selected.coefficients),
+            )
+        {
+            assert_eq!(&changed[to.clone()], &donor[from.clone()]);
+        }
+    }
+}
+
+#[test]
+fn native_source_transplants_copy_donor_bodies_and_keep_target_helpers() {
+    use h8_asm::{isa::decode_insn, Mode, Target};
+    use pioneer_optical::image::layout::Observation;
+    let body = |image: &[u8], start: usize| {
+        let mut at = start;
+        let mut calls = Vec::new();
+        loop {
+            let decoded = decode_insn(&image[at..], Target::H8S2000, Mode::Advanced).unwrap();
+            if decoded.insn.mnemonic == "JSR" {
+                calls.push(at - start + 1);
+            }
+            at += decoded.len;
+            if decoded.insn.mnemonic == "RTS" {
+                break;
+            }
+            assert!(at - start < 128);
+        }
+        (image[start..at].to_vec(), calls)
+    };
+    for hashes in [
+        [
+            "3711cd5cdde5b5e7f288ccd7bc7fe1100eb6de5e40f3d0ffdcc528fb93ebeb46",
+            "c93736b1fc66c7ada2d586044bf5d8a50a622b65e2f1fe6e74ad212f254adc1b",
+        ],
+        [
+            "84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750",
+            "87e8152f1de1d3be53eb4ad9144c1bb0c45a9be6f78713a0b7487a637f989bf1",
+        ],
+    ] {
+        let images = hashes.map(native_spans);
+        for (target, donor) in [(&images[0], &images[1]), (&images[1], &images[0])] {
+            let Observation::Known(before) = native::discover_pair(target) else {
+                panic!("target pair");
+            };
+            let Observation::Known(source) = native::discover_pair(donor) else {
+                panic!("donor pair");
+            };
+            let changed = native::sources::transplant(target, donor, Some(0x600..0x640)).unwrap();
+            let Observation::Known(after) = native::discover_pair(&changed) else {
+                panic!("output pair");
+            };
+            assert_eq!(after.assignment, source.assignment);
+            for word in 0..2 {
+                let output = donor[source.operands[word][1]];
+                let role = before
+                    .operands
+                    .iter()
+                    .position(|operands| target[operands[1]] == output)
+                    .unwrap();
+                let (old, old_calls) = body(target, before.functions[role]);
+                let (mut expected, donor_calls) = body(donor, source.functions[word]);
+                assert_eq!(old_calls.len(), donor_calls.len());
+                for (from, to) in old_calls.into_iter().zip(donor_calls) {
+                    expected[to..to + 3].copy_from_slice(&old[from..from + 3]);
+                }
+                assert_eq!(body(&changed, after.functions[word]).0, expected);
+            }
+            for (at, (old, new)) in target.iter().zip(&changed).enumerate() {
+                if old != new {
+                    assert!(
+                        (0x600..0x640).contains(&at)
+                            || before
+                                .functions
+                                .iter()
+                                .any(|start| (*start..*start + body(target, *start).0.len())
+                                    .contains(&at))
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn native_plain_loader_transplants_oem_bytes_with_only_address_relocations() {
     use bundle::waveforms::loader::{self, Table};
     let images = [

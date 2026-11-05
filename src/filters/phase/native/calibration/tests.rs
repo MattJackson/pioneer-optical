@@ -151,7 +151,45 @@ fn rewritten_readers_preserve_consumed_calibration_bytes_for_every_word_and_mode
     let packed = fixture(true, 0x410600);
     let to_whole = rewrite(&packed, &fixture(false, 0x410700), None).unwrap();
     let to_packed = rewrite(&whole, &fixture(true, 0x410700), Some(0x300..0x344)).unwrap();
+    let donor_whole = fixture(false, 0x410700);
+    let donor_packed = fixture(true, 0x410700);
+    let native_whole = transplant(&packed, &donor_whole, None).unwrap();
+    let native_packed = transplant(&whole, &donor_packed, Some(0x300..0x344)).unwrap();
+    for (target, donor, changed) in [
+        (&packed, &donor_whole, &native_whole),
+        (&whole, &donor_packed, &native_packed),
+    ] {
+        let source = bind(donor).unwrap();
+        let after = bind(changed).unwrap();
+        let len = if source.packed_shape {
+            PACKED.len()
+        } else {
+            WHOLE.len()
+        };
+        let fields: &[usize] = if source.packed_shape {
+            &[43, 53]
+        } else {
+            &[31]
+        };
+        for offset in 0..len {
+            if !fields
+                .iter()
+                .any(|field| (*field..*field + 3).contains(&offset))
+            {
+                assert_eq!(changed[after.at + offset], donor[source.at + offset]);
+            }
+        }
+        for (at, (old, new)) in target.iter().zip(changed).enumerate() {
+            if old != new {
+                assert!(
+                    (0x100..0x100 + PACKED.len()).contains(&at) || (0x300..0x344).contains(&at)
+                );
+            }
+        }
+    }
     let cases = [
+        (program(&native_whole), false),
+        (program(&native_packed), true),
         (program(&whole), false),
         (program(&packed), true),
         (program(&to_whole), false),
@@ -212,7 +250,12 @@ fn reader_binding_and_rewrite_refuse_partial_ambiguous_or_mismatched_getter_code
     duplicate[0x200..0x200 + PACKED.len()].copy_from_slice(&packed[0x100..0x100 + PACKED.len()]);
     assert_eq!(observe(&duplicate), Err(Error::Unresolved));
     assert_eq!(rewrite(&whole, &packed, None), Err(Error::SpaceRequired));
+    assert_eq!(transplant(&whole, &packed, None), Err(Error::SpaceRequired));
     for space in [0x301..0x345, 0x300..0x320, 0x100..0x200, 0x300..0x900] {
+        assert_eq!(
+            transplant(&whole, &packed, Some(space.clone())),
+            Err(Error::InvalidSpace)
+        );
         assert_eq!(
             rewrite(&whole, &packed, Some(space)),
             Err(Error::InvalidSpace)

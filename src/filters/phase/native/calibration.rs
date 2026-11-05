@@ -167,5 +167,79 @@ pub fn rewrite(
     Ok(changed)
 }
 
+/// Copy the donor's complete native calibration reader into the target, changing
+/// only getter call addresses. Stored words are neither copied nor written.
+/// The caller must establish ownership of any reservation used for growth and
+/// prove the getter/caller ABI, including which returned bytes are consumed.
+pub fn transplant(
+    target: &[u8],
+    donor: &[u8],
+    reservation: Option<Range<usize>>,
+) -> Result<Vec<u8>, Error> {
+    let before = bind(target)?;
+    let source = bind(donor)?;
+    let size = |reader: &Reader| {
+        if reader.packed_shape {
+            PACKED.len()
+        } else {
+            WHOLE.len()
+        }
+    };
+    let mut code = donor[source.at..source.at + size(&source)].to_vec();
+    let fields: &[usize] = if source.packed_shape {
+        &[43, 53]
+    } else {
+        &[31]
+    };
+    for field in fields {
+        code[*field..*field + 3].copy_from_slice(&before.getter);
+    }
+    let original = before.at..before.at + size(&before);
+    let mut changed = target.to_vec();
+    if code.len() <= original.len() {
+        changed[original.clone()].fill(0);
+        changed[original.start..original.start + code.len()].copy_from_slice(&code);
+    } else {
+        let space = reservation.ok_or(Error::SpaceRequired)?;
+        let regions = crate::image::regions(target).ok_or(Error::Unresolved)?;
+        let stored = regions.stored.iter().any(|region| {
+            let at = region.as_ptr() as usize - target.as_ptr() as usize;
+            space.start >= at && space.end <= at + region.len()
+        });
+        if space.start & 1 != 0
+            || space.end & 1 != 0
+            || space.start > space.end
+            || space.len() < code.len()
+            || !stored
+            || (space.start < original.end && original.start < space.end)
+            || !target
+                .get(space.clone())
+                .is_some_and(|bytes| bytes.iter().all(|b| *b == 0xff))
+        {
+            return Err(Error::InvalidSpace);
+        }
+        let address = 0x410000usize
+            .checked_add(space.start)
+            .filter(|a| *a <= 0xffffff)
+            .ok_or(Error::InvalidSpace)? as u32;
+        changed[space.clone()].fill(0);
+        changed[space.start..space.start + code.len()].copy_from_slice(&code);
+        changed[original.start..original.start + 4].copy_from_slice(&[
+            0x5a,
+            address.to_be_bytes()[1],
+            address.to_be_bytes()[2],
+            address.to_be_bytes()[3],
+        ]);
+    }
+    let actual = bind(&changed)?;
+    if actual.convention != source.convention
+        || actual.packed_shape != source.packed_shape
+        || actual.getter != before.getter
+    {
+        return Err(Error::VerificationFailed);
+    }
+    Ok(changed)
+}
+
 #[cfg(test)]
 mod tests;

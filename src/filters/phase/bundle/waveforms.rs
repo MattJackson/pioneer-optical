@@ -83,6 +83,68 @@ pub fn rewrite(target: &[u8], installed: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(changed)
 }
 
+/// Transplant OEM waveform data and its original noncomputed loader body.
+/// Unlike normalization, this preserves the donor's native fetch convention.
+/// Direct-table donor loaders are supported here; pointer-selected donor code
+/// needs its pointer resources established separately before transplantation.
+pub fn transplant(
+    target: &[u8],
+    installed: &[u8],
+    reservation: Option<core::ops::Range<usize>>,
+) -> Result<Vec<u8>, Error> {
+    let destination = resources::observe(target).map_err(Error::Resources)?;
+    let source = resources::observe(installed).map_err(Error::Resources)?;
+    let target_loader = loader::observe(target).map_err(Error::Loader)?;
+    let mut changed = loader::transplant_plain(
+        target,
+        installed,
+        destination
+            .selected
+            .coefficients
+            .clone()
+            .map(|range| loader::Table::Literal(0x410000 + range.start as u32)),
+        reservation.clone(),
+    )
+    .map_err(Error::Loader)?;
+    let mut writes = Vec::new();
+    for tables in core::iter::once(&destination.selected).chain(&destination.erased_parameter) {
+        for (to, from) in tables.motion.iter().zip(&source.selected.motion) {
+            writes.push((to.clone(), installed[from.clone()].to_vec()));
+        }
+    }
+    for (to, from) in destination
+        .selected
+        .coefficients
+        .iter()
+        .zip(&source.selected.coefficients)
+    {
+        writes.push((to.clone(), installed[from.clone()].to_vec()));
+    }
+    let protected = core::iter::once(&destination.dispatch)
+        .chain(core::iter::once(&target_loader.program))
+        .chain(destination.initializer.as_ref())
+        .chain(reservation.as_ref())
+        .collect::<Vec<_>>();
+    for (i, (range, bytes)) in writes.iter().enumerate() {
+        if protected
+            .iter()
+            .any(|program| program.start < range.end && range.start < program.end)
+        {
+            return Err(Error::VerificationFailed);
+        }
+        for (other, data) in &writes[..i] {
+            if range.start < other.end
+                && other.start < range.end
+                && (range != other || bytes != data)
+            {
+                return Err(Error::VerificationFailed);
+            }
+        }
+        changed[range.clone()].copy_from_slice(bytes);
+    }
+    Ok(changed)
+}
+
 /// Convert an eighteen-row coefficient table for the plain paired-word fetch.
 ///
 /// Plain ascending/descending loaders read row i's odd word first and even word

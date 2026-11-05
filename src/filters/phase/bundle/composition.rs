@@ -39,6 +39,28 @@ pub enum Error {
 /// data and does not authorize pointer-selected installed tables without a live
 /// read. The returned Normal retains the original checksum for its codec owner.
 pub fn rewrite(target: &[u8], installed: &[u8], space: Space) -> Result<Vec<u8>, Error> {
+    compose(target, installed, space, None, false)
+}
+
+/// Compose actual OEM donor routines and tables, with target helper relocation.
+/// The caller owns all executable reservations and live read prerequisites.
+/// The waveform donor currently requires direct coefficient-table addressing.
+pub fn transplant(
+    target: &[u8],
+    installed: &[u8],
+    space: Space,
+    loader_space: Option<Range<usize>>,
+) -> Result<Vec<u8>, Error> {
+    compose(target, installed, space, loader_space, true)
+}
+
+fn compose(
+    target: &[u8],
+    installed: &[u8],
+    space: Space,
+    loader_space: Option<Range<usize>>,
+    native_donor: bool,
+) -> Result<Vec<u8>, Error> {
     let before = super::bind(target).map_err(Error::Bundle)?;
     let required = super::bind(installed).map_err(Error::Bundle)?;
     let resources = waveforms::resources::observe(target)
@@ -57,7 +79,7 @@ pub fn rewrite(target: &[u8], installed: &[u8], space: Space) -> Result<Vec<u8>,
     let reservations: Vec<_> = space
         .conversions
         .iter()
-        .chain([&space.calibration, &space.sources])
+        .chain([&space.calibration, &space.sources, &loader_space])
         .filter_map(Option::as_ref)
         .collect();
     for (i, a) in reservations.iter().enumerate() {
@@ -77,9 +99,24 @@ pub fn rewrite(target: &[u8], installed: &[u8], space: Space) -> Result<Vec<u8>,
             required.step_minus_source ^ u8::from(before.coil != required.coil),
         )
         .map_err(Error::Bundle)?,
-        sources::rewrite(target, required.coil, space.sources).map_err(Error::Sources)?,
-        calibration::rewrite(target, installed, space.calibration).map_err(Error::Calibration)?,
-        waveforms::rewrite(target, installed).map_err(Error::Waveforms)?,
+        if native_donor {
+            sources::transplant(target, installed, space.sources)
+        } else {
+            sources::rewrite(target, required.coil, space.sources)
+        }
+        .map_err(Error::Sources)?,
+        if native_donor {
+            calibration::transplant(target, installed, space.calibration)
+        } else {
+            calibration::rewrite(target, installed, space.calibration)
+        }
+        .map_err(Error::Calibration)?,
+        if native_donor {
+            waveforms::transplant(target, installed, loader_space)
+        } else {
+            waveforms::rewrite(target, installed)
+        }
+        .map_err(Error::Waveforms)?,
     ];
     let mut changed = target.to_vec();
     for stage in stages {
@@ -97,7 +134,7 @@ pub fn rewrite(target: &[u8], installed: &[u8], space: Space) -> Result<Vec<u8>,
     }
     let actual = super::bind(&changed).map_err(Error::Bundle)?;
     let loader = match required.loader {
-        super::Loader::AscendingNegated17 => super::Loader::Ascending,
+        super::Loader::AscendingNegated17 if !native_donor => super::Loader::Ascending,
         other => other,
     };
     // The target retains its motion-pointer initializer. Its DSP loader now

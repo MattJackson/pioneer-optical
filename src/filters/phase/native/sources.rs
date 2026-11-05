@@ -242,6 +242,132 @@ pub fn rewrite(
     Ok(output)
 }
 
+/// Copy complete donor channel functions, preserving physical output/control
+/// coordinates and relocating helper calls to the target. Both sides must have
+/// the same native encoder ABI. Growth requires caller-owned executable space.
+/// This stage changes no waveform data, persistent values or image integrity.
+pub fn transplant(
+    normal: &[u8],
+    donor: &[u8],
+    reservation: Option<Range<usize>>,
+) -> Result<Vec<u8>, Error> {
+    let Observation::Known(proof) = discover_pair(normal) else {
+        return Err(Error::Unresolved);
+    };
+    let Observation::Known(required) = discover_pair(donor) else {
+        return Err(Error::Unresolved);
+    };
+    // Exact original function bodies only: adapted synthesized forms are not
+    // treated as OEM transplant sources by this entry point.
+    let parse = |image: &[u8], pair: &PairedPhase| {
+        pair.functions
+            .iter()
+            .map(|at| full(image, *at).or_else(|| short(image, *at)))
+            .collect::<Option<Vec<_>>>()
+            .ok_or(Error::Unresolved)
+    };
+    let functions = parse(normal, &proof)?;
+    let donor_functions = parse(donor, &required)?;
+    let regions = crate::image::regions(normal).ok_or(Error::Unresolved)?;
+    let contains = |span: &Range<usize>| {
+        regions.stored.iter().any(|r| {
+            let origin = r.as_ptr() as usize - normal.as_ptr() as usize;
+            span.start >= origin && span.end <= origin + r.len()
+        })
+    };
+    let mut output = normal.to_vec();
+    let mut used_space = false;
+    for function in &functions {
+        let source = donor_functions
+            .iter()
+            .find(|candidate| {
+                candidate.control == function.control && candidate.output == function.output
+            })
+            .ok_or(Error::Unresolved)?;
+        let calls: Vec<u32> = match (function.encoder, source.encoder) {
+            (Encoder::Full(high, low), Encoder::Full(_, _)) => alloc::vec![high, low],
+            (Encoder::Short(callee), Encoder::Short(_)) => alloc::vec![callee],
+            _ => return Err(Error::Unresolved),
+        };
+        let mut bytes = donor[source.start..source.end].to_vec();
+        let mut next_call = calls.into_iter();
+        let mut at = 0;
+        while at < bytes.len() {
+            let decoded = h8_asm::isa::decode_insn(
+                &bytes[at..],
+                h8_asm::Target::H8S2000,
+                h8_asm::Mode::Advanced,
+            )
+            .map_err(|_| Error::Unresolved)?;
+            if decoded.insn.mnemonic == "JSR" {
+                if decoded.len != 4 || bytes[at] != 0x5e {
+                    return Err(Error::Unresolved);
+                }
+                let address = next_call.next().ok_or(Error::Unresolved)?;
+                bytes[at + 1..at + 4].copy_from_slice(&address.to_be_bytes()[1..]);
+            }
+            at += decoded.len;
+        }
+        if next_call.next().is_some() {
+            return Err(Error::Unresolved);
+        }
+        let width = function.end - function.start;
+        if bytes.len() <= width {
+            output[function.start..function.end].fill(0);
+            output[function.start..function.start + bytes.len()].copy_from_slice(&bytes);
+        } else {
+            let space = reservation.clone().ok_or(Error::SpaceRequired)?;
+            if used_space
+                || space.start & 1 != 0
+                || space.end & 1 != 0
+                || space.start > space.end
+                || space.len() < bytes.len()
+                || !contains(&space)
+                || functions
+                    .iter()
+                    .any(|f| space.start < f.end && f.start < space.end)
+                || !normal
+                    .get(space.clone())
+                    .is_some_and(|b| b.iter().all(|b| *b == 0xff))
+            {
+                return Err(Error::InvalidSpace);
+            }
+            let address = 0x410000usize
+                .checked_add(space.start)
+                .filter(|a| *a <= 0xffffff)
+                .ok_or(Error::InvalidSpace)? as u32;
+            let mut end = function.start;
+            while end < function.start + 4 {
+                let decoded = h8_asm::isa::decode_insn(
+                    &normal[end..function.end],
+                    h8_asm::Target::H8S2000,
+                    h8_asm::Mode::Advanced,
+                )
+                .map_err(|_| Error::Unresolved)?;
+                if decoded.len == 0 {
+                    return Err(Error::Unresolved);
+                }
+                end += decoded.len;
+            }
+            output[function.start..end].fill(0);
+            output[function.start..function.start + 4].copy_from_slice(&[
+                0x5a,
+                address.to_be_bytes()[1],
+                address.to_be_bytes()[2],
+                address.to_be_bytes()[3],
+            ]);
+            output[space.clone()].fill(0);
+            output[space.start..space.start + bytes.len()].copy_from_slice(&bytes);
+            used_space = true;
+        }
+    }
+    if !matches!(discover_pair(&output),Observation::Known(p) if p.assignment==required.assignment)
+    {
+        return Err(Error::VerificationFailed);
+    }
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

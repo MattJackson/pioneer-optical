@@ -164,3 +164,89 @@ pub(crate) fn split_closed(
     encoding::nops(&mut prefix[used..])?;
     Some((prefix, spill.bytes))
 }
+
+/// Check the references visible in a Normal component before reusing part of a
+/// completely bound, replaced routine. This rejects direct entries into the
+/// routine interior and address-taken uses of any part of the original routine.
+/// Expanded streams have no execution mapping here: their absolute references
+/// are checked, but relative/indirect execution and other components remain the
+/// complete operation owner's obligation.
+pub(crate) fn retirement_references_clear(
+    normal: &[u8],
+    original: &Range<usize>,
+    retired: &Range<usize>,
+) -> Option<()> {
+    let regions = crate::image::regions(normal)?;
+    if original.start >= retired.start
+        || retired.start >= retired.end
+        || retired.end != original.end
+        || !stored(normal, &regions.stored, original)
+    {
+        return None;
+    }
+    flow(normal.get(original.clone())?)?;
+    let parent = BASE.checked_add(original.start)?..BASE.checked_add(original.end)?;
+    for (bytes, offset) in regions
+        .stored
+        .iter()
+        .map(|r| (*r, Some(r.as_ptr() as usize - normal.as_ptr() as usize)))
+        .chain(regions.expanded.iter().map(|r| (r.as_slice(), None)))
+    {
+        for at in (offset.unwrap_or(0) % 2..bytes.len()).step_by(2) {
+            if offset.is_some_and(|offset| original.contains(&(offset + at))) {
+                continue;
+            }
+            let Ok(d) = decode_insn(&bytes[at..], Target::H8S2000, Mode::Advanced) else {
+                continue;
+            };
+            for operand in d.insn.operands {
+                let (value, address_taken) = match operand {
+                    Operand::Address(Ea::Absolute {
+                        value,
+                        bits: 24 | 32,
+                    }) => (
+                        Some(value as usize),
+                        !matches!(d.insn.mnemonic, "JSR" | "JMP"),
+                    ),
+                    Operand::Immediate { value, bits: 32 } => (Some(value as usize), true),
+                    Operand::Address(Ea::PcRelative { value, .. }) => (
+                        offset.and_then(|offset| {
+                            (BASE + offset + at + d.len).checked_add_signed(value as isize)
+                        }),
+                        false,
+                    ),
+                    _ => (None, false),
+                };
+                if value.is_some_and(|value| {
+                    if address_taken {
+                        parent.contains(&value)
+                    } else {
+                        value != parent.start && parent.contains(&value)
+                    }
+                }) {
+                    return None;
+                }
+            }
+        }
+        // Also find pointer-table entries, including unaligned data that is not
+        // an instruction stream. h8-asm owns signature search and word decoding.
+        for high in parent.start >> 16..=(parent.end - 1) >> 16 {
+            let prefix = (high as u16).to_be_bytes();
+            let mut start = 0;
+            while let Some(at) =
+                h8_asm::image::find(bytes, h8_asm::image::Needle::Bytes(&prefix), start)
+            {
+                start = at + 1;
+                if offset.is_some_and(|offset| original.contains(&(offset + at))) {
+                    continue;
+                }
+                if h8_asm::image::read_u32(bytes, at)
+                    .is_some_and(|value| parent.contains(&(value as usize)))
+                {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(())
+}

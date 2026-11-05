@@ -62,7 +62,8 @@ pub fn transplant(
             let regions = crate::image::regions(target).ok_or(Error::VerificationFailed)?;
             if space.start > space.end
                 || space.len() < 8
-                || space.end & 3 != 0
+                || space.start & 1 != 0
+                || space.end & 1 != 0
                 || !regions.stored.iter().any(|region| {
                     let at = region.as_ptr() as usize - target.as_ptr() as usize;
                     space.start >= at && space.end <= at + region.len()
@@ -73,7 +74,26 @@ pub fn transplant(
             {
                 return Err(Error::Loader(loader::Error::InvalidSpace));
             }
-            let cells = space.end - 8..space.end;
+            // Keep the largest contiguous code remainder. A retired routine
+            // can end at either even alignment; only the cells need four-byte
+            // alignment. Prefer trailing cells when both layouts fit equally.
+            let tail = (space.end - 8) & !3;
+            let head = space
+                .start
+                .checked_add(3)
+                .ok_or(Error::Loader(loader::Error::InvalidSpace))?
+                & !3;
+            let trailing = (tail >= space.start).then_some((tail..tail + 8, space.start..tail));
+            let leading = head
+                .checked_add(8)
+                .filter(|end| *end <= space.end)
+                .map(|end| (head..end, end..space.end));
+            let (cells, code) = match (trailing, leading) {
+                (Some(a), Some(b)) if b.1.len() > a.1.len() => b,
+                (Some(a), _) => a,
+                (_, Some(b)) => b,
+                _ => return Err(Error::Loader(loader::Error::InvalidSpace)),
+            };
             let first = 0x410000usize
                 .checked_add(cells.start)
                 .filter(|address| *address <= 0xfffff8)
@@ -82,7 +102,7 @@ pub fn transplant(
                 .into_iter()
                 .flat_map(u32::to_be_bytes)
                 .collect::<Vec<_>>();
-            loader_space = Some(space.start..cells.start);
+            loader_space = Some(code);
             pointer_cells = Some((cells, bytes));
             [
                 loader::Table::Pointer(first),

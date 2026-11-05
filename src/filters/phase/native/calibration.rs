@@ -275,5 +275,33 @@ pub fn transplant(
     Ok(changed)
 }
 
+/// Identify the tail retired by a shrinking, complete OEM reader transplant.
+/// The caller's low-byte contract and all visible Normal references must hold.
+pub(crate) fn retired_tail(target: &[u8], changed: &[u8]) -> Result<Option<Range<usize>>, Error> {
+    let before = bind(target)?;
+    let after = bind(changed)?;
+    if before.body.spans.len() != 1
+        || after.body.spans.len() != 1
+        || before.at != after.at
+        || after.body.spans[0].end >= before.body.spans[0].end
+    {
+        return Ok(None);
+    }
+    if callers::observe(target)? != callers::observe(changed)? {
+        return Err(Error::Unresolved);
+    }
+    let tail = after.body.spans[0].end..before.body.spans[0].end;
+    super::placement::retirement_references_clear(target, &before.body.spans[0], &tail)
+        .ok_or(Error::InvalidSpace)?;
+    for bytes in changed[tail.clone()].chunks_exact(2) {
+        let d = h8_asm::isa::decode_insn(bytes, h8_asm::Target::H8S2000, h8_asm::Mode::Advanced)
+            .map_err(|_| Error::InvalidSpace)?;
+        if d.insn.mnemonic != "NOP" {
+            return Err(Error::InvalidSpace);
+        }
+    }
+    Ok(Some(tail))
+}
+
 #[cfg(test)]
 mod tests;

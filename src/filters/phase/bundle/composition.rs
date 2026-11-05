@@ -142,3 +142,19 @@ pub fn transplant(
     }
     Ok(changed)
 }
+
+/// Compose without an external code reservation by reusing the tail of a
+/// shrinking OEM calibration reader. No arbitrary erased gap is allocated.
+/// Caller/component prerequisites still belong to the complete operation:
+/// Normal reference checks do not prove absent indirect or resident-code edges.
+pub fn transplant_reusing_reader(target: &[u8], installed: &[u8]) -> Result<Vec<u8>, Error> {
+    let mut prepared =
+        calibration::transplant(target, installed, None).map_err(Error::Calibration)?;
+    let retired = calibration::retired_tail(target, &prepared).map_err(Error::Calibration)?;
+    if let Some(tail) = &retired {
+        // The old reader was positively bound and replaced. Erasure here is an
+        // in-memory staging marker for the shared reservation validator.
+        prepared[tail.clone()].fill(0xff);
+    }
+    transplant(&prepared, installed, Space::default(), retired)
+}

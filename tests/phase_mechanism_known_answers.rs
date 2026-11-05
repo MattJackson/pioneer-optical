@@ -203,7 +203,7 @@ fn native_oem_ud02_composition_relocates_indirect_loads_without_new_instructions
         if matches!(source.tables, Some([loader::Table::Pointer(_), _])) {
             for bad in [
                 0x600..0x608,
-                0x600..0x6fe,
+                0x600..0x6ff,
                 0x400..0x700,
                 0x600..target.len() + 4,
             ] {
@@ -1534,45 +1534,65 @@ fn native_oem_compositions_round_trip_original_envelopes() {
             Some(0x600..0x700),
         )
         .unwrap();
-        let context = filters::Preparation {
-            target: Firmware {
-                hardware,
-                normal: &target.normal.image,
-                kernel: target.kernel.as_ref().map(|k| k.image.as_slice()),
-            },
-            normal: Some(&target.normal),
-            kernel: target.kernel.as_ref(),
-        };
-        let corrected = (filters::be32_normal_integrity().repair)(&context, &changed).unwrap();
-        assert_eq!(sum(&target.normal.image), 0, "{id}: original checksum");
-        assert_eq!(sum(&corrected), 0, "{id}: output checksum");
-        assert_eq!(&corrected[..16], &changed[..16]);
-        assert_eq!(&corrected[20..], &changed[20..]);
-        let original_word = u32::from_be_bytes(changed[16..20].try_into().unwrap());
-        assert_eq!(
-            &corrected[16..20],
-            &original_word.wrapping_sub(sum(&changed)).to_be_bytes()
-        );
-        let file = target
-            .normal
-            .repack(&corrected)
-            .expect("original codec must preserve modified image");
-        let decoded = match &target.kernel {
-            Some(kernel) => Envelope::load_with_kernel(&file, kernel),
-            None => Envelope::load(&file),
+        let mut variants = vec![("explicit reservation", changed)];
+        if donor_hash == "84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750"
+            && matches!(
+                target_hash.as_str(),
+                "87e8152f1de1d3be53eb4ad9144c1bb0c45a9be6f78713a0b7487a637f989bf1"
+                    | "e6bdfa9bd0220f618d3e4bf722a590c2e1cf4216431869ab399561b94c71f515"
+            )
+        {
+            variants.push((
+                "retired reader",
+                bundle::composition::transplant_reusing_reader(
+                    &target.normal.image,
+                    &donor.normal.image,
+                )
+                .unwrap(),
+            ));
         }
-        .unwrap();
-        assert_eq!(decoded.image, corrected, "{id}: every decoded output byte");
-        assert_eq!(
-            decoded.repack(&decoded.image).unwrap(),
-            file,
-            "{id}: stable encoded output"
-        );
-        assert_eq!(decoded.info().layout, target.normal.info().layout);
-        println!(
-            "{id}: checksum and {:?} envelope round-trip passed",
-            decoded.info().layout
-        );
+        for (placement, changed) in variants {
+            let context = filters::Preparation {
+                target: Firmware {
+                    hardware,
+                    normal: &target.normal.image,
+                    kernel: target.kernel.as_ref().map(|k| k.image.as_slice()),
+                },
+                normal: Some(&target.normal),
+                kernel: target.kernel.as_ref(),
+            };
+            let corrected = (filters::be32_normal_integrity().repair)(&context, &changed).unwrap();
+            assert_eq!(sum(&target.normal.image), 0, "{id}: original checksum");
+            assert_eq!(sum(&corrected), 0, "{id}: output checksum");
+            assert_eq!(&corrected[..16], &changed[..16]);
+            assert_eq!(&corrected[20..], &changed[20..]);
+            let original_word = u32::from_be_bytes(changed[16..20].try_into().unwrap());
+            assert_eq!(
+                &corrected[16..20],
+                &original_word.wrapping_sub(sum(&changed)).to_be_bytes()
+            );
+            let file = target
+                .normal
+                .repack(&corrected)
+                .expect("original codec must preserve modified image");
+            let decoded = match &target.kernel {
+                Some(kernel) => Envelope::load_with_kernel(&file, kernel),
+                None => Envelope::load(&file),
+            }
+            .unwrap();
+            assert_eq!(decoded.image, corrected, "{id}: every decoded output byte");
+            assert_eq!(
+                decoded.repack(&decoded.image).unwrap(),
+                file,
+                "{id}: stable encoded output"
+            );
+            assert_eq!(decoded.info().layout, target.normal.info().layout);
+            println!(
+                "{id}: checksum and {:?} envelope round-trip passed",
+                decoded.info().layout
+            );
+            println!("{id}: {placement} verified");
+        }
     }
 }
 
@@ -1990,4 +2010,172 @@ fn export_calibration_callers_from_reference_normals() {
         format!("{}\n", serde_json::to_string_pretty(&fixtures).unwrap()),
     )
     .unwrap();
+}
+
+#[test]
+fn indirect_loader_fits_thirty_bytes_with_pointer_cells_at_either_end() {
+    use bundle::waveforms::{
+        self,
+        loader::{self, Table},
+    };
+    for (id, target_hash, donor_hash) in native_oem_pairs() {
+        let target = native_spans(&target_hash);
+        let donor = native_spans(&donor_hash);
+        if !matches!(
+            loader::observe(&donor).unwrap().tables,
+            Some([Table::Pointer(_), _])
+        ) {
+            continue;
+        }
+        for (space, expected_cells) in [(0x600..0x61e, 0x600), (0x602..0x620, 0x618)] {
+            let changed = waveforms::transplant(&target, &donor, Some(space.clone()))
+                .unwrap_or_else(|e| panic!("{id} {space:?}: {e:?}"));
+            let binding = loader::observe(&changed).unwrap();
+            assert_eq!(
+                binding.tables,
+                Some([
+                    Table::Pointer(0x410000 + expected_cells),
+                    Table::Pointer(0x410004 + expected_cells)
+                ])
+            );
+            assert_eq!(binding.spans[1].len(), 22);
+            assert!(binding.spans[1].start >= space.start && binding.spans[1].end <= space.end);
+            assert_eq!(
+                waveforms::transplant(&changed, &donor, None).unwrap(),
+                changed
+            );
+        }
+        assert!(
+            waveforms::transplant(&target, &donor, Some(0x600..0x61c)).is_err(),
+            "{id}: insufficient suffix space"
+        );
+        assert!(
+            waveforms::transplant(&target, &donor, Some(0x601..0x61f)).is_err(),
+            "{id}: misaligned code space"
+        );
+    }
+}
+
+#[test]
+fn ud02_composition_reuses_only_the_retired_packed_reader_tail() {
+    use h8_asm::{
+        isa::{encode_insn, Ea, Insn, Operand},
+        Mode, Target,
+    };
+    let donor = native_spans("84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750");
+    for hash in [
+        "87e8152f1de1d3be53eb4ad9144c1bb0c45a9be6f78713a0b7487a637f989bf1",
+        "e6bdfa9bd0220f618d3e4bf722a590c2e1cf4216431869ab399561b94c71f515",
+    ] {
+        let target = native_spans(hash);
+        let entry = native::calibration::callers::observe(&target)
+            .unwrap()
+            .reader;
+        let tail = entry + 36..entry + 66;
+        let changed = bundle::composition::transplant_reusing_reader(&target, &donor).unwrap();
+        let loader = bundle::waveforms::loader::observe(&changed).unwrap();
+        assert_eq!(loader.spans[1].len(), 22);
+        assert!(loader.spans[1].start >= tail.start && loader.spans[1].end <= tail.end);
+        for table in loader.tables.unwrap() {
+            let bundle::waveforms::loader::Table::Pointer(address) = table else {
+                panic!("OEM indirect load")
+            };
+            let at = (address - 0x410000) as usize;
+            assert!(at >= tail.start && at + 4 <= tail.end);
+        }
+        assert_eq!(
+            &changed[..0x1000],
+            &target[..0x1000],
+            "no header-gap allocation"
+        );
+        let explicit =
+            bundle::composition::transplant(&target, &donor, test_space(), Some(0x600..0x700))
+                .unwrap();
+        for (at, (old, new)) in target.iter().zip(&changed).enumerate() {
+            if old != new {
+                assert!(
+                    tail.contains(&at) || explicit[at] != *old,
+                    "unexpected write {at:x}"
+                );
+            }
+        }
+        assert_eq!(
+            bundle::composition::transplant_reusing_reader(&changed, &donor).unwrap(),
+            changed
+        );
+        let mut pointer = target.clone();
+        pointer[0x801..0x805].copy_from_slice(&((0x410000 + entry) as u32).to_be_bytes());
+        assert!(
+            bundle::composition::transplant_reusing_reader(&pointer, &donor).is_err(),
+            "unaligned address-taken reader"
+        );
+        for (mnemonic, bits) in [("JSR", 24), ("MOV", 32)] {
+            let instruction = if mnemonic == "JSR" {
+                Insn::new(
+                    mnemonic,
+                    None,
+                    [
+                        Operand::Address(Ea::Absolute {
+                            value: (0x410000 + tail.start) as u32,
+                            bits,
+                        }),
+                        Operand::None,
+                        Operand::None,
+                    ],
+                )
+            } else {
+                Insn::new(
+                    mnemonic,
+                    Some(h8_asm::isa::Size::Long),
+                    [
+                        Operand::Immediate {
+                            value: (0x410000 + tail.start) as u32,
+                            bits,
+                        },
+                        Operand::Register(h8_asm::isa::Reg::Long(0)),
+                        Operand::None,
+                    ],
+                )
+            };
+            let bytes = encode_insn(instruction, Target::H8S2000, Mode::Advanced).unwrap();
+            let mut broken = target.clone();
+            broken[0x800..0x800 + bytes.len()].copy_from_slice(&bytes);
+            assert!(
+                bundle::composition::transplant_reusing_reader(&broken, &donor).is_err(),
+                "reference into retired tail"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires PIONEER_NORMAL_CORPUS; retired reader space in full images"]
+fn ud02_retired_reader_space_in_full_images() {
+    let root = std::path::PathBuf::from(std::env::var("PIONEER_NORMAL_CORPUS").unwrap());
+    let read = |hash: &str| {
+        let image = std::fs::read(root.join(format!("{hash}.bin"))).unwrap();
+        assert_eq!(format!("{:x}", Sha256::digest(&image)), hash);
+        image
+    };
+    let donor = read("84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750");
+    for hash in [
+        "87e8152f1de1d3be53eb4ad9144c1bb0c45a9be6f78713a0b7487a637f989bf1",
+        "e6bdfa9bd0220f618d3e4bf722a590c2e1cf4216431869ab399561b94c71f515",
+    ] {
+        let target = read(hash);
+        let changed = bundle::composition::transplant_reusing_reader(&target, &donor).unwrap();
+        let sparse = native_spans(hash);
+        let expected = bundle::composition::transplant_reusing_reader(
+            &sparse,
+            &native_spans("84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750"),
+        )
+        .unwrap();
+        for (at, (old, new)) in target.iter().zip(&changed).enumerate() {
+            if sparse[at] != expected[at] {
+                assert_eq!(*new, expected[at]);
+            } else {
+                assert_eq!(old, new);
+            }
+        }
+    }
 }

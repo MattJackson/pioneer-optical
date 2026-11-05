@@ -33,15 +33,6 @@ pub enum Error {
     VerificationFailed,
 }
 
-/// Compose the installed image's mechanism convention into target code/data.
-/// Reservations must already be established as unused executable space by the
-/// caller; erased bytes are insufficient. This function never writes persistent
-/// data and does not authorize pointer-selected installed tables without a live
-/// read. The returned Normal retains the original checksum for its codec owner.
-pub fn rewrite(target: &[u8], installed: &[u8], space: Space) -> Result<Vec<u8>, Error> {
-    compose(target, installed, space, None, false)
-}
-
 /// Compose actual OEM donor routines and tables, with target helper relocation.
 /// The caller owns all executable reservations and live read prerequisites.
 /// Indirect donor table loads use read-only pointer cells in loader_space.
@@ -53,16 +44,6 @@ pub fn transplant(
     installed: &[u8],
     space: Space,
     loader_space: Option<Range<usize>>,
-) -> Result<Vec<u8>, Error> {
-    compose(target, installed, space, loader_space, true)
-}
-
-fn compose(
-    target: &[u8],
-    installed: &[u8],
-    space: Space,
-    loader_space: Option<Range<usize>>,
-    native_donor: bool,
 ) -> Result<Vec<u8>, Error> {
     let before = super::bind(target).map_err(Error::Bundle)?;
     let required = super::bind(installed).map_err(Error::Bundle)?;
@@ -95,36 +76,18 @@ fn compose(
         }
     }
     let stages = [
-        if native_donor {
-            conversions::rewrite_compact(target, installed, space.conversions)
-        } else {
-            conversions::rewrite(target, installed, space.conversions)
-        }
-        .map_err(Error::Conversions)?,
+        conversions::rewrite_compact(target, installed, space.conversions)
+            .map_err(Error::Conversions)?,
         conversions::rewrite_controls(target, installed).map_err(Error::Conversions)?,
         super::rewrite_step_offsets(
             target,
             required.step_minus_source ^ u8::from(before.coil != required.coil),
         )
         .map_err(Error::Bundle)?,
-        if native_donor {
-            sources::transplant(target, installed, space.sources)
-        } else {
-            sources::rewrite(target, required.coil, space.sources)
-        }
-        .map_err(Error::Sources)?,
-        if native_donor {
-            calibration::transplant(target, installed, space.calibration)
-        } else {
-            calibration::rewrite(target, installed, space.calibration)
-        }
-        .map_err(Error::Calibration)?,
-        if native_donor {
-            waveforms::transplant(target, installed, loader_space)
-        } else {
-            waveforms::rewrite(target, installed)
-        }
-        .map_err(Error::Waveforms)?,
+        sources::transplant(target, installed, space.sources).map_err(Error::Sources)?,
+        calibration::transplant(target, installed, space.calibration)
+            .map_err(Error::Calibration)?,
+        waveforms::transplant(target, installed, loader_space).map_err(Error::Waveforms)?,
     ];
     let mut changed = target.to_vec();
     for stage in stages {
@@ -141,14 +104,9 @@ fn compose(
         }
     }
     let actual = super::bind(&changed).map_err(Error::Bundle)?;
-    let loader = match required.loader {
-        super::Loader::AscendingNegated17 if !native_donor => super::Loader::Ascending,
-        other => other,
-    };
     // The target retains its motion-pointer initializer. Its DSP loader now
     // uses explicit coefficient addresses; the read-only selection is external.
     let expected = Bundle {
-        loader,
         table_select_0x28f: before.table_select_0x28f,
         ..required
     };

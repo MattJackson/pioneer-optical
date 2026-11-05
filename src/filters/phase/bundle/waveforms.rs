@@ -20,69 +20,6 @@ pub enum Error {
     VerificationFailed,
 }
 
-/// Carry installed image-resident waveforms into the target's bound table roles.
-/// This stage retains target helper addresses and writes no persistent values.
-/// A pointer-selected installed image still requires independent proof of its
-/// live non-FFFF selection; observing its initializer does not satisfy that read.
-pub fn rewrite(target: &[u8], installed: &[u8]) -> Result<Vec<u8>, Error> {
-    let destination = resources::observe(target).map_err(Error::Resources)?;
-    let source = resources::observe(installed).map_err(Error::Resources)?;
-    let source_loader = loader::observe(installed).map_err(Error::Loader)?;
-    let target_loader = loader::observe(target).map_err(Error::Loader)?;
-    if destination.selected.coefficients[0] == destination.selected.coefficients[1]
-        && installed[source.selected.coefficients[0].clone()]
-            != installed[source.selected.coefficients[1].clone()]
-    {
-        return Err(Error::VerificationFailed);
-    }
-    let direction = match source_loader.loader {
-        Loader::AscendingNegated17 => Loader::Ascending,
-        other => other,
-    };
-    let addresses = destination
-        .selected
-        .coefficients
-        .clone()
-        .map(|r| 0x410000 + r.start as u32);
-    let mut changed = loader::rewrite(target, direction, addresses, None).map_err(Error::Loader)?;
-    let programs = core::iter::once(&destination.dispatch)
-        .chain(core::iter::once(&target_loader.program))
-        .chain(destination.initializer.as_ref());
-    let data: Vec<_> = core::iter::once(&destination.selected)
-        .chain(&destination.erased_parameter)
-        .flat_map(|tables| tables.motion.iter())
-        .chain(&destination.selected.coefficients)
-        .collect();
-    if programs.into_iter().any(|program| {
-        data.iter()
-            .any(|span| program.start < span.end && span.start < program.end)
-    }) {
-        return Err(Error::VerificationFailed);
-    }
-    for tables in core::iter::once(&destination.selected).chain(&destination.erased_parameter) {
-        for (to, from) in tables.motion.iter().zip(&source.selected.motion) {
-            changed[to.clone()].copy_from_slice(&installed[from.clone()]);
-        }
-    }
-    for (to, from) in destination
-        .selected
-        .coefficients
-        .iter()
-        .zip(&source.selected.coefficients)
-    {
-        let coefficients: &[u8; 72] = installed[from.clone()]
-            .try_into()
-            .map_err(|_| Error::VerificationFailed)?;
-        changed[to.clone()]
-            .copy_from_slice(&plain_coefficients(coefficients, source_loader.loader));
-    }
-    let after = loader::observe(&changed).map_err(Error::Loader)?;
-    if after.loader != direction || after.tables != Some(addresses.map(loader::Table::Literal)) {
-        return Err(Error::VerificationFailed);
-    }
-    Ok(changed)
-}
-
 /// Transplant OEM waveform data and its original noncomputed loader body.
 /// Unlike normalization, this preserves the donor's native fetch convention.
 /// Indirect donor loads use relocated read-only pointer cells in the reserved

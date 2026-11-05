@@ -97,7 +97,7 @@ fn calls(template: Template) -> Result<Vec<usize>, Error> {
     }
     Ok(found)
 }
-fn emit(normal: &[u8], from: &Program, _donor: &[u8], desired: &Program) -> Result<Vec<u8>, Error> {
+fn transplant_program(normal: &[u8], from: &Program, desired: &Program) -> Result<Vec<u8>, Error> {
     let before = from.templates[from.variant as usize];
     if from.element != desired.element {
         return Err(Error::InvalidProgram);
@@ -193,7 +193,7 @@ fn rewrite_with_layout(
         if program.variant == desired.variant {
             continue;
         }
-        let bytes = emit(target, program, installed, desired)?;
+        let bytes = transplant_program(target, program, desired)?;
         if !compact && program.body.spans.len() != 1 {
             return Err(Error::InvalidProgram);
         }
@@ -346,16 +346,34 @@ pub fn rewrite_controls(target: &[u8], installed: &[u8]) -> Result<Vec<u8>, Erro
         ))
     };
     let ((mode, at), (controller, control_at)) = bind(target)?;
-    let ((required, _), (required_controller, _)) = bind(installed)?;
+    let ((required, _), (required_controller, donor_control)) = bind(installed)?;
     let mut changed = target.to_vec();
     if mode != required {
-        changed[at + 6] ^= 1;
+        use h8_asm::{
+            isa::{decode_insn, encode_insn},
+            Mode, Target,
+        };
+        let before = decode_insn(&target[at + 6..], Target::H8S2000, Mode::Advanced)
+            .map_err(|_| Error::InvalidProgram)?;
+        let mut instruction = before.insn;
+        // The native NEG may live in either arm. Flip the target's bound
+        // condition to select the donor's effective sign, retaining its arms.
+        instruction.mnemonic = match instruction.mnemonic {
+            "BEQ" => "BNE",
+            "BNE" => "BEQ",
+            _ => return Err(Error::InvalidProgram),
+        };
+        let bytes = encode_insn(instruction, Target::H8S2000, Mode::Advanced)
+            .map_err(|_| Error::InvalidProgram)?;
+        if bytes.len() != before.len {
+            return Err(Error::InvalidProgram);
+        }
+        changed[at + 6..at + 6 + bytes.len()].copy_from_slice(&bytes);
     }
     if controller != required_controller {
         let template = CONTROLLER[required_controller as usize];
-        for (i, byte) in template.iter().enumerate() {
-            changed[control_at + i] = byte.ok_or(Error::InvalidProgram)?;
-        }
+        changed[control_at..control_at + template.len()]
+            .copy_from_slice(&installed[donor_control..donor_control + template.len()]);
     }
     let ((after, _), (controller_after, _)) = bind(&changed)?;
     if after != required || controller_after != required_controller {

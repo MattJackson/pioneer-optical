@@ -413,7 +413,8 @@ pub fn correct_pair(normal: &[u8], target: Assignment) -> Result<Vec<u8>, Correc
     let mut corrected = normal.to_vec();
     if before.assignment != target {
         for offset in before.operands.iter().flatten() {
-            corrected[*offset] ^= 1;
+            encoding::swap_output(&mut corrected, *offset)
+                .ok_or(CorrectionError::VerificationFailed)?;
         }
     }
     let Observation::Known(after) = discover_pair(&corrected) else {

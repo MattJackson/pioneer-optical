@@ -399,13 +399,23 @@ pub fn rewrite_step_offsets(normal: &[u8], required_source: u8) -> Result<Vec<u8
     }
     let mut changed = normal.to_vec();
     if current != required_source {
-        for (before, after) in [(STEP_PLUS, STEP_MINUS), (STEP_MINUS, STEP_PLUS)] {
-            let at = sites(normal, &regions.stored, before)[0];
-            for (i, byte) in after.iter().enumerate() {
-                if let Some(byte) = byte {
-                    changed[at + i] = *byte;
-                }
+        let plus = sites(normal, &regions.stored, STEP_PLUS)[0];
+        let minus = sites(normal, &regions.stored, STEP_MINUS)[0];
+        for (to, from) in [(plus, minus), (minus, plus)] {
+            // Keep this caller's input-register move. The remainder is the
+            // opposite complete OEM block already present in the same image;
+            // equal block geometry preserves its relative branch destinations.
+            let first = h8_asm::isa::decode_insn(
+                &normal[to..],
+                h8_asm::Target::H8S2000,
+                h8_asm::Mode::Advanced,
+            )
+            .map_err(|_| Unbound::Missing(Element::StepOffsets))?;
+            if first.len != 2 {
+                return Err(Unbound::Missing(Element::StepOffsets));
             }
+            changed[to + first.len..to + STEP_PLUS.len()]
+                .copy_from_slice(&normal[from + first.len..from + STEP_PLUS.len()]);
         }
     }
     let changed_regions =

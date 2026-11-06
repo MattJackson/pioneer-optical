@@ -13,7 +13,8 @@ pub enum PreparationError {
     AmbiguousStartup,
     /// An observed startup comparison is not bound to a proven parameter getter.
     UnresolvedStartup,
-    /// Required native phase correction could not be proven.
+    /// The native compatibility plan or its prepared correction was refused.
+    /// The historical variant name also covers non-phase filter failures.
     PhaseCorrection(crate::compatibility::Error),
     /// Target requires a setting but the installed write surface is unknown.
     UnknownStartupAccess,

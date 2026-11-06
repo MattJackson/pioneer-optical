@@ -21,6 +21,7 @@ pub mod phase;
 mod receiver;
 pub mod registers;
 pub use abi::{provided_abi, required_abi, Abi};
+#[cfg(any(test, feature = "envelope"))]
 pub(crate) use control::with_kernel as receiver_control_with_kernel;
 pub use control::{receiver_control, ReceiverControl};
 #[cfg(all(test, feature = "envelope"))]

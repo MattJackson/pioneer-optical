@@ -253,6 +253,27 @@ fn native_sat1_directions_round_trip_original_envelopes() {
             normal: &original.normal.image,
             kernel: original.kernel.as_ref().map(|k| k.image.as_slice()),
         });
+        // Phase correction is independently proven below; it must not erase
+        // restrictions imposed by the complete app-facing owner inventory.
+        let complete =
+            filters::runner::evaluate(&installed, &destination, filters::runner::Policy::Strict)
+                .unwrap();
+        assert!(complete.admit().is_err());
+        let phase = complete
+            .decisions()
+            .iter()
+            .find(|decision| decision.id == "phase")
+            .unwrap();
+        assert!(phase.blocked().is_none());
+        assert!(phase.operation().is_some());
+        let restrictions: Vec<_> = complete
+            .decisions()
+            .iter()
+            .filter_map(|decision| decision.blocked().map(|error| (decision.id, error)))
+            .collect();
+        assert!(!restrictions.is_empty());
+        assert!(restrictions.iter().all(|(id, _)| *id != "phase"));
+        println!("native SAT1 {source_hardware} -> {hardware}: other-filter restrictions {restrictions:?}");
         let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
         let plan = filters::runner::plan_with(
             &installed,

@@ -140,7 +140,7 @@ fn check_component(
                     }),
                     _ => None,
                 };
-                if address.is_some_and(&conflict) {
+                if address.is_some_and(conflict) {
                     return None;
                 }
             }

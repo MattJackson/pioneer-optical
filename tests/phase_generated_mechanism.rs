@@ -354,3 +354,46 @@ fn four_choice_selector_distinguishes_stored_tables_from_runtime_producers() {
     image[at..at + 4].copy_from_slice(&incomplete.to_be_bytes());
     assert!(software::observe(&image).is_err());
 }
+
+#[test]
+fn generated_target_without_complete_bundle_proof_is_not_an_equal_coil_noop() {
+    use filters::phase::bundle;
+    let literal = fixture("87e8152f1de1d3be53eb4ad9144c1bb0c45a9be6f78713a0b7487a637f989bf1");
+    for hash in HASHES {
+        let target = fixture(hash);
+        let generated_target = generated::observe(&target).unwrap();
+        let source = native::correct_pair(&literal, generated_target.coils.assignment).unwrap();
+        assert!(generated::observe(&source).is_err());
+        assert!(bundle::bind(&target).is_err());
+        assert!(
+            matches!((native::discover(&source), native::discover(&target)), (pioneer_optical::image::layout::Observation::Known(a), pioneer_optical::image::layout::Observation::Known(b)) if a == b)
+        );
+        assert_ne!(
+            native::encoders::observe(&source).unwrap().representation,
+            native::encoders::observe(&target).unwrap().representation
+        );
+        let installed = filters::Context::new(Firmware {
+            hardware: "SAT 8000",
+            normal: &source,
+            kernel: None,
+        });
+        let destination = filters::Context::new(Firmware {
+            hardware: "SAT 8000",
+            normal: &target,
+            kernel: None,
+        });
+        let filter = &filters::phase::FILTER;
+        let transition = filters::Transition {
+            installed: &installed,
+            target: &destination,
+        };
+        assert!(matches!(
+            filter.plan(
+                &transition,
+                &filter.inspect(&installed),
+                &filter.inspect(&destination)
+            ),
+            Err(pioneer_optical::compatibility::Error::Unsupported)
+        ));
+    }
+}

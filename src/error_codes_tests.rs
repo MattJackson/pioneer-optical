@@ -514,11 +514,31 @@ fn receiver_and_preparation_error_catalogues_have_stable_codes() {
         ),
         (
             P::PhaseCorrection(crate::compatibility::Error::Unsupported),
-            "pioneer.phase.correction_unproven",
+            "pioneer.compatibility.unsupported_correction",
+        ),
+        (
+            P::PhaseCorrection(crate::compatibility::Error::UnresolvedIdentity),
+            "pioneer.compatibility.unresolved_identity",
+        ),
+        (
+            P::PhaseCorrection(crate::compatibility::Error::Incompatible),
+            "pioneer.compatibility.incompatible",
+        ),
+        (
+            P::PhaseCorrection(crate::compatibility::Error::Representation),
+            "pioneer.compatibility.representation_failed",
         ),
     ];
     for (error, code) in preparation {
         assert_eq!(error.code(), code);
+    }
+    use crate::{compatibility::Error as C, operation::IssueKind as K};
+    for (cause, kind) in [
+        (C::UnresolvedIdentity, K::UnsupportedFirmware),
+        (C::Incompatible, K::HardwareMismatch),
+        (C::Representation, K::InvalidFirmware),
+    ] {
+        assert_eq!(P::PhaseCorrection(cause).kind(), kind);
     }
 }
 

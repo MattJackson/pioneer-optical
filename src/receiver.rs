@@ -4,7 +4,7 @@
 //! hardware compatibility, component acceptance, or a complete flash plan.
 
 use crate::envelope::Envelope;
-use crate::image::{receiver_control, Family, ReceiverControl};
+use crate::image::{receiver_control_with_kernel, Family, ReceiverControl};
 use crate::{cdb, ComponentKind};
 
 mod preparation;
@@ -108,7 +108,7 @@ pub struct Receiver {
 }
 
 trait ReceiverCodec: core::fmt::Debug + Sync {
-    fn detect(&self, image: &[u8]) -> Option<ReceiverControl>;
+    fn detect(&self, image: &[u8], kernel: Option<&[u8]>) -> Option<ReceiverControl>;
     fn control(
         &self,
         descriptor: &[u8; DESCRIPTOR_LEN],
@@ -119,8 +119,8 @@ trait ReceiverCodec: core::fmt::Debug + Sync {
 #[derive(Debug)]
 struct Oem;
 impl ReceiverCodec for Oem {
-    fn detect(&self, image: &[u8]) -> Option<ReceiverControl> {
-        receiver_control(image)
+    fn detect(&self, image: &[u8], kernel: Option<&[u8]>) -> Option<ReceiverControl> {
+        receiver_control_with_kernel(image, kernel)
     }
     fn control(
         &self,
@@ -141,18 +141,30 @@ const CODECS: &[&dyn ReceiverCodec] = &[&Oem];
 impl Receiver {
     /// Recover entry requirements from decoded installed firmware instructions.
     pub fn detect(normal: &Envelope) -> Result<Self, Error> {
+        Self::detect_components(normal, None)
+    }
+
+    fn detect_components(normal: &Envelope, kernel: Option<&Envelope>) -> Result<Self, Error> {
         if normal.info().kind != ComponentKind::Normal {
             return Err(Error::Component {
                 actual: normal.info().kind,
             });
         }
-        let mut receiver = Self::from_image(&normal.image)?;
+        let mut receiver = Self::from_image_with_kernel(
+            &normal.image,
+            kernel.map(|kernel| kernel.image.as_slice()),
+        )?;
         receiver.family = normal.family();
         receiver.installed_normal = Some(normal.clone());
         Ok(receiver)
     }
 
+    #[cfg(test)]
     fn from_image(image: &[u8]) -> Result<Self, Error> {
+        Self::from_image_with_kernel(image, None)
+    }
+
+    fn from_image_with_kernel(image: &[u8], kernel: Option<&[u8]>) -> Result<Self, Error> {
         let descriptor: [u8; DESCRIPTOR_LEN] = image
             .get(..DESCRIPTOR_LEN)
             .and_then(|bytes| bytes.try_into().ok())
@@ -168,7 +180,7 @@ impl Receiver {
         }
         let mut candidates = CODECS
             .iter()
-            .filter_map(|&codec| codec.detect(image).map(|policy| (codec, policy)));
+            .filter_map(|&codec| codec.detect(image, kernel).map(|policy| (codec, policy)));
         let (codec, policy) = candidates.next().ok_or(Error::Unsupported)?;
         if candidates.next().is_some() {
             return Err(Error::Unsupported);
@@ -200,7 +212,9 @@ impl Receiver {
     /// The caller must bind both images to its capture; header agreement alone
     /// cannot prove they are currently installed on a physical device.
     pub fn detect_with_kernel(normal: &Envelope, kernel: &Envelope) -> Result<Self, Error> {
-        let mut receiver = Self::detect(normal)?;
+        if normal.info().kind != ComponentKind::Normal {
+            return Self::detect(normal);
+        }
         if kernel.info().kind != ComponentKind::Kernel {
             return Err(Error::KernelComponent {
                 actual: kernel.info().kind,
@@ -217,6 +231,7 @@ impl Receiver {
                 return Err(Error::InstalledPairMismatch);
             }
         }
+        let mut receiver = Self::detect_components(normal, Some(kernel))?;
         receiver.kernel_policy = crate::image::kernel_marker_policy(&kernel.image);
         receiver.startup =
             crate::startup::checks::Checks::discover(&normal.image, Some(&kernel.image));

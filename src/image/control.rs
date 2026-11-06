@@ -13,6 +13,8 @@ const SHORT_REJECT_BRANCH: u8 = 0x46;
 
 #[path = "control_descriptor.rs"]
 mod descriptor;
+#[path = "control_indirect.rs"]
+mod indirect;
 
 /// Control data checked by a recognized Normal update-entry handler.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,9 +30,19 @@ pub enum ReceiverControl {
 /// Missing, truncated and ambiguous implementations return `None`.
 /// This establishes entry control only, not a complete transfer protocol.
 pub fn receiver_control(body: &[u8]) -> Option<ReceiverControl> {
+    with_kernel(body, None)
+}
+
+pub(crate) fn with_kernel(body: &[u8], kernel: Option<&[u8]>) -> Option<ReceiverControl> {
     let mut matches = keys(body)
         .map(ReceiverControl::Key)
-        .chain(descriptor::matches(body).map(|()| ReceiverControl::DescriptorOnly));
+        .chain(descriptor::matches(body).map(|()| ReceiverControl::DescriptorOnly))
+        .chain(
+            kernel
+                .into_iter()
+                .flat_map(|kernel| indirect::matches(body, kernel))
+                .map(|()| ReceiverControl::DescriptorOnly),
+        );
     let first = matches.next()?;
     matches.next().is_none().then_some(first)
 }

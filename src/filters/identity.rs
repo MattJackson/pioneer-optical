@@ -39,12 +39,13 @@ impl Domain {
         if bytes.len() != 8 || !bytes[4..].iter().all(u8::is_ascii_hexdigit) {
             return None;
         }
+        if let Some(platform) = crate::image::matrix::SatPlatform::from_hardware(hardware) {
+            return Some(match platform {
+                crate::image::matrix::SatPlatform::Sat1 => Self::Sat1,
+                crate::image::matrix::SatPlatform::H8 => Self::H8Sat,
+            });
+        }
         match &bytes[..4] {
-            b"SAT " => match bytes[4] {
-                b'1' => Some(Self::Sat1),
-                b'8' | b'9' => Some(Self::H8Sat),
-                _ => None,
-            },
             b"ATA " => Some(Self::Ata),
             b"SCSI" => Some(Self::Scsi),
             _ => None,
@@ -58,7 +59,8 @@ pub const PARTITION: &str = "Families never cross a platform. The identity start
 platform partition: SAT 1xxx, SAT 8xxx/9xxx (one H8 SAT platform), ATA or SCSI. SAT 8xxx and \
 SAT 9xxx are one platform because their Kernels receive, hand off, finalize, checksum and \
 marker-gate updates with the same native code and their persistent banks use the same versioned \
-contract; every filter value must still match. A tag outside these domains produces no identity. \
+contract. Recorder-branded REC 8xxx selects the same H8 native discovery; its raw tag is retained \
+and every hardware contract must still be established and match. A tag outside these domains produces no identity. \
 Under the strict update policy the correction planner also refuses any transition between \
 different platforms before owner corrections are considered.";
 

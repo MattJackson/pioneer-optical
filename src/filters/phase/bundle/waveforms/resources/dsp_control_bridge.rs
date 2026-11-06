@@ -73,7 +73,7 @@ fn matched(n: &[u8], address: u32, shape: Template) -> Result<Range<usize>, Fail
 ///
 /// The two intervening complete native helpers either save and restore ER6 or
 /// never write it. Their DSP calls bind to the loader's existing writer/reader.
-/// The complete movement routine stores R1L at object[6] before any helper call;
+/// The complete movement routine stores R1L at `object[6]` before any helper call;
 /// its bound vtable callback selects positive/negative row delta from that byte.
 /// Ordinary native call/return stack discipline is the same precondition as the
 /// existing native loader proofs. This does not claim entry-R1H preservation,

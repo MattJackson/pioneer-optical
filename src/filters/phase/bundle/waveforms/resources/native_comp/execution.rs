@@ -7,7 +7,7 @@
 //! reach arithmetic, control flow, addresses or observable output. Native scratch
 //! tables may differ between encodings; only their bounded effects are asserted.
 //! Instruction semantics: Renesas H8S/2600, H8S/2000 Software Manual (REJ09B0139),
-//! https://www.renesas.com/en/document/mah/h8s2600-series-h8s2000-series-software-manual
+//! <https://www.renesas.com/en/document/mah/h8s2600-series-h8s2000-series-software-manual>
 use super::Binding;
 use h8_asm::{
     isa::{decode_insn, Ea, Insn, Operand as O, Reg, Size},

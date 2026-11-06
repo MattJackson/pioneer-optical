@@ -112,19 +112,20 @@ pub(crate) fn test_family(variant: u8) -> super::Family {
 pub enum SatPlatform {
     /// SAT 1xxx.
     Sat1,
-    /// H8 SAT: SAT 8xxx and SAT 9xxx.
+    /// H8 SAT: SAT 8xxx, SAT 9xxx, and recorder-branded REC 8xxx.
     H8,
 }
 impl SatPlatform {
-    /// Parse an exact SAT hardware tag. Model names and fuzzy strings are not evidence.
+    /// Parse an exact platform tag. REC 8xxx is the recorder branding of H8 SAT.
+    /// This selects native discovery only; every hardware contract must still be proven.
     pub fn from_hardware(tag: &str) -> Option<Self> {
         let b = tag.as_bytes();
-        if b.len() != 8 || &b[..4] != b"SAT " || !b[4..].iter().all(u8::is_ascii_hexdigit) {
+        if b.len() != 8 || !b[4..].iter().all(u8::is_ascii_hexdigit) {
             return None;
         }
-        match b[4] {
-            b'1' => Some(Self::Sat1),
-            b'8' | b'9' => Some(Self::H8),
+        match (&b[..4], b[4]) {
+            (b"SAT ", b'1') => Some(Self::Sat1),
+            (b"SAT ", b'8' | b'9') | (b"REC ", b'8') => Some(Self::H8),
             _ => None,
         }
     }
@@ -174,12 +175,34 @@ mod tests {
     #[test]
     fn structured_metadata_never_supplies_missing_native_evidence() {
         for hardware in [
-            "SAT 1000", "SAT 8000", "SAT 9000", "ATA 0005", "SCSI0001", "BDR-UD04", "SAT 8xxx", "",
+            "SAT 1000", "SAT 8000", "SAT 9000", "REC 8900", "REC 8C00", "ATA 0005", "SCSI0001",
+            "BDR-UD04", "SAT 8xxx", "",
         ] {
             assert!(discover(hardware, &[], None).is_none());
             assert!(super::super::family_with_context(&[], hardware, None).is_none());
         }
     }
+    #[test]
+    fn recorder_family_requires_every_native_contract_and_retains_differences() {
+        let mut body = alloc::vec![0xff; 0x2000];
+        install_test_contract(&mut body, 0x20);
+        let sat = discover("SAT 8900", &body, None).unwrap();
+        for hardware in ["REC 8900", "REC 8C00"] {
+            let rec = discover(hardware, &body, None).unwrap();
+            assert_eq!(rec.as_is, sat.as_is);
+            assert_eq!(rec.candidate, sat.candidate);
+        }
+        let mut different = body.clone();
+        install_test_contract(&mut different, 0);
+        assert_ne!(
+            discover("REC 8900", &body, None).unwrap().candidate,
+            discover("REC 8C00", &different, None).unwrap().candidate
+        );
+        // A valid REC tag cannot supply the missing host-interface contract.
+        body[0x710..0x716].fill(0xff);
+        assert!(discover("REC 8900", &body, None).is_none());
+    }
+
     #[test]
     fn platform_is_a_structured_tag_not_a_model_guess() {
         assert_eq!(
@@ -194,7 +217,14 @@ mod tests {
             SatPlatform::from_hardware("SAT 9200"),
             Some(SatPlatform::H8)
         );
+        for hardware in ["REC 8900", "REC 8C00"] {
+            assert_eq!(SatPlatform::from_hardware(hardware), Some(SatPlatform::H8));
+        }
         for s in [
+            "REC 1000",
+            "REC 9000",
+            "REC 8xxx",
+            "REC 8900 ",
             "BDR-212",
             "8A10",
             "SAT 8xxx",

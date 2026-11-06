@@ -289,7 +289,7 @@
     }
   ],
   "identity": {
-    "partition": "Families never cross a platform. The identity starts with the platform partition: SAT 1xxx, SAT 8xxx/9xxx (one H8 SAT platform), ATA or SCSI. SAT 8xxx and SAT 9xxx are one platform because their Kernels receive, hand off, finalize, checksum and marker-gate updates with the same native code and their persistent banks use the same versioned contract; every filter value must still match. A tag outside these domains produces no identity. Under the strict update policy the correction planner also refuses any transition between different platforms before owner corrections are considered.",
+    "partition": "Families never cross a platform. The identity starts with the platform partition: SAT 1xxx, SAT 8xxx/9xxx (one H8 SAT platform), ATA or SCSI. SAT 8xxx and SAT 9xxx are one platform because their Kernels receive, hand off, finalize, checksum and marker-gate updates with the same native code and their persistent banks use the same versioned contract. Recorder-branded REC 8xxx selects the same H8 native discovery; its raw tag is retained and every hardware contract must still be established and match. A tag outside these domains produces no identity. Under the strict update policy the correction planner also refuses any transition between different platforms before owner corrections are considered.",
     "rules": [
       "Every registered filter runs on every image. Hardware filters form the identity; operational requirements are evaluated and planned per update but never enter it.",
       "As-is identity: every hardware value before any correction. Matching (candidate) family: each owner's projection with exactly what it may correct removed, so it is built only from facts no owner corrects.",

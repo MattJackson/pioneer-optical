@@ -28,6 +28,10 @@ pub mod generated;
 pub mod materialized;
 /// Complete native COMP inflater binding and arithmetic relocation.
 pub mod native_comp;
+/// Native pointer dispatcher and command caller adaptation.
+pub mod pointer_bridge;
+/// Complete guarded pointer-donor composition into the native computed target.
+pub mod pointer_composition;
 /// Exact component reference checks for a replaced native resource graph.
 pub mod retirement;
 mod shapes;
@@ -235,70 +239,133 @@ pub fn observe(normal: &[u8]) -> Result<Binding, Error> {
                 }
             }
             let dispatch = at..at + shape.len();
+            let mut fixed_motion_cells = Vec::new();
+            let mut fixed_programs = Vec::new();
             let result = if pointer {
                 let motion_slots = [word(bytes, 40), word(bytes, 124)];
                 if motion_slots != [word(bytes, 54), word(bytes, 138)] {
                     return Err(Error::ResourceMismatch);
                 }
                 table(normal, word(bytes, 78), 256)?;
-                let initializers = sites(normal, &regions.stored, shapes::INITIALIZER);
-                let [init] = initializers.as_slice() else {
-                    return Err(Error::Unresolved);
-                };
-                let body = &normal[*init..*init + shapes::INITIALIZER.len()];
-                let expected_slots = [
-                    motion_slots[0],
-                    motion_slots[1],
-                    word(body, 52),
-                    word(body, 116),
-                ];
-                for (i, slot) in expected_slots.into_iter().enumerate() {
-                    ram(slot)?;
-                    if expected_slots[i + 1..].iter().any(|other| {
-                        slot < other.saturating_add(4) && *other < slot.saturating_add(4)
-                    }) {
-                        return Err(Error::ResourceMismatch);
-                    }
-                }
-                if [word(body, 24), word(body, 38)] != motion_slots
-                    || [word(body, 74), word(body, 88), word(body, 102)] != expected_slots[..3]
-                {
-                    return Err(Error::ResourceMismatch);
-                }
-                let selected = [word(body, 16), word(body, 30)];
-                let erased = [word(body, 66), word(body, 80)];
-                let sources = loader.tables.ok_or(Error::ResourceMismatch)?;
-                let (coefficients, erased_coefficients) = match sources {
-                    [Table::Pointer(a), Table::Pointer(b)] if a < 0x100000 && b < 0x100000 => {
-                        if [a, b] != expected_slots[2..] {
+                if motion_slots.iter().all(|address| *address >= 0x410000) {
+                    // The complete native dispatcher still performs two MOV.L
+                    // dereferences. Image-resident cells resolve directly; do
+                    // not invent a RAM initializer or a live parameter read.
+                    let mut motion = [0; 2];
+                    for (i, address) in motion_slots.into_iter().enumerate() {
+                        if address & 3 != 0 {
                             return Err(Error::ResourceMismatch);
                         }
-                        (
-                            [word(body, 44), word(body, 58)],
-                            [word(body, 94), word(body, 108)],
-                        )
+                        let cell = table(normal, address, 4)?;
+                        if fixed_motion_cells
+                            .iter()
+                            .any(|old: &Range<usize>| old.start < cell.end && cell.start < old.end)
+                        {
+                            return Err(Error::ResourceMismatch);
+                        }
+                        motion[i] = word(normal, cell.start);
+                        fixed_motion_cells.push(cell);
                     }
-                    [a, b] => {
-                        let values = [literal_table(normal, a)?, literal_table(normal, b)?];
-                        (values, values)
-                    }
-                };
-                Binding {
-                    dispatch,
-                    initializer: Some(*init..*init + shapes::INITIALIZER.len()),
-                    selected: tables(
-                        normal,
-                        [selected[0], selected[1], coefficients[0], coefficients[1]],
-                    )?,
-                    erased_parameter: Some(tables(
+                    let [a, b] = loader.tables.ok_or(Error::ResourceMismatch)?;
+                    let selected = tables(
                         normal,
                         [
-                            erased[0],
-                            erased[1],
-                            erased_coefficients[0],
-                            erased_coefficients[1],
+                            motion[0],
+                            motion[1],
+                            literal_table(normal, a)?,
+                            literal_table(normal, b)?,
                         ],
-                    )?),
+                    )?;
+                    let linked = dispatch_bridge::observe(normal).map_err(|_| Error::Unresolved)?;
+                    if linked.dispatch != dispatch {
+                        return Err(Error::ResourceMismatch);
+                    }
+                    let outputs =
+                        native::encoders::observe(normal).map_err(|_| Error::Unresolved)?;
+                    fixed_programs.push(linked.selector);
+                    fixed_programs.extend(outputs.programs.into_iter().flatten());
+                    fixed_programs.push(outputs.leaf);
+                    let ordinary = table(normal, word(bytes, 78), 256)?;
+                    for data in selected
+                        .motion
+                        .iter()
+                        .chain(&selected.coefficients)
+                        .chain(core::iter::once(&ordinary))
+                    {
+                        if core::iter::once(&dispatch)
+                            .chain(&loader.spans)
+                            .chain(&fixed_programs)
+                            .any(|code| data.start < code.end && code.start < data.end)
+                        {
+                            return Err(Error::ResourceMismatch);
+                        }
+                    }
+                    Binding {
+                        dispatch,
+                        initializer: None,
+                        selected,
+                        erased_parameter: None,
+                    }
+                } else {
+                    let initializers = sites(normal, &regions.stored, shapes::INITIALIZER);
+                    let [init] = initializers.as_slice() else {
+                        return Err(Error::Unresolved);
+                    };
+                    let body = &normal[*init..*init + shapes::INITIALIZER.len()];
+                    let expected_slots = [
+                        motion_slots[0],
+                        motion_slots[1],
+                        word(body, 52),
+                        word(body, 116),
+                    ];
+                    for (i, slot) in expected_slots.into_iter().enumerate() {
+                        ram(slot)?;
+                        if expected_slots[i + 1..].iter().any(|other| {
+                            slot < other.saturating_add(4) && *other < slot.saturating_add(4)
+                        }) {
+                            return Err(Error::ResourceMismatch);
+                        }
+                    }
+                    if [word(body, 24), word(body, 38)] != motion_slots
+                        || [word(body, 74), word(body, 88), word(body, 102)] != expected_slots[..3]
+                    {
+                        return Err(Error::ResourceMismatch);
+                    }
+                    let selected = [word(body, 16), word(body, 30)];
+                    let erased = [word(body, 66), word(body, 80)];
+                    let sources = loader.tables.ok_or(Error::ResourceMismatch)?;
+                    let (coefficients, erased_coefficients) = match sources {
+                        [Table::Pointer(a), Table::Pointer(b)] if a < 0x100000 && b < 0x100000 => {
+                            if [a, b] != expected_slots[2..] {
+                                return Err(Error::ResourceMismatch);
+                            }
+                            (
+                                [word(body, 44), word(body, 58)],
+                                [word(body, 94), word(body, 108)],
+                            )
+                        }
+                        [a, b] => {
+                            let values = [literal_table(normal, a)?, literal_table(normal, b)?];
+                            (values, values)
+                        }
+                    };
+                    Binding {
+                        dispatch,
+                        initializer: Some(*init..*init + shapes::INITIALIZER.len()),
+                        selected: tables(
+                            normal,
+                            [selected[0], selected[1], coefficients[0], coefficients[1]],
+                        )?,
+                        erased_parameter: Some(tables(
+                            normal,
+                            [
+                                erased[0],
+                                erased[1],
+                                erased_coefficients[0],
+                                erased_coefficients[1],
+                            ],
+                        )?),
+                    }
                 }
             } else {
                 table(normal, word(bytes, 40), 256)?;
@@ -312,6 +379,18 @@ pub fn observe(normal: &[u8]) -> Result<Binding, Error> {
                     erased_parameter: None,
                 }
             };
+            for cell in &fixed_motion_cells {
+                let protected = core::iter::once(&result.dispatch)
+                    .chain(&fixed_programs)
+                    .chain(&loader.spans)
+                    .chain(&result.initializer)
+                    .chain(result.selected.motion.iter())
+                    .chain(result.selected.coefficients.iter());
+                if protected.into_iter().any(|r|r.start < cell.end && cell.start < r.end)
+                    || loader.tables.into_iter().flatten().any(|source|matches!(source, Table::Pointer(a) if a >= 0x410000 && a < 0x410000 + cell.end as u32 && 0x410000 + (cell.start as u32) < a.saturating_add(4))) {
+                    return Err(Error::ResourceMismatch);
+                }
+            }
             // Fixed pointer cells are read-only resources too. They must not
             // overlap a consumed table or a bound program that composition edits.
             if let Some(sources) = loader.tables {
@@ -324,6 +403,7 @@ pub fn observe(normal: &[u8]) -> Result<Binding, Error> {
                     }
                     let cell = table(normal, address, 4)?;
                     let protected = core::iter::once(&result.dispatch)
+                        .chain(&fixed_programs)
                         .chain(&loader.spans)
                         .chain(&result.initializer)
                         .chain(

@@ -50,11 +50,11 @@ pub struct Plan {
     kernel_digest: [u8; 32],
     convention: bundle::Bundle,
 }
-struct Pool {
-    spans: Vec<Range<usize>>,
+pub(super) struct Pool {
+    pub(super) spans: Vec<Range<usize>>,
 }
 impl Pool {
-    fn take(&mut self, length: usize) -> Result<Range<usize>, Error> {
+    pub(super) fn take(&mut self, length: usize) -> Result<Range<usize>, Error> {
         let index = self
             .spans
             .iter()
@@ -68,20 +68,20 @@ impl Pool {
         Ok(span)
     }
 }
-fn address(span: &Range<usize>) -> Result<u32, Error> {
+pub(super) fn address(span: &Range<usize>) -> Result<u32, Error> {
     u32::try_from(span.start)
         .ok()
         .and_then(|x| x.checked_add(BASE))
         .filter(|x| *x <= 0xffffff)
         .ok_or(Error::Space)
 }
-struct Repacked {
-    image: Vec<u8>,
-    pool: Pool,
-    protected: Vec<Range<usize>>,
-    ownership_witnesses: Vec<Range<usize>>,
+pub(super) struct Repacked {
+    pub(super) image: Vec<u8>,
+    pub(super) pool: Pool,
+    pub(super) protected: Vec<Range<usize>>,
+    pub(super) ownership_witnesses: Vec<Range<usize>>,
 }
-fn repack(target: &[u8], kernel: &[u8]) -> Result<Repacked, Error> {
+pub(super) fn repack(target: &[u8], kernel: &[u8]) -> Result<Repacked, Error> {
     let (base, streams) = crate::comp_streams::read(target, 4 * 1024 * 1024, &mut || true)
         .map_err(|_| Error::Compression)?
         .ok_or(Error::Compression)?;
@@ -379,6 +379,7 @@ pub fn plan(
         coherence.control,
         coherence.setter,
         coherence.movement,
+        coherence.getter,
         coherence.tick,
         coherence.vtable,
     ]);

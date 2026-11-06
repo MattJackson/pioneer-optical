@@ -33,6 +33,25 @@ fn computed_target_literal_source_round_trips_original_codec() {
         normal: &target.normal.image,
         kernel: target.kernel.as_ref().map(|k| k.image.as_slice()),
     });
+    let complete =
+        filters::runner::evaluate(&installed, &destination, filters::runner::Policy::Strict)
+            .unwrap();
+    assert!(complete.admit().is_err());
+    let phase = complete
+        .decisions()
+        .iter()
+        .find(|d| d.id == "phase")
+        .unwrap();
+    assert!(phase.blocked().is_none());
+    assert!(phase.operation().is_some());
+    let restrictions: Vec<_> = complete
+        .decisions()
+        .iter()
+        .filter_map(|d| d.blocked().map(|e| (d.id, e)))
+        .collect();
+    assert!(!restrictions.is_empty());
+    assert!(restrictions.iter().all(|(id, _)| *id != "phase"));
+    println!("full registry retains independent restrictions: {restrictions:?}");
     let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
     let started = std::time::Instant::now();
     let plan = filters::runner::plan_with(
@@ -82,6 +101,16 @@ fn computed_target_literal_source_round_trips_original_codec() {
     invalid_witness[witness] ^= 1;
     assert!(plan
         .verify_with(&preparation, &invalid_witness, registry)
+        .is_err());
+    let coherence = filters::phase::bundle::waveforms::resources::dsp_control_bridge::observe(
+        &target.normal.image,
+        &target.kernel.as_ref().unwrap().image,
+    )
+    .unwrap();
+    let mut invalid_getter = changed.clone();
+    invalid_getter[coherence.getter.start] ^= 1;
+    assert!(plan
+        .verify_with(&preparation, &invalid_getter, registry)
         .is_err());
     // The same Normal cannot borrow an ownership certificate from another
     // resident Kernel, even when the changed mechanism bytes agree.

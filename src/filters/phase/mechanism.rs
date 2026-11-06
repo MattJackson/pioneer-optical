@@ -12,6 +12,7 @@ pub(super) struct Mechanism {
     generated: bool,
     generated_words: Vec<Word>,
     sat1_kernel: Option<Vec<u8>>,
+    cross: Option<bundle::waveforms::resources::cross_representation::Plan>,
 }
 impl Mechanism {
     pub(super) fn plan(
@@ -46,8 +47,11 @@ impl Mechanism {
                         &donor,
                         kernel,
                     )
-                })
-                .map_err(|_| Error::Unsupported)?;
+                });
+                let image = match image {
+                    Ok(image) => image,
+                    Err(_) => return Self::plan_cross(transition),
+                };
                 (image, true)
             }
         };
@@ -59,6 +63,28 @@ impl Mechanism {
             generated: false,
             generated_words: Vec::new(),
             sat1_kernel: None,
+            cross: None,
+        })
+    }
+    fn plan_cross(transition: &Transition<'_, '_>) -> Result<Self, Error> {
+        let target = transition.target.firmware;
+        let source = transition.installed.firmware;
+        let cross = bundle::waveforms::resources::cross_representation::plan(
+            target.normal,
+            source.normal,
+            target.kernel.ok_or(Error::Unsupported)?,
+            source.kernel.ok_or(Error::Unsupported)?,
+        )
+        .map_err(|_| Error::Unsupported)?;
+        Ok(Self {
+            donor: source.normal.to_vec(),
+            image: cross.image().to_vec(),
+            selection_required: false,
+            specialized: false,
+            generated: false,
+            generated_words: Vec::new(),
+            sat1_kernel: None,
+            cross: Some(cross),
         })
     }
     pub(super) fn plan_generated(transition: &Transition<'_, '_>) -> Result<Self, Error> {
@@ -77,6 +103,7 @@ impl Mechanism {
             generated: true,
             generated_words: plan.required_words,
             sat1_kernel: None,
+            cross: None,
         })
     }
     pub(super) fn plan_sat1(transition: &Transition<'_, '_>) -> Result<Self, Error> {
@@ -106,6 +133,7 @@ impl Mechanism {
             generated: false,
             generated_words: Vec::new(),
             sat1_kernel: Some(donor_kernel.to_vec()),
+            cross: None,
         })
     }
     pub(super) fn required_words(&self) -> Vec<Word> {
@@ -155,6 +183,15 @@ impl Mechanism {
             if !(16..20).contains(&at) && before != expected && actual != expected {
                 return Err(Error::VerificationFailed);
             }
+        }
+        if let Some(cross) = &self.cross {
+            return cross
+                .verify(
+                    context.target.normal,
+                    context.target.kernel.ok_or(Error::VerificationFailed)?,
+                    normal,
+                )
+                .map_err(|_| Error::VerificationFailed);
         }
         if let Some(donor_kernel) = &self.sat1_kernel {
             return super::native::sat1::verify(

@@ -72,3 +72,94 @@ pub fn observe(image: &[u8], base: u32, multiply: u32, divide: u32) -> Option<Bi
         unsigned_divide,
     })
 }
+
+/// Provenance of the complete OEM bodies emitted below: decoded PR1 Normal.
+/// The committed `phase-generated-arithmetic.json` fixture records these bytes;
+/// source CPU entries are 0x623C4A, 0x6238A4 and 0x6238CA, respectively (Normal
+/// file offsets 0x213C4A, 0x2138A4 and 0x2138CA at CPU base 0x410000).
+/// Only the signed wrapper's absolute unsigned-core JSR is relocated.
+pub const OEM_SOURCE_SHA256: &str =
+    "8037cdb3ae67e04a82aa3e9b7a0f52202e17f1e39d1f50b894158d9be0cec898";
+
+/// Exact emitted lengths in multiply, signed divide, unsigned divide order.
+pub const fn lengths() -> [usize; 3] {
+    [MULTIPLY.len(), SIGNED.len(), UNSIGNED.len()]
+}
+
+/// Emit complete OEM services at explicit CPU entries. This provides bytes, not
+/// executable-storage ownership or a caller ABI proof. Entries must be aligned,
+/// nonoverlapping and entirely within the 24-bit H8 address space. All internal
+/// relative branches retain their instruction destinations; the signed wrapper
+/// calls the supplied unsigned-core entry. No runtime source image is required.
+pub fn emit(entries: [u32; 3]) -> Option<[alloc::vec::Vec<u8>; 3]> {
+    use h8_asm::{
+        isa::{decode_insn, encode_insn, Ea, Operand},
+        Mode, Target,
+    };
+    let lengths = lengths();
+    let mut spans = [0..0, 0..0, 0..0];
+    for i in 0..3 {
+        let end = entries[i].checked_add(lengths[i] as u32)?;
+        if entries[i] & 1 != 0 || end > 0x1000000 {
+            return None;
+        }
+        spans[i] = entries[i]..end;
+        if spans[..i]
+            .iter()
+            .any(|s| s.start < end && entries[i] < s.end)
+        {
+            return None;
+        }
+    }
+    let mut output = [
+        alloc::vec::Vec::new(),
+        alloc::vec::Vec::new(),
+        alloc::vec::Vec::new(),
+    ];
+    for (i, body) in [MULTIPLY, SIGNED, UNSIGNED].into_iter().enumerate() {
+        let mut at = 0;
+        let mut starts = alloc::vec::Vec::new();
+        let mut branches = alloc::vec::Vec::new();
+        let mut calls = 0;
+        while at < body.len() {
+            let decoded = decode_insn(&body[at..], Target::H8S2000, Mode::Advanced).ok()?;
+            let mut insn = decoded.insn;
+            starts.push(at);
+            let original = encode_insn(insn, Target::H8S2000, Mode::Advanced).ok()?;
+            if original != body[at..at + decoded.len] {
+                return None;
+            }
+            for operand in insn.operands {
+                if let Operand::Address(Ea::PcRelative { value, .. }) = operand {
+                    branches.push((at + decoded.len).checked_add_signed(value as isize)?);
+                }
+            }
+            if insn.mnemonic == "JSR" {
+                if i != 1
+                    || at != 18
+                    || !matches!(
+                        insn.operands[0],
+                        Operand::Address(Ea::Absolute { bits: 24, .. })
+                    )
+                {
+                    return None;
+                }
+                insn.operands[0] = Operand::Address(Ea::Absolute {
+                    value: entries[2],
+                    bits: 24,
+                });
+                calls += 1;
+            }
+            let emitted = encode_insn(insn, Target::H8S2000, Mode::Advanced).ok()?;
+            if emitted.len() != decoded.len {
+                return None;
+            }
+            output[i].extend(emitted);
+            at += decoded.len;
+        }
+        if calls != usize::from(i == 1) || branches.iter().any(|to| !starts.contains(to)) {
+            return None;
+        }
+    }
+    Some(output)
+}

@@ -1,0 +1,45 @@
+{
+  "normal_sha256": "fc13ef323a6d9b92cb79db617d4ba3e8def15b9ed4c6a8f2196141d2925d38be",
+  "arithmetic_source_sha256": "8037cdb3ae67e04a82aa3e9b7a0f52202e17f1e39d1f50b894158d9be0cec898",
+  "arithmetic_offsets": [
+    2178122,
+    2177188,
+    2177226
+  ],
+  "streams": [
+    {
+      "start": 1740064,
+      "end": 1754113,
+      "expanded": 29548
+    },
+    {
+      "start": 1754120,
+      "end": 1774431,
+      "expanded": 46747
+    },
+    {
+      "start": 1774436,
+      "end": 1784559,
+      "expanded": 24593
+    },
+    {
+      "start": 1784564,
+      "end": 1786662,
+      "expanded": 4096
+    },
+    {
+      "start": 1786668,
+      "end": 1786926,
+      "expanded": 4112
+    },
+    {
+      "start": 1786932,
+      "end": 1834498,
+      "expanded": 102362
+    }
+  ],
+  "normal_corpus_key": "459673172ab424ff3a698d58d03421364ebb596435eb39a265728da02eb22851",
+  "arithmetic_source_corpus_key": "ddfa7d758503458345de549321b048574a162272b7e3ee0cfe2e257110eb6982",
+  "recompressed_producer": "zopfli 0.8.2 (Rust), release-0180 phase probe",
+  "directory_semantics": "start points to BE32 expanded length; zlib bytes are start+4..end+4; zlib length=end-start"
+}

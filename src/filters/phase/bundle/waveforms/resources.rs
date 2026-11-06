@@ -8,14 +8,26 @@ use alloc::vec::Vec;
 use core::ops::Range;
 /// Transfer a complete native calibration source without persistent writes.
 pub mod calibration_bridge;
+/// Complete native unchanged-code grammar and instruction boundaries.
+pub mod comp_code;
+/// Ownership of rewritten native COMP stream payloads.
+pub mod comp_ownership;
+/// Positively typed native scalar-table consumers.
+pub mod comp_tables;
+/// Complete generated/computed and literal resource composition.
+pub mod cross_representation;
 /// Complete native dispatcher and selector adaptation across resource representations.
 pub mod dispatch_bridge;
+/// Native loader and movement mode coherence.
+pub mod dsp_control_bridge;
 /// Native generated-waveform basis and evaluator relationships.
 pub mod evaluators;
 /// Complete generated-table phase graph and convention transfer.
 pub mod generated;
 /// Native evaluator materialization under exact read-only calibration guards.
 pub mod materialized;
+/// Complete native COMP inflater binding and arithmetic relocation.
+pub mod native_comp;
 /// Exact component reference checks for a replaced native resource graph.
 pub mod retirement;
 mod shapes;

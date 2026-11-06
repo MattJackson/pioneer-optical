@@ -369,15 +369,25 @@ fn prepare(
             .1;
         encoding::retarget_field(&mut bodies[0], *field, 4, new).ok_or(Failure::Verification)?;
     }
-    let (_, _, target_fields) = fields(destination.kind);
-    let target_body = &target[destination.dispatch.clone()];
-    for (index, field) in call_fields.iter().enumerate() {
-        let field_target = if index + 1 == call_fields.len() {
-            *target_fields.last().unwrap()
-        } else {
-            target_fields[0]
-        };
-        encoding::retarget_field(&mut bodies[0], *field, 3, call(target_body, field_target))
+    let Observation::Known(target_coils) = native::discover_pair(target) else {
+        return Err(Failure::Unresolved);
+    };
+    let Observation::Known(source_coils) = native::discover_pair(donor) else {
+        return Err(Failure::Unresolved);
+    };
+    for field in call_fields {
+        let callee =
+            bundle::resolve_call(donor, call(&bodies[0], *field)).ok_or(Failure::Unresolved)?;
+        let channel = source_coils
+            .functions
+            .iter()
+            .position(|entry| *entry == callee)
+            .ok_or(Failure::Unresolved)?;
+        let address = u32::try_from(target_coils.functions[channel])
+            .ok()
+            .and_then(|at| at.checked_add(0x410000))
+            .ok_or(Failure::Unresolved)?;
+        encoding::retarget_field(&mut bodies[0], *field, 3, address)
             .ok_or(Failure::Verification)?;
     }
     encoding::retarget_field(&mut bodies[1], 2, 4, destination.state[1])

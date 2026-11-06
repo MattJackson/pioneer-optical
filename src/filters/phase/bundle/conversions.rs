@@ -51,6 +51,14 @@ fn programs(normal: &[u8]) -> Result<Vec<Program>, Error> {
     .collect()
 }
 
+/// Complete bound native conversion bodies, including any instruction spill.
+pub(crate) fn protected_ranges(normal: &[u8]) -> Result<Vec<Range<usize>>, Error> {
+    Ok(programs(normal)?
+        .into_iter()
+        .flat_map(|p| p.body.spans)
+        .collect())
+}
+
 /// Bind contiguous or single-spill OEM conversions through h8-asm searches.
 pub(super) fn locate(
     normal: &[u8],

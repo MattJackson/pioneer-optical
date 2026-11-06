@@ -6,6 +6,15 @@ use core::ops::Range;
 /// Native four-mode caller and low-byte return contract.
 pub mod callers;
 
+/// Complete reader and caller bodies whose unchanged operands remain authoritative.
+pub(crate) fn protected_ranges(normal: &[u8]) -> Result<Vec<Range<usize>>, Error> {
+    let reader = bind(normal)?;
+    let caller = callers::observe(normal)?;
+    let mut ranges = reader.body.spans;
+    ranges.push(caller.program);
+    Ok(ranges)
+}
+
 /// Interpretation established by the complete native reader program.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Convention {

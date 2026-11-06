@@ -531,6 +531,10 @@ fn mechanism_gate(
             mechanism::Mechanism::plan(transition, a.table_select_0x28f || b.table_select_0x28f)
                 .map(Some)
         }
+        // Equal coil facts do not establish agreement with a generated target
+        // when either complete Bundle is unbound. Positive Bundle proofs above
+        // remain available for generated mechanisms with a native DSP loader.
+        _ if generated(transition.target.firmware.normal).is_ok() => Err(Error::Unsupported),
         _ if from.assignment != required.assignment => Err(Error::Unsupported),
         _ => Ok(None),
     }

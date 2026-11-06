@@ -319,3 +319,38 @@ fn native_generated_directions_round_trip_original_envelopes() {
         println!("native generated {source_hardware} -> {hardware}: {} exact read-only words, original-codec round trip passed",words);
     }
 }
+
+#[test]
+fn four_choice_selector_distinguishes_stored_tables_from_runtime_producers() {
+    use pioneer_optical::filters::phase::bundle::waveforms::resources::software;
+    let mut image = fixture(HASHES[0]);
+    let original = software::observe(&image).unwrap();
+    assert!(original
+        .choices
+        .iter()
+        .all(|(_, s)| matches!(s, software::Source::Runtime(_))));
+    assert!(image[0x10000..0x10400].iter().all(|b| *b == 255));
+    for (i, field) in [20, 28, 36, 44].into_iter().enumerate() {
+        let at = original.selector.start + field;
+        image[at..at + 4].copy_from_slice(&(0x420000u32 + i as u32 * 256).to_be_bytes());
+        image[0x10000 + i * 256..0x10100 + i * 256].fill(i as u8);
+    }
+    let materialized = software::observe(&image).unwrap();
+    assert_eq!(
+        materialized
+            .choices
+            .iter()
+            .map(|(m, _)| *m)
+            .collect::<Vec<_>>(),
+        original.choices.iter().map(|(m, _)| *m).collect::<Vec<_>>()
+    );
+    assert!(materialized
+        .choices
+        .iter()
+        .all(|(_, s)| matches!(s,software::Source::Image(r) if r.len()==256)));
+    assert!(software::observe_producer(&image).is_err());
+    let at = original.selector.start + 20;
+    let incomplete = 0x410000 + image.len() as u32 - 2;
+    image[at..at + 4].copy_from_slice(&incomplete.to_be_bytes());
+    assert!(software::observe(&image).is_err());
+}

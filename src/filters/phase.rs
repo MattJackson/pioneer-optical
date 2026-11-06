@@ -432,6 +432,21 @@ fn mechanism_gate(
     if !matches!(from.interface, Interface::H8SplitWord { .. }) {
         return Ok(None);
     }
+    // Materialized software mechanisms have their own complete native
+    // observation. They do not acquire fabricated legacy DSP bundle fields.
+    let software = |firmware: Firmware<'_>| {
+        firmware.kernel.and_then(|kernel| {
+            bundle::waveforms::resources::reverse_composition::observe(firmware.normal, kernel)
+        })
+    };
+    match (
+        software(transition.installed.firmware),
+        software(transition.target.firmware),
+    ) {
+        (Some(a), Some(b)) if a.equivalent(&b) => return Ok(None),
+        (Some(_), _) | (_, Some(_)) => return Err(Error::Unsupported),
+        _ => {}
+    }
     let generated = bundle::waveforms::resources::generated::observe;
     if let (Ok(a), Ok(b), installed_loader, target_loader) = (
         generated(transition.installed.firmware.normal),
@@ -488,6 +503,12 @@ fn mechanism_gate(
             return Ok(None);
         }
         return mechanism::Mechanism::plan_generated(transition).map(Some);
+    }
+    if let Ok(source) = generated(transition.installed.firmware.normal) {
+        if source.coils.assignment != required.assignment {
+            return Err(Error::UnresolvedIdentity);
+        }
+        return mechanism::Mechanism::plan_reverse(transition).map(Some);
     }
     let installed = bundle::bind(transition.installed.firmware.normal);
     let target = bundle::bind(transition.target.firmware.normal);

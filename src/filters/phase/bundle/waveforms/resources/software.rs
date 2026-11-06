@@ -81,12 +81,19 @@ pub fn observe(normal: &[u8]) -> Result<Binding, Error> {
             let mut choices = Vec::new();
             for (mode, field) in fields {
                 let address = word(body, field);
-                let source = if runtime {
+                let source = if runtime
+                    && !address
+                        .checked_sub(0x410000)
+                        .is_some_and(|at| (at as usize) < normal.len())
+                {
                     if address == 0 || address & 1 != 0 {
                         return Err(Error::ResourceMismatch);
                     }
                     Source::Runtime(address)
                 } else {
+                    // The native four-choice selector can select positively
+                    // bound image tables after guarded materialization. Its
+                    // branch shape alone does not imply a runtime producer.
                     Source::Image(table(normal, address, 256)?)
                 };
                 choices.push((mode, source));

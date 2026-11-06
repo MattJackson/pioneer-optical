@@ -32,11 +32,21 @@ pub mod native_comp;
 pub mod pointer_bridge;
 /// Complete guarded pointer-donor composition into the native computed target.
 pub mod pointer_composition;
+/// Complete unchanged native clients of retired profile table storage.
+pub mod profile_code;
+/// Exact component reference closure for retired native profile storage.
+pub mod profile_ownership;
 /// Exact component reference checks for a replaced native resource graph.
 pub mod retirement;
+/// Complete generated donor specialization into a plain target.
+pub mod reverse_composition;
 mod shapes;
 /// Software-table dispatch and selector observation; generation proof is separate.
 pub mod software;
+/// Native trajectory controller and timer lifecycle adaptation.
+pub mod trajectory_bridge;
+/// Native source trajectory profile and target speed-coordinate adaptation.
+pub mod trajectory_profile;
 
 /// Why the native resource graph could not be established.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

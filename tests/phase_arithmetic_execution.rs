@@ -74,6 +74,22 @@ impl Cpu {
                     c.set(r, v);
                     c.r[7] += width;
                 }
+                ("STM", O::Registers { first, last }, _) => {
+                    for r in first..=last {
+                        c.saved.push((c.r[r as usize], 4));
+                        c.r[7] -= 4;
+                    }
+                }
+                ("LDM", _, O::Registers { first, last }) => {
+                    for r in (first..=last).rev() {
+                        let (value, width) = c.saved.pop().unwrap();
+                        c.r[r as usize] = value;
+                        c.r[7] += width;
+                    }
+                }
+                ("MULXU", O::Register(from), O::Register(Reg::Long(to))) => {
+                    c.set(Reg::Long(to), c.get(from) * (c.r[to as usize] & 0xffff));
+                }
                 ("MOV", a, O::Register(r)) => c.set(r, c.value(a)),
                 ("XOR", a, O::Register(r)) => c.set(r, c.get(r) ^ c.value(a)),
                 ("NEG", O::Register(r), _) => {
@@ -222,5 +238,100 @@ fn oem_signed_divider_returns_truncated_quotient_and_signed_remainder() {
             random ^= random << 5;
             check(a, random as i32);
         }
+    }
+}
+
+#[test]
+fn emitted_services_match_committed_pr1_source_and_native_execution() {
+    use pioneer_optical::filters::phase::native::arithmetic;
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/phase-generated-arithmetic.json")).unwrap();
+    let source = &fixture[0];
+    assert_eq!(
+        source["normal"].as_str().unwrap(),
+        arithmetic::OEM_SOURCE_SHA256
+    );
+    let native_entries = [0x623c4a, 0x6238a4, 0x6238ca];
+    let emitted = arithmetic::emit(native_entries).unwrap();
+    for (i, span) in source["spans"].as_array().unwrap().iter().enumerate() {
+        assert_eq!(span[0].as_u64().unwrap(), u64::from(native_entries[i]));
+        let hex = span[1].as_str().unwrap();
+        let expected: Vec<_> = (0..hex.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap())
+            .collect();
+        assert_eq!(emitted[i], expected);
+    }
+    for entries in [
+        [0x410100, 0x410200, 0x410300],
+        [0x410900, 0x410500, 0x410100],
+    ] {
+        let bodies = arithmetic::emit(entries).unwrap();
+        assert_eq!(bodies.each_ref().map(Vec::len), arithmetic::lengths());
+        let mut image = vec![0xff; 0x1000];
+        let mut program = BTreeMap::new();
+        for (entry, body) in entries.into_iter().zip(&bodies) {
+            let offset = (entry - 0x410000) as usize;
+            image[offset..offset + body.len()].copy_from_slice(body);
+            let mut at = 0;
+            while at < body.len() {
+                let d = decode_insn(&body[at..], Target::H8S2000, Mode::Advanced).unwrap();
+                program.insert(entry + at as u32, (d.insn, d.len));
+                at += d.len;
+            }
+        }
+        let bound = arithmetic::observe(&image, 0x410000, entries[0], entries[1]).unwrap();
+        assert_eq!(
+            bound.unsigned_divide.start,
+            (entries[2] - 0x410000) as usize
+        );
+        let check = |a: u32, b: u32| {
+            for carry in [false, true] {
+                let (product, unchanged) =
+                    Cpu::run(&program, entries[0], a as i32, b as i32, carry);
+                assert_eq!(product as u32, a.wrapping_mul(b));
+                assert_eq!(unchanged as u32, b);
+                if b != 0 {
+                    let (q, r) = Cpu::run(&program, entries[2], a as i32, b as i32, carry);
+                    assert_eq!((q as u32, r as u32), (a / b, a % b));
+                    let (a, b) = (a as i32, b as i32);
+                    if (a, b) != (i32::MIN, -1) {
+                        assert_eq!(Cpu::run(&program, entries[1], a, b, carry), (a / b, a % b));
+                    }
+                }
+            }
+        };
+        let edges = [
+            0, 1, 3, 0xffff, 0x10000, 0x10001, 0x7fffffff, 0x80000000, 0xffffffff,
+        ];
+        for a in edges {
+            for b in edges {
+                check(a, b);
+            }
+        }
+        let mut random = 0x9e3779b9u32;
+        for _ in 0..10000 {
+            random ^= random << 13;
+            random ^= random >> 17;
+            random ^= random << 5;
+            let a = random;
+            random ^= random << 13;
+            random ^= random >> 17;
+            random ^= random << 5;
+            check(a, random);
+        }
+    }
+}
+
+#[test]
+fn arithmetic_emission_rejects_aliases_unaligned_and_overflowing_entries() {
+    use pioneer_optical::filters::phase::native::arithmetic;
+    for entries in [
+        [0x410001, 0x410100, 0x410200],
+        [0x410000, 0x410010, 0x410200],
+        [0x410000, 0x410100, 0xfffffe],
+        [0xfffffffe, 0x410100, 0x410200],
+    ] {
+        assert!(arithmetic::emit(entries).is_none());
     }
 }

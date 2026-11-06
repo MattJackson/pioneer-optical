@@ -403,3 +403,55 @@ fn relocated_entries_retarget_callers_and_release_only_complete_old_bodies() {
         }
     }
 }
+
+#[test]
+fn dispatcher_calls_follow_source_words_after_physical_channel_exchange() {
+    use pioneer_optical::{filters::phase::native, image::layout::Observation};
+    let target = fixture(HASHES[0]);
+    let donor = fixture(HASHES[1]);
+    let exchanged =
+        native::sources::rewrite(&target, native::Assignment::Swapped, Some(0x1000..0x1040))
+            .unwrap();
+    let source = bridge::observe(&donor).unwrap();
+    let resources = source
+        .tables
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (*a, 0xa10000 + i as u32 * 256))
+        .collect::<Vec<_>>();
+    let changed =
+        bridge::transplant(&exchanged, &donor, &resources, [Some(0x1100..0x1200), None]).unwrap();
+    let actual = bridge::observe(&changed).unwrap();
+    let calls = |normal: &[u8], span: std::ops::Range<usize>| {
+        let Observation::Known(pair) = native::discover_pair(normal) else {
+            panic!()
+        };
+        let mut at = span.start;
+        let mut words = Vec::new();
+        while at < span.end {
+            let d = decode_insn(&normal[at..], Target::H8S2000, Mode::Advanced).unwrap();
+            if d.insn.mnemonic == "JSR" {
+                let O::Address(Ea::Absolute { value, .. }) = d.insn.operands[0] else {
+                    panic!()
+                };
+                let mut callee = value as usize - 0x410000;
+                if normal[callee] == 0x5a {
+                    callee = u32::from_be_bytes([
+                        0,
+                        normal[callee + 1],
+                        normal[callee + 2],
+                        normal[callee + 3],
+                    ]) as usize
+                        - 0x410000;
+                }
+                words.push(pair.functions.iter().position(|x| *x == callee).unwrap());
+            }
+            at += d.len;
+        }
+        words
+    };
+    assert_eq!(
+        calls(&changed, actual.dispatch),
+        calls(&donor, source.dispatch)
+    );
+}

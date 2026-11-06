@@ -29,6 +29,8 @@ pub struct Binding {
     pub setter: Range<usize>,
     /// Complete movement constructor storing its direction at object offset six.
     pub movement: Range<usize>,
+    /// Complete movement getter preserving the callback object register.
+    pub getter: Range<usize>,
     /// Complete native movement callback consuming that direction.
     pub tick: Range<usize>,
     /// Native callback object's stored vtable through its direction callback.
@@ -165,6 +167,7 @@ pub fn observe(n: &[u8], kernel: &[u8]) -> Result<Binding, Failure> {
         control: control.clone(),
         setter,
         movement,
+        getter,
         tick,
         vtable,
     })

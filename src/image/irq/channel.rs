@@ -9,6 +9,8 @@ use alloc::{vec, vec::Vec};
 mod consumers;
 #[path = "channel_controller.rs"]
 mod controller;
+#[path = "channel_diagnostics.rs"]
+mod diagnostics;
 
 /// Physical channel selected by the linked native programs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,13 +134,17 @@ fn auxiliary(n: &Native<'_>, at: usize, enter: &[u8], leave: &[u8]) -> Option<(A
     }
     Some((Auxiliary::LatchedObject, 12))
 }
-fn consumer(n: &Native<'_>, at: usize) -> Option<usize> {
+fn consumer(n: &Native<'_>, at: usize) -> Option<(usize, Vec<(usize, usize)>)> {
     for t in consumers::CONSUMERS {
         let Some(b) = n.get(at, t.bytes.len()) else {
             continue;
         };
-        let valid = (0..b.len())
-            .all(|p| t.holes.iter().any(|&(a, z, _)| (a..z).contains(&p)) || b[p] == t.bytes[p]);
+        let valid = (0..b.len()).all(|p| {
+            t.holes.iter().any(|&(a, z, _)| (a..z).contains(&p))
+                || (90..94).contains(&p)
+                || (98..102).contains(&p)
+                || b[p] == t.bytes[p]
+        });
         if !valid {
             continue;
         }
@@ -173,7 +179,23 @@ fn consumer(n: &Native<'_>, at: usize) -> Option<usize> {
             }
         }
         if valid {
-            return Some(t.bytes.len());
+            let relocated = b[90..94] != t.bytes[90..94] || b[98..102] != t.bytes[98..102];
+            let spans = if relocated {
+                let Some(logger) = call(n, at + 112) else {
+                    continue;
+                };
+                let Some(spans) = diagnostics::bind(
+                    n,
+                    logger,
+                    [super::number(&b[90..94]), super::number(&b[98..102])],
+                ) else {
+                    continue;
+                };
+                spans
+            } else {
+                Vec::new()
+            };
+            return Some((t.bytes.len(), spans));
         }
     }
     None
@@ -315,7 +337,7 @@ fn bind(n: &Native<'_>, setup: usize, mapping: Mapping) -> Option<Channel> {
             let Some(consumer_at) = call(n, disarm + 2) else {
                 continue;
             };
-            let Some(consumer_len) = consumer(n, consumer_at) else {
+            let Some((consumer_len, diagnostic_spans)) = consumer(n, consumer_at) else {
                 continue;
             };
             let Some(aux) = cpu(n, n.get(table + 0x58, 4)?) else {
@@ -339,6 +361,7 @@ fn bind(n: &Native<'_>, setup: usize, mapping: Mapping) -> Option<Channel> {
                 (empty, 8),
                 (aux, aux_len),
             ];
+            spans.extend(diagnostic_spans);
             if auxiliary == Auxiliary::LatchedObject {
                 spans.push((call(n, aux + 4)?, 80));
             }

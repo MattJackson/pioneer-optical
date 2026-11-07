@@ -744,3 +744,49 @@ fn every_bound_channel_image_roundtrips_in_ci() {
         &failures[..failures.len().min(20)]
     );
 }
+
+#[test]
+#[ignore = "requires the exact private corpus components"]
+fn relocated_diagnostic_identifiers_preserve_channel_binding() {
+    const WX1: &str = "9b44cfbe5134d4f992b4f1b6e4cdea930c61f83cdbd6808f858f87ba27eedb23";
+    let target = load(WX1);
+    let source = load(SEVEN);
+    Update::load(
+        &component("100ebef645a65f7e1ac99b5558fd20885f9ac2db8c3f649df0a11bc48e2ef0fc").unwrap(),
+        &component(WX1).unwrap(),
+    )
+    .unwrap();
+    prove_native(&target, Mapping::Seven).unwrap();
+    exercise(&source, &target).unwrap();
+    exercise(&target, &source).unwrap();
+    let original = load(FIVE);
+    assert_eq!(
+        loading::FILTER.inspect(&context(&original)).finding,
+        loading::FILTER.inspect(&context(&target)).finding
+    );
+    // Original BDE codec roundtrip is distinct from original package authentication.
+    assert!(matches!(
+        Update::load(
+            &component("05fc3aaa7f86ecb69107b75d5c1ec4ea5dbd23b6671673327ccb4c6b9cf1448b").unwrap(),
+            &component(FIVE).unwrap()
+        ),
+        Err(pioneer_optical::envelope::UpdateError::Authentication)
+    ));
+    // The relocated operands may only feed the positively bound in-range
+    // identifier branch. Wrong role, out-of-range tag, or dereference reject.
+    for (offset, value) in [
+        (0x16b4cc + 90, 0xff),
+        (0x13c4fc + 0x184, 0x46),
+        (0x13bc4c + 56, 0x5a),
+    ] {
+        let mut changed = target.normal.image.clone();
+        changed[offset] = value;
+        assert!(
+            !matches!(
+                pioneer_optical::image::irq::discover(&changed).channel,
+                Observation::Known(_)
+            ),
+            "mutation at {offset:x}"
+        );
+    }
+}

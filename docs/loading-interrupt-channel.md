@@ -65,3 +65,32 @@ classification, separates native correction from codec proof, and collects
 unavailable obligations through the end. Unbound clear-five/seven counts and
 codec gaps must remain visible; no universal coverage claim follows from the
 small targeted test.
+
+Relocated diagnostic identifiers are accepted only after binding the complete
+linked logger wrapper and record producer. The two consumer immediates must be
+distinct and inside the producer's native `[0x900000, upper)` range. On that
+branch the producer serializes the identifiers; its string-dereference fallback
+is not reachable for those values. Native RAM roles, repeated operands, calls,
+header-data reference and control flow remain checked, and all additional bound
+spans remain unchanged during correction. No diagnostic identifier is copied
+from the source. The SAT 8801/revision 1.01 WX1DM witness `9b44cfbe…` demonstrates
+this distinction: its V5C entry is positively empty, like BDE `0a3954c0…`, and its
+otherwise matching consumer differs only in these identifiers. The targeted
+regression authenticates the WX1DM package and proves both correction directions
+against the Seven witness. BDE's original pair returns `UpdateError::Authentication`;
+its successful codec roundtrip must not be described as package authentication.
+
+The older XS06JL `7b417d52…` remains outside the binding domain. Its positive V5C
+latched-object program matches `00eeb09b…`, but the 830-byte controller helper,
+absolute-versus-relative consumer call encoding, and diagnostic producer with a
+different stack/header-copy implementation need separate equivalence proof. This
+observed binding split is not evidence of a different V5C hardware requirement.
+
+Exact Normal SHA256 witnesses for this comparison:
+
+| Model / hardware / revision | Normal SHA256 | Observed independent V5C |
+| --- | --- | --- |
+| BDE-PR1JAME / SAT 8801 / 1.01 | `0a3954c01e54510eea5c870fe633fd0532d2415744e5a860962acfd06bb7430c` | Empty |
+| BDR-WX1DM / SAT 8801 / 1.01 | `9b44cfbe5134d4f992b4f1b6e4cdea930c61f83cdbd6808f858f87ba27eedb23` | Empty |
+| BDR-XS06JL / SAT 8722 / 1.11 | `00eeb09ba68c05db205d40efdcb7aac5c120439d39ba564e5b4c7d3061043a59` | Latched object |
+| BDR-XS06JL / SAT 8721 / 1.01 | `7b417d52597883ce77717c4fe9701e528ecbffc0c9733cd28e3aa6dc8a75287b` | Matching latched object; complete X binding unavailable |

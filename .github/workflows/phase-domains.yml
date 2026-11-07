@@ -10,6 +10,7 @@ on:
       - 'tests/loading_channel.rs'
       - 'tests/fixtures/phase-domain-inventory.json'
       - 'tests/fixtures/phase-conditional-receivers.json'
+      - 'tests/fixtures/phase-unavailable-receivers.json'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/phase-corpus.json'

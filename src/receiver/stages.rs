@@ -37,11 +37,14 @@ impl PreparedStage {
             .map_or(crate::startup::checks::Policy::CompatibleBanks, |plan| {
                 plan.policy()
             });
-        receiver.prepare_startup_with_policy(
+        let startup_checks = receiver.prepare_startup_with_policy(
             &target.normal().image,
             Some(&target.kernel().image),
             policy,
         )?;
+        // Retain the evidence for the actual stage, including a temporary
+        // marker/handoff Kernel, rather than the pristine final target.
+        let settings = settings.with_startup_checks(startup_checks);
         let installed = receiver
             .installed_kernel()
             .ok_or(PreparationError::MissingInstalledKernel)?;

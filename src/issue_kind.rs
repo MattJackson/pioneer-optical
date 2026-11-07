@@ -41,6 +41,7 @@ pub(crate) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         "pioneer.startup.bank_unknown_installed"
         | "pioneer.startup.bank_unknown_target"
         | "pioneer.startup.bank_conversion_required"
+        | "pioneer.startup.capacity_relation_unproved"
         | "pioneer.device.unsupported"
         | "pioneer.kernel_handoff.unknown_installed"
         | "pioneer.kernel_handoff.unknown_target"

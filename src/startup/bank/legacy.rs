@@ -243,6 +243,44 @@ fn rejecting(normal: &[u8], at: usize) -> Option<(u32, [u32; 2], usize)> {
     Some((magic, markers, entry))
 }
 
+/// Additional complete SAT1 witness used only alongside the exact predicate
+/// receipts. This does not strengthen the existing storage-only observation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LegacyPredicateBank {
+    pub magic: u32,
+    pub headers: [u32; 2],
+    pub sequences: [u32; 2],
+    pub writer: u32,
+    pub reject: u32,
+}
+
+pub(crate) fn legacy_predicate_witness(
+    normal: &[u8],
+    validator: usize,
+    selection: usize,
+) -> Option<LegacyPredicateBank> {
+    let (magic, headers, entry) = rejecting(normal, validator)?;
+    let b = normal.get(validator..selection)?;
+    if entry != validator
+        || b.len() != 124
+        || headers != [0x7dfffa, 0x7efffa]
+        || !selector(normal.get(selection..)?, magic, headers)
+    {
+        return None;
+    }
+    let writer = call(b, 0x4a)?;
+    if call(b, 0x58)? != writer {
+        return None;
+    }
+    Some(LegacyPredicateBank {
+        magic,
+        headers,
+        sequences: [headers[0] + 4, headers[1] + 4],
+        writer,
+        reject: call(b, 0x6e)?,
+    })
+}
+
 pub(super) fn discover(normal: &[u8]) -> Option<Fixed> {
     let mut calls = Calls::new(normal);
     let mut selectors = Selectors::new(normal);

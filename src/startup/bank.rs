@@ -6,6 +6,7 @@ use alloc::vec::Vec;
 const BASE: u32 = 0x410000;
 
 mod legacy;
+pub(crate) use legacy::{legacy_predicate_witness, LegacyPredicateBank};
 #[cfg(test)]
 mod tests;
 

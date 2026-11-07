@@ -110,6 +110,15 @@ jobs:
             bdr211m_pair_profile_composes_without_editing_firmware_or_parameters -- --ignored --exact --nocapture
           cargo test --locked --release --features envelope --test startup_pair_profiles \
             sat8000_pair_profile_retains_resident_validation_without_edits -- --ignored --exact --nocapture
+      - name: Prove exact paired SAT1 legacy preservation contracts
+        if: ${{ !cancelled() && steps.inventory.outcome == 'success' && matrix.domain == 'sat1' && matrix.shard == 0 }}
+        env:
+          PIONEER_PHASE_CORPUS: ${{ runner.temp }}/phase-inputs
+        shell: bash
+        run: |
+          cargo test --locked --release --features envelope --lib \
+            startup::coverage::legacy_sinks::tests:: \
+            -- --ignored --nocapture 2>&1 | tee "$RUNNER_TEMP/sat1-legacy-report.txt"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -117,5 +126,6 @@ jobs:
           path: |
             ${{ runner.temp }}/phase-report.txt
             ${{ runner.temp }}/phase-authentication-report.txt
+            ${{ runner.temp }}/sat1-legacy-report.txt
           if-no-files-found: ignore
           retention-days: 14

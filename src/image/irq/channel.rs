@@ -68,6 +68,19 @@ pub enum Auxiliary {
     /// V5C tests a RAM latch, invokes the object callback and acknowledges 30.0.
     LatchedObject,
 }
+/// Positive setup, installed routing and independent auxiliary hardware facts.
+/// This observation alone does not prove that rewriting the program is valid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Hardware {
+    /// Observed external event channel.
+    pub mapping: Mapping,
+    /// Positively installed independent V5C consumer.
+    pub auxiliary: Auxiliary,
+}
+struct Binding {
+    hardware: Hardware,
+    correction: Option<Channel>,
+}
 /// A complete channel binding, including exact target-local edit coordinates.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Channel {
@@ -236,6 +249,9 @@ fn vector_copy(n: &Native<'_>, at: usize) -> Option<usize> {
     .then_some(bridge)
 }
 fn bind(n: &Native<'_>, setup: usize, mapping: Mapping) -> Option<Channel> {
+    binding(n, setup, mapping)?.correction
+}
+fn binding(n: &Native<'_>, setup: usize, mapping: Mapping) -> Option<Binding> {
     let b = n.get(setup, 40)?;
     if b[..6] != [0x6a, 0x18, 0xff, 0xc5, 0x72, mapping.legacy_bit()]
         || !bit(n, setup + 6, mapping.pending(), 0x72, mapping.bit())
@@ -259,9 +275,7 @@ fn bind(n: &Native<'_>, setup: usize, mapping: Mapping) -> Option<Channel> {
         return None;
     }
     let enable_helper = call(n, prefix + 6)?;
-    if !controller_helper(n, enable_helper, &controller::ENABLE) {
-        return None;
-    }
+    let enable_bound = controller_helper(n, enable_helper, &controller::ENABLE);
     let mut matches = Vec::new();
     for &(a, z) in &n.ranges {
         for install in (a + (a & 1)..z.saturating_sub(25)).step_by(2) {
@@ -331,48 +345,54 @@ fn bind(n: &Native<'_>, setup: usize, mapping: Mapping) -> Option<Channel> {
             let Some(disable_helper) = call(n, disarm + 20) else {
                 continue;
             };
-            if !controller_helper(n, disable_helper, &controller::DISABLE) {
-                continue;
-            }
+            let disable_bound = controller_helper(n, disable_helper, &controller::DISABLE);
             let Some(consumer_at) = call(n, disarm + 2) else {
                 continue;
             };
-            let Some((consumer_len, diagnostic_spans)) = consumer(n, consumer_at) else {
-                continue;
-            };
+            let consumer_bound = consumer(n, consumer_at);
             let Some(aux) = cpu(n, n.get(table + 0x58, 4)?) else {
                 continue;
             };
             let Some((auxiliary, aux_len)) = auxiliary(n, aux, &w[..4], &w[8..]) else {
                 continue;
             };
-            let mut spans = vec![
-                (enable_helper, controller::ENABLE.bytes.len()),
-                (disable_helper, controller::DISABLE.bytes.len()),
-                (copy_helper, 24),
-                (copy_bridge, 30),
-                (consumer_at, consumer_len),
-                (prefix, 50),
-                (disarm, 26),
-                (callback, 14),
-                (install, 26),
-                (table, 0xa8),
-                (active, 12),
-                (empty, 8),
-                (aux, aux_len),
-            ];
-            spans.extend(diagnostic_spans);
-            if auxiliary == Auxiliary::LatchedObject {
-                spans.push((call(n, aux + 4)?, 80));
-            }
-            matches.push(Channel {
-                mapping,
-                auxiliary,
-                setup,
-                disarm,
-                callback,
-                table,
-                spans,
+            let correction = if let (true, true, Some((consumer_len, diagnostic_spans))) =
+                (enable_bound, disable_bound, consumer_bound)
+            {
+                let mut spans = vec![
+                    (enable_helper, controller::ENABLE.bytes.len()),
+                    (disable_helper, controller::DISABLE.bytes.len()),
+                    (copy_helper, 24),
+                    (copy_bridge, 30),
+                    (consumer_at, consumer_len),
+                    (prefix, 50),
+                    (disarm, 26),
+                    (callback, 14),
+                    (install, 26),
+                    (table, 0xa8),
+                    (active, 12),
+                    (empty, 8),
+                    (aux, aux_len),
+                ];
+                spans.extend(diagnostic_spans);
+                if auxiliary == Auxiliary::LatchedObject {
+                    spans.push((call(n, aux + 4)?, 80));
+                }
+                Some(Channel {
+                    mapping,
+                    auxiliary,
+                    setup,
+                    disarm,
+                    callback,
+                    table,
+                    spans,
+                })
+            } else {
+                None
+            };
+            matches.push(Binding {
+                hardware: Hardware { mapping, auxiliary },
+                correction,
             });
         }
     }
@@ -382,8 +402,9 @@ fn bind(n: &Native<'_>, setup: usize, mapping: Mapping) -> Option<Channel> {
         None
     }
 }
-/// Bind the complete linked program; a bare register pattern is insufficient.
-pub(super) fn discover(n: &Native<'_>) -> Observation<Channel> {
+/// Observe the linked hardware facts separately from complete correction proof.
+/// A bare register pattern, missing V5C consumer or ambiguous route is insufficient.
+pub(super) fn discover(n: &Native<'_>) -> (Observation<Hardware>, Observation<Channel>) {
     let mut found = Vec::new();
     for &(a, z) in &n.ranges {
         for at in (a + (a & 1)..z.saturating_sub(5)).step_by(2) {
@@ -398,15 +419,27 @@ pub(super) fn discover(n: &Native<'_>) -> Observation<Channel> {
                 0x70 => Mapping::Seven,
                 _ => continue,
             };
-            if let Some(channel) = bind(n, at, mapping) {
-                found.push(channel);
+            if let Some(binding) = binding(n, at, mapping) {
+                found.push(binding);
             }
         }
     }
     match found.len() {
-        0 => Observation::Unresolved(Unresolved::ReaderNotRecognized),
-        1 => Observation::Known(found.remove(0)),
-        _ => Observation::Conflicting,
+        0 => (
+            Observation::Unresolved(Unresolved::ReaderNotRecognized),
+            Observation::Unresolved(Unresolved::ReaderNotRecognized),
+        ),
+        1 => {
+            let binding = found.remove(0);
+            (
+                Observation::Known(binding.hardware),
+                binding
+                    .correction
+                    .map(Observation::Known)
+                    .unwrap_or(Observation::Unresolved(Unresolved::ReaderNotRecognized)),
+            )
+        }
+        _ => (Observation::Conflicting, Observation::Conflicting),
     }
 }
 impl Channel {
@@ -539,10 +572,88 @@ mod tests {
         b
     }
     fn bound(b: &[u8]) -> Channel {
-        let Observation::Known(channel) = discover(&Native::new(b).unwrap()) else {
+        let Observation::Known(channel) = discover(&Native::new(b).unwrap()).1 else {
             panic!("fixture must bind")
         };
         channel
+    }
+    #[test]
+    fn hardware_observation_does_not_claim_correction_proof_or_unknown_auxiliary() {
+        use crate::{
+            compatibility::{Error, Firmware},
+            filters::{loading, loading_channel, Context, Filter, Transition},
+        };
+        let original = fixture();
+        let mut unsupported = original.clone();
+        unsupported[0x1000] ^= 1;
+        let (hardware, correction) = discover(&Native::new(&unsupported).unwrap());
+        assert!(matches!(
+            hardware,
+            Observation::Known(Hardware {
+                mapping: Mapping::Five,
+                auxiliary: Auxiliary::Empty
+            })
+        ));
+        assert!(matches!(correction, Observation::Unresolved(_)));
+        let context = |bytes| {
+            Context::new(Firmware {
+                hardware: "SAT 8801",
+                normal: bytes,
+                kernel: None,
+            })
+        };
+        let a = context(&original);
+        let b = context(&unsupported);
+        for filter in [&loading::FILTER as &dyn Filter, &loading_channel::FILTER] {
+            let x = filter.inspect(&a);
+            let y = filter.inspect(&b);
+            assert_eq!(x.finding, y.finding);
+            assert_eq!(filter.candidate(&a, &x), filter.candidate(&b, &y));
+            assert!(filter
+                .plan(
+                    &Transition {
+                        installed: &a,
+                        target: &b
+                    },
+                    &x,
+                    &y
+                )
+                .unwrap()
+                .is_none());
+        }
+        let changed = bound(&original).correct(&original, Mapping::Seven).unwrap();
+        let c = context(&changed);
+        let filter = &loading_channel::FILTER;
+        assert!(filter
+            .plan(
+                &Transition {
+                    installed: &b,
+                    target: &c
+                },
+                &filter.inspect(&b),
+                &filter.inspect(&c)
+            )
+            .unwrap()
+            .is_some());
+        assert!(matches!(
+            filter.plan(
+                &Transition {
+                    installed: &c,
+                    target: &b
+                },
+                &filter.inspect(&c),
+                &filter.inspect(&b)
+            ),
+            Err(Error::Unsupported)
+        ));
+        unsupported[0x620] ^= 1;
+        assert!(
+            matches!(
+                discover(&Native::new(&unsupported).unwrap()).0,
+                Observation::Unresolved(_)
+            ),
+            "unknown V5C is not positive emptiness"
+        );
     }
     #[test]
     fn mapped_program_round_trip_keeps_target_consumers_and_auxiliary_vector() {
@@ -571,7 +682,7 @@ mod tests {
             broken[at] ^= 1;
             assert!(
                 matches!(
-                    discover(&Native::new(&broken).unwrap()),
+                    discover(&Native::new(&broken).unwrap()).1,
                     Observation::Unresolved(_)
                 ),
                 "{at:x}"
@@ -593,7 +704,7 @@ mod tests {
                 broken[at + p] ^= 1;
                 assert!(
                     matches!(
-                        discover(&Native::new(&broken).unwrap()),
+                        discover(&Native::new(&broken).unwrap()).1,
                         Observation::Unresolved(_)
                     ),
                     "helper {at:x}+{p:x}"
@@ -605,7 +716,7 @@ mod tests {
             broken[at] ^= 1;
             assert!(
                 matches!(
-                    discover(&Native::new(&broken).unwrap()),
+                    discover(&Native::new(&broken).unwrap()).1,
                     Observation::Unresolved(_)
                 ),
                 "copy ABI {at:x}"
@@ -618,7 +729,7 @@ mod tests {
         let setup = b[0xf6..0x128].to_vec();
         b[0x1f6..0x228].copy_from_slice(&setup);
         assert!(matches!(
-            discover(&Native::new(&b).unwrap()),
+            discover(&Native::new(&b).unwrap()).1,
             Observation::Conflicting
         ));
     }

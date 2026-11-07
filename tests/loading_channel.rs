@@ -790,3 +790,59 @@ fn relocated_diagnostic_identifiers_preserve_channel_binding() {
         );
     }
 }
+
+#[test]
+#[ignore = "requires the exact private corpus components"]
+fn observed_xs06_hardware_matches_without_authorizing_unproved_correction() {
+    const OLDER: &str = "7b417d52597883ce77717c4fe9701e528ecbffc0c9733cd28e3aa6dc8a75287b";
+    let older = load(OLDER);
+    let newer = load(SEVEN);
+    let five = load(FIVE);
+    let a = context(&older);
+    let b = context(&newer);
+    assert!(matches!(
+        a.sat.as_ref().unwrap().irq.channel,
+        Observation::Unresolved(_)
+    ));
+    assert!(matches!(
+        a.sat.as_ref().unwrap().irq.channel_hardware,
+        Observation::Known(_)
+    ));
+    let registry: &[&dyn Filter] = &[&loading_channel::FILTER, &loading::FILTER];
+    for filter in registry {
+        let x = filter.inspect(&a);
+        let y = filter.inspect(&b);
+        assert_eq!(x.finding, y.finding);
+        assert_eq!(filter.candidate(&a, &x), filter.candidate(&b, &y));
+    }
+    for (source, target, pair) in [(&a, &b, &newer), (&b, &a, &older)] {
+        let plan = runner::plan_with(source, target, Policy::Strict, registry).unwrap();
+        assert_eq!(plan.operations().count(), 0);
+        let preparation = Preparation {
+            target: target.firmware,
+            normal: Some(&pair.normal),
+            kernel: pair.kernel.as_ref(),
+        };
+        assert!(plan.prepare_with(&preparation, registry).unwrap().is_none());
+        plan.verify_with(&preparation, &pair.normal.image, registry)
+            .unwrap();
+    }
+    let c = context(&five);
+    // Required hardware is positively observed in installed older XS06; only
+    // the incoming Five image is edited, so its complete proof is sufficient.
+    exercise(&older, &five).unwrap();
+    assert!(matches!(
+        runner::plan_with(&c, &a, Policy::Strict, &[&loading_channel::FILTER]),
+        Err(Error::Unsupported)
+    ));
+    let full = runner::evaluate(&a, &c, Policy::Strict).unwrap();
+    assert_eq!(full.admit(), Err(Error::Incompatible));
+    assert_eq!(
+        full.decisions()
+            .iter()
+            .find(|d| d.id == loading::FILTER.id())
+            .unwrap()
+            .blocked(),
+        Some(Error::Incompatible)
+    );
+}

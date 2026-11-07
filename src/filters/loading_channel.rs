@@ -6,7 +6,7 @@ use super::{
 use crate::{
     compatibility::Error,
     image::{
-        irq::channel::{Channel, Mapping},
+        irq::channel::{Channel, Hardware, Mapping},
         layout::Observation,
     },
 };
@@ -17,10 +17,10 @@ pub struct LoadingChannel;
 pub static FILTER: LoadingChannel = LoadingChannel;
 const ID: &str = "loading-interrupt-channel";
 static RULES:super::Rules=super::Rules {
-    description:"Identifies a positively linked H8 event channel: FFC5 legacy bit, external mode/pending/enable operands, callback acknowledgement, disarm and installed V58/V60 routing. Outside that complete native domain the existing architecture-native loading variant remains required unchanged.",
+    description:"Identifies positive H8 channel hardware observations independently of correction-proof availability: FFC5 legacy bit, external mode/pending/enable operands, callback acknowledgement, disarm and installed V58/V60 routing. Outside that observed native domain the existing architecture-native loading variant remains required unchanged.",
     role:Role::Hardware,
     correctability:super::Correctability::Guarded,
-    correction:"Guarded, partial-domain correction: maps bound clear-five/clear-seven event channels using only target-local instruction operands and its existing V58/V60 entries. Independent V5C/input requirements remain enforced by loading-input-interrupt-setup. Direct writes, mixed setup and unbound programs are not corrected. A channel correction does not authorize the complete firmware pair.",
+    correction:"Guarded, partial-domain correction: maps bound clear-five/clear-seven event channels using the installed positive hardware requirement and only target-local instruction operands and its existing V58/V60 entries. Independent V5C/input requirements remain enforced by loading-input-interrupt-setup. Direct writes, mixed setup and programs without complete correction proof are not corrected. Equal observed channels need no edit; candidate families are an overapproximation and never authorize a changing-channel plan. A channel correction does not authorize the complete firmware pair.",
     policies:&[],
 };
 fn channel<'a>(context: &'a Context<'_>) -> Option<&'a Channel> {
@@ -30,6 +30,11 @@ fn channel<'a>(context: &'a Context<'_>) -> Option<&'a Channel> {
     };
     (matches!(irq.selected, Observation::Known(value) if value==channel.mapping.controller()))
         .then_some(channel)
+}
+fn hardware<'a>(context: &'a Context<'_>) -> Option<&'a Hardware> {
+    let irq = &context.sat.as_ref()?.irq;
+    let Observation::Known(hardware) = &irq.channel_hardware else { return None; };
+    matches!(irq.selected, Observation::Known(value) if value == hardware.mapping.controller()).then_some(hardware)
 }
 fn value(mapping: Mapping) -> Value {
     Value::Variant(
@@ -48,15 +53,15 @@ impl Filter for LoadingChannel {
         Some(&RULES)
     }
     fn inspect(&self, context: &Context<'_>) -> Assessment {
-        if let Some(channel) = channel(context) {
-            return Assessment::known(ID,Role::Hardware,value(channel.mapping),format!("Complete target-local setup/disarm/acknowledgement/vector binding: {channel:?}"));
+        if let Some(hardware) = hardware(context) {
+            return Assessment::known(ID,Role::Hardware,value(hardware.mapping),format!("Positive setup/disarm/acknowledgement/vector hardware observation: {hardware:?}; complete correction proof available: {}", channel(context).is_some()));
         }
         let mut observed = super::loading::legacy(context);
         observed.id = ID;
         if let Finding::Known(value) = observed.finding {
             observed.finding = Finding::Known(Value::Variant(0, vec![value]));
         }
-        observed.evidence=format!("No complete mapped-channel correction proof; retain original native requirement unchanged. {}",observed.evidence);
+        observed.evidence=format!("No complete mapped-channel hardware observation; retain original native requirement unchanged. {}",observed.evidence);
         observed
     }
     fn candidate(&self, context: &Context<'_>, assessment: &Assessment) -> Finding {
@@ -68,7 +73,9 @@ impl Filter for LoadingChannel {
                 "Mapped-channel assessment is not bound to this owner and context".into(),
             );
         }
-        if channel(context).is_some() {
+        if matches!(&assessment.finding, Finding::Known(Value::Variant(1, _))) {
+            // Candidate families overapproximate possible corrections. Actual
+            // changing-channel plans still require complete target proof.
             Finding::Known(Value::Variant(1, vec![]))
         } else {
             assessment.finding.clone()
@@ -96,11 +103,13 @@ impl Filter for LoadingChannel {
             }
             Comparison::Different => {}
         }
-        let required = channel(transition.installed)
+        // The installed program specifies the positive hardware requirement;
+        // only the incoming target is rewritten and needs complete edit proof.
+        let required = hardware(transition.installed)
             .ok_or(Error::Incompatible)?
             .mapping;
         let from = channel(transition.target)
-            .ok_or(Error::Incompatible)?
+            .ok_or_else(|| if hardware(transition.target).is_some() { Error::Unsupported } else { Error::Incompatible })?
             .clone();
         from.correct(transition.target.firmware.normal, required)
             .ok_or(Error::Unsupported)?;

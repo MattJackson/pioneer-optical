@@ -252,7 +252,7 @@
       "role": "Hardware"
     },
     {
-      "correctability": "Guarded",
+      "correctability": "Operational",
       "correction": "H8 startup comparison operands remain unchanged, with a read-only live-word prerequisite for equal known comparisons or a supported unresolved-source target-word fallback. Differing primary comparisons refuse because no complete OEM writer-lifecycle proof is bound. Separately bound non-comparison preservation and other platforms retain their independent native prerequisites.",
       "description": "Compares a bound startup gate or a separately proved preservation contract: unchanged H8 word 0x009F comparisons, ATA word 0x00D9, V850 Kernel identity, or SCSI checksum/header. Fixed and conditional predicates differ. No recognised comparison does not mean no requirement; reader, caller, cache, startup-path and automatic OEM writer-lifecycle evidence remain separate.",
       "id": "startup-prerequisite",

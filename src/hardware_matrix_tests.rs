@@ -64,7 +64,7 @@ fn every_registered_filter_declares_rules_matching_its_behaviour() {
     assert_eq!(rules("phase").correctability, Correctability::Guarded);
     assert_eq!(
         rules("startup-prerequisite").correctability,
-        Correctability::Guarded
+        Correctability::Operational
     );
 }
 

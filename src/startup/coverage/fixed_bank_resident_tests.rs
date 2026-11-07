@@ -71,7 +71,7 @@ fn metadata_and_final_integrity_are_distinct_from_composition() {
     n[0x14..0x18].copy_from_slice(&0x100u32.to_be_bytes());
     assert_eq!(paired_header(&n, &k), Some(()));
     let validation = ResidentValidation {
-        kernel_spans: vec![0..0x10000],
+        kernel_spans: core::iter::once(0..0x10000).collect(),
         identity_spans: vec![0x6ae4..0x6af4, 0x1008..0x1010],
         normal_spans: vec![0..0x10, 0x14..0x20],
         image_length_field: 0x14,

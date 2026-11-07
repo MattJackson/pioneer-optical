@@ -127,7 +127,7 @@ fn duplicate_owner_and_stored_range_splits_refuse() {
     let span = BODY;
     assert!(!contained(&[span.start..0xdc432, 0xdc432..span.end], &span));
     assert!(!contained(&[0..span.start, span.end..normal.len()], &span));
-    assert!(contained(&[span.clone()], &span));
+    assert!(contained(core::slice::from_ref(&span), &span));
     let (mut normal, kernel) = fixture();
     // Malformed compression never falls back to treating its payload as code.
     normal[0x1000..0x1004].copy_from_slice(b"COMP");

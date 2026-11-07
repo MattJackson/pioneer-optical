@@ -48,6 +48,7 @@ fn known(
             1,
             vec![Value::U16(0xfe94), Value::U8(0x80), Value::U8(0x80)],
         ),
+        "loading-interrupt-channel" => Value::Variant(1, vec![Value::U8(5)]),
         "loading-input-interrupt-setup" => Value::Variant(
             1,
             vec![Value::Variant(

@@ -482,6 +482,7 @@ register_filters!(
     initialization,
     host,
     loading,
+    loading_channel,
     layout,
     phase,
     startup

@@ -324,6 +324,27 @@ fn known_label(id: &str, value: &Value) -> String {
             hex(g(2)),
             join(seq(g(3)), |x| hex(Some(x)), " / ")
         )),
+        ("loading-interrupt-channel", 0) => Some(format!(
+            "Uncorrected native contract: {}",
+            g(0).map(|v| known_label("loading-input-interrupt-setup", v))
+                .unwrap_or_default()
+        )),
+        ("loading-interrupt-channel", 1) => Some(match num(g(0)) {
+            Some(5) => "Mapped event: FFC5 b5; pending 31.7 / enable 29.7 / mode 0C; V60".into(),
+            Some(7) => "Mapped event: FFC5 b7; pending 30.1 / enable 28.1 / mode 0B; V58".into(),
+            _ => "Mapped event channel (candidate projection)".into(),
+        }),
+        ("loading-input-interrupt-setup", 4) => {
+            let (aux, _) = var(g(0));
+            Some(format!(
+                "Independent V5C: {}; physical input observations retained",
+                if aux == Some(0) {
+                    "explicit empty wrapper"
+                } else {
+                    "latched object callback, acknowledge FFFDFF30.b0"
+                }
+            ))
+        }
         ("loading-input-interrupt-setup", 1) => {
             let (t, f) = var(g(0));
             match t {

@@ -7,6 +7,7 @@ on:
       - 'src/**'
       - 'tests/phase_domain_coverage.rs'
       - 'tests/phase_sat1_phase_only.rs'
+      - 'tests/loading_channel.rs'
       - 'tests/fixtures/phase-domain-inventory.json'
       - 'tests/fixtures/phase-conditional-receivers.json'
       - 'Cargo.toml'
@@ -67,8 +68,31 @@ jobs:
           --domain '${{ matrix.domain }}'
           --output "$RUNNER_TEMP/phase-inputs"
       - name: Validate the pinned inventory
+        id: inventory
         run: cargo test --locked --release --features envelope --test phase_domain_coverage -- --skip every_target_mapping_and_ordered_planner_pair
+      - name: Prove exact loading-channel witnesses
+        if: ${{ !cancelled() && steps.inventory.outcome == 'success' && matrix.domain == 'h8sat' && matrix.shard == 0 }}
+        env:
+          PIONEER_PHASE_CORPUS: ${{ runner.temp }}/phase-inputs
+        shell: bash
+        run: |
+          cargo test --locked --release --features envelope --test loading_channel \
+            real_channel_correction_preserves_independent_requirements_and_roundtrips \
+            -- --ignored --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/loading-witness-report.txt"
+      - name: Prove assigned native loading-channel bindings
+        if: ${{ !cancelled() && steps.inventory.outcome == 'success' && matrix.domain == 'h8sat' }}
+        env:
+          PIONEER_PHASE_CORPUS: ${{ runner.temp }}/phase-inputs
+          PIONEER_PHASE_SHARD: ${{ matrix.shard }}
+          PIONEER_PHASE_SHARDS: ${{ matrix.shards }}
+        shell: bash
+        run: |
+          echo "source=${{ github.sha }} shard=${{ matrix.shard }}/${{ matrix.shards }}" > "$RUNNER_TEMP/loading-corpus-report.txt"
+          cargo test --locked --release --features envelope --test loading_channel \
+            every_bound_channel_image_roundtrips_in_ci \
+            -- --ignored --exact --nocapture 2>&1 | tee -a "$RUNNER_TEMP/loading-corpus-report.txt"
       - name: Prove target mappings and every ordered planner pair
+        if: ${{ !cancelled() && steps.inventory.outcome == 'success' }}
         env:
           PIONEER_PHASE_CORPUS: ${{ runner.temp }}/phase-inputs
           PIONEER_PHASE_DOMAIN: ${{ matrix.domain }}
@@ -84,6 +108,9 @@ jobs:
         if: always()
         with:
           name: phase-${{ matrix.domain }}-${{ matrix.shard }}
-          path: ${{ runner.temp }}/phase-report.txt
+          path: |
+            ${{ runner.temp }}/phase-report.txt
+            ${{ runner.temp }}/loading-witness-report.txt
+            ${{ runner.temp }}/loading-corpus-report.txt
           if-no-files-found: ignore
           retention-days: 14

@@ -256,7 +256,7 @@ static RULES: super::Rules = super::Rules {
     description: "Identifies which source element drives which phase output (direct 0 or swapped 1) together with the native architecture and output interface: H8 byte or split-word outputs, M32C outputs or the V850 indexed bus. The assignment is not signed waveform winding or physical motor direction.",
     role: super::Role::Hardware,
     correctability: super::Correctability::Guarded,
-    correction: "Corrected in Normal only for pairs the phase owner proves; the native architecture and interface must always match. The matching family drops the assignment only for H8 programs with a complete paired-word grammar.",
+    correction: "Corrected in Normal only for pairs the phase owner proves. A different native interface requires a complete mechanism conversion; assignment-only changes require the same interface. The matching family drops the assignment only for H8 programs with a complete paired-word grammar.",
     policies: &[
         super::Policy {
             domains: &[],

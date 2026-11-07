@@ -101,7 +101,7 @@ fn native_value_keeps_architecture_interface_and_register_coordinates() {
 }
 
 #[test]
-fn interface_difference_refuses_even_when_assignments_match() {
+fn invented_interface_assessment_cannot_authorize_a_conversion() {
     let raw = fixture();
     let installed = context(&raw);
     let target = context(&raw);
@@ -130,7 +130,7 @@ fn interface_difference_refuses_even_when_assignments_match() {
                 &a,
                 &b
             ),
-            Err(Error::Incompatible)
+            Err(Error::UnresolvedIdentity)
         ));
     }
 }

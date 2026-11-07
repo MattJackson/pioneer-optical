@@ -161,17 +161,15 @@ pub(super) fn plan(transition: &Transition<'_, '_>) -> Result<Option<Box<dyn Ope
         return Err(Error::UnresolvedIdentity);
     }
     if Gate::bind(target.normal).is_err() {
-        if let Some(operation) = PreservationOperation::bind(transition) {
+        if let Some(operation) = PreservationOperation::bind(transition)? {
             return Ok(Some(Box::new(operation)));
         }
     }
     // Exact component preservation proves no new startup requirement even if
     // this architecture's comparison is not recognized. This is not an absence
     // proof and supplies no guessed live word.
-    let normal_reader = matches!(layout::discover_h8_reader(target.normal, None),
-        Observation::Known(reader) if reader.component == H8ReaderComponent::Normal);
     if installed.normal == target.normal
-        && (installed.kernel == target.kernel || normal_reader)
+        && installed.kernel == target.kernel
         && Gate::bind(target.normal).is_err()
     {
         return Ok(None);
@@ -224,36 +222,47 @@ struct PreservationOperation {
     certificate: startup::coverage::preservation::Certificate,
 }
 impl PreservationOperation {
-    fn bind(transition: &Transition<'_, '_>) -> Option<Self> {
+    fn bind(transition: &Transition<'_, '_>) -> Result<Option<Self>, Error> {
         let source = transition.installed.firmware;
         let target = transition.target.firmware;
         let Observation::Known(installed_reader) = layout::discover_h8_reader(source.normal, None)
         else {
-            return None;
+            return Ok(None);
         };
         let Observation::Known(target_reader) = layout::discover_h8_reader(target.normal, None)
         else {
-            return None;
+            return Ok(None);
         };
         if installed_reader.component != H8ReaderComponent::Normal
             || target_reader.component != H8ReaderComponent::Normal
             || installed_reader.layout != target_reader.layout
         {
-            return None;
+            return Ok(None);
         }
-        let installed_certificate = startup::coverage::preservation::discover_pair(source.normal, source.kernel)?;
-        let certificate = startup::coverage::preservation::discover_pair(target.normal, target.kernel)?;
-        if !installed_certificate.final_integrity(source.normal, source.kernel)
-            || !certificate.final_integrity(target.normal, target.kernel)
+        let installed_certificate =
+            startup::coverage::preservation::discover_pair(source.normal, source.kernel);
+        let certificate =
+            startup::coverage::preservation::discover_pair(target.normal, target.kernel);
+        // Positive native-integrity failure is a refusal, not missing evidence
+        // which may fall through to the unknown exact-pair preservation path.
+        if installed_certificate
+            .as_ref()
+            .is_some_and(|certificate| !certificate.final_integrity(source.normal, source.kernel))
+            || certificate.as_ref().is_some_and(|certificate| {
+                !certificate.final_integrity(target.normal, target.kernel)
+            })
         {
-            return None;
+            return Err(Error::VerificationFailed);
         }
-        Some(Self {
+        let (Some(_), Some(certificate)) = (installed_certificate, certificate) else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
             hardware: target.hardware.into(),
             normal: target.normal.to_vec(),
             kernel: target.kernel.map(<[u8]>::to_vec),
             certificate,
-        })
+        }))
     }
     fn bound(&self, context: &Preparation<'_>) -> Result<(), Error> {
         if context.target.hardware != self.hardware
@@ -289,8 +298,12 @@ impl Operation for PreservationOperation {
     }
     fn verify(&self, context: &Preparation<'_>, normal: &[u8]) -> Result<(), Error> {
         self.bound(context)?;
-        if !self.certificate.preserves(&self.normal, normal, self.kernel.as_deref())
-            || !self.certificate.final_integrity(normal, self.kernel.as_deref())
+        if !self
+            .certificate
+            .preserves(&self.normal, normal, self.kernel.as_deref())
+            || !self
+                .certificate
+                .final_integrity(normal, self.kernel.as_deref())
         {
             return Err(Error::VerificationFailed);
         }

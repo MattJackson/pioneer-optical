@@ -124,6 +124,79 @@ fn preservation_refuses_source_or_target_generation_failures_and_missing_kernel(
 }
 
 #[test]
+fn exact_normal_cannot_bypass_recognized_generation_integrity() {
+    let normal = compact_normal();
+    let kernel = [0xff; 0x100];
+    let mut wrong_kernel = kernel;
+    wrong_kernel[0xfe] ^= 1;
+    let mut aliased_kernel = kernel;
+    aliased_kernel[0x80..0x84]
+        .copy_from_slice(&sinks::discover(&normal).unwrap().entries[0].to_be_bytes());
+    let registry: &[&dyn Filter] = &[&filters::startup::FILTER];
+    let outcomes: Vec<_> = [
+        (Some(kernel.as_slice()), Some(wrong_kernel.as_slice())),
+        (Some(wrong_kernel.as_slice()), Some(wrong_kernel.as_slice())),
+        (Some(wrong_kernel.as_slice()), Some(kernel.as_slice())),
+        (
+            Some(wrong_kernel.as_slice()),
+            Some(aliased_kernel.as_slice()),
+        ),
+        (
+            Some(aliased_kernel.as_slice()),
+            Some(wrong_kernel.as_slice()),
+        ),
+        (None, None),
+        (Some(&kernel[..0xfe]), Some(&kernel[..0xfe])),
+    ]
+    .into_iter()
+    .map(|(source_kernel, target_kernel)| {
+        let installed = context(&normal, source_kernel);
+        let requested = context(&normal, target_kernel);
+        let plan = runner::evaluate_with(&installed, &requested, runner::Policy::Strict, registry)
+            .unwrap();
+        assert!(plan.decisions()[0].operation().is_none());
+        plan.admit()
+    })
+    .collect();
+    assert_eq!(
+        outcomes,
+        vec![Err(Error::VerificationFailed); outcomes.len()]
+    );
+}
+
+#[test]
+fn unknown_exact_pair_remains_noop_but_changed_unbound_kernel_refuses() {
+    let mut normal = compact_normal();
+    // Break checksum-predicate eligibility while retaining the Normal reader.
+    normal[0x2000] ^= 1;
+    assert!(preservation::discover_pair(&normal, None).is_none());
+    let kernel = [0xff; 0x100];
+    let mut changed_kernel = kernel;
+    changed_kernel[0x80] ^= 1;
+    let registry: &[&dyn Filter] = &[&filters::startup::FILTER];
+    let installed = context(&normal, Some(&kernel));
+    let same = context(&normal, Some(&kernel));
+    let plan = runner::plan_with(&installed, &same, runner::Policy::Strict, registry).unwrap();
+    assert!(plan.operations().next().is_none());
+    let changed = context(&normal, Some(&changed_kernel));
+    assert!(runner::plan_with(&installed, &changed, runner::Policy::Strict, registry).is_err());
+
+    // An otherwise recognized inventory cannot assign an unbound Kernel alias
+    // to a known Normal predicate and fall through as an exact-pair no-op.
+    let normal = compact_normal();
+    let certificate = sinks::discover(&normal).unwrap();
+    let mut aliased_kernel = kernel;
+    aliased_kernel[0x80..0x84].copy_from_slice(&certificate.entries[0].to_be_bytes());
+    assert!(preservation::discover_pair(&normal, Some(&aliased_kernel)).is_none());
+    let installed = context(&normal, Some(&kernel));
+    let changed = context(&normal, Some(&aliased_kernel));
+    assert!(runner::plan_with(&installed, &changed, runner::Policy::Strict, registry).is_err());
+    let supported = context(&normal, Some(&changed_kernel));
+    let plan = runner::plan_with(&installed, &supported, runner::Policy::Strict, registry).unwrap();
+    assert_eq!(plan.operations().count(), 1);
+}
+
+#[test]
 fn composed_normal_header_change_refuses_even_with_compensated_checksum() {
     let source = compact_normal();
     let mut target = source.clone();

@@ -433,21 +433,25 @@ fn explicit_crossflash_refuses_changed_bank_magic_even_with_a_target_word() {
 
 #[test]
 fn prepares_patch_and_pristine_restore_before_any_io() {
-    let installed = update(true, 1, 0x12, true);
+    // Final components carry a bound startup gate; this test exercises the
+    // intermediate marker patch and restoration after their admission.
+    let installed = update_with_bound_startup(true, 1, 0x12, true);
     let receiver = Receiver::from_installed(&installed).unwrap();
     for marker in [0, 0xff] {
-        let target = update(false, marker, 0x12, true);
+        let target = update_with_bound_startup(false, marker, 0x12, true);
         let pristine = target.kernel().image.clone();
-        let normal = target.normal_transfer().to_vec();
+        let normal = target.normal().image.clone();
         let plan = receiver.prepare(target).unwrap();
         assert_eq!(
             plan.first_kernel_image(),
             downgrade_patch(&pristine).unwrap().0
         );
         assert_eq!(plan.final_kernel_image(), pristine);
-        assert_eq!(plan.normal_transfer(), normal);
         let first = Envelope::load(plan.kernel_transfer()).unwrap();
         let restored = Envelope::load(plan.final_stage_kernel_transfer().unwrap()).unwrap();
+        // A bound read-only prerequisite may rebuild the signed envelope.
+        let transferred = Envelope::load_with_kernel(plan.normal_transfer(), &restored).unwrap();
+        assert_eq!(transferred.image, normal);
         assert_eq!(first.image, plan.first_kernel_image());
         assert_eq!(restored.image, pristine);
         let restore = plan.final_stage_receiver().unwrap();

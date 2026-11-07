@@ -29,7 +29,7 @@ fn versioned() -> Vec<u8> {
 }
 
 /// [`versioned`] with another header magic and marker offsets.
-fn versioned_with(magic: u32, markers: [u32; 2]) -> Vec<u8> {
+pub(super) fn versioned_with(magic: u32, markers: [u32; 2]) -> Vec<u8> {
     let mut b = vec![0; 0x4000];
     let v = VALIDATOR;
     put(

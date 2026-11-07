@@ -99,10 +99,11 @@ pub(in crate::receiver) fn update(gated: bool, marker: u8, family: u8, entry: bo
     }
     kernel[KERNEL_MARKER_OFFSET] = marker;
     fix_sum(&mut kernel);
-    let mut normal = normal_image(0x2000);
+    let mut normal = normal_image(crate::startup::coverage::sink_fixture::IMAGE_LEN);
     crate::startup::bank::fixture(&mut normal);
     normal[8..16].fill(b' ');
     crate::image::matrix::install_test_contract(&mut normal, family);
+    crate::startup::coverage::sink_fixture::install(&mut normal);
     normal[0x400..0x408].copy_from_slice(&[0xf6, family, 0x6a, 0x86, 0xe4, 0x36, 0, 0]);
     if entry {
         normal[0x500..0x510].copy_from_slice(&[
@@ -181,7 +182,11 @@ fn ordinary_preparation_keeps_the_receivers_bank_checks() {
     assert!(normal_only.settings().startup_setting().is_none());
 
     let mut normal = installed.normal().image.clone();
-    for at in [0x180a, 0x190a] {
+    for at in [
+        0x180a,
+        0x190a,
+        crate::startup::coverage::sink_fixture::MAGIC_OFFSET,
+    ] {
         normal[at..at + 4].copy_from_slice(&0xfedc4322u32.to_be_bytes());
     }
     fix_sum(&mut normal);
@@ -223,7 +228,11 @@ fn ordinary_preparation_keeps_the_receivers_bank_checks() {
 /// BDR-212U-style magic, FEDC4322 the BDR-213U-style magic.
 fn with_bank_magic(installed: &Update, magic: u32) -> Update {
     let mut normal = installed.normal().image.clone();
-    for at in [0x180a, 0x190a] {
+    for at in [
+        0x180a,
+        0x190a,
+        crate::startup::coverage::sink_fixture::MAGIC_OFFSET,
+    ] {
         normal[at..at + 4].copy_from_slice(&magic.to_be_bytes());
     }
     fix_sum(&mut normal);
@@ -310,6 +319,7 @@ fn explicit_crossflash_refuses_unknown_banks() {
     let receiver = Receiver::from_installed(&installed).unwrap();
     let mut normal = installed.normal().image.clone();
     normal[0x1800..0x1a00].fill(0);
+    normal[0x2200..0x229c].fill(0);
     fix_sum(&mut normal);
     let mut bytes = installed.normal().repack(&normal).unwrap();
     let mut key = [0; 20];
@@ -350,7 +360,11 @@ fn explicit_crossflash_refuses_changed_bank_magic_even_with_a_target_word() {
     let installed = update(false, 1, 0x12, true);
     let receiver = Receiver::from_installed(&installed).unwrap();
     let mut normal = installed.normal().image.clone();
-    for at in [0x180a, 0x190a] {
+    for at in [
+        0x180a,
+        0x190a,
+        crate::startup::coverage::sink_fixture::MAGIC_OFFSET,
+    ] {
         normal[at..at + 4].copy_from_slice(&0xfedc4322u32.to_be_bytes());
     }
     normal[0x600..0x614].copy_from_slice(&[
@@ -398,7 +412,11 @@ fn explicit_crossflash_refuses_changed_bank_magic_even_with_a_target_word() {
     ));
     // With bank compatibility established, bypass still cannot select between
     // conflicting startup words. Do not couple this check to error priority.
-    for at in [0x180a, 0x190a] {
+    for at in [
+        0x180a,
+        0x190a,
+        crate::startup::coverage::sink_fixture::MAGIC_OFFSET,
+    ] {
         normal[at..at + 4].copy_from_slice(&0xfedc4321u32.to_be_bytes());
     }
     let duplicate = normal[0x600..0x614].to_vec();

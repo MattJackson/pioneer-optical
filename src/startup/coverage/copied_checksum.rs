@@ -61,6 +61,24 @@ const FILL: &[u8] = &[
     0x47, 0x1c, 0x0c, 0x91, 0x0d, 0x19, 0x0d, 0x23, 0x11, 0x72, 0x47, 0x08, 1, 0, 0x6d, 0x81, 0x1b,
     0x72, 0x46, 0xf8, 0xeb, 3, 0x47, 6, 0x6c, 0x89, 0x1a, 0x0b, 0x46, 0xfa, 0x6d, 0x73, 0x54, 0x70,
 ];
+
+#[cfg(all(test, feature = "envelope"))]
+pub(super) fn install_fixture(normal: &mut [u8]) -> usize {
+    for (at, body) in [
+        (0x2a00, BODY),
+        (0x2b00, COPY),
+        (0x2b40, ADAPTER),
+        (0x2b80, CLEAR),
+        (0x2bc0, FILL),
+    ] {
+        normal[at..at + body.len()].copy_from_slice(body);
+    }
+    for (at, target) in [(0x2b0f, 0x412b40u32), (0x2b57, MEMCPY), (0x2b8b, 0x412bc0)] {
+        normal[at..at + 3].copy_from_slice(&target.to_be_bytes()[1..]);
+    }
+    BODY.len()
+}
+
 fn addr(b: &[u8]) -> u32 {
     u32::from_be_bytes([0, b[0], b[1], b[2]])
 }

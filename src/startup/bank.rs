@@ -140,6 +140,11 @@ pub(crate) fn fixture(normal: &mut [u8]) {
     legacy::fixture(normal);
 }
 
+#[cfg(all(test, feature = "envelope"))]
+pub(crate) fn versioned_fixture(magic: u32, markers: [u32; 2]) -> Vec<u8> {
+    tests::versioned_with(magic, markers)
+}
+
 /// Recover a storage contract. `None` means unresolved, never "no check".
 pub fn analyze(normal: &[u8]) -> Option<Contract> {
     if let Some(guard) = discover(normal) {

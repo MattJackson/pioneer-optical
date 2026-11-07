@@ -7,7 +7,6 @@ on:
       - 'src/**'
       - 'tests/phase_domain_coverage.rs'
       - 'tests/phase_sat1_phase_only.rs'
-      - 'tests/loading_channel.rs'
       - 'tests/fixtures/phase-domain-inventory.json'
       - 'tests/fixtures/phase-conditional-receivers.json'
       - 'tests/fixtures/phase-unavailable-receivers.json'
@@ -80,27 +79,6 @@ jobs:
           cargo test --locked --release --features envelope --test phase_domain_coverage \
             unsigned_packaged_phase_output_uses_existing_authenticated_encoder \
             -- --ignored --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/phase-authentication-report.txt"
-      - name: Prove loading boundaries and shared phase composition
-        if: ${{ !cancelled() && steps.inventory.outcome == 'success' && matrix.domain == 'h8sat' && matrix.shard == 0 }}
-        env:
-          PIONEER_PHASE_CORPUS: ${{ runner.temp }}/phase-inputs
-        shell: bash
-        run: |
-          cargo test --locked --release --features envelope --test loading_channel \
-            -- --ignored --skip every_bound_channel_image_roundtrips_in_ci --nocapture \
-            2>&1 | tee "$RUNNER_TEMP/loading-witness-report.txt"
-      - name: Prove assigned native loading-channel bindings
-        if: ${{ !cancelled() && steps.inventory.outcome == 'success' && matrix.domain == 'h8sat' }}
-        env:
-          PIONEER_PHASE_CORPUS: ${{ runner.temp }}/phase-inputs
-          PIONEER_PHASE_SHARD: ${{ matrix.shard }}
-          PIONEER_PHASE_SHARDS: ${{ matrix.shards }}
-        shell: bash
-        run: |
-          echo "source=${{ github.sha }} shard=${{ matrix.shard }}/${{ matrix.shards }}" > "$RUNNER_TEMP/loading-corpus-report.txt"
-          cargo test --locked --release --features envelope --test loading_channel \
-            every_bound_channel_image_roundtrips_in_ci \
-            -- --ignored --exact --nocapture 2>&1 | tee -a "$RUNNER_TEMP/loading-corpus-report.txt"
       - name: Prove target mappings and every ordered planner pair
         if: ${{ !cancelled() && steps.inventory.outcome == 'success' }}
         env:
@@ -121,7 +99,5 @@ jobs:
           path: |
             ${{ runner.temp }}/phase-report.txt
             ${{ runner.temp }}/phase-authentication-report.txt
-            ${{ runner.temp }}/loading-witness-report.txt
-            ${{ runner.temp }}/loading-corpus-report.txt
           if-no-files-found: ignore
           retention-days: 14

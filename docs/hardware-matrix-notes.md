@@ -35,17 +35,20 @@ evidence only, so every SAT9 family identifier changed.
 The hand-made page carried these statements; the 1.6.0 code does not enforce
 them (see CHANGELOG 1.6.0):
 
-- SAT1 phase: "Correctable in Normal across all 13 native forms." The phase owner
-  suspends every SAT1 phase correction (`mechanism_gate`): any assignment change
-  refuses.
-- SAT1 phase: "Phase remains in both published family keys." The matching
-  (candidate) family drops the assignment for H8 programs with a complete paired-word
-  grammar; only the as-is identity keeps it.
-- SAT8/SAT9 phase: historical exact-image recipes are replaced by the phase
-  filter's native mechanism composition. Differing bound bundles can be corrected
-  with OEM instructions/tables and read-only prerequisites. The complete update
-  still requires every other filter; XS08U and XD08 have different tray inputs.
-  Native reference conversion evidence does not establish every family-wide pair.
+- Phase correction now means native output assignment only. Complete bound H8
+  programs can normalize Direct/Swapped assignment in candidate identities;
+  architecture and output interface remain required. SAT1 byte-output versus
+  split-word interface conversion is unsupported. Equal assignments do not
+  trigger DSP, waveform, calibration or motion-program transplantation.
+- Native operand/reversal evidence and authenticated original-file delivery are
+  separate obligations. Conditional receiver Kernels are not evidence of a
+  packaged or installed Kernel. Missing codec authority remains a refusal;
+  historical corpus counts below are not current completion claims.
+- Loading is split into a guarded mapped interrupt channel and independently
+  required input/callback facts. Only completely bound clear-five/clear-seven
+  programs gain the channel correction; direct writes and unbound programs keep
+  their original requirements. See [the native binding and proof limits](loading-interrupt-channel.md).
+  A successful channel correction does not by itself admit a firmware pair.
 - Startup: historical neutral FFFF selection and persistent word transactions
   are superseded by filter-owned image correction and read-only prerequisites.
   Missing native evidence remains a refusal.

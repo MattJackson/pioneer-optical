@@ -22,9 +22,9 @@ fn bind(normal: &[u8]) -> Result<Binding, CorrectionError> {
                 continue;
             };
             let leaf = if template.requires_leaf {
-                // The original leaf remains intact. A mapped call is specialized
-                // to its exact four-byte MOV, so unrelated callers retain their
-                // original destination. Adjacency makes both forms reversible.
+                // Bind the unchanged shared leaf for both the native call and
+                // the previously emitted inline form. Recognition does not
+                // authorize rewriting the call/return execution path.
                 let start = at.checked_sub(6).ok_or(CorrectionError::Unresolved)?;
                 if normal.get(start..at) != Some(&[0x6a, 0x88, 0xf9, 9, 0x54, 0x70][..]) {
                     return Err(CorrectionError::Unresolved);
@@ -72,6 +72,8 @@ pub fn observe(normal: &[u8]) -> Result<Phase, CorrectionError> {
 /// F910/F911 data and F912/F913 control destinations, including in-body zeros.
 /// Separate symmetric zero leaves remain unchanged: both channels still receive
 /// zero. No resident Kernel body, coefficient width or interface is replaced.
+/// Assignment changes requiring a call/inline rewrite refuse: execution timing
+/// and temporary stack preservation have not been established for those forms.
 pub fn correct(normal: &[u8], assignment: Assignment) -> Result<Vec<u8>, CorrectionError> {
     let before = bind(normal)?;
     if before.phase.assignment == assignment {

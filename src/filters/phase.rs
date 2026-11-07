@@ -255,7 +255,7 @@ static RULES: super::Rules = super::Rules {
     description: "Compares the native output assignment together with architecture and output interface. Supported corrections change only the incoming firmware channel mapping while retaining its DSP program, waveform tables, calibration and motion behavior. This is not a change of drive voltage, motor type or byte-versus-word output interface.",
     role: super::Role::Hardware,
     correctability: super::Correctability::Guarded,
-    correction: "Corrects the incoming Normal image's native direct/swapped output mapping while retaining its waveform tables, DSP program, calibration and motion behavior. Architecture and output interface must match. Other filters remain independently enforced.",
+    correction: "Corrects supported incoming Normal channel operands while preserving execution, waveform tables, DSP program, calibration and motion behavior. Architecture and output interface must match. Other filters remain independently enforced.",
     policies: &[
         super::Policy {
             domains: &[],
@@ -263,7 +263,7 @@ static RULES: super::Rules = super::Rules {
         },
         super::Policy {
             domains: &[super::identity::Domain::Sat1],
-            text: "SAT1 phase correction binds complete native output programs and changes only the channel mapping. Output helper behavior and all unrelated bytes are preserved; unrecognized or conflicting programs refuse.",
+            text: "SAT1 phase correction binds complete native output programs and changes only supported channel operands, preserving output helper execution and unrelated bytes. Forms requiring a call/inline rewrite remain observable but refuse assignment changes because call timing and temporary stack preservation are unproved. Equal assignments need no correction; unrecognized or conflicting programs refuse.",
         },
         super::Policy {
             domains: &[super::identity::Domain::H8Sat],
@@ -328,7 +328,7 @@ impl Filter for PhaseFilter {
             return Finding::Conflicting("phase assessment owner/role mismatch".into());
         }
         // This is a native grouping contract, not checksum/file admission.
-        // Complete target-native grammars establish two-way output mapping.
+        // Complete target-native grammars establish the observed assignment.
         // The candidate projection is the published family grouping and stays
         // assignment-free; correctability is decided per pair in `plan`, where
         // only its native output mapping is corrected.

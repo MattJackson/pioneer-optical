@@ -49,10 +49,21 @@ fn fix_sum(raw: &mut [u8]) {
 }
 
 #[test]
-fn every_complete_legacy_form_is_reversible_and_preserves_shared_leaf() {
+fn operand_only_legacy_forms_are_reversible_and_preserve_shared_leaf() {
     assert_eq!(templates::TEMPLATES.len(), 13);
     for t in templates::TEMPLATES {
         let raw = fixture(t);
+        assert_eq!(correct(&raw, t.assignment).unwrap(), raw);
+        if t.patches
+            .iter()
+            .any(|patch| matches!(patch, Patch::LeafCall(_)))
+        {
+            assert_eq!(
+                correct(&raw, opposite(t.assignment)),
+                Err(CorrectionError::Unresolved)
+            );
+            continue;
+        }
         let corrected = correct(&raw, opposite(t.assignment)).unwrap();
         assert!(matches!(discover(&corrected), Observation::Known(p)
             if p.assignment == opposite(t.assignment) && p.interface == t.interface));
@@ -181,7 +192,7 @@ fn byte_pair_correction_uses_native_programs_across_platform_labels() {
     use crate::filters::{phase::FILTER, Context, Filter, Transition};
     for t in templates::TEMPLATES
         .iter()
-        .filter(|t| t.interface == Interface::BytePair)
+        .filter(|t| t.interface == Interface::BytePair && !t.requires_leaf)
     {
         let raw = fixture(t);
         let corrected = correct(&raw, opposite(t.assignment)).unwrap();

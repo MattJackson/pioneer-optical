@@ -11,6 +11,7 @@ on:
       - 'tests/startup_generation_integrity.rs'
       - 'tests/startup_inspection.rs'
       - 'tests/fixtures/phase-domain-inventory.json'
+      - 'tests/fixtures/phase-sat1-deferred-calls.json'
       - 'tests/fixtures/phase-conditional-receivers.json'
       - 'tests/fixtures/phase-unavailable-receivers.json'
       - 'Cargo.toml'

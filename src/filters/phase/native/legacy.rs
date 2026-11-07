@@ -18,6 +18,7 @@ struct Binding {
     native: Phase,
     observed: Phase,
     changes: Vec<Change>,
+    operand_only: bool,
 }
 fn binding(t: &Template, normal: &[u8], at: usize) -> Option<Binding> {
     let candidate = normal.get(at..at.checked_add(t.bytes.len())?)?;
@@ -91,6 +92,7 @@ fn binding(t: &Template, normal: &[u8], at: usize) -> Option<Binding> {
             interface: t.interface,
         },
         changes,
+        operand_only: t.patches.iter().all(|patch| matches!(patch, Patch::Byte(_))),
     })
 }
 fn stored(normal: &[u8], regions: &[&[u8]], at: usize, len: usize) -> bool {
@@ -162,6 +164,16 @@ pub(super) fn correct(normal: &[u8], target: Assignment) -> Result<Vec<u8>, Corr
     }
     let b = &before[0];
     if !matches!(discover(normal),Observation::Known(p)if p==b.observed) {
+        return Err(CorrectionError::Unresolved);
+    }
+    if target == b.observed.assignment {
+        return Ok(normal.to_vec());
+    }
+    // LeafCall recognizes both the native JSR and the previously emitted inline
+    // MOV. Rewriting between them changes call/return latency and temporary
+    // stack effects. Output/register equivalence alone does not establish that
+    // this preserves execution, so neither direction is an authorized edit.
+    if !b.operand_only {
         return Err(CorrectionError::Unresolved);
     }
     let mut output = normal.to_vec();

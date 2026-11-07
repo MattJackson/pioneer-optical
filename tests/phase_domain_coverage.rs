@@ -84,6 +84,16 @@ struct UnavailableReceiver {
 fn unavailable_manifest() -> UnavailableManifest {
     serde_json::from_str(include_str!("fixtures/phase-unavailable-receivers.json")).unwrap()
 }
+#[derive(Deserialize)]
+struct DeferredCalls {
+    schema: u32,
+    normals: BTreeSet<String>,
+}
+fn deferred_calls() -> DeferredCalls {
+    serde_json::from_str(include_str!("fixtures/phase-sat1-deferred-calls.json")).unwrap()
+}
+const CALL_REWRITE_UNPROVED: &str =
+    "SAT1 call/inline timing and temporary stack preservation unproved";
 struct Proof {
     codec_roundtrip: bool,
     image: Vec<u8>,
@@ -351,6 +361,29 @@ fn unavailable_receiver_fixture_is_exact_and_disjoint() {
     }
 }
 
+#[test]
+fn deferred_call_rewrites_are_exact_native_byte_targets() {
+    let deferred = deferred_calls();
+    assert_eq!(deferred.schema, 1);
+    assert_eq!(deferred.normals.len(), 42);
+    let inventory = inventory();
+    let sat1 = inventory.domains.iter().find(|d| d.id == "sat1").unwrap();
+    for normal in deferred.normals {
+        let record = sat1.records.iter().find(|r| r.normal == normal).unwrap();
+        let expected = phase::NativePhase {
+            architecture: phase::Architecture::H8,
+            interface: phase::Interface::H8BytePair {
+                outputs: [0xf908, 0xf909],
+            },
+            assignment: Assignment::Direct,
+        };
+        assert_eq!(
+            record.phase,
+            serde_json::to_value(expected.value()).unwrap()
+        );
+    }
+}
+
 /// One complete target/fact effect is independent of donor waveforms. The witness
 /// is explicitly target-derived, not an invented original image or resident Kernel.
 fn prove_target(
@@ -364,6 +397,25 @@ fn prove_target(
     let destination = filters::Context::new(target);
     let before = known(&destination);
     assert_eq!(serde_json::to_value(before.value()).unwrap(), record.phase);
+    if before.assignment != assignment && deferred_calls().normals.contains(&record.normal) {
+        // This is an exact frozen disassembly expectation, not permission to
+        // treat arbitrary mapping failures as a supported or completed stage.
+        assert_eq!(
+            native::correct_legacy(target.normal, assignment),
+            Err(native::CorrectionError::Unresolved)
+        );
+        assert_eq!(
+            native::sat1::phase_only::correct(target.normal, assignment),
+            Err(native::CorrectionError::Unresolved)
+        );
+        println!(
+            "{}",
+            json!({"event":"target-mapping-unsupported", "normal":record.normal,
+            "assignment":format!("{assignment:?}"), "reason":CALL_REWRITE_UNPROVED,
+            "native_mapping_verified":false,"codec_roundtrip_verified":false,"complete":false})
+        );
+        return Err(CALL_REWRITE_UNPROVED.into());
+    }
     let mapped = mapping(target.normal, assignment)?;
     let witness = filters::Context::new(Firmware {
         normal: &mapped,
@@ -644,6 +696,7 @@ fn every_target_mapping_and_ordered_planner_pair() {
     let mut conditional_records = 0;
     let mut conditional_variants = 0;
     let mut expected_refusals = 0;
+    let mut unsupported_target_mappings = 0;
     let mut native_only_pairs = 0;
     let strict_delivery = std::env::var("PIONEER_PHASE_REQUIRE_DELIVERY").as_deref() == Ok("1");
     for (b, record) in domain.records.iter().enumerate() {
@@ -755,7 +808,11 @@ fn every_target_mapping_and_ordered_planner_pair() {
                         "packaged_kernel":record.kernel,"selected_receiver":record.kernel,
                         "assignment":format!("{assignment:?}"),"reason":reason,"complete":false})
                     );
-                    failures.push(format!("{} {assignment:?}: {reason}", record.normal));
+                    if reason == CALL_REWRITE_UNPROVED {
+                        unsupported_target_mappings += 1;
+                    } else {
+                        failures.push(format!("{} {assignment:?}: {reason}", record.normal));
+                    }
                 }
                 proofs.push(proof);
             }
@@ -897,7 +954,9 @@ fn every_target_mapping_and_ordered_planner_pair() {
         "unique_images_in_domain":domain.image_count,"retained_input_records":domain.records.len(),
         "execution":if focused {"one explicitly selected local direction"} else {"exhaustive CI target shard"},
         "target_records":targets,"native_mapping_proofs":native_proofs,
-        "native_assignment_and_codec_proofs":mappings,"expected_mapping_proofs":targets*2,
+        "native_assignment_and_codec_proofs":mappings,"requested_target_assignments":targets*2,
+        "expected_supported_mapping_proofs":targets*2-unsupported_target_mappings,
+        "unsupported_target_only_mapping_stages":unsupported_target_mappings,
         "ordered_pairs":pairs,"same_interface_pairs":same_interface,"cross_interface_unresolved_pairs":cross_interface,
         "decode_unavailable_pairs":unavailable_pairs,"records_without_packaged_kernel":receiver_unavailable,
         "original_standalone_representation_refusals":original_context_refusals,
@@ -909,7 +968,7 @@ fn every_target_mapping_and_ordered_planner_pair() {
         "records_without_listed_receiver_context":receiver_unavailable-conditional_records,
         "expected_representation_refusals":expected_refusals,
         "native_only_same_interface_pairs":native_only_pairs,
-        "codec_roundtrip_complete":expected_refusals==0 && failures.is_empty(),
+        "codec_roundtrip_complete":expected_refusals==0 && unsupported_target_mappings==0 && failures.is_empty(),
         "authenticated_delivery_complete":false,"corrected_receiver_authentication_proofs":0,
         "original_conditional_receiver_update_checks":conditional_variants,
         "original_packaged_update_authentication":"not evaluated by this corpus test",
@@ -924,13 +983,20 @@ fn every_target_mapping_and_ordered_planner_pair() {
         failures.len(),
         &failures[..failures.len().min(20)]
     );
-    assert_eq!(mappings + expected_refusals, targets * 2);
     assert_eq!(
-        native_proofs,
+        mappings + expected_refusals + unsupported_target_mappings,
+        targets * 2
+    );
+    assert_eq!(
+        native_proofs + unsupported_target_mappings,
         targets * 2,
-        "every original input retains both native proofs"
+        "each requested assignment has a native proof or exact unsupported call-rewrite expectation"
     );
     if strict_delivery {
+        assert_eq!(
+            unsupported_target_mappings, 0,
+            "strict delivery completeness: some requested native assignments remain unsupported"
+        );
         assert_eq!(
             expected_refusals, 0,
             "strict delivery completeness: authentic receiver contexts remain unavailable"

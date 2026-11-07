@@ -197,6 +197,7 @@ fn all_sat1_forms_match_independent_operand_and_checksum_oracles() {
     assert_eq!(rows.len(), 73);
     let mut complete = 0;
     let mut duplicates = 0;
+    let mut deferred = 0;
     for row in rows {
         let component = row["component"].as_str().unwrap();
         let raw = std::fs::read(corpus.join(format!("{component}.bin"))).unwrap();
@@ -225,6 +226,32 @@ fn all_sat1_forms_match_independent_operand_and_checksum_oracles() {
             Some(true),
             "{component}"
         );
+        assert_eq!(correct_legacy(&raw, assignment).unwrap(), raw);
+        duplicates += usize::from(row["hits"].as_array().unwrap().len() > 1);
+        complete += usize::from(row["complete_normal_checksum_valid"] == true);
+        if row["patches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["kind"] == "inline_leaf")
+        {
+            deferred += 1;
+            assert_eq!(
+                correct_legacy(&raw, target),
+                Err(CorrectionError::Unresolved),
+                "{component}"
+            );
+            assert_eq!(
+                correct_normal(&raw, target),
+                Err(if row["complete_normal_checksum_valid"] == true {
+                    CorrectionError::Unresolved
+                } else {
+                    CorrectionError::InvalidNormal
+                }),
+                "{component}"
+            );
+            continue;
+        }
         let corrected =
             correct_legacy(&raw, target).unwrap_or_else(|e| panic!("{component}: {e:?}"));
         assert_eq!(
@@ -255,9 +282,7 @@ fn all_sat1_forms_match_independent_operand_and_checksum_oracles() {
             raw,
             "{component}: native no-op"
         );
-        duplicates += usize::from(row["hits"].as_array().unwrap().len() > 1);
         if row["complete_normal_checksum_valid"] == true {
-            complete += 1;
             let image = correct_normal(&raw, target).unwrap();
             assert_eq!(
                 format!("{:x}", Sha256::digest(&image)),
@@ -278,6 +303,7 @@ fn all_sat1_forms_match_independent_operand_and_checksum_oracles() {
         }
     }
     assert_eq!((complete, duplicates), (52, 6));
+    assert_eq!(deferred, 42);
 }
 
 #[test]
@@ -316,6 +342,8 @@ fn sat1_original_files_follow_independent_operand_oracle_and_round_trip() {
     let mut scaled = 0;
     let mut unresolved_identity = 0;
     let mut invalid_standalone = 0;
+    let mut deferred = 0;
+    let mut deferred_valid = 0;
     std::thread::scope(|scope| {
         let handles: Vec<_> = (0..8)
             .map(|worker| {
@@ -325,6 +353,8 @@ fn sat1_original_files_follow_independent_operand_oracle_and_round_trip() {
                     let mut scaled = 0;
                     let mut unresolved_identity = 0;
                     let mut invalid_standalone = 0;
+                    let mut deferred = 0;
+                    let mut deferred_valid = 0;
                     for row in rows.as_array().unwrap().iter().skip(worker).step_by(8) {
                         let component = row["component"].as_str().unwrap();
                         let bytes = std::fs::read(files.join(format!("{component}.enc"))).unwrap();
@@ -366,6 +396,26 @@ fn sat1_original_files_follow_independent_operand_oracle_and_round_trip() {
                                 "{component}: oracle binding"
                             );
                             expected[at..at + new.len()].copy_from_slice(&new);
+                        }
+                        if contract["patches"].as_array().unwrap().iter().any(|p| p["kind"] == "inline_leaf") {
+                            // The independent historical oracle still describes
+                            // a recognizable assignment, but deleting JSR/RTS
+                            // lacks timing and temporary stack preservation proof.
+                            assert_eq!(correct_legacy(&original.image, before.assignment).unwrap(), original.image);
+                            assert_eq!(correct_legacy(&original.image, target), Err(CorrectionError::Unresolved));
+                            assert!(matches!(discover(&expected), Observation::Known(p) if p.assignment == target && p.interface == before.interface));
+                            assert_eq!(correct_legacy(&expected, before.assignment), Err(CorrectionError::Unresolved));
+                            deferred += 1;
+                            if sum(&original.image) != 0 {
+                                assert!(kernel.is_none());
+                                assert_eq!(correct_normal(&original.image, target), Err(CorrectionError::InvalidNormal));
+                                invalid_standalone += 1;
+                            } else {
+                                assert_eq!(correct_normal(&original.image, target), Err(CorrectionError::Unresolved));
+                                deferred_valid += 1;
+                                scaled += usize::from(original.info().layout == Layout::NormalScaledKey);
+                            }
+                            continue;
                         }
                         if sum(&original.image) != 0 {
                             assert!(
@@ -483,19 +533,22 @@ fn sat1_original_files_follow_independent_operand_oracle_and_round_trip() {
                             eprintln!("SAT1 complete original files proved: {complete}");
                         }
                     }
-                    (complete, scaled, unresolved_identity, invalid_standalone)
+                    (complete, scaled, unresolved_identity, invalid_standalone, deferred, deferred_valid)
                 })
             })
             .collect();
         for handle in handles {
-            let (c, s, u, i) = handle.join().expect("SAT1 proof worker failed");
+            let (c, s, u, i, d, v) = handle.join().expect("SAT1 proof worker failed");
             complete += c;
             scaled += s;
             unresolved_identity += u;
             invalid_standalone += i;
+            deferred += d;
+            deferred_valid += v;
         }
     });
-    assert_eq!(complete, 58);
+    assert_eq!(complete + deferred_valid, 58);
+    assert_eq!(deferred, 42);
     assert_eq!(scaled, 6);
     assert_eq!(invalid_standalone, 15);
     assert_eq!(unresolved_identity, 3);

@@ -391,7 +391,8 @@ pub fn discover_pair(normal: &[u8]) -> Observation<PairedPhase> {
 /// A Normal-only phase correction could not be established.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CorrectionError {
-    /// Complete unambiguous paired functions are unavailable.
+    /// A complete unambiguous binding with an execution-preserving correction
+    /// is unavailable. A program can remain observable without such a correction.
     Unresolved,
     /// Normal header, declared length or additive checksum is invalid.
     InvalidNormal,
@@ -852,6 +853,10 @@ fn template_matches_bytes(t: &Template, normal: &[u8], at: usize, candidate: &[u
 
 /// Correct a uniquely bound SAT1 output program without changing shared helpers.
 /// Edits operands only; checksum, envelope and other filter gates remain required.
+/// Changing assignment refuses for forms requiring a call/inline rewrite because
+/// preservation of call timing and temporary stack effects is not established.
+/// Their native and previously emitted inline forms remain observable; requesting
+/// their current assignment returns an unchanged copy.
 pub fn correct_legacy(normal: &[u8], target: Assignment) -> Result<Vec<u8>, CorrectionError> {
     legacy::correct(normal, target)
 }

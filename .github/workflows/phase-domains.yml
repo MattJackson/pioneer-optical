@@ -8,6 +8,7 @@ on:
       - 'tests/phase_domain_coverage.rs'
       - 'tests/phase_sat1_phase_only.rs'
       - 'tests/startup_pair_profiles.rs'
+      - 'tests/startup_generation_integrity.rs'
       - 'tests/startup_inspection.rs'
       - 'tests/fixtures/phase-domain-inventory.json'
       - 'tests/fixtures/phase-conditional-receivers.json'
@@ -110,6 +111,8 @@ jobs:
             bdr211m_pair_profile_composes_without_editing_firmware_or_parameters -- --ignored --exact --nocapture
           cargo test --locked --release --features envelope --test startup_pair_profiles \
             sat8000_pair_profile_retains_resident_validation_without_edits -- --ignored --exact --nocapture
+          cargo test --locked --release --features envelope --test startup_generation_integrity \
+            exact_w1_generation_checks_survive_authentication_and_full_composition -- --ignored --exact --nocapture
       - name: Prove exact paired SAT1 legacy preservation contracts
         if: ${{ !cancelled() && steps.inventory.outcome == 'success' && matrix.domain == 'sat1' && matrix.shard == 0 }}
         env:

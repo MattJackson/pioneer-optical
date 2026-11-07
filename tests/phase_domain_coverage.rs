@@ -85,7 +85,7 @@ fn unavailable_manifest() -> UnavailableManifest {
     serde_json::from_str(include_str!("fixtures/phase-unavailable-receivers.json")).unwrap()
 }
 struct Proof {
-    delivery: bool,
+    codec_roundtrip: bool,
     image: Vec<u8>,
     native_phase: phase::NativePhase,
 }
@@ -461,7 +461,7 @@ fn prove_target(
         return Ok(Proof {
             image: mapped,
             native_phase: required,
-            delivery: false,
+            codec_roundtrip: false,
         });
     }
     let changed = plan
@@ -471,7 +471,7 @@ fn prove_target(
     let image = changed.unwrap_or_else(|| target.normal.to_vec());
     // A no-op plan does not invoke the integrity owner. Explicitly establish
     // original codec/checksum authority even then: lossless repacking of invalid
-    // plaintext is only byte preservation, not a valid delivery proof.
+    // plaintext is only byte preservation, not a valid codec integrity proof.
     match (filters::be32_normal_integrity().repair)(&preparation, target.normal) {
         Ok(unchanged) => assert_eq!(unchanged, target.normal),
         Err(error) => {
@@ -530,13 +530,14 @@ fn prove_target(
         "assignment":format!("{assignment:?}"), "interface":format!("{:?}",required.interface),
         "installed_witness":"target-derived native assignment; not a new OEM original",
         "image_sha256":digest(&image), "encoded_sha256":digest(&encoded),
-        "original_integrity_authority":true,
+        "original_integrity_authority":true,"codec_roundtrip_verified":true,
+        "receiver_authentication_verified":false,"authenticated_delivery_verified":false,
         "receiver_policy_bound":original.normal.info().receiver_xor_policy.is_some(),
         "receiver_context":if original.conditional {"conditional receiver only; not original package or installed identity"} else if original.kernel.is_some() {"packaged Kernel"} else {"unavailable; no resident Kernel inferred"},
         "scope":"native phase and original codec only; other flash gates not evaluated"})
     );
     Ok(Proof {
-        delivery: true,
+        codec_roundtrip: true,
         image,
         native_phase: required,
     })
@@ -741,7 +742,7 @@ fn every_target_mapping_and_ordered_planner_pair() {
                     )
                 });
                 if let Ok(proof) = &proof {
-                    if proof.delivery {
+                    if proof.codec_roundtrip {
                         original_context_codec_proofs += 1;
                     } else {
                         expected_refusals += 1;
@@ -761,7 +762,7 @@ fn every_target_mapping_and_ordered_planner_pair() {
         }
         mappings += proofs
             .iter()
-            .filter(|p| p.as_ref().is_ok_and(|p| p.delivery))
+            .filter(|p| p.as_ref().is_ok_and(|p| p.codec_roundtrip))
             .count();
         for (a, source_record) in domain.records.iter().enumerate() {
             if source.as_ref().is_some_and(|h| h != &source_record.normal) {
@@ -845,10 +846,10 @@ fn every_target_mapping_and_ordered_planner_pair() {
                 }
                 Ok(())
             })();
-            let delivery = proofs[usize::from(required.assignment == Assignment::Swapped)]
+            let codec_roundtrip = proofs[usize::from(required.assignment == Assignment::Swapped)]
                 .as_ref()
-                .is_ok_and(|p| p.delivery);
-            if result.is_ok() && !delivery {
+                .is_ok_and(|p| p.codec_roundtrip);
+            if result.is_ok() && !codec_roundtrip {
                 native_only_pairs += 1;
             }
             println!(
@@ -859,9 +860,11 @@ fn every_target_mapping_and_ordered_planner_pair() {
                     "target_selected_receiver":originals[b].as_ref().ok().and_then(|o|o.receiver.as_ref()),
                     "source_conditional":originals[a].as_ref().is_ok_and(|o|o.conditional),
                     "target_conditional":originals[b].as_ref().is_ok_and(|o|o.conditional),"actual_installed_kernel":"unknown",
-                "assignment":format!("{:?}",required.assignment),"verified":result.is_ok() && delivery,
-                "native_verified":result.is_ok(),"delivery_verified":result.is_ok() && delivery,
-                "expected_representation_refusal":result.is_ok() && !delivery,
+                "assignment":format!("{:?}",required.assignment),"verified":result.is_ok() && codec_roundtrip,
+                "native_verified":result.is_ok(),"codec_roundtrip_verified":result.is_ok() && codec_roundtrip,
+                "delivery_verified":false,"receiver_authentication_verified":false,
+                "verification_scope":"native phase and raw original codec only; authenticated emission not evaluated",
+                "expected_representation_refusal":result.is_ok() && !codec_roundtrip,
                 "error":result.as_ref().err(),
                 "elapsed_ms":pair_started.elapsed().as_millis()})
             );
@@ -906,8 +909,12 @@ fn every_target_mapping_and_ordered_planner_pair() {
         "records_without_listed_receiver_context":receiver_unavailable-conditional_records,
         "expected_representation_refusals":expected_refusals,
         "native_only_same_interface_pairs":native_only_pairs,
-        "codec_delivery_complete":expected_refusals==0 && failures.is_empty(),
+        "codec_roundtrip_complete":expected_refusals==0 && failures.is_empty(),
+        "authenticated_delivery_complete":false,"corrected_receiver_authentication_proofs":0,
+        "original_conditional_receiver_update_checks":conditional_variants,
+        "original_packaged_update_authentication":"not evaluated by this corpus test",
         "strict_delivery_required":strict_delivery,
+        "strict_delivery_scope":"original codec completeness; authenticated emission and full admission are separate",
         "failed_obligations":failures.len(),"overall_phase_domain_complete":false,
         "scope":"same-interface native phase only; cross-interface and other flash gates are separate unresolved obligations"})
     );
@@ -930,4 +937,97 @@ fn every_target_mapping_and_ordered_planner_pair() {
         );
     }
     assert_eq!(supplemental_codec_proofs, conditional_variants * 2);
+}
+
+/// Raw codec proof deliberately retains an unsigned capture's signature field.
+/// The application's all-zero normalization policy and production encoder can
+/// authenticate an owned transfer without changing its corrected plaintext.
+#[test]
+#[ignore = "requires exact BDE private corpus components; one bounded authentication boundary"]
+fn unsigned_packaged_phase_output_uses_existing_authenticated_encoder() {
+    use pioneer_optical::envelope::{
+        builder::{
+            encode_normal_for_kernel, NormalKeySource, NormalSignature, NORMAL_SIGNATURE_RANGE,
+        },
+        signature::{verify_normal_signature, SignatureCheck, SigningKey},
+        Layout, UpdateError,
+    };
+    const NORMAL: &str = "0a3954c01e54510eea5c870fe633fd0532d2415744e5a860962acfd06bb7430c";
+    const KERNEL: &str = "05fc3aaa7f86ecb69107b75d5c1ec4ea5dbd23b6671673327ccb4c6b9cf1448b";
+    let root = std::env::var_os("PIONEER_PHASE_CORPUS").expect("PIONEER_PHASE_CORPUS");
+    let root = Path::new(&root);
+    let normal_bytes = component(root, NORMAL);
+    let kernel_bytes = component(root, KERNEL);
+    let inventory = inventory();
+    let record = inventory
+        .domains
+        .iter()
+        .flat_map(|d| &d.records)
+        .find(|r| r.normal == NORMAL)
+        .unwrap();
+    assert_eq!(record.kernel.as_deref(), Some(KERNEL));
+    assert!(
+        normal_bytes[NORMAL_SIGNATURE_RANGE].iter().all(|b| *b == 0),
+        "only an exactly unsigned capture follows the existing normalization policy"
+    );
+    assert!(matches!(
+        Update::load(&kernel_bytes, &normal_bytes),
+        Err(UpdateError::Authentication)
+    ));
+    let original = load(root, record).unwrap();
+    let kernel = original.kernel.as_ref().unwrap();
+    let before = known(&filters::Context::new(firmware(record, &original)));
+    let required = match before.assignment {
+        Assignment::Direct => Assignment::Swapped,
+        Assignment::Swapped => Assignment::Direct,
+    };
+    let mut native_proofs = 0;
+    let proof = prove_target(record, &original, required, &mut native_proofs, None).unwrap();
+    assert_eq!(native_proofs, 1);
+    assert!(proof.codec_roundtrip);
+    assert_ne!(proof.image, original.normal.image);
+    let raw = original.normal.repack(&proof.image).unwrap();
+    assert!(matches!(
+        Update::load(&kernel_bytes, &raw),
+        Err(UpdateError::Authentication)
+    ));
+    // This capture has no recoverable LCG seed. The encoder's existing RawKey
+    // input retains its observed table; no seed or new authentication rule is
+    // guessed. Sign uses the same production signing primitive as the app.
+    assert!(original.normal.encoding_seed().is_none());
+    assert_eq!(original.normal.info().layout, Layout::Normal);
+    assert_eq!(original.normal.info().payload_offset, 0x10200);
+    let signer = SigningKey::random().unwrap();
+    let emitted = encode_normal_for_kernel(
+        &kernel.image,
+        &proof.image,
+        &normal_bytes[..0x200],
+        NormalKeySource::RawKey(&normal_bytes[0x200..0x10200]),
+        NormalSignature::Sign(&signer),
+    )
+    .unwrap();
+    assert_eq!(
+        verify_normal_signature(&emitted),
+        SignatureCheck::ValidKeyAndCiphertext
+    );
+    let accepted = Update::load(&kernel_bytes, &emitted).unwrap();
+    assert_eq!(accepted.normal().image, proof.image);
+    assert_eq!(accepted.kernel().image, kernel.image);
+    for (at, (a, b)) in raw.iter().zip(&emitted).enumerate() {
+        if !NORMAL_SIGNATURE_RANGE.contains(&at) {
+            assert_eq!(a, b, "emission changed raw codec byte {at:#x}");
+        }
+    }
+    assert_eq!(raw.len(), emitted.len());
+    println!(
+        "{}",
+        json!({"event":"phase-authentication-boundary-proof",
+        "normal":NORMAL,"kernel":KERNEL,"native_mapping_proofs":native_proofs,
+        "raw_codec_roundtrip_proofs":1,"original_input_authentication_refusals":1,
+        "raw_corrected_authentication_refusals":1,"unsigned_original_signature":true,
+        "production_encoder":"encode_normal_for_kernel + RawKey + NormalSignature::Sign",
+        "corrected_receiver_update_proofs":1,"receiver_authentication_verified":true,
+        "corrected_plaintext_unchanged_by_emission":true,
+        "actual_installed_kernel":"unknown","full_firmware_admission":"not evaluated"})
+    );
 }

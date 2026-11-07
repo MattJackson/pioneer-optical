@@ -94,6 +94,7 @@ fn known(
         hardware: hardware.into(),
         as_is: Some(as_is.into()),
         candidate: Some(candidate.into()),
+        startup_inspection: None,
         filters: filters::filters()
             .iter()
             .map(|f| {

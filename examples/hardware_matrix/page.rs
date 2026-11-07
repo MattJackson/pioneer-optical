@@ -10,6 +10,9 @@
 use pioneer_optical::compatibility::Firmware;
 use pioneer_optical::envelope::Envelope;
 use pioneer_optical::filters::{self, identity, Assessment, Context, Finding, Role, Value};
+use pioneer_optical::startup::inspection::{
+    self, Inspection, ReaderEvidenceState, RequirementObservation,
+};
 use serde_json::{json, Value as Json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -51,6 +54,7 @@ pub struct Analysis {
     pub as_is: Option<String>,
     pub candidate: Option<String>,
     pub filters: Vec<Assessment>,
+    pub startup_inspection: Option<Inspection>,
 }
 
 /// Run every registered filter and the identity discovery for one image.
@@ -71,6 +75,117 @@ pub fn analyze(image: &Image<'_>) -> Analysis {
             .as_ref()
             .map(|i| format!("{:016x}", i.candidate.fingerprint())),
         filters: context.filters(),
+        startup_inspection: context
+            .sat
+            .as_ref()
+            .map(|_| inspection::inspect(image.normal, image.kernel)),
+    }
+}
+
+fn startup_inspection(value: &Inspection) -> Json {
+    let reader = match value.reader() {
+        ReaderEvidenceState::Normal(_) => "Normal",
+        ReaderEvidenceState::Resident { .. } => "Resident",
+        ReaderEvidenceState::MissingResident { .. } => "Missing Kernel",
+        ReaderEvidenceState::Unrecognized => "Reader not recognized",
+        ReaderEvidenceState::Conflicting => "Conflicting reader",
+    };
+    let requirement = match value.requirement() {
+        RequirementObservation::Fixed(_) => "Fixed comparison",
+        RequirementObservation::Conditional(_) => "Conditional comparison",
+        RequirementObservation::NoSupportedComparison => "No fixed comparison",
+        RequirementObservation::Conflicting => "Conflicting comparison",
+    };
+    let label = if matches!(
+        value.reader(),
+        ReaderEvidenceState::MissingResident { .. }
+            | ReaderEvidenceState::Unrecognized
+            | ReaderEvidenceState::Conflicting
+    ) {
+        reader.into()
+    } else if let RequirementObservation::Fixed(bound) = value.requirement() {
+        format!(
+            "Word {:04X} = {:04X}",
+            bound.requirement.parameter, bound.requirement.required
+        )
+    } else if matches!(
+        value.requirement(),
+        RequirementObservation::Conditional(_) | RequirementObservation::Conflicting
+    ) {
+        requirement.into()
+    } else if value.preservation().is_some() {
+        String::from("Scoped preservation")
+    } else if matches!(
+        value.sink_failure(),
+        Some(
+            pioneer_optical::startup::coverage::sinks::Failure::UnclassifiedAddressReference { .. }
+        )
+    ) {
+        String::from("Unclassified reference")
+    } else {
+        requirement.into()
+    };
+    let state = if matches!(value.requirement(), RequirementObservation::Fixed(_))
+        && matches!(
+            value.reader(),
+            ReaderEvidenceState::Normal(_) | ReaderEvidenceState::Resident { .. }
+        ) {
+        requirement
+    } else {
+        label.as_str()
+    };
+    let mut details = vec![
+        format!("Reader: {reader}"),
+        format!("Requirement: {requirement}"),
+    ];
+    if let ReaderEvidenceState::MissingResident { entry } = value.reader() {
+        details.push(format!("Required resident reader: {entry:#08x}"));
+    }
+    if let Some(preservation) = value.preservation() {
+        details.push(format!(
+            "Preservation scope: {:?}; this is not an application admission",
+            preservation.scope()
+        ));
+        details.push(format!(
+            "Native profile: {:?}",
+            preservation.certificate().kind()
+        ));
+    }
+    if let Some(failure) = value.sink_failure() {
+        details.push(format!("Native boundary: {failure:?}"));
+    }
+    details.extend(
+        value
+            .rooted_obligations()
+            .iter()
+            .map(|obligation| format!("Remaining obligation: {obligation:?}")),
+    );
+    json!({
+        "label": label,
+        "state": state,
+        "reader": reader,
+        "requirement": requirement,
+        "details": details,
+        "normal_sha256": value.context().normal().iter().map(|b| format!("{b:02x}")).collect::<String>(),
+        "kernel_sha256": value.context().kernel().map(|id| id.iter().map(|b| format!("{b:02x}")).collect::<String>()),
+    })
+}
+
+fn summary(finding: &Assessment) -> String {
+    if finding.id == "phase" {
+        if let Finding::Known(Value::Variant(1, fields)) = &finding.finding {
+            return match fields.get(2) {
+                Some(Value::U8(0)) => "Direct".into(),
+                Some(Value::U8(1)) => "Swapped".into(),
+                _ => "Assignment not bound".into(),
+            };
+        }
+    }
+    match &finding.finding {
+        Finding::Known(_) => label(finding.id, &finding.finding),
+        Finding::Unresolved(_) => "Not established".into(),
+        Finding::Conflicting(_) => "Conflicting".into(),
+        Finding::NotApplicable { .. } => "Not applicable".into(),
     }
 }
 
@@ -665,6 +780,9 @@ pub fn data(
                         "label": label(f.id, &f.finding),
                         "finding": f.finding,
                         "evidence": f.evidence,
+                        "summary": summary(f),
+                        "inspection": (f.id == "startup-prerequisite")
+                            .then(|| a.startup_inspection.as_ref().map(startup_inspection)).flatten(),
                     })
                 })
                 .collect();

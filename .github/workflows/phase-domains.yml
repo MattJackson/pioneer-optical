@@ -119,6 +119,9 @@ jobs:
           cargo test --locked --release --features envelope --lib \
             startup::coverage::legacy_sinks::tests:: \
             -- --ignored --nocapture 2>&1 | tee "$RUNNER_TEMP/sat1-legacy-report.txt"
+          cargo test --locked --release --features envelope --test startup_pair_profiles \
+            sat1_pair_profile_composes_phase_without_persistent_edits \
+            -- --ignored --exact --nocapture 2>&1 | tee -a "$RUNNER_TEMP/sat1-legacy-report.txt"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

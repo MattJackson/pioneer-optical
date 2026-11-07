@@ -1,6 +1,7 @@
 //! Pair-bound local rejection-predicate preservation. These profiles retain
 //! independent bank and image checks; none proves complete startup acceptance.
-use super::{fixed_bank_resident, sink_boundaries, sinks};
+use super::{fixed_bank_resident, legacy_sinks, sink_boundaries, sinks};
+use alloc::boxed::Box;
 use core::ops::Range;
 use sha2::{Digest, Sha256};
 
@@ -13,6 +14,8 @@ pub enum Kind {
     InstructionOwnedPredicates,
     /// Fixed-bank Normal predicates and resident image validation.
     FixedBankResident,
+    /// Legacy SAT1 predicates with their complete exact resident authority.
+    LegacyPredicates,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,6 +23,7 @@ enum Evidence {
     Normal(sinks::Certificate),
     InstructionOwned(sinks::Certificate, sink_boundaries::BoundaryCertificate),
     FixedBank(sinks::Certificate, fixed_bank_resident::ResidentValidation),
+    Legacy(Box<legacy_sinks::LegacyPredicateCertificate>),
 }
 
 /// An immutable native profile, privately constructed from the supplied pair.
@@ -36,20 +40,27 @@ impl Certificate {
             Evidence::Normal(_) => Kind::NormalPredicates,
             Evidence::InstructionOwned(..) => Kind::InstructionOwnedPredicates,
             Evidence::FixedBank(..) => Kind::FixedBankResident,
+            Evidence::Legacy(_) => Kind::LegacyPredicates,
         }
     }
 
     /// Unchanged Normal spans required by the complete bound profile.
     pub fn protected_spans(&self) -> &[Range<usize>] {
-        &self.normal_predicates().protected
-    }
-
-    /// Native Normal predicate inventory, including any owned supporting spans.
-    pub fn normal_predicates(&self) -> &sinks::Certificate {
         match &self.evidence {
             Evidence::Normal(normal)
             | Evidence::InstructionOwned(normal, _)
-            | Evidence::FixedBank(normal, _) => normal,
+            | Evidence::FixedBank(normal, _) => &normal.protected,
+            Evidence::Legacy(legacy) => legacy.protected(),
+        }
+    }
+
+    /// Native Normal predicate inventory, including any owned supporting spans.
+    pub fn normal_predicates(&self) -> Option<&sinks::Certificate> {
+        match &self.evidence {
+            Evidence::Normal(normal)
+            | Evidence::InstructionOwned(normal, _)
+            | Evidence::FixedBank(normal, _) => Some(normal),
+            Evidence::Legacy(_) => None,
         }
     }
 
@@ -74,6 +85,9 @@ impl Certificate {
         match &self.evidence {
             Evidence::FixedBank(_, resident) => {
                 kernel.is_some_and(|kernel| resident.final_integrity(normal, kernel))
+            }
+            Evidence::Legacy(legacy) => {
+                kernel.is_some_and(|kernel| legacy.final_integrity(normal, kernel))
             }
             _ => true,
         }
@@ -105,9 +119,15 @@ pub fn discover_pair(normal: &[u8], kernel: Option<&[u8]>) -> Option<Certificate
         }
         return None;
     }
-    let (certificate, resident) = fixed_bank_resident::discover(normal, kernel)?;
+    if let Some((certificate, resident)) = fixed_bank_resident::discover(normal, kernel) {
+        return Some(Certificate {
+            evidence: Evidence::FixedBank(certificate, resident),
+            kernel: kernel_id,
+        });
+    }
+    let legacy = legacy_sinks::discover(normal, kernel)?;
     Some(Certificate {
-        evidence: Evidence::FixedBank(certificate, resident),
+        evidence: Evidence::Legacy(Box::new(legacy)),
         kernel: kernel_id,
     })
 }

@@ -13,6 +13,11 @@ mod boot_shapes;
 pub mod copied_checksum;
 /// Fixed-bank predicates whose paired resident owns image validation.
 pub mod fixed_bank_resident;
+mod legacy_aliases;
+mod legacy_kernel;
+mod legacy_shapes;
+/// Exact paired SAT1 local predicate preservation.
+pub mod legacy_sinks;
 /// Native Normal control-flow graph with conditional call-return frontiers.
 pub mod native_flow;
 /// Pair-bound local predicate preservation, separate from rooted acceptance.

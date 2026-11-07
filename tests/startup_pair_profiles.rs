@@ -110,3 +110,87 @@ fn sat8000_pair_profile_retains_resident_validation_without_edits() {
     }
     unchanged_directions(&a, &b);
 }
+
+#[test]
+#[ignore = "requires the four exact authenticated SAT1 W26/US01 components"]
+fn sat1_pair_profile_composes_phase_without_persistent_edits() {
+    let w26 = pair(
+        "2fbd27764be34ebb9a95e898d4e53afa5f67435b7fd324adbfde7411a386466c",
+        "c834e7b2b7281121eceda84d67f00f73fe2b3036a58ebeae547b4a0a10b1a3a0",
+    );
+    let us01 = pair(
+        "ab9ff1487bb2551064c59a53a659676833e0096c183bafb8e7715f49806a51a3",
+        "de05d4a7c58e13b20f62c896d9db05d6b13f3bc8e0d3ebe4a4cad31781145573",
+    );
+    for (source, target, operands) in [
+        (
+            &w26,
+            &us01,
+            [1540733, 1540757, 1540793, 1540807, 1540823, 1540831],
+        ),
+        (
+            &us01,
+            &w26,
+            [1532915, 1532941, 1532973, 1532989, 1533003, 1533013],
+        ),
+    ] {
+        let installed = Context::new(firmware(source));
+        let requested = Context::new(firmware(target));
+        let certificate =
+            preservation::discover_pair(&target.normal().image, Some(&target.kernel().image))
+                .unwrap();
+        assert_eq!(certificate.kind(), Kind::LegacyPredicates);
+        assert!(preservation::discover_pair(&target.normal().image, None).is_none());
+        let plan = runner::plan(&installed, &requested, runner::Policy::Strict).unwrap();
+        assert!(plan.required_words().unwrap().is_empty());
+        assert!(plan.decisions().iter().all(|decision| !decision.waived));
+        let context = Preparation {
+            target: firmware(target),
+            normal: Some(target.normal()),
+            kernel: Some(target.kernel()),
+        };
+        let output = plan
+            .prepare(&context)
+            .unwrap()
+            .expect("Phase edits required");
+        plan.verify(&context, &output).unwrap();
+        let changed: Vec<_> = output
+            .iter()
+            .zip(&target.normal().image)
+            .enumerate()
+            .filter_map(|(at, (a, b))| (a != b && !(16..20).contains(&at)).then_some(at))
+            .collect();
+        assert_eq!(changed, operands);
+        assert!(certificate.preserves(
+            &target.normal().image,
+            &output,
+            Some(&target.kernel().image)
+        ));
+        assert!(certificate.final_integrity(&output, Some(&target.kernel().image)));
+        let encoded = target.normal().repack(&output).unwrap();
+        let decoded =
+            pioneer_optical::envelope::Envelope::load_with_kernel(&encoded, target.kernel())
+                .unwrap();
+        assert_eq!(decoded.image, output);
+        let mut corrupt = output.clone();
+        corrupt[certificate.protected_spans()[0].start] ^= 1;
+        assert_eq!(
+            plan.verify(&context, &corrupt),
+            Err(Error::VerificationFailed)
+        );
+        let mut wrong_kernel = target.kernel().image.clone();
+        wrong_kernel[0x100] ^= 1;
+        let wrong_context = Preparation {
+            target: Firmware {
+                kernel: Some(&wrong_kernel),
+                ..firmware(target)
+            },
+            normal: None,
+            kernel: None,
+        };
+        assert_eq!(
+            plan.verify(&wrong_context, &output),
+            Err(Error::ComponentMismatch)
+        );
+    }
+}

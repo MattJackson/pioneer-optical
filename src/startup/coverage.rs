@@ -11,8 +11,14 @@ pub mod boot;
 mod boot_shapes;
 /// Native copied checksum routine used by startup rejection predicates.
 pub mod copied_checksum;
+/// Fixed-bank predicates whose paired resident owns image validation.
+pub mod fixed_bank_resident;
 /// Native Normal control-flow graph with conditional call-return frontiers.
 pub mod native_flow;
+/// Pair-bound local predicate preservation, separate from rooted acceptance.
+pub mod preservation;
+mod sink_boundaries;
+mod sink_boundary_shapes;
 /// Native rejection sink ownership and independently owned predicates.
 pub mod sinks;
 

@@ -6,6 +6,8 @@ const BASE: usize = 0x410000;
 
 /// Enumerated native getter references for bounded startup coverage analysis.
 pub mod coverage;
+/// Reader, requirement and scoped preservation evidence for exact components.
+pub mod inspection;
 
 /// Read-only binding of the audited direct native parameter surface.
 pub mod surface;

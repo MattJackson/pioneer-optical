@@ -35,7 +35,7 @@ fn scoped_preservation_retains_rooted_obligations_and_legacy_discovery() {
     ));
     let witness = result.preservation().unwrap();
     assert_eq!(witness.scope(), PreservationScope::LocalPredicates);
-    assert_eq!(witness.certificate(), &before);
+    assert_eq!(witness.certificate().normal_predicates(), &before);
     assert!(result.sink_failure().is_none());
     assert!(result
         .rooted_obligations()

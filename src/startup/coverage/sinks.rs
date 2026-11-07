@@ -258,7 +258,12 @@ pub enum Failure {
 
 /// Every instruction-shaped direct/relative reference and aligned longword
 /// address literal must have a classified owner. Address-taking and tails refuse.
-fn calls(normal: &[u8], target: u32, stage: Stage, failure: &mut Failure) -> Option<Vec<usize>> {
+fn calls_diagnostic(
+    normal: &[u8],
+    target: u32,
+    stage: Stage,
+    failure: &mut Failure,
+) -> Option<Vec<usize>> {
     let regions = crate::image::regions(normal)?;
     let mut found = Vec::new();
     for bytes in regions.stored {
@@ -305,19 +310,31 @@ fn calls(normal: &[u8], target: u32, stage: Stage, failure: &mut Failure) -> Opt
     Some(found)
 }
 
+pub(super) fn calls(normal: &[u8], target: u32) -> Option<Vec<usize>> {
+    let mut failure = Failure::Unsupported {
+        stage: Stage::ServiceCalls,
+    };
+    calls_diagnostic(normal, target, Stage::ServiceCalls, &mut failure)
+}
+
 // An instruction-shaped entry into a bound predicate must come from that
 // predicate or its classified caller/table edge. This prevents a new branch
 // from bypassing a comparison and entering an existing rejection tail.
-fn closed_entries(
+fn closed_entries_diagnostic(
     normal: &[u8],
     scopes: &[(Range<usize>, Vec<usize>)],
     failure: &mut Failure,
+    boundary: Option<&super::sink_boundaries::BoundaryCertificate>,
 ) -> Option<()> {
     for bytes in crate::image::regions(normal)?.stored {
         let start = bytes.as_ptr() as usize - normal.as_ptr() as usize;
         for local in (start & 1..bytes.len().saturating_sub(3)).step_by(2) {
             let at = start + local;
             let b = &bytes[local..];
+            if b[0] == 0 && boundary.is_some_and(|proof| proof.is_cross_instruction_literal(at, 4))
+            {
+                continue;
+            }
             let target = match b[0] {
                 0 => word(b, 0).and_then(|v| offset(v, normal)),
                 0x5e | 0x5a => offset(address(&b[1..4]), normal),
@@ -351,6 +368,13 @@ fn closed_entries(
     Some(())
 }
 
+pub(super) fn closed_entries(normal: &[u8], scopes: &[(Range<usize>, Vec<usize>)]) -> Option<()> {
+    let mut failure = Failure::Unsupported {
+        stage: Stage::ClosedEntries,
+    };
+    closed_entries_diagnostic(normal, scopes, &mut failure, None)
+}
+
 const CONSOLE: &[u8] = &[
     0x79, 0x37, 0, 0x10, 0x7a, 0x20, 0x19, 0x28, 0x37, 0x46, 0x46, 0x22, 0x0f, 0xf0, 0x19, 0x11,
     0x1a, 0xa2, 0xfa, 0x10, 0x5e, 0, 0, 0, 0x7a, 0, 0, 0x41, 0, 0, 0x7a, 0x30, 0, 0x40, 0, 0, 0x0f,
@@ -370,7 +394,7 @@ const CONSOLE_DISPATCH: &[u8] = &[
     0x0f, 0x90, 0x0b, 0x97, 1, 0x20, 0x6d, 0x76, 1, 0, 0x6d, 0x73, 0x54, 0x70,
 ];
 
-fn console(normal: &[u8], call: usize, reject: u32) -> Option<Vec<Range<usize>>> {
+pub(super) fn console(normal: &[u8], call: usize, reject: u32) -> Option<Vec<Range<usize>>> {
     let start = call.checked_sub(46)?;
     let body = normal.get(start..start + CONSOLE.len())?;
     if !shaped(body, CONSOLE, &[(21, 3), (43, 3), (47, 3)]) || address(&body[47..50]) != reject {
@@ -476,10 +500,24 @@ pub fn diagnose(normal: &[u8]) -> Result<Certificate, Failure> {
     let mut failure = Failure::Unsupported {
         stage: Stage::Reader,
     };
-    discover_with_failure(normal, &mut failure).ok_or(failure)
+    discover_with_failure(normal, &mut failure, None).ok_or(failure)
 }
 
-fn discover_with_failure(normal: &[u8], failure: &mut Failure) -> Option<Certificate> {
+pub(super) fn diagnose_with_boundary(
+    normal: &[u8],
+    boundary: &super::sink_boundaries::BoundaryCertificate,
+) -> Result<Certificate, Failure> {
+    let mut failure = Failure::Unsupported {
+        stage: Stage::Reader,
+    };
+    discover_with_failure(normal, &mut failure, Some(boundary)).ok_or(failure)
+}
+
+fn discover_with_failure(
+    normal: &[u8],
+    failure: &mut Failure,
+    boundary: Option<&super::sink_boundaries::BoundaryCertificate>,
+) -> Option<Certificate> {
     let mut protected = Vec::new();
     let mut scopes = Vec::new();
     let Observation::Known(reader) = crate::image::layout::discover_h8_reader(normal, None) else {
@@ -495,7 +533,7 @@ fn discover_with_failure(normal: &[u8], failure: &mut Failure) -> Option<Certifi
     *failure = Failure::Unsupported {
         stage: Stage::ServiceCalls,
     };
-    let service_calls = calls(normal, 0x400a1a, Stage::ServiceCalls, failure)?;
+    let service_calls = calls_diagnostic(normal, 0x400a1a, Stage::ServiceCalls, failure)?;
     if service_calls.is_empty() {
         return None;
     }
@@ -521,7 +559,7 @@ fn discover_with_failure(normal: &[u8], failure: &mut Failure) -> Option<Certifi
     protected.push(validator..validator + 0x9c);
     scopes.push((
         validator..validator + 0x9c,
-        calls(normal, bank.validator, Stage::ValidatorCalls, failure)?,
+        calls_diagnostic(normal, bank.validator, Stage::ValidatorCalls, failure)?,
     ));
     protected.push(reject..reject + 18);
     let mode_wrapper = offset(address(normal.get(reject + 3..reject + 6)?), normal)?;
@@ -529,7 +567,7 @@ fn discover_with_failure(normal: &[u8], failure: &mut Failure) -> Option<Certifi
     *failure = Failure::Unsupported {
         stage: Stage::RejectCalls,
     };
-    let reject_calls = calls(normal, bank.reject_helper, Stage::RejectCalls, failure)?;
+    let reject_calls = calls_diagnostic(normal, bank.reject_helper, Stage::RejectCalls, failure)?;
     scopes.push((reject..reject + 18, reject_calls.clone()));
     for call in reject_calls {
         if call == validator + 0x8a {
@@ -559,7 +597,8 @@ fn discover_with_failure(normal: &[u8], failure: &mut Failure) -> Option<Certifi
         }
         protected.push(wrapper..wrapper + 6);
         entries.push(BASE + wrapper as u32);
-        let wrapper_calls = calls(normal, BASE + wrapper as u32, Stage::WrapperCalls, failure)?;
+        let wrapper_calls =
+            calls_diagnostic(normal, BASE + wrapper as u32, Stage::WrapperCalls, failure)?;
         scopes.push((wrapper..wrapper + 6, wrapper_calls.clone()));
         for call in wrapper_calls {
             *failure = Failure::Unsupported {
@@ -636,7 +675,10 @@ fn discover_with_failure(normal: &[u8], failure: &mut Failure) -> Option<Certifi
     *failure = Failure::Unsupported {
         stage: Stage::ClosedEntries,
     };
-    closed_entries(normal, &scopes, failure)?;
+    closed_entries_diagnostic(normal, &scopes, failure, boundary)?;
+    if let Some(boundary) = boundary {
+        protected.extend(boundary.protected());
+    }
     protected.sort_by_key(|span| (span.start, span.end));
     protected.dedup();
     entries.sort_unstable();
@@ -654,7 +696,7 @@ mod tests {
             let mut normal = [0xff; 64];
             normal[16..20].copy_from_slice(&[opcode, 0x41, 0, 0x30]);
             let mut failure = Failure::Unsupported { stage };
-            assert!(calls(&normal, 0x410030, stage, &mut failure).is_none());
+            assert!(calls_diagnostic(&normal, 0x410030, stage, &mut failure).is_none());
             assert_eq!(
                 failure,
                 Failure::UnclassifiedAddressReference {
@@ -669,7 +711,7 @@ mod tests {
         let mut failure = Failure::Unsupported {
             stage: Stage::WrapperCalls,
         };
-        assert!(calls(&normal, 0x410030, Stage::WrapperCalls, &mut failure).is_none());
+        assert!(calls_diagnostic(&normal, 0x410030, Stage::WrapperCalls, &mut failure).is_none());
         assert_eq!(
             failure,
             Failure::UnclassifiedAddressReference {
@@ -688,7 +730,7 @@ mod tests {
         let mut failure = Failure::Unsupported {
             stage: Stage::ClosedEntries,
         };
-        assert!(closed_entries(&normal, &scopes, &mut failure).is_none());
+        assert!(closed_entries_diagnostic(&normal, &scopes, &mut failure, None).is_none());
         assert_eq!(
             failure,
             Failure::UnclassifiedAddressReference {

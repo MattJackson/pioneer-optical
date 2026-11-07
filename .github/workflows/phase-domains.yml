@@ -7,6 +7,8 @@ on:
       - 'src/**'
       - 'tests/phase_domain_coverage.rs'
       - 'tests/phase_sat1_phase_only.rs'
+      - 'tests/startup_pair_profiles.rs'
+      - 'tests/startup_inspection.rs'
       - 'tests/fixtures/phase-domain-inventory.json'
       - 'tests/fixtures/phase-conditional-receivers.json'
       - 'tests/fixtures/phase-unavailable-receivers.json'
@@ -92,6 +94,22 @@ jobs:
           cargo test --locked --release --features envelope --test phase_domain_coverage \
             every_target_mapping_and_ordered_planner_pair \
             -- --ignored --exact --nocapture 2>&1 | tee -a "$RUNNER_TEMP/phase-report.txt"
+      - name: Prove exact paired Startup profiles and composition
+        if: ${{ !cancelled() && steps.inventory.outcome == 'success' && matrix.domain == 'h8sat' && matrix.shard == 0 }}
+        env:
+          PIONEER_PHASE_CORPUS: ${{ runner.temp }}/phase-inputs
+          PIONEER_CORPUS: ${{ runner.temp }}/phase-inputs
+          PIONEER_NORMAL_CORPUS: ${{ runner.temp }}/phase-inputs
+        shell: bash
+        run: |
+          cargo test --locked --release --features envelope --lib \
+            authenticated_bdr211m_boundary_positive_mutations_and_phase_preservation -- --ignored --nocapture
+          cargo test --locked --release --features envelope --lib \
+            authenticated_sat8000_pairs_bind_and_reject_native_mutations -- --ignored --nocapture
+          cargo test --locked --release --features envelope --test startup_pair_profiles \
+            bdr211m_pair_profile_composes_without_editing_firmware_or_parameters -- --ignored --exact --nocapture
+          cargo test --locked --release --features envelope --test startup_pair_profiles \
+            sat8000_pair_profile_retains_resident_validation_without_edits -- --ignored --exact --nocapture
       - uses: actions/upload-artifact@v4
         if: always()
         with:

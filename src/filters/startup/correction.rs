@@ -221,7 +221,7 @@ struct PreservationOperation {
     hardware: String,
     normal: Vec<u8>,
     kernel: Option<Vec<u8>>,
-    certificate: startup::coverage::sinks::Certificate,
+    certificate: startup::coverage::preservation::Certificate,
 }
 impl PreservationOperation {
     fn bind(transition: &Transition<'_, '_>) -> Option<Self> {
@@ -241,14 +241,10 @@ impl PreservationOperation {
         {
             return None;
         }
-        let installed_certificate = startup::coverage::sinks::discover(source.normal)?;
-        let certificate = startup::coverage::sinks::discover(target.normal)?;
-        if source
-            .kernel
-            .is_some_and(|kernel| !installed_certificate.accepts_kernel(kernel))
-            || target
-                .kernel
-                .is_some_and(|kernel| !certificate.accepts_kernel(kernel))
+        let installed_certificate = startup::coverage::preservation::discover_pair(source.normal, source.kernel)?;
+        let certificate = startup::coverage::preservation::discover_pair(target.normal, target.kernel)?;
+        if !installed_certificate.final_integrity(source.normal, source.kernel)
+            || !certificate.final_integrity(target.normal, target.kernel)
         {
             return None;
         }
@@ -293,13 +289,8 @@ impl Operation for PreservationOperation {
     }
     fn verify(&self, context: &Preparation<'_>, normal: &[u8]) -> Result<(), Error> {
         self.bound(context)?;
-        if normal.len() != self.normal.len()
-            || self
-                .certificate
-                .protected
-                .iter()
-                .any(|span| normal.get(span.clone()) != self.normal.get(span.clone()))
-            || startup::coverage::sinks::discover(normal).as_ref() != Some(&self.certificate)
+        if !self.certificate.preserves(&self.normal, normal, self.kernel.as_deref())
+            || !self.certificate.final_integrity(normal, self.kernel.as_deref())
         {
             return Err(Error::VerificationFailed);
         }

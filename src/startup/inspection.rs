@@ -1,7 +1,7 @@
 //! Read-only Startup evidence, independent of update policy and family identity.
 //! A missing comparison never supplies an erased word or proves startup acceptance.
 use super::{
-    coverage::{assessment, sinks},
+    coverage::{assessment, preservation, sinks},
     BoundSelection,
 };
 use crate::image::layout::{self, H8ReaderComponent, H8ReaderEvidence, Observation, Unresolved};
@@ -108,7 +108,7 @@ pub enum PreservationScope {
 /// Bound local predicate inventory with private construction.
 #[derive(Clone, Debug)]
 pub struct ScopedPreservation {
-    certificate: sinks::Certificate,
+    certificate: preservation::Certificate,
 }
 impl ScopedPreservation {
     /// Exact proof boundary of this witness.
@@ -116,7 +116,7 @@ impl ScopedPreservation {
         PreservationScope::LocalPredicates
     }
     /// Existing native certificate, available read-only for expandable evidence.
-    pub fn certificate(&self) -> &sinks::Certificate {
+    pub fn certificate(&self) -> &preservation::Certificate {
         &self.certificate
     }
 }
@@ -214,18 +214,17 @@ pub fn inspect(normal: &[u8], kernel: Option<&[u8]>) -> Inspection {
         Observation::Conflicting => RequirementObservation::Conflicting,
         Observation::Unresolved(_) => RequirementObservation::NoSupportedComparison,
     };
-    let (preservation, sink_failure) = match sinks::diagnose(normal) {
-        Ok(certificate) if kernel.map_or(true, |bytes| certificate.accepts_kernel(bytes)) => {
+    let (preservation, sink_failure) =
+        if let Some(certificate) = preservation::discover_pair(normal, kernel) {
             (Some(ScopedPreservation { certificate }), None)
-        }
-        Ok(_) => (
-            None,
-            Some(sinks::Failure::Unsupported {
-                stage: sinks::Stage::KernelAliases,
-            }),
-        ),
-        Err(failure) => (None, Some(failure)),
-    };
+        } else {
+            let failure = sinks::diagnose(normal)
+                .err()
+                .unwrap_or(sinks::Failure::Unsupported {
+                    stage: sinks::Stage::KernelAliases,
+                });
+            (None, Some(failure))
+        };
     let mut obligations = assessment::assess(normal).obligations;
     if let ReaderEvidenceState::Resident { .. } = &reader {
         // Normal-only assessment cannot erase a positively bound resident reader.

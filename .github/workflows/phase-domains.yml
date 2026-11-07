@@ -71,15 +71,24 @@ jobs:
       - name: Validate the pinned inventory
         id: inventory
         run: cargo test --locked --release --features envelope --test phase_domain_coverage -- --skip every_target_mapping_and_ordered_planner_pair
-      - name: Prove exact loading-channel witnesses
+      - name: Prove the unsigned-capture authentication boundary
+        if: ${{ !cancelled() && steps.inventory.outcome == 'success' && matrix.domain == 'h8sat' && matrix.shard == 0 }}
+        env:
+          PIONEER_PHASE_CORPUS: ${{ runner.temp }}/phase-inputs
+        shell: bash
+        run: |
+          cargo test --locked --release --features envelope --test phase_domain_coverage \
+            unsigned_packaged_phase_output_uses_existing_authenticated_encoder \
+            -- --ignored --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/phase-authentication-report.txt"
+      - name: Prove loading boundaries and shared phase composition
         if: ${{ !cancelled() && steps.inventory.outcome == 'success' && matrix.domain == 'h8sat' && matrix.shard == 0 }}
         env:
           PIONEER_PHASE_CORPUS: ${{ runner.temp }}/phase-inputs
         shell: bash
         run: |
           cargo test --locked --release --features envelope --test loading_channel \
-            real_channel_correction_preserves_independent_requirements_and_roundtrips \
-            -- --ignored --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/loading-witness-report.txt"
+            -- --ignored --skip every_bound_channel_image_roundtrips_in_ci --nocapture \
+            2>&1 | tee "$RUNNER_TEMP/loading-witness-report.txt"
       - name: Prove assigned native loading-channel bindings
         if: ${{ !cancelled() && steps.inventory.outcome == 'success' && matrix.domain == 'h8sat' }}
         env:
@@ -111,6 +120,7 @@ jobs:
           name: phase-${{ matrix.domain }}-${{ matrix.shard }}
           path: |
             ${{ runner.temp }}/phase-report.txt
+            ${{ runner.temp }}/phase-authentication-report.txt
             ${{ runner.temp }}/loading-witness-report.txt
             ${{ runner.temp }}/loading-corpus-report.txt
           if-no-files-found: ignore

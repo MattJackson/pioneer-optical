@@ -13,7 +13,7 @@ pub static FILTER: Loading = Loading;
 
 /// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
 static RULES: super::Rules = super::Rules {
-    description: "Retains independent loading/input requirements. For a completely bound mapped event channel, requires the installed V5C consumer and physical input predicates to match; that channel is owned separately. Otherwise retains the original native contract: the H8 FFC5 transformation new = (old & mask) | set, a physical input predicate (address, bit, level) or a vector route, and the ATA mechanical/event input contract. The variant is part of the value: equal numbers under different variants are not equal.",
+    description: "Retains independent loading/input requirements. For a positively observed mapped event channel, requires the installed V5C consumer and physical input predicates to match; that channel is owned separately. Otherwise retains the original native contract: the H8 FFC5 transformation new = (old & mask) | set, a physical input predicate (address, bit, level) or a vector route, and the ATA mechanical/event input contract. The variant is part of the value: equal numbers under different variants are not equal.",
     role: super::Role::Hardware,
     correctability: super::Correctability::Never,
     correction: "Never corrected. Values must match.",
@@ -173,7 +173,7 @@ impl Filter for Loading {
     }
     fn inspect(&self, context: &Context<'_>) -> Assessment {
         if let Some(evidence) = &context.sat {
-            if let Observation::Known(channel) = &evidence.irq.channel {
+            if let Observation::Known(channel) = &evidence.irq.channel_hardware {
                 if matches!(evidence.irq.selected, Observation::Known(value) if value == channel.mapping.controller())
                 {
                     let auxiliary = match channel.auxiliary {

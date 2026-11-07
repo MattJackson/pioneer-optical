@@ -188,7 +188,7 @@
     {
       "correctability": "Never",
       "correction": "Never corrected. Values must match.",
-      "description": "Retains independent loading/input requirements. For a completely bound mapped event channel, requires the installed V5C consumer and physical input predicates to match; that channel is owned separately. Otherwise retains the original native contract: the H8 FFC5 transformation new = (old & mask) | set, a physical input predicate (address, bit, level) or a vector route, and the ATA mechanical/event input contract. The variant is part of the value: equal numbers under different variants are not equal.",
+      "description": "Retains independent loading/input requirements. For a positively observed mapped event channel, requires the installed V5C consumer and physical input predicates to match; that channel is owned separately. Otherwise retains the original native contract: the H8 FFC5 transformation new = (old & mask) | set, a physical input predicate (address, bit, level) or a vector route, and the ATA mechanical/event input contract. The variant is part of the value: equal numbers under different variants are not equal.",
       "id": "loading-input-interrupt-setup",
       "name": "Loading input / interrupt setup",
       "policies": [
@@ -201,8 +201,8 @@
     },
     {
       "correctability": "Guarded",
-      "correction": "Guarded, partial-domain correction: maps bound clear-five/clear-seven event channels using only target-local instruction operands and its existing V58/V60 entries. Independent V5C/input requirements remain enforced by loading-input-interrupt-setup. Direct writes, mixed setup and unbound programs are not corrected. A channel correction does not authorize the complete firmware pair.",
-      "description": "Identifies a positively linked H8 event channel: FFC5 legacy bit, external mode/pending/enable operands, callback acknowledgement, disarm and installed V58/V60 routing. Outside that complete native domain the existing architecture-native loading variant remains required unchanged.",
+      "correction": "Guarded, partial-domain correction: maps bound clear-five/clear-seven event channels using the installed positive hardware requirement and only target-local instruction operands and its existing V58/V60 entries. Independent V5C/input requirements remain enforced by loading-input-interrupt-setup. Direct writes, mixed setup and programs without complete correction proof are not corrected. Equal observed channels need no edit; candidate families are an overapproximation and never authorize a changing-channel plan. A channel correction does not authorize the complete firmware pair.",
+      "description": "Identifies positive H8 channel hardware observations independently of correction-proof availability: FFC5 legacy bit, external mode/pending/enable operands, callback acknowledgement, disarm and installed V58/V60 routing. Outside that observed native domain the existing architecture-native loading variant remains required unchanged.",
       "id": "loading-interrupt-channel",
       "name": "Mapped loading interrupt channel",
       "policies": [],
@@ -353,7 +353,7 @@
           "state": "Unresolved"
         },
         {
-          "evidence": "No complete mapped-channel correction proof; retain original native requirement unchanged. Audited H8 projection: Unresolved(ReaderNotRecognized); every supporting observation: []. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts.",
+          "evidence": "No complete mapped-channel hardware observation; retain original native requirement unchanged. Audited H8 projection: Unresolved(ReaderNotRecognized); every supporting observation: []. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts.",
           "finding": {
             "Unresolved": "Audited H8 projection: Unresolved(ReaderNotRecognized); every supporting observation: []. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts."
           },
@@ -451,7 +451,7 @@
           "state": "Unresolved"
         },
         {
-          "evidence": "No complete mapped-channel correction proof; retain original native requirement unchanged. Audited H8 projection: Unresolved(ReaderNotRecognized); every supporting observation: []. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts.",
+          "evidence": "No complete mapped-channel hardware observation; retain original native requirement unchanged. Audited H8 projection: Unresolved(ReaderNotRecognized); every supporting observation: []. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts.",
           "finding": {
             "Unresolved": "Audited H8 projection: Unresolved(ReaderNotRecognized); every supporting observation: []. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts."
           },
@@ -549,7 +549,7 @@
           "state": "Unresolved"
         },
         {
-          "evidence": "No complete mapped-channel correction proof; retain original native requirement unchanged. Architecture-native loading/key programs: Unresolved(ReaderNotRecognized); Unresolved(ReaderNotRecognized). This mixed-column input contract is not a claim of no independent IRQ. Legacy M7900 ATA/SCSI facts require their own bound native owner.",
+          "evidence": "No complete mapped-channel hardware observation; retain original native requirement unchanged. Architecture-native loading/key programs: Unresolved(ReaderNotRecognized); Unresolved(ReaderNotRecognized). This mixed-column input contract is not a claim of no independent IRQ. Legacy M7900 ATA/SCSI facts require their own bound native owner.",
           "finding": {
             "Unresolved": "Architecture-native loading/key programs: Unresolved(ReaderNotRecognized); Unresolved(ReaderNotRecognized). This mixed-column input contract is not a claim of no independent IRQ. Legacy M7900 ATA/SCSI facts require their own bound native owner."
           },
@@ -647,7 +647,7 @@
           "state": "Unresolved"
         },
         {
-          "evidence": "No complete mapped-channel correction proof; retain original native requirement unchanged. No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default",
+          "evidence": "No complete mapped-channel hardware observation; retain original native requirement unchanged. No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default",
           "finding": {
             "Unresolved": "No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default"
           },
@@ -745,7 +745,7 @@
           "state": "Unresolved"
         },
         {
-          "evidence": "No complete mapped-channel correction proof; retain original native requirement unchanged. No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default",
+          "evidence": "No complete mapped-channel hardware observation; retain original native requirement unchanged. No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default",
           "finding": {
             "Unresolved": "No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default"
           },

@@ -508,6 +508,13 @@ fn known_unavailable_loading_receiver_retains_native_and_integrity_refusals() {
         b.sat.as_ref().unwrap().irq.channel,
         Observation::Unresolved(_)
     ));
+    assert!(matches!(
+        b.sat.as_ref().unwrap().irq.channel_hardware,
+        Observation::Known(pioneer_optical::image::irq::channel::Hardware {
+            mapping: Mapping::Seven,
+            auxiliary: pioneer_optical::image::irq::channel::Auxiliary::LatchedObject,
+        })
+    ));
     assert!(
         matches!(
             loading_channel::FILTER.plan(
@@ -518,7 +525,7 @@ fn known_unavailable_loading_receiver_retains_native_and_integrity_refusals() {
                 &loading_channel::FILTER.inspect(&a),
                 &loading_channel::FILTER.inspect(&b)
             ),
-            Err(Error::Incompatible)
+            Err(Error::Unsupported)
         ),
         "native binding is unavailable independently of checksum authority"
     );
@@ -743,4 +750,179 @@ fn every_bound_channel_image_roundtrips_in_ci() {
         failures.len(),
         &failures[..failures.len().min(20)]
     );
+}
+
+#[test]
+#[ignore = "requires the exact private corpus components"]
+fn relocated_diagnostic_identifiers_preserve_channel_binding() {
+    const WX1: &str = "9b44cfbe5134d4f992b4f1b6e4cdea930c61f83cdbd6808f858f87ba27eedb23";
+    let target = load(WX1);
+    let source = load(SEVEN);
+    Update::load(
+        &component("100ebef645a65f7e1ac99b5558fd20885f9ac2db8c3f649df0a11bc48e2ef0fc").unwrap(),
+        &component(WX1).unwrap(),
+    )
+    .unwrap();
+    prove_native(&target, Mapping::Seven).unwrap();
+    exercise(&source, &target).unwrap();
+    exercise(&target, &source).unwrap();
+    let original = load(FIVE);
+    assert_eq!(
+        loading::FILTER.inspect(&context(&original)).finding,
+        loading::FILTER.inspect(&context(&target)).finding
+    );
+    // Original BDE codec roundtrip is distinct from original package authentication.
+    assert!(matches!(
+        Update::load(
+            &component("05fc3aaa7f86ecb69107b75d5c1ec4ea5dbd23b6671673327ccb4c6b9cf1448b").unwrap(),
+            &component(FIVE).unwrap()
+        ),
+        Err(pioneer_optical::envelope::UpdateError::Authentication)
+    ));
+    // The relocated operands may only feed the positively bound in-range
+    // identifier branch. Wrong role, out-of-range tag, or dereference reject.
+    for (offset, value) in [
+        (0x16b4cc + 90, 0xff),
+        (0x13c4fc + 0x184, 0x46),
+        (0x13bc4c + 56, 0x5a),
+    ] {
+        let mut changed = target.normal.image.clone();
+        changed[offset] = value;
+        assert!(
+            !matches!(
+                pioneer_optical::image::irq::discover(&changed).channel,
+                Observation::Known(_)
+            ),
+            "mutation at {offset:x}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the exact private corpus components"]
+fn observed_xs06_hardware_matches_without_authorizing_unproved_correction() {
+    const OLDER: &str = "7b417d52597883ce77717c4fe9701e528ecbffc0c9733cd28e3aa6dc8a75287b";
+    let older = load(OLDER);
+    let newer = load(SEVEN);
+    let five = load(FIVE);
+    let a = context(&older);
+    let b = context(&newer);
+    assert!(matches!(
+        a.sat.as_ref().unwrap().irq.channel,
+        Observation::Unresolved(_)
+    ));
+    assert!(matches!(
+        a.sat.as_ref().unwrap().irq.channel_hardware,
+        Observation::Known(_)
+    ));
+    let registry: &[&dyn Filter] = &[&loading_channel::FILTER, &loading::FILTER];
+    for filter in registry {
+        let x = filter.inspect(&a);
+        let y = filter.inspect(&b);
+        assert_eq!(x.finding, y.finding);
+        assert_eq!(filter.candidate(&a, &x), filter.candidate(&b, &y));
+    }
+    for (source, target, pair) in [(&a, &b, &newer), (&b, &a, &older)] {
+        let plan = runner::plan_with(source, target, Policy::Strict, registry).unwrap();
+        assert_eq!(plan.operations().count(), 0);
+        let preparation = Preparation {
+            target: target.firmware,
+            normal: Some(&pair.normal),
+            kernel: pair.kernel.as_ref(),
+        };
+        assert!(plan.prepare_with(&preparation, registry).unwrap().is_none());
+        plan.verify_with(&preparation, &pair.normal.image, registry)
+            .unwrap();
+    }
+    let c = context(&five);
+    // Required hardware is positively observed in installed older XS06; only
+    // the incoming Five image is edited, so its complete proof is sufficient.
+    exercise(&older, &five).unwrap();
+    assert!(matches!(
+        runner::plan_with(&c, &a, Policy::Strict, &[&loading_channel::FILTER]),
+        Err(Error::Unsupported)
+    ));
+    let full = runner::evaluate(&a, &c, Policy::Strict).unwrap();
+    assert_eq!(full.admit(), Err(Error::Incompatible));
+    assert_eq!(
+        full.decisions()
+            .iter()
+            .find(|d| d.id == loading::FILTER.id())
+            .unwrap()
+            .blocked(),
+        Some(Error::Incompatible)
+    );
+}
+
+#[test]
+#[ignore = "requires the exact private corpus components"]
+fn phase_and_loading_compose_on_real_native_targets() {
+    use pioneer_optical::filters::phase;
+    let five = load(FIVE);
+    let seven = load(SEVEN);
+    let registry: &[&dyn Filter] = &[&phase::FILTER, &loading_channel::FILTER];
+    for (source, target) in [(&five, &seven), (&seven, &five)] {
+        let installed = context(source);
+        let incoming = context(target);
+        let unchanged_y = loading::FILTER.inspect(&incoming).finding;
+        let plan = runner::plan_with(&installed, &incoming, Policy::Strict, registry).unwrap();
+        assert_eq!(
+            plan.operations().count(),
+            2,
+            "both native assignments must change"
+        );
+        let preparation = Preparation {
+            target: incoming.firmware,
+            normal: Some(&target.normal),
+            kernel: target.kernel.as_ref(),
+        };
+        let composed = plan.prepare_with(&preparation, registry).unwrap().unwrap();
+        assert_eq!(checksum(&composed), 0);
+        plan.verify_with(&preparation, &composed, registry).unwrap();
+        // One composed result goes through one codec roundtrip, rather than
+        // independently repacking and combining each owner's encoded output.
+        let encoded = target.normal.repack(&composed).unwrap();
+        let decoded =
+            Envelope::load_with_kernel(&encoded, target.kernel.as_ref().unwrap()).unwrap();
+        assert_eq!(decoded.image, composed);
+        plan.verify_with(&preparation, &decoded.image, registry)
+            .unwrap();
+        let after = Context::new(Firmware {
+            normal: &decoded.image,
+            ..incoming.firmware
+        });
+        for owner in registry {
+            assert_eq!(
+                owner.inspect(&after).finding,
+                owner.inspect(&installed).finding
+            );
+        }
+        assert_eq!(loading::FILTER.inspect(&after).finding, unchanged_y);
+        let reverse = runner::plan_with(&incoming, &after, Policy::Strict, registry).unwrap();
+        assert_eq!(reverse.operations().count(), 2);
+        let reverse_context = Preparation {
+            target: after.firmware,
+            normal: Some(&decoded),
+            kernel: target.kernel.as_ref(),
+        };
+        let restored = reverse
+            .prepare_with(&reverse_context, registry)
+            .unwrap()
+            .unwrap();
+        reverse
+            .verify_with(&reverse_context, &restored, registry)
+            .unwrap();
+        assert_eq!(restored, target.normal.image);
+        // This is real firmware facet composition, not whole-pair admission.
+        let full = runner::evaluate(&installed, &incoming, Policy::Strict).unwrap();
+        assert_eq!(
+            full.decisions()
+                .iter()
+                .find(|d| d.id == loading::FILTER.id())
+                .unwrap()
+                .blocked(),
+            Some(Error::Incompatible)
+        );
+        assert!(full.admit().is_err());
+    }
 }

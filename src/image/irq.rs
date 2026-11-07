@@ -31,7 +31,9 @@ pub enum Value {
 /// All native observations plus the matrix projection for family comparison.
 #[derive(Clone, Debug)]
 pub struct Evidence {
-    /// Positively linked setup, disarm, callback and vector program.
+    /// Positively linked hardware observations, independent of correction proof.
+    pub channel_hardware: Observation<channel::Hardware>,
+    /// Complete native correction proof for the linked channel program.
     pub channel: Observation<channel::Channel>,
     /// Deduplicated observations, retaining facts outside the projection.
     pub observations: Vec<Value>,
@@ -205,6 +207,7 @@ fn choose(mut observations: Vec<Value>) -> Evidence {
         Observation::Unresolved(Unresolved::ReaderNotRecognized)
     };
     Evidence {
+        channel_hardware: Observation::Unresolved(Unresolved::ReaderNotRecognized),
         channel: Observation::Unresolved(Unresolved::ReaderNotRecognized),
         observations: unique,
         selected,
@@ -294,7 +297,7 @@ pub fn discover(normal: &[u8]) -> Evidence {
         }
     }
     let mut evidence = choose(found);
-    evidence.channel = channel::discover(&n);
+    (evidence.channel_hardware, evidence.channel) = channel::discover(&n);
     evidence
 }
 

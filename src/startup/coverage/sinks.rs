@@ -205,9 +205,60 @@ fn shaped(bytes: &[u8], shape: &[u8], holes: &[(usize, usize)]) -> bool {
             .all(|(i, (a, b))| a == b || holes.iter().any(|&(at, len)| (at..at + len).contains(&i)))
 }
 
+/// Native binding stage where sink ownership could not be established.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    /// Complete parameter reader graph.
+    Reader,
+    /// References to the resident loader-flag service.
+    ServiceCalls,
+    /// Persistent-bank validator binding.
+    Bank,
+    /// Complete rejection helper and mode wrapper.
+    RejectHelper,
+    /// Complete validator and its callers.
+    ValidatorCalls,
+    /// References to the bank rejection helper.
+    RejectCalls,
+    /// Console predicate ownership.
+    Console,
+    /// Loader-flag wrapper and its callers.
+    WrapperCalls,
+    /// Copied image checksum ownership.
+    CopiedChecksum,
+    /// Host opcode callback ownership.
+    HostCommand,
+    /// Required checksum and host predicate counts.
+    Census,
+    /// Incoming references to protected predicate bodies.
+    ClosedEntries,
+    /// Paired Kernel aliases to Normal-owned rejection entries.
+    KernelAliases,
+}
+
+/// Refusal evidence from the actual sink-binding branch. Offsets refer to the
+/// decoded Normal; targets are CPU addresses, never guessed parameter values.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Failure {
+    /// The complete supported native grammar was not established at this stage.
+    Unsupported {
+        /// Binding stage which failed.
+        stage: Stage,
+    },
+    /// An address-taking, tail or relative reference has no classified owner.
+    UnclassifiedAddressReference {
+        /// Binding stage which encountered the reference.
+        stage: Stage,
+        /// Byte offset in the decoded Normal.
+        at: usize,
+        /// CPU address of the referenced native entry.
+        target: u32,
+    },
+}
+
 /// Every instruction-shaped direct/relative reference and aligned longword
 /// address literal must have a classified owner. Address-taking and tails refuse.
-fn calls(normal: &[u8], target: u32) -> Option<Vec<usize>> {
+fn calls(normal: &[u8], target: u32, stage: Stage, failure: &mut Failure) -> Option<Vec<usize>> {
     let regions = crate::image::regions(normal)?;
     let mut found = Vec::new();
     for bytes in regions.stored {
@@ -222,7 +273,10 @@ fn calls(normal: &[u8], target: u32) -> Option<Vec<usize>> {
             }
             match normal[at] {
                 0x5e => found.push(at),
-                0 | 0x5a => return None,
+                0 | 0x5a => {
+                    *failure = Failure::UnclassifiedAddressReference { stage, at, target };
+                    return None;
+                }
                 _ => {}
             }
         }
@@ -241,6 +295,7 @@ fn calls(normal: &[u8], target: u32) -> Option<Vec<usize>> {
                 continue;
             };
             if (BASE as i64 + at as i64 + length + i64::from(delta)) == i64::from(target) {
+                *failure = Failure::UnclassifiedAddressReference { stage, at, target };
                 // Current complete sink shapes use direct JSR. A relative
                 // alias is evidence requiring another predicate, never ignored.
                 return None;
@@ -253,7 +308,11 @@ fn calls(normal: &[u8], target: u32) -> Option<Vec<usize>> {
 // An instruction-shaped entry into a bound predicate must come from that
 // predicate or its classified caller/table edge. This prevents a new branch
 // from bypassing a comparison and entering an existing rejection tail.
-fn closed_entries(normal: &[u8], scopes: &[(Range<usize>, Vec<usize>)]) -> Option<()> {
+fn closed_entries(
+    normal: &[u8],
+    scopes: &[(Range<usize>, Vec<usize>)],
+    failure: &mut Failure,
+) -> Option<()> {
     for bytes in crate::image::regions(normal)?.stored {
         let start = bytes.as_ptr() as usize - normal.as_ptr() as usize;
         for local in (start & 1..bytes.len().saturating_sub(3)).step_by(2) {
@@ -271,15 +330,20 @@ fn closed_entries(normal: &[u8], scopes: &[(Range<usize>, Vec<usize>)]) -> Optio
                 }
                 _ => None,
             };
-            if target.is_some_and(|target| {
+            if let Some(target) = target.filter(|target| {
                 scopes.iter().any(|(range, allowed)| {
-                    range.contains(&target)
+                    range.contains(target)
                         && !range.contains(&at)
                         && !allowed.contains(&at)
-                        && !(target == range.start
+                        && !(*target == range.start
                             && scopes.iter().any(|(owner, _)| owner.contains(&at)))
                 })
             }) {
+                *failure = Failure::UnclassifiedAddressReference {
+                    stage: Stage::ClosedEntries,
+                    at,
+                    target: BASE + target as u32,
+                };
                 return None;
             }
         }
@@ -404,6 +468,18 @@ impl Certificate {
 
 /// Bind all supported loader-flag references, refusing every unclassified one.
 pub fn discover(normal: &[u8]) -> Option<Certificate> {
+    diagnose(normal).ok()
+}
+
+/// Bind the same certificate as [`discover`], retaining the actual refusal.
+pub fn diagnose(normal: &[u8]) -> Result<Certificate, Failure> {
+    let mut failure = Failure::Unsupported {
+        stage: Stage::Reader,
+    };
+    discover_with_failure(normal, &mut failure).ok_or(failure)
+}
+
+fn discover_with_failure(normal: &[u8], failure: &mut Failure) -> Option<Certificate> {
     let mut protected = Vec::new();
     let mut scopes = Vec::new();
     let Observation::Known(reader) = crate::image::layout::discover_h8_reader(normal, None) else {
@@ -416,16 +492,26 @@ pub fn discover(normal: &[u8]) -> Option<Certificate> {
         let at = offset(function.address, normal)?;
         protected.push(at..at + function.bytes);
     }
-    let service_calls = calls(normal, 0x400a1a)?;
+    *failure = Failure::Unsupported {
+        stage: Stage::ServiceCalls,
+    };
+    let service_calls = calls(normal, 0x400a1a, Stage::ServiceCalls, failure)?;
     if service_calls.is_empty() {
         return None;
     }
+    *failure = Failure::Unsupported { stage: Stage::Bank };
     let bank = crate::startup::bank::discover(normal)?;
+    *failure = Failure::Unsupported {
+        stage: Stage::RejectHelper,
+    };
     let reject = offset(bank.reject_helper, normal)?;
     let mut entries = alloc::vec![bank.reject_helper];
     if normal.get(reject + 12..reject + 18)? != [0x18, 0x88, 0x55, 2, 0x54, 0x70] {
         return None;
     }
+    *failure = Failure::Unsupported {
+        stage: Stage::ValidatorCalls,
+    };
     let validator = offset(bank.validator, normal)?;
     if normal.get(validator + 0x92..validator + 0x9c)?
         != [1, 0x20, 0x6d, 0x76, 1, 0, 0x6d, 0x73, 0x54, 0x70]
@@ -433,16 +519,25 @@ pub fn discover(normal: &[u8]) -> Option<Certificate> {
         return None;
     }
     protected.push(validator..validator + 0x9c);
-    scopes.push((validator..validator + 0x9c, calls(normal, bank.validator)?));
+    scopes.push((
+        validator..validator + 0x9c,
+        calls(normal, bank.validator, Stage::ValidatorCalls, failure)?,
+    ));
     protected.push(reject..reject + 18);
     let mode_wrapper = offset(address(normal.get(reject + 3..reject + 6)?), normal)?;
     protected.push(mode_wrapper..mode_wrapper + 6);
-    let reject_calls = calls(normal, bank.reject_helper)?;
+    *failure = Failure::Unsupported {
+        stage: Stage::RejectCalls,
+    };
+    let reject_calls = calls(normal, bank.reject_helper, Stage::RejectCalls, failure)?;
     scopes.push((reject..reject + 18, reject_calls.clone()));
     for call in reject_calls {
         if call == validator + 0x8a {
             continue;
         }
+        *failure = Failure::Unsupported {
+            stage: Stage::Console,
+        };
         let console = console(normal, call, bank.reject_helper)?;
         let entry = BASE + console[0].start as u32;
         let table_call = (console[1].start..console[1].end)
@@ -456,14 +551,20 @@ pub fn discover(normal: &[u8]) -> Option<Certificate> {
     let mut checksum_count = 0;
     let mut host_count = 0;
     for wrapper in service_calls {
+        *failure = Failure::Unsupported {
+            stage: Stage::WrapperCalls,
+        };
         if normal.get(wrapper..wrapper + 6)? != [0x5e, 0x40, 0x0a, 0x1a, 0x54, 0x70] {
             return None;
         }
         protected.push(wrapper..wrapper + 6);
         entries.push(BASE + wrapper as u32);
-        let wrapper_calls = calls(normal, BASE + wrapper as u32)?;
+        let wrapper_calls = calls(normal, BASE + wrapper as u32, Stage::WrapperCalls, failure)?;
         scopes.push((wrapper..wrapper + 6, wrapper_calls.clone()));
         for call in wrapper_calls {
+            *failure = Failure::Unsupported {
+                stage: Stage::WrapperCalls,
+            };
             if call == reject + 8 {
                 continue;
             }
@@ -478,6 +579,9 @@ pub fn discover(normal: &[u8]) -> Option<Certificate> {
                     && normal.get(at + 14..at + 17)? == [0x18, 0x88, 0x5e]
                 {
                     let entry = address(&normal[at + 1..at + 4]);
+                    *failure = Failure::Unsupported {
+                        stage: Stage::CopiedChecksum,
+                    };
                     let Observation::Known(checksum) =
                         super::copied_checksum::discover(normal, entry)
                     else {
@@ -509,6 +613,9 @@ pub fn discover(normal: &[u8]) -> Option<Certificate> {
                     continue;
                 }
             }
+            *failure = Failure::Unsupported {
+                stage: Stage::HostCommand,
+            };
             let host = write_buffer(normal, call)?;
             entries.push(BASE + host.instructions.first()?.start as u32);
             scopes.push((
@@ -520,13 +627,75 @@ pub fn discover(normal: &[u8]) -> Option<Certificate> {
             host_count += 1;
         }
     }
+    *failure = Failure::Unsupported {
+        stage: Stage::Census,
+    };
     if checksum_count != 1 || host_count != 1 {
         return None;
     }
-    closed_entries(normal, &scopes)?;
+    *failure = Failure::Unsupported {
+        stage: Stage::ClosedEntries,
+    };
+    closed_entries(normal, &scopes, failure)?;
     protected.sort_by_key(|span| (span.start, span.end));
     protected.dedup();
     entries.sort_unstable();
     entries.dedup();
     Some(Certificate { protected, entries })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reference_failures_retain_stage_site_and_cpu_target() {
+        for (opcode, stage) in [(0, Stage::ValidatorCalls), (0x5a, Stage::RejectCalls)] {
+            let mut normal = [0xff; 64];
+            normal[16..20].copy_from_slice(&[opcode, 0x41, 0, 0x30]);
+            let mut failure = Failure::Unsupported { stage };
+            assert!(calls(&normal, 0x410030, stage, &mut failure).is_none());
+            assert_eq!(
+                failure,
+                Failure::UnclassifiedAddressReference {
+                    stage,
+                    at: 16,
+                    target: 0x410030
+                }
+            );
+        }
+        let mut normal = [0xff; 64];
+        normal[16..18].copy_from_slice(&[0x55, 30]);
+        let mut failure = Failure::Unsupported {
+            stage: Stage::WrapperCalls,
+        };
+        assert!(calls(&normal, 0x410030, Stage::WrapperCalls, &mut failure).is_none());
+        assert_eq!(
+            failure,
+            Failure::UnclassifiedAddressReference {
+                stage: Stage::WrapperCalls,
+                at: 16,
+                target: 0x410030
+            }
+        );
+    }
+
+    #[test]
+    fn predicate_entry_failure_retains_site_and_target() {
+        let mut normal = [0xff; 64];
+        normal[16..20].copy_from_slice(&[0, 0x41, 0, 0x32]);
+        let scopes = [(48..56, Vec::new())];
+        let mut failure = Failure::Unsupported {
+            stage: Stage::ClosedEntries,
+        };
+        assert!(closed_entries(&normal, &scopes, &mut failure).is_none());
+        assert_eq!(
+            failure,
+            Failure::UnclassifiedAddressReference {
+                stage: Stage::ClosedEntries,
+                at: 16,
+                target: 0x410032
+            }
+        );
+    }
 }

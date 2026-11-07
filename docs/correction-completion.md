@@ -30,42 +30,30 @@ support for a transfer representation it otherwise refuses.
 
 ## Phase correction
 
-SAT8/SAT9 bind the native output interface and the complete supported sled
-mechanism convention. A differing convention can require source exchange,
-calibration reader/caller changes, conversion routines and DSP waveform edits,
-even when coil assignments match. OEM donor code and tables are recognized,
-relocated and emitted through h8-asm. Routine specialization preserves proved
-caller semantics; reclaimed loader suffixes require exact component evidence.
-Unproved growth or resource ownership refuses preparation.
+Phase owns the direct/swapped source-to-output assignment within a native
+architecture and output interface. SAT1 and SAT8/SAT9 corrections preserve the
+incoming image's DSP program, waveform tables, calibration, motion profiles and
+lifecycle. Equal assignments require no phase operation even when those other
+properties differ. Byte-to-split interface conversion is not currently admitted.
 
-The earlier `transplant_reusing_reader` helper remains a limited stage proof: its
-Normal-only reference scan does not establish resident or indirect entry
-ownership. Production planning now tries native in-place specialization and a
-Kernel-checked retired-loader suffix instead of stopping at the original
-no-reservation transplant. Those paths pass the full UD03/UD04 target-image
-conversions with the UD02 donor. They do not rely on the weaker reader helper as
-an unchecked fallback. The previously removed empty source-helper calls remain
-removed; no additional source-routine storage is needed for the eight references.
+H8 paired programs exchange corresponding output/control operands. SAT1 legacy
+programs bind their complete native output grammar and shared output leaf before
+changing channel destinations. Shared leaves remain intact; a bound call may be
+specialized to its same-width native output instruction. Verification rebinds
+the corrected program and permits independent owners to compose disjoint edits.
+The phase operation introduces no persistent-word prerequisites or writes.
 
-The integrated reference proofs cover all eight original-image directions,
-including XD08 and XS08U independently of their tray-filter refusal. Runtime
-generated PR1MLA 1.60 and S08 1.50 conventions also pass the phase planner and
-original-codec round trips in both directions. The reverse generated transition
-requires eight exact existing calibration words (`0x30..0x37`), checked read-only.
-Computed-loader direction changes have shared-runner tests with a controlled
-native fixture; the held computed images share the same observed convention.
-Encoder and calibration adapters have separate native execution proofs. Those
-stage proofs do not establish complete generated/computed-to-plain composition;
-that integration remains unfinished.
+Native mechanism transplantation, DSP and calibration adapters remain separate
+low-level APIs and tests. Their stage proofs do not establish phase correction
+coverage or complete cross-filter compatibility. The solved source-helper space
+issue does not need reopening for output-assignment correction.
 
-Parameter `0x28F == 1`, when required by the bound mechanism, is read-only. The
-executor checks it before transfer and never selects or writes it. Independent
-phase proofs do not waive tray inputs, storage layout or other filter failures.
-SAT1 complete command-relative graphs now pass bidirectional shared phase-runner
-checks and 61,440 native execution comparisons. The original-codec test is written
-but has not run at this checkpoint; other SAT1 graphs remain unsupported.
-M32C and V850 retain their supported
-architecture-specific native output/checksum proofs.
+The corpus coverage harness distinguishes native mapping, ordered planner pairs
+and original-codec preparation. Missing authentic receiver context is incomplete
+file-conversion evidence, not permission to bypass integrity checks. Until those
+proofs and cross-interface coverage are complete, no 100% phase-correctibility
+claim is made. Other registered filters remain independently enforced. M32C and
+V850 retain their architecture-specific output/checksum requirements.
 
 ## Startup correction
 
@@ -132,11 +120,10 @@ Native filter, identity, runner and layout tests verify recognition, complete
 owner registration, typed comparison and refusal boundaries. Three SAT1003
 layouts require the unavailable exact resident reader at 0x404622; their other
 five hardware findings are recognized, and no layout mismatch is established.
-Historical isolated phase file-operation counts are not current release
-admission evidence. In particular, historical SAT1 file proofs do not replace
-the new command-relative graph and exact-Kernel requirements. Full mechanism conversions require the actual shared
-planner, composition, prerequisites and original-codec verification; an operand
-reversal alone is insufficient. Invalid files and missing exact Kernels refuse.
+Historical phase or mechanism file-operation counts are not current release
+admission evidence. Native operand reversal proves only its bounded effect;
+file conversion also requires the shared planner, composition and original-codec
+verification. Invalid files and missing required receiver context refuse.
 
 The startup owner independently recognizes 85 M32C `0x00D9 == 0xFFFF`
 comparisons. These remain native read-only requirements; ATA/SCSI do not

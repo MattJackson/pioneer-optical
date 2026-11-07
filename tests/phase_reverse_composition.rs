@@ -1,13 +1,11 @@
-//! Native generated/software donor onto a literal target through the real owner.
+//! Phase-only mapping and explicit generated-to-literal resource composition.
 #![cfg(feature = "envelope")]
 use filters::phase::{bundle::waveforms::resources as r, native};
-use pioneer_optical::{
-    compatibility::Firmware,
-    envelope::Envelope,
-    filters::{self, Filter},
-};
+use pioneer_optical::{compatibility::Firmware, envelope::Envelope, filters};
 #[path = "../examples/hardware_matrix/page.rs"]
 mod page;
+#[path = "support/phase_only.rs"]
+mod phase_only;
 #[test]
 #[ignore = "requires PIONEER_HOARD; complete guarded phase operation and original codec"]
 fn generated_source_literal_target_round_trips_and_remains_recognizable() {
@@ -21,26 +19,37 @@ fn generated_source_literal_target_round_trips_and_remains_recognizable() {
         get("8e02ed7244d8de7564f6e0606ba803f8614a6e2b87b5e24f7ee344cdcea71141");
     let (source_hardware, source) =
         get("ddfa7d758503458345de549321b048574a162272b7e3ee0cfe2e257110eb6982");
-    let installed = filters::Context::new(Firmware {
-        hardware: &source_hardware,
-        normal: &source.normal.image,
-        kernel: source.kernel.as_ref().map(|k| k.image.as_slice()),
-    });
-    let destination = filters::Context::new(Firmware {
-        hardware: &hardware,
-        normal: &target.normal.image,
-        kernel: target.kernel.as_ref().map(|k| k.image.as_slice()),
-    });
-    let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
+    phase_only::check(
+        Firmware {
+            hardware: &source_hardware,
+            normal: &source.normal.image,
+            kernel: source.kernel.as_ref().map(|k| k.image.as_slice()),
+        },
+        Firmware {
+            hardware: &hardware,
+            normal: &target.normal.image,
+            kernel: target.kernel.as_ref().map(|k| k.image.as_slice()),
+        },
+        Some(&target.normal),
+        target.kernel.as_ref(),
+    );
+    // Full resource transplantation is an explicit API, separate from phase.
     let started = std::time::Instant::now();
-    let plan = filters::runner::plan_with(
-        &installed,
-        &destination,
-        filters::runner::Policy::Strict,
-        registry,
+    let plan = filters::phase::bundle::waveforms::resources::reverse_composition::plan(
+        &target.normal.image,
+        &source.normal.image,
+        &target.kernel.as_ref().unwrap().image,
+        &source.kernel.as_ref().unwrap().image,
     )
     .unwrap();
-    let words = plan.required_words().unwrap();
+    let words: Vec<_> = plan
+        .required_words()
+        .iter()
+        .map(|word| filters::prerequisites::OwnedWord {
+            filter: "explicit resource composition",
+            word: *word,
+        })
+        .collect();
     assert_eq!(
         words
             .iter()
@@ -60,15 +69,21 @@ fn generated_source_literal_target_round_trips_and_remains_recognizable() {
         );
     }
     let preparation = filters::Preparation {
-        target: destination.firmware,
+        target: Firmware {
+            hardware: &hardware,
+            normal: &target.normal.image,
+            kernel: target.kernel.as_ref().map(|k| k.image.as_slice()),
+        },
         normal: Some(&target.normal),
         kernel: target.kernel.as_ref(),
     };
-    let changed = plan
-        .prepare_with(&preparation, registry)
-        .unwrap()
-        .expect("complete software mechanism");
-    plan.verify_with(&preparation, &changed, registry).unwrap();
+    let changed = (filters::be32_normal_integrity().repair)(&preparation, plan.image()).unwrap();
+    plan.verify(
+        &target.normal.image,
+        &target.kernel.as_ref().unwrap().image,
+        &changed,
+    )
+    .unwrap();
     let kernel = &target.kernel.as_ref().unwrap().image;
     let observed = r::reverse_composition::observe(&changed, kernel)
         .expect("fresh complete native observation");
@@ -93,25 +108,6 @@ fn generated_source_literal_target_round_trips_and_remains_recognizable() {
     assert_eq!(decoded.image, changed);
     assert_eq!(decoded.repack(&decoded.image).unwrap(), encoded);
     assert!(r::reverse_composition::observe(&decoded.image, kernel).is_some());
-    let corrected = filters::Context::new(Firmware {
-        hardware: &hardware,
-        normal: &decoded.image,
-        kernel: Some(kernel),
-    });
-    let again = filters::runner::plan_with(
-        &corrected,
-        &corrected,
-        filters::runner::Policy::Strict,
-        registry,
-    )
-    .unwrap();
-    assert!(again.required_words().unwrap().is_empty());
-    let next = filters::Preparation {
-        target: corrected.firmware,
-        normal: Some(&decoded),
-        kernel: target.kernel.as_ref(),
-    };
-    assert!(again.prepare_with(&next, registry).unwrap().is_none());
     for at in [
         observed.choices[0].1.start,
         observed.coils.programs[0][0].start,
@@ -119,7 +115,13 @@ fn generated_source_literal_target_round_trips_and_remains_recognizable() {
     ] {
         let mut broken = changed.clone();
         broken[at] ^= 1;
-        assert!(plan.verify_with(&preparation, &broken, registry).is_err());
+        assert!(plan
+            .verify(
+                &target.normal.image,
+                &target.kernel.as_ref().unwrap().image,
+                &broken
+            )
+            .is_err());
     }
     let mut entered = changed.clone();
     let address = (0x410000 + observed.choices[0].1.start) as u32;
@@ -130,10 +132,8 @@ fn generated_source_literal_target_round_trips_and_remains_recognizable() {
     let last = resident.len() - 1;
     resident[last] ^= 1;
     assert!(r::reverse_composition::observe(&changed, &resident).is_none());
-    let full = filters::runner::evaluate(&installed, &destination, filters::runner::Policy::Strict)
-        .unwrap();
-    assert!(full.admit().is_err());
-    let phase = full.decisions().iter().find(|d| d.id == "phase").unwrap();
-    assert!(phase.blocked().is_none());
-    println!("PR1 generated -> UD04 literal: guarded phase/original-codec/rediscovery {:?}; other filters {:?}",started.elapsed(),full.decisions().iter().filter_map(|d|d.blocked().map(|e|(d.id,e))).collect::<Vec<_>>());
+    println!(
+        "explicit generated resource API + phase-only/original-codec {:?}",
+        started.elapsed()
+    );
 }

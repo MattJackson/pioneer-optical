@@ -1,12 +1,10 @@
-//! Actual whole phase operation across generated/static resource representations.
+//! Phase-only mapping and explicit cross-representation resource composition.
 #![cfg(feature = "envelope")]
-use pioneer_optical::{
-    compatibility::Firmware,
-    envelope::Envelope,
-    filters::{self, Filter},
-};
+use pioneer_optical::{compatibility::Firmware, envelope::Envelope, filters};
 #[path = "../examples/hardware_matrix/page.rs"]
 mod page;
+#[path = "support/phase_only.rs"]
+mod phase_only;
 #[test]
 #[ignore = "requires PIONEER_HOARD; actual native cross-representation pipeline and original codec"]
 fn computed_target_literal_source_round_trips_original_codec() {
@@ -23,55 +21,45 @@ fn computed_target_literal_source_round_trips_original_codec() {
         get("459673172ab424ff3a698d58d03421364ebb596435eb39a265728da02eb22851");
     let (source_hardware, source) =
         get("8e02ed7244d8de7564f6e0606ba803f8614a6e2b87b5e24f7ee344cdcea71141");
-    let installed = filters::Context::new(Firmware {
-        hardware: &source_hardware,
-        normal: &source.normal.image,
-        kernel: source.kernel.as_ref().map(|k| k.image.as_slice()),
-    });
-    let destination = filters::Context::new(Firmware {
-        hardware: &hardware,
-        normal: &target.normal.image,
-        kernel: target.kernel.as_ref().map(|k| k.image.as_slice()),
-    });
-    let complete =
-        filters::runner::evaluate(&installed, &destination, filters::runner::Policy::Strict)
-            .unwrap();
-    assert!(complete.admit().is_err());
-    let phase = complete
-        .decisions()
-        .iter()
-        .find(|d| d.id == "phase")
-        .unwrap();
-    assert!(phase.blocked().is_none());
-    assert!(phase.operation().is_some());
-    let restrictions: Vec<_> = complete
-        .decisions()
-        .iter()
-        .filter_map(|d| d.blocked().map(|e| (d.id, e)))
-        .collect();
-    assert!(!restrictions.is_empty());
-    assert!(restrictions.iter().all(|(id, _)| *id != "phase"));
-    println!("full registry retains independent restrictions: {restrictions:?}");
-    let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
+    phase_only::check(
+        Firmware {
+            hardware: &source_hardware,
+            normal: &source.normal.image,
+            kernel: source.kernel.as_ref().map(|k| k.image.as_slice()),
+        },
+        Firmware {
+            hardware: &hardware,
+            normal: &target.normal.image,
+            kernel: target.kernel.as_ref().map(|k| k.image.as_slice()),
+        },
+        Some(&target.normal),
+        target.kernel.as_ref(),
+    );
+    // Full resource transplantation is an explicit API, separate from phase.
     let started = std::time::Instant::now();
-    let plan = filters::runner::plan_with(
-        &installed,
-        &destination,
-        filters::runner::Policy::Strict,
-        registry,
+    let plan = filters::phase::bundle::waveforms::resources::cross_representation::plan(
+        &target.normal.image,
+        &source.normal.image,
+        &target.kernel.as_ref().unwrap().image,
+        &source.kernel.as_ref().unwrap().image,
     )
     .unwrap();
-    assert!(plan.required_words().unwrap().is_empty());
     let preparation = filters::Preparation {
-        target: destination.firmware,
+        target: Firmware {
+            hardware: &hardware,
+            normal: &target.normal.image,
+            kernel: target.kernel.as_ref().map(|k| k.image.as_slice()),
+        },
         normal: Some(&target.normal),
         kernel: target.kernel.as_ref(),
     };
-    let changed = plan
-        .prepare_with(&preparation, registry)
-        .unwrap()
-        .expect("complete cross-representation operation");
-    plan.verify_with(&preparation, &changed, registry).unwrap();
+    let changed = (filters::be32_normal_integrity().repair)(&preparation, plan.image()).unwrap();
+    plan.verify(
+        &target.normal.image,
+        &target.kernel.as_ref().unwrap().image,
+        &changed,
+    )
+    .unwrap();
     assert_eq!(
         filters::phase::bundle::bind(&changed).unwrap(),
         filters::phase::bundle::bind(&source.normal.image).unwrap()
@@ -89,7 +77,13 @@ fn computed_target_literal_source_round_trips_original_codec() {
         .0;
     let mut tampered = changed.clone();
     tampered[first] ^= 1;
-    assert!(plan.verify_with(&preparation, &tampered, registry).is_err());
+    assert!(plan
+        .verify(
+            &target.normal.image,
+            &target.kernel.as_ref().unwrap().image,
+            &tampered
+        )
+        .is_err());
     // Retained generator code remains part of the proof, even though this
     // operation does not edit it. Other owners cannot invalidate that witness.
     let generator =
@@ -100,7 +94,11 @@ fn computed_target_literal_source_round_trips_original_codec() {
     let mut invalid_witness = changed.clone();
     invalid_witness[witness] ^= 1;
     assert!(plan
-        .verify_with(&preparation, &invalid_witness, registry)
+        .verify(
+            &target.normal.image,
+            &target.kernel.as_ref().unwrap().image,
+            &invalid_witness
+        )
         .is_err());
     let coherence = filters::phase::bundle::waveforms::resources::dsp_control_bridge::observe(
         &target.normal.image,
@@ -110,24 +108,19 @@ fn computed_target_literal_source_round_trips_original_codec() {
     let mut invalid_getter = changed.clone();
     invalid_getter[coherence.getter.start] ^= 1;
     assert!(plan
-        .verify_with(&preparation, &invalid_getter, registry)
+        .verify(
+            &target.normal.image,
+            &target.kernel.as_ref().unwrap().image,
+            &invalid_getter
+        )
         .is_err());
     // The same Normal cannot borrow an ownership certificate from another
     // resident Kernel, even when the changed mechanism bytes agree.
     let mut other_kernel = target.kernel.as_ref().unwrap().image.clone();
     let last = other_kernel.len() - 1;
     other_kernel[last] ^= 1;
-    let other_preparation = filters::Preparation {
-        target: Firmware {
-            hardware: &hardware,
-            normal: &target.normal.image,
-            kernel: Some(&other_kernel),
-        },
-        normal: Some(&target.normal),
-        kernel: target.kernel.as_ref(),
-    };
     assert!(plan
-        .verify_with(&other_preparation, &changed, registry)
+        .verify(&target.normal.image, &other_kernel, &changed)
         .is_err());
     println!(
         "complete native literal->{hardware} phase + original codec: {:?}",

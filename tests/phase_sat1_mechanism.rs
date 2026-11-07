@@ -163,54 +163,91 @@ fn checksum(bytes: &mut [u8]) {
     });
     bytes[16..20].copy_from_slice(&sum.wrapping_neg().to_be_bytes());
 }
-#[test]
-fn sat1_complete_graph_runs_through_independent_phase_owner() {
-    use pioneer_optical::{
-        compatibility::Firmware,
-        filters::{self, Filter},
+/// The phase owner preserves every byte outside target output operands and
+/// checksum, even when the installed mechanism has different native tables.
+fn phase_only_change(
+    source: pioneer_optical::compatibility::Firmware<'_>,
+    target: pioneer_optical::compatibility::Firmware<'_>,
+    envelope: Option<&pioneer_optical::envelope::Envelope>,
+    kernel: Option<&pioneer_optical::envelope::Envelope>,
+) -> Vec<u8> {
+    use pioneer_optical::filters::{self, Filter};
+    let required = sat1::phase_only::observe(source.normal).unwrap();
+    let before = sat1::phase_only::observe(target.normal).unwrap();
+    assert_eq!(required.interface, before.interface);
+    assert_ne!(required.assignment, before.assignment);
+    let installed = filters::Context::new(source);
+    let destination = filters::Context::new(target);
+    let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
+    let plan = filters::runner::plan_with(
+        &installed,
+        &destination,
+        filters::runner::Policy::Strict,
+        registry,
+    )
+    .unwrap();
+    assert!(plan.required_words().unwrap().is_empty());
+    let context = filters::Preparation {
+        target,
+        normal: envelope,
+        kernel,
     };
+    let changed = plan
+        .prepare_with(&context, registry)
+        .unwrap()
+        .expect("target output correction");
+    plan.verify_with(&context, &changed, registry).unwrap();
+    let expected = sat1::phase_only::correct(target.normal, required.assignment).unwrap();
+    let expected = (filters::be32_normal_integrity().repair)(&context, &expected).unwrap();
+    assert_eq!(
+        changed, expected,
+        "only target output operands and checksum change"
+    );
+    assert_eq!(sat1::phase_only::observe(&changed).unwrap(), required);
+    let at = changed
+        .iter()
+        .zip(target.normal)
+        .enumerate()
+        .find(|(at, (a, b))| !(16..20).contains(at) && a != b)
+        .unwrap()
+        .0;
+    let mut broken = changed.clone();
+    broken[at] = target.normal[at];
+    assert!(plan.verify_with(&context, &broken, registry).is_err());
+    changed
+}
+
+#[test]
+fn sat1_phase_owner_preserves_target_tables_calibration_and_callers() {
+    use pioneer_optical::compatibility::Firmware;
     let mut all = fixtures();
     for (n, _) in &mut all {
         checksum(n);
     }
     for (a, b) in [(&all[0], &all[1]), (&all[1], &all[0])] {
-        let installed = filters::Context::new(Firmware {
-            hardware: "SAT 1000",
-            normal: &b.0,
-            kernel: Some(&b.1),
-        });
-        let destination = filters::Context::new(Firmware {
-            hardware: "SAT 1000",
-            normal: &a.0,
-            kernel: Some(&a.1),
-        });
-        let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
-        let plan = filters::runner::plan_with(
-            &installed,
-            &destination,
-            filters::runner::Policy::Strict,
-            registry,
-        )
-        .unwrap();
-        assert!(plan.required_words().unwrap().is_empty());
-        let context = filters::Preparation {
-            target: destination.firmware,
-            normal: None,
-            kernel: None,
-        };
-        let changed = plan
-            .prepare_with(&context, registry)
-            .unwrap()
-            .expect("complete SAT1 correction");
-        plan.verify_with(&context, &changed, registry).unwrap();
-        assert_eq!(
-            sat1::observe(&changed, &a.1).unwrap().assignment,
-            sat1::observe(&b.0, &b.1).unwrap().assignment
+        let changed = phase_only_change(
+            Firmware {
+                hardware: "SAT 1000",
+                normal: &b.0,
+                kernel: Some(&b.1),
+            },
+            Firmware {
+                hardware: "SAT 1000",
+                normal: &a.0,
+                kernel: Some(&a.1),
+            },
+            None,
+            None,
         );
-        let binding = sat1::observe(&changed, &a.1).unwrap();
-        let mut broken = changed.clone();
-        broken[binding.tables[1].start] ^= 1;
-        assert!(plan.verify_with(&context, &broken, registry).is_err());
+        let before = sat1::observe(&a.0, &a.1).unwrap();
+        for range in before.tables.iter().chain([
+            &before.command,
+            &before.caller,
+            &before.jump_table,
+            &before.mode_getter,
+        ]) {
+            assert_eq!(&changed[range.clone()], &a.0[range.clone()]);
+        }
     }
 }
 
@@ -253,51 +290,72 @@ fn native_sat1_directions_round_trip_original_envelopes() {
             normal: &original.normal.image,
             kernel: original.kernel.as_ref().map(|k| k.image.as_slice()),
         });
-        // Phase correction is independently proven below; it must not erase
-        // restrictions imposed by the complete app-facing owner inventory.
+        let source_phase = sat1::phase_only::observe(&source.normal.image).unwrap();
+        let target_phase = sat1::phase_only::observe(&original.normal.image).unwrap();
+        let cross_interface = source_phase.interface != target_phase.interface;
+        let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
         let complete =
             filters::runner::evaluate(&installed, &destination, filters::runner::Policy::Strict)
                 .unwrap();
-        assert!(complete.admit().is_err());
-        let phase = complete
-            .decisions()
-            .iter()
-            .find(|decision| decision.id == "phase")
-            .unwrap();
-        assert!(phase.blocked().is_none());
-        assert!(phase.operation().is_some());
-        let restrictions: Vec<_> = complete
-            .decisions()
-            .iter()
-            .filter_map(|decision| decision.blocked().map(|error| (decision.id, error)))
-            .collect();
-        assert!(!restrictions.is_empty());
-        assert!(restrictions.iter().all(|(id, _)| *id != "phase"));
-        println!("native SAT1 {source_hardware} -> {hardware}: other-filter restrictions {restrictions:?}");
-        let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
-        let plan = filters::runner::plan_with(
-            &installed,
-            &destination,
-            filters::runner::Policy::Strict,
-            registry,
-        )
-        .unwrap();
-        assert!(plan.required_words().unwrap().is_empty());
-        let context = filters::Preparation {
-            target: destination.firmware,
-            normal: Some(&original.normal),
-            kernel: original.kernel.as_ref(),
+        assert!(
+            complete.admit().is_err(),
+            "other filters retain independent restrictions"
+        );
+        assert_eq!(
+            complete
+                .decisions()
+                .iter()
+                .find(|d| d.id == "phase")
+                .unwrap()
+                .blocked()
+                .is_some(),
+            cross_interface
+        );
+        let synthetic_source;
+        let phase_source = if cross_interface {
+            assert!(matches!(
+                filters::runner::plan_with(
+                    &installed,
+                    &destination,
+                    filters::runner::Policy::Strict,
+                    registry
+                ),
+                Err(pioneer_optical::compatibility::Error::Incompatible)
+            ));
+            // Synthetic installed assignment, actual OEM target and codec.
+            // A different native interface cannot authorize transplantation.
+            let assignment = match target_phase.assignment {
+                pioneer_optical::filters::phase::native::Assignment::Direct => {
+                    pioneer_optical::filters::phase::native::Assignment::Swapped
+                }
+                pioneer_optical::filters::phase::native::Assignment::Swapped => {
+                    pioneer_optical::filters::phase::native::Assignment::Direct
+                }
+            };
+            let mut changed =
+                sat1::phase_only::correct(&original.normal.image, assignment).unwrap();
+            checksum(&mut changed);
+            synthetic_source = changed;
+            Firmware {
+                hardware,
+                normal: &synthetic_source,
+                kernel: destination.firmware.kernel,
+            }
+        } else {
+            // Both current held originals are SplitWord: use their actual
+            // opposite assignments, without synthetic donor conventions.
+            installed.firmware
         };
-        let changed = plan
-            .prepare_with(&context, registry)
-            .unwrap()
-            .expect("native SAT1 correction");
-        plan.verify_with(&context, &changed, registry).unwrap();
+        let changed = phase_only_change(
+            phase_source,
+            destination.firmware,
+            Some(&original.normal),
+            original.kernel.as_ref(),
+        );
         let encoded = original.normal.repack(&changed).unwrap();
         let decoded =
             Envelope::load_with_kernel(&encoded, original.kernel.as_ref().unwrap()).unwrap();
         assert_eq!(decoded.image, changed);
         assert_eq!(decoded.repack(&decoded.image).unwrap(), encoded);
-        println!("native SAT1 {source_hardware} -> {hardware}: full phase operation and original-codec round trip passed");
     }
 }

@@ -134,39 +134,28 @@ fn phase_plan(hardware: &'static str, installed: &[u8], target: &[u8]) -> Result
 }
 
 #[test]
-fn sat1_phase_correction_requires_command_relative_proof() {
+fn sat1_phase_correction_binds_native_output_programs() {
     assert!(rules("phase")
         .policies_for(Domain::Sat1)
-        .any(|p| p.domains == [Domain::Sat1] && p.text.contains("suspended")));
-    // Assignment-only fixtures do not bind the complete SAT1 command graph.
+        .any(|p| p.domains == [Domain::Sat1] && p.text.contains("complete native output")));
     let (direct, swapped) = split_word(false);
     for (a, b) in [(&direct, &swapped), (&swapped, &direct)] {
-        assert_eq!(phase_plan("SAT 1050", a, b), Err(Error::Unsupported));
+        assert_eq!(phase_plan("SAT 1050", a, b), Ok(true));
     }
 }
 
 #[test]
-fn phase_order_is_not_changed_on_assignment_evidence_alone() {
+fn phase_output_mapping_preserves_independent_mechanism_properties() {
     assert!(rules("phase")
         .policies_for(Domain::H8Sat)
-        .any(|p| p.text.contains("mechanism bundle")));
+        .any(|p| p.text.contains("No donor tables")));
     for hardware in ["SAT 8A10", "SAT 9621"] {
-        // Assignment-only evidence (no bound mechanism bundle) refuses.
-        let (direct, swapped) = split_word(false);
-        assert_eq!(
-            phase_plan(hardware, &direct, &swapped),
-            Err(Error::Unsupported)
-        );
-        // A mirrored mechanism (XD08/XS08U, UD02D/UD04 shape) refuses too.
-        let (direct, mirrored) = split_word(true);
-        assert_eq!(
-            phase_plan(hardware, &direct, &mirrored),
-            Err(Error::Unsupported)
-        );
-        assert_eq!(
-            phase_plan(hardware, &mirrored, &direct),
-            Err(Error::Unsupported)
-        );
+        for bound in [false, true] {
+            let (direct, swapped) = split_word(bound);
+            assert_eq!(phase_plan(hardware, &direct, &swapped), Ok(true));
+            assert_eq!(phase_plan(hardware, &swapped, &direct), Ok(true));
+            assert_eq!(phase_plan(hardware, &direct, &direct), Ok(false));
+        }
     }
 }
 
@@ -219,10 +208,10 @@ fn startup_rules_state_the_kernel_getter_refusal() {
 }
 
 #[test]
-fn matching_family_excludes_phase_but_unproven_correction_still_refuses() {
+fn matching_family_normalizes_supported_phase_mapping() {
     // Family = registered candidate key: built only from facts no owner
-    // corrects. A phase-only difference shares the family; the phase owner then
-    // decides, and a mirrored sled mechanism is refused at that step.
+    // corrects. A phase-only difference shares the family; the phase owner
+    // preserves the target mechanism while mapping its native output channels.
     let contract = |convention| {
         let mut body = alloc::vec![0xff; 0x2000];
         crate::image::matrix::install_test_contract(&mut body, 0x12);
@@ -265,10 +254,7 @@ fn matching_family_excludes_phase_but_unproven_correction_still_refuses() {
         kernel: None,
     };
     for (a, b) in [(&direct, &mirrored), (&mirrored, &direct)] {
-        assert!(matches!(
-            crate::compatibility::plan(firmware(a), firmware(b)),
-            Err(Error::Unsupported)
-        ));
+        assert!(crate::compatibility::plan(firmware(a), firmware(b)).is_ok());
     }
     assert!(crate::compatibility::plan(firmware(&direct), firmware(&coil_only)).is_ok());
 }

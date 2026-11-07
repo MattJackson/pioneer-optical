@@ -215,7 +215,7 @@
     },
     {
       "correctability": "Guarded",
-      "correction": "Corrected in Normal only for pairs the phase owner proves; the native architecture and interface must always match. The matching family drops the assignment only for H8 programs with a complete paired-word grammar.",
+      "correction": "Corrects the incoming Normal image's native direct/swapped output mapping while retaining its waveform tables, DSP program, calibration and motion behavior. Architecture and output interface must match. Other filters remain independently enforced.",
       "description": "Identifies which source element drives which phase output (direct 0 or swapped 1) together with the native architecture and output interface: H8 byte or split-word outputs, M32C outputs or the V850 indexed bus. The assignment is not signed waveform winding or physical motor direction.",
       "id": "phase",
       "name": "Phase output assignment",
@@ -228,13 +228,13 @@
           "platforms": [
             "SAT 1xxx"
           ],
-          "text": "SAT1 phase correction requires a complete command-relative native graph, exact paired Kernel leaves, table ownership and caller/output verification. Other assignment changes remain suspended."
+          "text": "SAT1 phase correction binds complete native output programs and changes only the channel mapping. Output helper behavior and all unrelated bytes are preserved; unrecognized or conflicting programs refuse."
         },
         {
           "platforms": [
             "SAT 8xxx/9xxx"
           ],
-          "text": "Split-word (F910-F913) corrections bind the complete sled mechanism bundle. Differing bundles use OEM routines and tables through the phase operation, with full resource and caller verification; equal coil assignments do not suppress required mechanism correction. Growth without proved placement remains Unsupported and cannot be waived by Recovery. Bound 0x28F selection requires the existing word to equal 1; the operation never writes it."
+          "text": "Split-word (F910-F913) correction exchanges the corresponding output and control destinations in complete native programs. Equal phase assignments require no correction, even when other mechanism properties differ. No donor tables, DSP program, calibration policy or persistent values are copied."
         },
         {
           "platforms": [

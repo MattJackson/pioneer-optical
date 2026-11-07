@@ -1,0 +1,84 @@
+name: Phase domain coverage
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev, fix/complete-phase-domain]
+    paths:
+      - 'src/**'
+      - 'tests/phase_domain_coverage.rs'
+      - 'tests/fixtures/phase-domain-inventory.json'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/phase-corpus.json'
+      - '.github/scripts/fetch-phase-corpus.py'
+      - '.github/workflows/phase-domains.yml'
+permissions:
+  contents: read
+concurrency:
+  group: phase-domains-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
+    steps:
+      - id: matrix
+        shell: bash
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          rows = [{"domain": domain, "shard": shard, "shards": shards}
+                  for domain, shards in [("sat1", 8), ("h8sat", 64)]
+                  for shard in range(shards)]
+          print("value=" + json.dumps({"include": rows}))
+          PY
+  phase:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    # Draft inputs require repository push access. The token is exposed only
+    # to the download step; it is not persisted by checkout or passed to tests.
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: phase-domain
+          cache-on-failure: true
+      - name: Fetch exact unpublished original-image inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/fetch-phase-corpus.py
+          --config .github/phase-corpus.json
+          --manifest tests/fixtures/phase-domain-inventory.json
+          --domain '${{ matrix.domain }}'
+          --output "$RUNNER_TEMP/phase-inputs"
+      - name: Prove every assigned image direction through its original codec
+        env:
+          PIONEER_PHASE_CORPUS: ${{ runner.temp }}/phase-inputs
+          PIONEER_PHASE_DOMAIN: ${{ matrix.domain }}
+          PIONEER_PHASE_SHARD: ${{ matrix.shard }}
+          PIONEER_PHASE_SHARDS: ${{ matrix.shards }}
+        shell: bash
+        run: |
+          echo "source=${{ github.sha }} domain=${{ matrix.domain }} shard=${{ matrix.shard }}/${{ matrix.shards }}" > "$RUNNER_TEMP/phase-report.txt"
+          cargo test --locked --release --features envelope --test phase_domain_coverage \
+            every_direction_prepares_verifies_and_round_trips_original_codec \
+            -- --ignored --exact --nocapture 2>&1 | tee -a "$RUNNER_TEMP/phase-report.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase-${{ matrix.domain }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/phase-report.txt
+          if-no-files-found: ignore
+          retention-days: 14

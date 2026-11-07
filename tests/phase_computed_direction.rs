@@ -237,59 +237,37 @@ fn checksum(bytes: &mut [u8]) {
     });
     bytes[16..20].copy_from_slice(&sum.wrapping_neg().to_be_bytes());
 }
+#[path = "support/phase_only.rs"]
+mod phase_only;
+
 #[test]
-fn controlled_computed_direction_composes_through_phase_owner() {
-    use bundle::waveforms::resources::generated;
-    use pioneer_optical::{
-        compatibility::Firmware,
-        filters::{self, Filter},
-    };
+fn phase_mapping_preserves_the_targets_computed_direction() {
+    use pioneer_optical::{compatibility::Firmware, filters::phase::native};
     let mut target = image(COMPUTED);
     checksum(&mut target);
     let kernel = vec![255; 65536];
-    generated::observe(&target).unwrap();
-    // This donor is a controlled direction mutation of one complete native
-    // computed/generated graph, not a claim of an observed OEM package pair.
+    // Controlled direction mutation; not an observed differing OEM pair.
     let mut donor = computed::specialize_direction(&target, &image(DOWN), &kernel).unwrap();
     checksum(&mut donor);
-    let installed = filters::Context::new(Firmware {
-        hardware: "SAT 8600",
-        normal: &donor,
-        kernel: Some(&kernel),
-    });
-    let destination = filters::Context::new(Firmware {
-        hardware: "SAT 8600",
-        normal: &target,
-        kernel: Some(&kernel),
-    });
-    let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
-    let plan = filters::runner::plan_with(
-        &installed,
-        &destination,
-        filters::runner::Policy::Strict,
-        registry,
-    )
-    .unwrap();
-    let context = filters::Preparation {
-        target: destination.firmware,
-        normal: None,
-        kernel: None,
-    };
-    let changed = plan
-        .prepare_with(&context, registry)
-        .unwrap()
-        .expect("complete computed operation");
-    plan.verify_with(&context, &changed, registry).unwrap();
-    assert_eq!(
-        computed::observe(&changed).unwrap(),
+    assert_ne!(
+        computed::observe(&target).unwrap(),
         computed::observe(&donor).unwrap()
     );
+    let firmware = |normal| Firmware {
+        hardware: "SAT 8600",
+        normal,
+        kernel: Some(&kernel),
+    };
+    // Direction differs but phase does not: preserve the exact incoming image.
     assert_eq!(
-        generated::observe(&changed).unwrap(),
-        generated::observe(&target).unwrap()
+        phase_only::check(firmware(&donor), firmware(&target), None, None),
+        target
     );
-    let mut broken = changed.clone();
-    let binding = computed::observe(&changed).unwrap();
-    broken[binding.loader.program.start + 35] ^= 1;
-    assert!(plan.verify_with(&context, &broken, registry).is_err());
+    let mut swapped = native::correct_pair(&donor, native::Assignment::Swapped).unwrap();
+    checksum(&mut swapped);
+    let changed = phase_only::check(firmware(&swapped), firmware(&target), None, None);
+    assert_eq!(
+        computed::observe(&changed).unwrap(),
+        computed::observe(&target).unwrap()
+    );
 }

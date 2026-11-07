@@ -67,7 +67,25 @@ struct Receiver {
 fn conditional_manifest() -> ConditionalManifest {
     serde_json::from_str(include_str!("fixtures/phase-conditional-receivers.json")).unwrap()
 }
+#[derive(Deserialize)]
+struct UnavailableManifest {
+    schema: u32,
+    records: Vec<UnavailableReceiver>,
+}
+#[derive(Deserialize)]
+struct UnavailableReceiver {
+    normal: String,
+    hardware: String,
+    standalone_decoded_sha256: String,
+    standalone_be32_sum: u32,
+    refusal: String,
+    reason: String,
+}
+fn unavailable_manifest() -> UnavailableManifest {
+    serde_json::from_str(include_str!("fixtures/phase-unavailable-receivers.json")).unwrap()
+}
 struct Proof {
+    delivery: bool,
     image: Vec<u8>,
     native_phase: phase::NativePhase,
 }
@@ -305,6 +323,34 @@ fn conditional_receivers_are_supplemental_not_packaged_or_installed() {
     }
 }
 
+#[test]
+fn unavailable_receiver_fixture_is_exact_and_disjoint() {
+    let missing = unavailable_manifest();
+    let conditional = conditional_manifest();
+    let inventory = inventory();
+    assert_eq!(missing.schema, 1);
+    assert_eq!(missing.records.len(), 14);
+    let mut hashes = BTreeSet::new();
+    for row in &missing.records {
+        assert!(hashes.insert(&row.normal));
+        assert_eq!(row.normal.len(), 64);
+        assert_eq!(row.standalone_decoded_sha256.len(), 64);
+        assert_ne!(row.standalone_be32_sum, 0);
+        assert_eq!(row.refusal, "Representation");
+        assert!(!row.reason.is_empty());
+        assert!(!conditional.records.iter().any(|r| r.normal == row.normal));
+        let records: Vec<_> = inventory
+            .domains
+            .iter()
+            .flat_map(|d| &d.records)
+            .filter(|r| r.normal == row.normal)
+            .collect();
+        assert_eq!(records.len(), 1);
+        assert!(records[0].kernel.is_none());
+        assert_eq!(records[0].hardware, row.hardware);
+    }
+}
+
 /// One complete target/fact effect is independent of donor waveforms. The witness
 /// is explicitly target-derived, not an invented original image or resident Kernel.
 fn prove_target(
@@ -312,6 +358,7 @@ fn prove_target(
     original: &Original,
     assignment: Assignment,
     native_proofs: &mut usize,
+    unavailable: Option<&UnavailableReceiver>,
 ) -> Result<Proof, String> {
     let target = firmware(record, original);
     let destination = filters::Context::new(target);
@@ -355,6 +402,68 @@ fn prove_target(
         kernel: original.kernel.as_ref(),
     };
     assert!(plan.matches_components(&preparation));
+    if let Some(expected) = unavailable {
+        assert_eq!(expected.normal, record.normal);
+        assert_eq!(expected.hardware, record.hardware);
+        assert!(record.kernel.is_none() && original.kernel.is_none());
+        assert!(original.receiver.is_none() && !original.conditional);
+        assert!(original.normal.info().receiver_xor_policy.is_none());
+        assert_eq!(digest(target.normal), expected.standalone_decoded_sha256);
+        let sum = target.normal.chunks_exact(4).fold(0u32, |sum, word| {
+            sum.wrapping_add(u32::from_be_bytes(word.try_into().unwrap()))
+        });
+        assert_eq!(target.normal.len() % 4, 0);
+        assert_eq!(sum, expected.standalone_be32_sum);
+        assert_ne!(
+            sum, 0,
+            "resolved checksum authority must retire this negative fixture"
+        );
+        assert_eq!(expected.refusal, "Representation");
+        // Native semantics remain mandatory even when delivery cannot be proven.
+        // This verifies the actual selected operation against the reversible,
+        // target-derived mapping before asserting the precise integrity refusal.
+        plan.verify_with(&preparation, &mapped, REGISTRY)
+            .map_err(|e| format!("native phase verify: {e:?}"))?;
+        let prepared = plan.prepare_with(&preparation, REGISTRY);
+        if before.assignment == assignment {
+            assert_eq!(prepared, Ok(None), "unchanged native plan remains a no-op");
+        } else {
+            assert_eq!(
+                prepared,
+                Err(Error::Representation),
+                "only the pinned representation refusal is expected"
+            );
+        }
+        assert_eq!(
+            (filters::be32_normal_integrity().repair)(&preparation, target.normal),
+            Err(Error::Representation),
+            "original codec integrity authority remains unavailable"
+        );
+        assert!(original.normal.repack_with_checksum(&mapped).is_none());
+        assert_eq!(
+            digest(
+                &original
+                    .normal
+                    .repack(target.normal)
+                    .expect("unchanged original representation remains lossless")
+            ),
+            record.normal
+        );
+        println!(
+            "{}",
+            json!({"event":"expected-receiver-context-refusal",
+            "normal":record.normal,"packaged_kernel":null,"selected_receiver":null,
+            "assignment":format!("{assignment:?}"),"native_mapping_verified":true,
+            "byte_exact_native_round_trip":true,"refusal":"Representation",
+            "standalone_be32_sum":sum,"reason":expected.reason,
+            "complete_delivery_proof":false,"actual_installed_kernel":"unknown"})
+        );
+        return Ok(Proof {
+            image: mapped,
+            native_phase: required,
+            delivery: false,
+        });
+    }
     let changed = plan
         .prepare_with(&preparation, REGISTRY)
         .map_err(|e| format!("phase prepare: {e:?}"))?;
@@ -427,6 +536,7 @@ fn prove_target(
         "scope":"native phase and original codec only; other flash gates not evaluated"})
     );
     Ok(Proof {
+        delivery: true,
         image,
         native_phase: required,
     })
@@ -480,6 +590,7 @@ fn every_target_mapping_and_ordered_planner_pair() {
         .map(|r| load(Path::new(&root), r))
         .collect();
     let supplemental = conditional_manifest();
+    let unavailable = unavailable_manifest();
     let originals: Vec<_> = domain
         .records
         .iter()
@@ -531,6 +642,9 @@ fn every_target_mapping_and_ordered_planner_pair() {
     let mut original_context_codec_proofs = 0;
     let mut conditional_records = 0;
     let mut conditional_variants = 0;
+    let mut expected_refusals = 0;
+    let mut native_only_pairs = 0;
+    let strict_delivery = std::env::var("PIONEER_PHASE_REQUIRE_DELIVERY").as_deref() == Ok("1");
     for (b, record) in domain.records.iter().enumerate() {
         if b % shards != shard || selected.as_ref().is_some_and(|h| h != &record.normal) {
             continue;
@@ -553,7 +667,7 @@ fn every_target_mapping_and_ordered_planner_pair() {
                 let base = standalone[b]
                     .as_ref()
                     .map_err(Clone::clone)
-                    .and_then(|o| prove_target(record, o, assignment, &mut native_proofs));
+                    .and_then(|o| prove_target(record, o, assignment, &mut native_proofs, None));
                 println!(
                     "{}",
                     json!({"event":"original-standalone-outcome","normal":record.normal,
@@ -590,7 +704,7 @@ fn every_target_mapping_and_ordered_planner_pair() {
                 let mut effects = Vec::new();
                 for assignment in [Assignment::Direct, Assignment::Swapped] {
                     let effect = candidate.as_ref().map_err(Clone::clone).and_then(|o| {
-                        prove_target(record, o, assignment, &mut supplemental_native_proofs)
+                        prove_target(record, o, assignment, &mut supplemental_native_proofs, None)
                     });
                     println!(
                         "{}",
@@ -614,12 +728,24 @@ fn every_target_mapping_and_ordered_planner_pair() {
             }
         } else {
             for assignment in [Assignment::Direct, Assignment::Swapped] {
-                let proof = originals[b]
-                    .as_ref()
-                    .map_err(Clone::clone)
-                    .and_then(|o| prove_target(record, o, assignment, &mut native_proofs));
-                if proof.is_ok() {
-                    original_context_codec_proofs += 1;
+                let proof = originals[b].as_ref().map_err(Clone::clone).and_then(|o| {
+                    prove_target(
+                        record,
+                        o,
+                        assignment,
+                        &mut native_proofs,
+                        unavailable
+                            .records
+                            .iter()
+                            .find(|r| r.normal == record.normal),
+                    )
+                });
+                if let Ok(proof) = &proof {
+                    if proof.delivery {
+                        original_context_codec_proofs += 1;
+                    } else {
+                        expected_refusals += 1;
+                    }
                 }
                 if let Err(reason) = &proof {
                     println!(
@@ -633,7 +759,10 @@ fn every_target_mapping_and_ordered_planner_pair() {
                 proofs.push(proof);
             }
         }
-        mappings += proofs.iter().filter(|p| p.is_ok()).count();
+        mappings += proofs
+            .iter()
+            .filter(|p| p.as_ref().is_ok_and(|p| p.delivery))
+            .count();
         for (a, source_record) in domain.records.iter().enumerate() {
             if source.as_ref().is_some_and(|h| h != &source_record.normal) {
                 continue;
@@ -716,6 +845,12 @@ fn every_target_mapping_and_ordered_planner_pair() {
                 }
                 Ok(())
             })();
+            let delivery = proofs[usize::from(required.assignment == Assignment::Swapped)]
+                .as_ref()
+                .is_ok_and(|p| p.delivery);
+            if result.is_ok() && !delivery {
+                native_only_pairs += 1;
+            }
             println!(
                 "{}",
                 json!({"event":"pair-proof", "source":source_record.normal,
@@ -724,7 +859,10 @@ fn every_target_mapping_and_ordered_planner_pair() {
                     "target_selected_receiver":originals[b].as_ref().ok().and_then(|o|o.receiver.as_ref()),
                     "source_conditional":originals[a].as_ref().is_ok_and(|o|o.conditional),
                     "target_conditional":originals[b].as_ref().is_ok_and(|o|o.conditional),"actual_installed_kernel":"unknown",
-                "assignment":format!("{:?}",required.assignment),"verified":result.is_ok(),"error":result.as_ref().err(),
+                "assignment":format!("{:?}",required.assignment),"verified":result.is_ok() && delivery,
+                "native_verified":result.is_ok(),"delivery_verified":result.is_ok() && delivery,
+                "expected_representation_refusal":result.is_ok() && !delivery,
+                "error":result.as_ref().err(),
                 "elapsed_ms":pair_started.elapsed().as_millis()})
             );
             if let Err(reason) = result {
@@ -766,6 +904,10 @@ fn every_target_mapping_and_ordered_planner_pair() {
         "conditional_codec_proofs":supplemental_codec_proofs,"conditional_receivers_do_not_identify_installed_kernel":true,
         "primary_codec_proofs_include_conditional_receivers":conditional_records>0,
         "records_without_listed_receiver_context":receiver_unavailable-conditional_records,
+        "expected_representation_refusals":expected_refusals,
+        "native_only_same_interface_pairs":native_only_pairs,
+        "codec_delivery_complete":expected_refusals==0 && failures.is_empty(),
+        "strict_delivery_required":strict_delivery,
         "failed_obligations":failures.len(),"overall_phase_domain_complete":false,
         "scope":"same-interface native phase only; cross-interface and other flash gates are separate unresolved obligations"})
     );
@@ -775,6 +917,17 @@ fn every_target_mapping_and_ordered_planner_pair() {
         failures.len(),
         &failures[..failures.len().min(20)]
     );
-    assert_eq!(mappings, targets * 2);
+    assert_eq!(mappings + expected_refusals, targets * 2);
+    assert_eq!(
+        native_proofs,
+        targets * 2,
+        "every original input retains both native proofs"
+    );
+    if strict_delivery {
+        assert_eq!(
+            expected_refusals, 0,
+            "strict delivery completeness: authentic receiver contexts remain unavailable"
+        );
+    }
     assert_eq!(supplemental_codec_proofs, conditional_variants * 2);
 }

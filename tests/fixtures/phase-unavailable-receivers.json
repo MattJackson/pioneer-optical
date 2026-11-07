@@ -1,0 +1,117 @@
+{
+  "records": [
+    {
+      "hardware": "SAT 1040",
+      "normal": "038e1e237ca383dfd771fd9963b1c3523538599f3704bf8b1f5aef9b448733e5",
+      "reason": "no authentic matching receiver context in retained inventory; original checksum authority unavailable",
+      "refusal": "Representation",
+      "standalone_be32_sum": 2293459190,
+      "standalone_decoded_sha256": "bc50d7452b5314a0a8b96ad0f3cf69e441738dc671c44009ced33807632d6b0f"
+    },
+    {
+      "hardware": "SAT 1030",
+      "normal": "284db805ea17c1cf90e94f553259ddacddae44f329e201731f8b988452fcb2ca",
+      "reason": "no authentic matching receiver context in retained inventory; original checksum authority unavailable",
+      "refusal": "Representation",
+      "standalone_be32_sum": 2514677835,
+      "standalone_decoded_sha256": "4648e96e29054a12e8c8b561823df5567f6dabc4e2930127ea940b2c460e73e3"
+    },
+    {
+      "hardware": "SAT 1041",
+      "normal": "3ab8dba217db53f3caaae8ec655728a92d1235cb047537d9729f580a02de73c6",
+      "reason": "no authentic matching receiver context in retained inventory; original checksum authority unavailable",
+      "refusal": "Representation",
+      "standalone_be32_sum": 2901805506,
+      "standalone_decoded_sha256": "7a6884ac77a18902d98fdc6343fdbb35cc5e4396a056da6e7acafa8b38c731c1"
+    },
+    {
+      "hardware": "SAT 1034",
+      "normal": "44115211b4dc12046f6e1b5bf285eaef95be1a7a61c3ccc3aee638124393d31d",
+      "reason": "no authentic matching receiver context in retained inventory; original checksum authority unavailable",
+      "refusal": "Representation",
+      "standalone_be32_sum": 3472183526,
+      "standalone_decoded_sha256": "062d817c91393c9cf9ce343b6c203c7f6822736bf39eae6f43d27cc959ee0ec0"
+    },
+    {
+      "hardware": "SAT 1030",
+      "normal": "66688fa1e64bea4543f9b57c5b4574f5b57ae5e15caa8b64d2afa5b49825ab55",
+      "reason": "no authentic matching receiver context in retained inventory; original checksum authority unavailable",
+      "refusal": "Representation",
+      "standalone_be32_sum": 546533259,
+      "standalone_decoded_sha256": "44dc082e8ed0092a2abdb58ff6c94ccd0d571a7aac701a45cfaaf34a0ef4b74b"
+    },
+    {
+      "hardware": "SAT 1034",
+      "normal": "6f7cbad83186f49abefea1fdb07fada4d4c7762d0f1045b78e46439321768b62",
+      "reason": "no authentic matching receiver context in retained inventory; original checksum authority unavailable",
+      "refusal": "Representation",
+      "standalone_be32_sum": 1308365958,
+      "standalone_decoded_sha256": "6bfae4bb8b32082736dd3b2abe69401d53252bd50052af4db573dc01b3d194fb"
+    },
+    {
+      "hardware": "SAT 1005",
+      "normal": "9293eb86cdade4392b98a34ce3cb0526e3d759b6e2d8c38eeb1e7245377b96f1",
+      "reason": "no authentic matching receiver context in retained inventory; original checksum authority unavailable",
+      "refusal": "Representation",
+      "standalone_be32_sum": 4015364418,
+      "standalone_decoded_sha256": "7f02b74a88e12d440c530ae7f6c1738426a9eff676c7f6da3161af0b3ce91106"
+    },
+    {
+      "hardware": "SAT 1014",
+      "normal": "d8977f5d339a9e8d28a0d6fd5a8290e3d0a36dc0271c7acb3e0610c8dcf10181",
+      "reason": "no authentic matching receiver context in retained inventory; original checksum authority unavailable",
+      "refusal": "Representation",
+      "standalone_be32_sum": 1661915571,
+      "standalone_decoded_sha256": "168aede4df7459932be9136bbe336622f228a9f3deab1ebd84d050b57dd4b3d0"
+    },
+    {
+      "hardware": "SAT 1030",
+      "normal": "e933db8f6d37bfd22811339cc10d53b69b49b2a8be77279385fe5501a7f269af",
+      "reason": "no authentic matching receiver context in retained inventory; original checksum authority unavailable",
+      "refusal": "Representation",
+      "standalone_be32_sum": 46608436,
+      "standalone_decoded_sha256": "2703cc6f0f3b9f10f1a3980b6a78ddde246c3ee939977d150db353045e0dc51c"
+    },
+    {
+      "hardware": "SAT 1003",
+      "normal": "fc63d5758a1405c53ea66e49bf738ac0c9580b0f08bfdd3f5dc5edefe4a78092",
+      "reason": "no authentic matching receiver context in retained inventory; original checksum authority unavailable",
+      "refusal": "Representation",
+      "standalone_be32_sum": 1859219805,
+      "standalone_decoded_sha256": "950460894048b22c61413903e91587fa8f37d08bc25fdc0acc3239fd367f5734"
+    },
+    {
+      "hardware": "SAT 1040",
+      "normal": "ff6dbac35aa954dc1f5102bb52cce7baf0ae7b3b6648852c6e923e341459b3a8",
+      "reason": "no authentic matching receiver context in retained inventory; original checksum authority unavailable",
+      "refusal": "Representation",
+      "standalone_be32_sum": 976407486,
+      "standalone_decoded_sha256": "ea05fa7c13382aed6935c8bcfc13a005e85f2a4ca0f0f650e120868cf1aa6374"
+    },
+    {
+      "hardware": "SAT 8721",
+      "normal": "5f8438bf528b55bbf778e64d743ad5e93835e1d43b0ff04fd1107b84103a019a",
+      "reason": "no authentic matching receiver context in retained inventory; original checksum authority unavailable",
+      "refusal": "Representation",
+      "standalone_be32_sum": 405445359,
+      "standalone_decoded_sha256": "a05aee125e37c0a932d8d6cf0b0ab116f0c9251f9444b09d05c2c46c4dff0c98"
+    },
+    {
+      "hardware": "SAT 8291",
+      "normal": "612d204899fb7c88c7b2d47022fb9dfcfbb95ce16e30b377da40ed4f40737eb7",
+      "reason": "no authentic matching receiver context in retained inventory; original checksum authority unavailable",
+      "refusal": "Representation",
+      "standalone_be32_sum": 2549658953,
+      "standalone_decoded_sha256": "03d3e715c9365ef31e8ecb34e5c95d58be464cea7c048214c88851e6b1518a26"
+    },
+    {
+      "hardware": "SAT 8211",
+      "normal": "9a21cbbb0783536cf90bf5193746a7a55b460377a13d44759dda90fef3599a19",
+      "reason": "no authentic matching receiver context in retained inventory; original checksum authority unavailable",
+      "refusal": "Representation",
+      "standalone_be32_sum": 374980049,
+      "standalone_decoded_sha256": "f341fe56ffabc440673de7344ba184ac3767e3be6ce7b1ffbaa479a3044a4beb"
+    }
+  ],
+  "schema": 1
+}

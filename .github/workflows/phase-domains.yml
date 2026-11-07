@@ -2,12 +2,13 @@ name: Phase-only corpus coverage
 on:
   workflow_dispatch:
   push:
-    branches: [dev, fix/phase-only-correction]
+    branches: [dev]
     paths:
       - 'src/**'
       - 'tests/phase_domain_coverage.rs'
       - 'tests/phase_sat1_phase_only.rs'
       - 'tests/fixtures/phase-domain-inventory.json'
+      - 'tests/fixtures/phase-conditional-receivers.json'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/phase-corpus.json'
@@ -62,10 +63,11 @@ jobs:
           python3 .github/scripts/fetch-phase-corpus.py
           --config .github/phase-corpus.json
           --manifest tests/fixtures/phase-domain-inventory.json
+          --conditional-manifest tests/fixtures/phase-conditional-receivers.json
           --domain '${{ matrix.domain }}'
           --output "$RUNNER_TEMP/phase-inputs"
       - name: Validate the pinned inventory
-        run: cargo test --locked --release --features envelope --test phase_domain_coverage inventory_covers_every_held_image_and_kernel_variant -- --exact
+        run: cargo test --locked --release --features envelope --test phase_domain_coverage -- --skip every_target_mapping_and_ordered_planner_pair
       - name: Prove target mappings and every ordered planner pair
         env:
           PIONEER_PHASE_CORPUS: ${{ runner.temp }}/phase-inputs

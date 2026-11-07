@@ -293,7 +293,7 @@ fn every_bound_channel_image_roundtrips_in_ci() {
         .unwrap_or_else(|_| "1".into())
         .parse()
         .unwrap();
-    assert!(shards > 0 && shard < shards);
+    assert!(shards > 0 && shard < shards && shards <= domain["records"].as_array().unwrap().len());
     let mut count = [0usize; 2];
     let mut unbound = [0usize; 2];
     let mut native = 0usize;
@@ -381,7 +381,22 @@ fn every_bound_channel_image_roundtrips_in_ci() {
         "{}",
         serde_json::json!({"event":"loading-channel-summary","shard":shard,"shards":shards,"records":records,"bound_clear5_clear7":count,"recognized_but_unbound_clear5_clear7":unbound,"native_mapping_proofs":native,"codec_and_runner_proofs":codec,"failures":failures.len(),"universal_loading_correctability":false})
     );
-    assert!(count.iter().sum::<usize>() > 0, "no bound domain coverage");
+    let expected_records = domain["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| index % shards == shard)
+        .count();
+    assert_eq!(
+        records, expected_records,
+        "every assigned record was examined"
+    );
+    // A shard may contain only unbound programs. The exact witness test proves
+    // both mapped channels independently; don't infer a per-shard population.
+    if shards == 1 {
+        assert!(count.iter().all(|n| *n > 0), "no bound domain coverage");
+    }
     assert!(
         failures.is_empty(),
         "{} unavailable obligations; first20={:?}",

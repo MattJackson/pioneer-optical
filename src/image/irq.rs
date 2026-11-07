@@ -6,6 +6,8 @@ use super::{
     layout::{Observation, Unresolved},
 };
 use alloc::{vec, vec::Vec};
+/// Linked native event-channel correction contracts.
+pub mod channel;
 mod templates;
 const BASE: u32 = 0x410000;
 
@@ -29,6 +31,8 @@ pub enum Value {
 /// All native observations plus the matrix projection for family comparison.
 #[derive(Clone, Debug)]
 pub struct Evidence {
+    /// Positively linked setup, disarm, callback and vector program.
+    pub channel: Observation<channel::Channel>,
     /// Deduplicated observations, retaining facts outside the projection.
     pub observations: Vec<Value>,
     /// Controller first, then input, then route. More than one distinct value
@@ -201,6 +205,7 @@ fn choose(mut observations: Vec<Value>) -> Evidence {
         Observation::Unresolved(Unresolved::ReaderNotRecognized)
     };
     Evidence {
+        channel: Observation::Unresolved(Unresolved::ReaderNotRecognized),
         observations: unique,
         selected,
     }
@@ -288,7 +293,9 @@ pub fn discover(normal: &[u8]) -> Evidence {
             }
         }
     }
-    choose(found)
+    let mut evidence = choose(found);
+    evidence.channel = channel::discover(&n);
+    evidence
 }
 
 #[cfg(test)]

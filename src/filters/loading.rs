@@ -13,7 +13,7 @@ pub static FILTER: Loading = Loading;
 
 /// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
 static RULES: super::Rules = super::Rules {
-    description: "Identifies the loading input, interrupt-register operation or installed callback route: the H8 FFC5 transformation new = (old & mask) | set, a physical input predicate (address, bit, level) or a vector route, and the ATA mechanical/event input contract. The variant is part of the value: equal numbers under different variants are not equal.",
+    description: "Retains independent loading/input requirements. For a completely bound mapped event channel, requires the installed V5C consumer and physical input predicates to match; that channel is owned separately. Otherwise retains the original native contract: the H8 FFC5 transformation new = (old & mask) | set, a physical input predicate (address, bit, level) or a vector route, and the ATA mechanical/event input contract. The variant is part of the value: equal numbers under different variants are not equal.",
     role: super::Role::Hardware,
     correctability: super::Correctability::Never,
     correction: "Never corrected. Values must match.",
@@ -33,7 +33,7 @@ fn term(term: inputs::Term) -> Value {
     };
     Value::Sequence(vec![address, Value::U8(term.bit), Value::Bool(term.active)])
 }
-fn sat(value: irq::Value) -> Value {
+pub(super) fn sat(value: irq::Value) -> Value {
     let native = match value {
         irq::Value::Controller { and_mask, or_mask } => Value::Variant(
             0,
@@ -173,36 +173,70 @@ impl Filter for Loading {
     }
     fn inspect(&self, context: &Context<'_>) -> Assessment {
         if let Some(evidence) = &context.sat {
-            let retained=format!("Audited H8 projection: {:?}; every supporting observation: {:?}. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts.",evidence.irq.selected,evidence.irq.observations);
-            return match evidence.irq.selected {
-                Observation::Known(value) => {
-                    Assessment::known(ID, Role::Hardware, sat(value), retained)
+            if let Observation::Known(channel) = &evidence.irq.channel {
+                if matches!(evidence.irq.selected, Observation::Known(value) if value == channel.mapping.controller())
+                {
+                    let auxiliary = match channel.auxiliary {
+                        irq::channel::Auxiliary::Empty => Value::Variant(0, vec![]),
+                        irq::channel::Auxiliary::LatchedObject => Value::Variant(
+                            1,
+                            vec![
+                                Value::U32(0xfffdff30),
+                                Value::U8(0),
+                                Value::U16(0x4c),
+                                Value::U16(0x46),
+                            ],
+                        ),
+                    };
+                    let mut inputs: Vec<_> = evidence
+                        .irq
+                        .observations
+                        .iter()
+                        .filter_map(|value| match value {
+                            irq::Value::Input(_) | irq::Value::TrayCloseRoute => Some(sat(*value)),
+                            _ => None,
+                        })
+                        .collect();
+                    inputs.sort_by_key(Value::canonical_bytes);
+                    return Assessment::known(ID, Role::Hardware, Value::Variant(4, vec![auxiliary, Value::Sequence(inputs)]), format!("Independent installed V5C consumer: {:?}; positively observed independent physical inputs/routes retained. Linked V58/V60 setup, disarm and acknowledgement belong to loading-interrupt-channel, not this remainder.", channel.auxiliary));
                 }
-                Observation::Conflicting => Assessment::conflicting(ID, Role::Hardware, retained),
-                Observation::Unresolved(_) => Assessment::unresolved(ID, Role::Hardware, retained),
-            };
+            }
         }
-        let tag = context.firmware.hardware.as_bytes();
-        if tag.len() == 8 && &tag[..4] == b"ATA " && tag[4..].iter().all(u8::is_ascii_hexdigit) {
-            let mut values = Vec::new();
-            let mut details = Vec::new();
-            for evidence in &context.ata {
-                details.push(format!("{:?}", evidence.input));
-                match evidence.input {
+        legacy(context)
+    }
+}
+
+pub(super) fn legacy(context: &Context<'_>) -> Assessment {
+    if let Some(evidence) = &context.sat {
+        let retained=format!("Audited H8 projection: {:?}; every supporting observation: {:?}. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts.",evidence.irq.selected,evidence.irq.observations);
+        return match evidence.irq.selected {
+            Observation::Known(value) => {
+                Assessment::known(ID, Role::Hardware, sat(value), retained)
+            }
+            Observation::Conflicting => Assessment::conflicting(ID, Role::Hardware, retained),
+            Observation::Unresolved(_) => Assessment::unresolved(ID, Role::Hardware, retained),
+        };
+    }
+    let tag = context.firmware.hardware.as_bytes();
+    if tag.len() == 8 && &tag[..4] == b"ATA " && tag[4..].iter().all(u8::is_ascii_hexdigit) {
+        let mut values = Vec::new();
+        let mut details = Vec::new();
+        for evidence in &context.ata {
+            details.push(format!("{:?}", evidence.input));
+            match evidence.input {
                     Observation::Known(input)=>{let value=ata(input);if !values.contains(&value){values.push(value);}},
                     Observation::Conflicting=>return Assessment::conflicting(ID,Role::Hardware,"Architecture-native input programs conflict; no candidate is selected by order"),
                     Observation::Unresolved(_)=>{},
                 }
-            }
-            let details=format!("Architecture-native loading/key programs: {}. This mixed-column input contract is not a claim of no independent IRQ. Legacy M7900 ATA/SCSI facts require their own bound native owner.",details.join("; "));
-            return match values.as_slice() {
-                [value] => Assessment::known(ID, Role::Hardware, value.clone(), details),
-                [] => Assessment::unresolved(ID, Role::Hardware, details),
-                _ => Assessment::conflicting(ID, Role::Hardware, details),
-            };
         }
-        Assessment::unresolved(ID,Role::Hardware,"No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default")
+        let details=format!("Architecture-native loading/key programs: {}. This mixed-column input contract is not a claim of no independent IRQ. Legacy M7900 ATA/SCSI facts require their own bound native owner.",details.join("; "));
+        return match values.as_slice() {
+            [value] => Assessment::known(ID, Role::Hardware, value.clone(), details),
+            [] => Assessment::unresolved(ID, Role::Hardware, details),
+            _ => Assessment::conflicting(ID, Role::Hardware, details),
+        };
     }
+    Assessment::unresolved(ID,Role::Hardware,"No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default")
 }
 
 #[cfg(test)]
@@ -289,7 +323,9 @@ mod tests {
         }
         let conflicting = candidate(Observation::Conflicting);
         assert!(matches!(
-            FILTER.inspect(&context(vec![a.clone(), conflicting])).finding,
+            FILTER
+                .inspect(&context(vec![a.clone(), conflicting]))
+                .finding,
             Finding::Conflicting(_)
         ));
         assert!(matches!(

@@ -188,7 +188,7 @@
     {
       "correctability": "Never",
       "correction": "Never corrected. Values must match.",
-      "description": "Identifies the loading input, interrupt-register operation or installed callback route: the H8 FFC5 transformation new = (old & mask) | set, a physical input predicate (address, bit, level) or a vector route, and the ATA mechanical/event input contract. The variant is part of the value: equal numbers under different variants are not equal.",
+      "description": "Retains independent loading/input requirements. For a completely bound mapped event channel, requires the installed V5C consumer and physical input predicates to match; that channel is owned separately. Otherwise retains the original native contract: the H8 FFC5 transformation new = (old & mask) | set, a physical input predicate (address, bit, level) or a vector route, and the ATA mechanical/event input contract. The variant is part of the value: equal numbers under different variants are not equal.",
       "id": "loading-input-interrupt-setup",
       "name": "Loading input / interrupt setup",
       "policies": [
@@ -197,6 +197,15 @@
           "text": "Additional recognizer misses are not proof of absence and are never hashed as negative facts."
         }
       ],
+      "role": "Hardware"
+    },
+    {
+      "correctability": "Guarded",
+      "correction": "Guarded, partial-domain correction: maps bound clear-five/clear-seven event channels using only target-local instruction operands and its existing V58/V60 entries. Independent V5C/input requirements remain enforced by loading-input-interrupt-setup. Direct writes, mixed setup and unbound programs are not corrected. A channel correction does not authorize the complete firmware pair.",
+      "description": "Identifies a positively linked H8 event channel: FFC5 legacy bit, external mode/pending/enable operands, callback acknowledgement, disarm and installed V58/V60 routing. Outside that complete native domain the existing architecture-native loading variant remains required unchanged.",
+      "id": "loading-interrupt-channel",
+      "name": "Mapped loading interrupt channel",
+      "policies": [],
       "role": "Hardware"
     },
     {
@@ -344,6 +353,16 @@
           "state": "Unresolved"
         },
         {
+          "evidence": "No complete mapped-channel correction proof; retain original native requirement unchanged. Audited H8 projection: Unresolved(ReaderNotRecognized); every supporting observation: []. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts.",
+          "finding": {
+            "Unresolved": "Audited H8 projection: Unresolved(ReaderNotRecognized); every supporting observation: []. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts."
+          },
+          "id": "loading-interrupt-channel",
+          "label": "Unresolved: Audited H8 projection: Unresolved(ReaderNotRecognized); every supporting observation: []. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts.",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
           "evidence": "No complete supported native persistent reader was established",
           "finding": {
             "Unresolved": "No complete supported native persistent reader was established"
@@ -381,6 +400,7 @@
         "startup-inputs-initialization",
         "host-interface-setup",
         "loading-input-interrupt-setup",
+        "loading-interrupt-channel",
         "persistent-parameter-layout",
         "phase"
       ]
@@ -431,6 +451,16 @@
           "state": "Unresolved"
         },
         {
+          "evidence": "No complete mapped-channel correction proof; retain original native requirement unchanged. Audited H8 projection: Unresolved(ReaderNotRecognized); every supporting observation: []. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts.",
+          "finding": {
+            "Unresolved": "Audited H8 projection: Unresolved(ReaderNotRecognized); every supporting observation: []. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts."
+          },
+          "id": "loading-interrupt-channel",
+          "label": "Unresolved: Audited H8 projection: Unresolved(ReaderNotRecognized); every supporting observation: []. Priority is controller, then physical input, then installed route. Additional recognizer misses are not proven absence and are not hashed as negative facts.",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
           "evidence": "No complete supported native persistent reader was established",
           "finding": {
             "Unresolved": "No complete supported native persistent reader was established"
@@ -468,6 +498,7 @@
         "startup-inputs-initialization",
         "host-interface-setup",
         "loading-input-interrupt-setup",
+        "loading-interrupt-channel",
         "persistent-parameter-layout",
         "phase"
       ]
@@ -518,6 +549,16 @@
           "state": "Unresolved"
         },
         {
+          "evidence": "No complete mapped-channel correction proof; retain original native requirement unchanged. Architecture-native loading/key programs: Unresolved(ReaderNotRecognized); Unresolved(ReaderNotRecognized). This mixed-column input contract is not a claim of no independent IRQ. Legacy M7900 ATA/SCSI facts require their own bound native owner.",
+          "finding": {
+            "Unresolved": "Architecture-native loading/key programs: Unresolved(ReaderNotRecognized); Unresolved(ReaderNotRecognized). This mixed-column input contract is not a claim of no independent IRQ. Legacy M7900 ATA/SCSI facts require their own bound native owner."
+          },
+          "id": "loading-interrupt-channel",
+          "label": "Unresolved: Architecture-native loading/key programs: Unresolved(ReaderNotRecognized); Unresolved(ReaderNotRecognized). This mixed-column input contract is not a claim of no independent IRQ. Legacy M7900 ATA/SCSI facts require their own bound native owner.",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
           "evidence": "No complete supported native persistent reader was established",
           "finding": {
             "Unresolved": "No complete supported native persistent reader was established"
@@ -555,6 +596,7 @@
         "startup-inputs-initialization",
         "host-interface-setup",
         "loading-input-interrupt-setup",
+        "loading-interrupt-channel",
         "persistent-parameter-layout",
         "phase"
       ]
@@ -605,6 +647,16 @@
           "state": "Unresolved"
         },
         {
+          "evidence": "No complete mapped-channel correction proof; retain original native requirement unchanged. No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default",
+          "finding": {
+            "Unresolved": "No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default"
+          },
+          "id": "loading-interrupt-channel",
+          "label": "Unresolved: No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
           "evidence": "No complete supported native persistent reader was established",
           "finding": {
             "Unresolved": "No complete supported native persistent reader was established"
@@ -642,6 +694,7 @@
         "startup-inputs-initialization",
         "host-interface-setup",
         "loading-input-interrupt-setup",
+        "loading-interrupt-channel",
         "persistent-parameter-layout",
         "phase"
       ]
@@ -692,6 +745,16 @@
           "state": "Unresolved"
         },
         {
+          "evidence": "No complete mapped-channel correction proof; retain original native requirement unchanged. No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default",
+          "finding": {
+            "Unresolved": "No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default"
+          },
+          "id": "loading-interrupt-channel",
+          "label": "Unresolved: No supported architecture-native loading/interrupt contract established; H8 no-match does not prove no input or IRQ, and legacy ATA/SCSI facts are not replaced by a default",
+          "role": "Hardware",
+          "state": "Unresolved"
+        },
+        {
           "evidence": "No complete supported native persistent reader was established",
           "finding": {
             "Unresolved": "No complete supported native persistent reader was established"
@@ -729,6 +792,7 @@
         "startup-inputs-initialization",
         "host-interface-setup",
         "loading-input-interrupt-setup",
+        "loading-interrupt-channel",
         "persistent-parameter-layout",
         "phase"
       ]
@@ -839,6 +903,25 @@
           },
           "id": "loading-input-interrupt-setup",
           "label": "0xFFC5 = (old & 0xDF) | 0x00",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U8": 5
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "loading-interrupt-channel",
+          "label": "Mapped event: FFC5 b5; pending 31.7 / enable 29.7 / mode 0C; V60",
           "role": "Hardware",
           "state": "Known"
         },
@@ -1081,6 +1164,25 @@
                 1,
                 [
                   {
+                    "U8": 5
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "loading-interrupt-channel",
+          "label": "Mapped event: FFC5 b5; pending 31.7 / enable 29.7 / mode 0C; V60",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
                     "Sequence": [
                       {
                         "Sequence": [
@@ -1312,6 +1414,25 @@
                 1,
                 [
                   {
+                    "U8": 5
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "loading-interrupt-channel",
+          "label": "Mapped event: FFC5 b5; pending 31.7 / enable 29.7 / mode 0C; V60",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
                     "Sequence": [
                       {
                         "Sequence": [
@@ -1517,6 +1638,25 @@
           },
           "id": "loading-input-interrupt-setup",
           "label": "0xFFC5 = (old & 0xDF) | 0x00",
+          "role": "Hardware",
+          "state": "Known"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U8": 5
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "loading-interrupt-channel",
+          "label": "Mapped event: FFC5 b5; pending 31.7 / enable 29.7 / mode 0C; V60",
           "role": "Hardware",
           "state": "Known"
         },

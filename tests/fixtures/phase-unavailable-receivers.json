@@ -111,6 +111,806 @@
       "refusal": "Representation",
       "standalone_be32_sum": 374980049,
       "standalone_decoded_sha256": "f341fe56ffabc440673de7344ba184ac3767e3be6ce7b1ffbaa479a3044a4beb"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "00afff7a71fca1f7581109382ca67b434aa240c324cbc91b9ebcc4e03e2099db",
+      "standalone_be32_sum": 2586098893,
+      "standalone_decoded_sha256": "270bca0349e12b944e2843b4cad5696b27e5feeeecb9a8140e411ad1507e3b1d",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "03a561f1c76aac8281cf22b4a4d75148ee978fa2a6b4bbf8d76c1b89aee2a20a",
+      "standalone_be32_sum": 1516819153,
+      "standalone_decoded_sha256": "6d70172e6fda85ff2e0b9af4412c2f370572cd6f39222900efe097f7154ebf4f",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8801",
+      "normal": "04f632a651ac424e28f9179cd99c92661353d04134345f91733c1eb4cfe439f0",
+      "standalone_be32_sum": 2889516465,
+      "standalone_decoded_sha256": "e5ae1e60a9b8fbc290b45353b0d7e69d204c32a874a771c5c2a137700fb610c9",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8F00",
+      "normal": "060aa6d700e973c9df82a3d0eec893f26e6905f4ce689894c5f703318c218c52",
+      "standalone_be32_sum": 3966661485,
+      "standalone_decoded_sha256": "03921a54a4d6a083fe71a3e943133bbf840b82eedc9d65ab4178cd84c1052c63",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "09405c441544f975e3410c61d950976bb83385200602442bd49b3acc660d9d4a",
+      "standalone_be32_sum": 3692993053,
+      "standalone_decoded_sha256": "657d4c51340a9c327cf8cb568d3d382fa748938aabb392e10c6c7f664904f100",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8601",
+      "normal": "0caf5a7e1086dc836212d1ad64b69e23256861a0f6ad56e2682a51d23745c43f",
+      "standalone_be32_sum": 708599153,
+      "standalone_decoded_sha256": "03c6dda57300a12e40c1ca030d44065bd5b78b252491d5ea3feea14cc746e463",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 9001",
+      "normal": "0db89e3fa866676a5e73a64b88213219f4bdbca18b09904037913ac1542ee27b",
+      "standalone_be32_sum": 443449457,
+      "standalone_decoded_sha256": "948e631a4fc2c5f31124454c7f4bda0b751353f7b73b08bc57d7b5a77d037735",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "0e2d30cf078a9f4273ecd822940f6073fb1e859350c823871bac73f40f321f3e",
+      "standalone_be32_sum": 1480512175,
+      "standalone_decoded_sha256": "4db1f2bab1a992f3cbb956de6a2f9fa6a0d05256ac460cedb566acf6a1556847",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8000",
+      "normal": "0f5c38364443f62fabab3412a4da507eec56bb03e23f836428b6514e10707dfc",
+      "standalone_be32_sum": 376332365,
+      "standalone_decoded_sha256": "bc25784e82f9a9532a04d1ff9a861aa1807acb59e89a9995e3f5248bc365001d",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8301",
+      "normal": "108fcd4ffe53e2816befbb841b2005fda08275678c1100948d3b0f5654f2428a",
+      "standalone_be32_sum": 2582795617,
+      "standalone_decoded_sha256": "d04f4e93b9f285310e96cf7212cc5e1a64b7119ea4aab9c088fcfe259fe59f71",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "14d19c5bcadd8b10e89f10b9e6ea99fd39c1a0a13b91a3b1a3225c4625d260fc",
+      "standalone_be32_sum": 3597311345,
+      "standalone_decoded_sha256": "c2e96f9a356e7ab6094ae52b25a2e624de907b37fa8775db4b6f34df99030e45",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8800",
+      "normal": "185c8d4ce1b9893894fa7a0e29f8ceffe280d6aa87b8ba53b5fddf68222d45c3",
+      "standalone_be32_sum": 3964562753,
+      "standalone_decoded_sha256": "da0af5e2f2ba8bfbe926f3be55002f0725cc78940ac99da7fa9a5d7f3aa99564",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "1930eb998112cd7aa6f695cc6d342d649f329125f006fc79d44a96bfef176ef5",
+      "standalone_be32_sum": 1449688805,
+      "standalone_decoded_sha256": "84b76c71728dd9c27d27c3cb974f062b55c59a7a26145c858dc45cc1a79db66a",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "19ee9b3468677a2fcc1fa633cb8767a49e87f68481fa2b20299e6f5221b3ed1a",
+      "standalone_be32_sum": 3628780385,
+      "standalone_decoded_sha256": "8922f363b8e59e8191202ed7ebb24c22d0b5fba14dc1763604f3f679fa58dd5a",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "1abe4f7450bd1283eeec689f917c371d5e65c76b3b417fa3ba235a3f921d6c1f",
+      "standalone_be32_sum": 676218817,
+      "standalone_decoded_sha256": "2d12e8d04507dff923df336e7005406b09151ccae85b654e4a4fbb59ca7d33dc",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "1d669f937d6d453b37d1be3ea0161556da287216cc024796ab69575ec6b022bc",
+      "standalone_be32_sum": 2821470881,
+      "standalone_decoded_sha256": "36eab38786e62c0d12d4357b47f062fed40aaa49167a01cf6fa9cbf5b6fab83c",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "1ffe718988d7562224d87e6480ef0ff2ac03bfc85a206ab8ac8cfd6f7bc655d8",
+      "standalone_be32_sum": 1516820175,
+      "standalone_decoded_sha256": "6c9f6cff6a16f9a59a3e313de15146eabfaae17b0e1fa0b9f9cf2d469b1113fc",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8800",
+      "normal": "2324962b59fd8c069818b3469a75ffc9752b83b4145f72dce9034c785592beb9",
+      "standalone_be32_sum": 1810799041,
+      "standalone_decoded_sha256": "368543ee7e7edb433c6378a0b75b9e761e810f97413bb9f617bbef421663c725",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "28896426035c259a2163d08d6c98d507664c217e9b4aab8289908e931f1ff09d",
+      "standalone_be32_sum": 1744461649,
+      "standalone_decoded_sha256": "9ad150ea4bda173f6febc6021999b1323f2b6280d326fa8067e0e34684e42720",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "2dc39002611f7b683515796eb90f033798be1060e4b31afee3305964bfac34e4",
+      "standalone_be32_sum": 1547357341,
+      "standalone_decoded_sha256": "5358488bef533d5851c16268490da8c12308780cd962346ceb284bf2e238a631",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8000",
+      "normal": "300ac90c29810191d3353413b25a199a816965ad5341e8d756d18fdd46c22e44",
+      "standalone_be32_sum": 1477366605,
+      "standalone_decoded_sha256": "ded505ee3a0a6b473ad75b814e208f32ab4b99188504f4339b56d479515f1532",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8000",
+      "normal": "311533d6e1be743e2e4bf4c895a57f7783dcf9b6b511fee7db47f77a339d36f3",
+      "standalone_be32_sum": 3862782795,
+      "standalone_decoded_sha256": "24daf8a7a051473719f3d8b6a6bf332937475113ef7062d6790bf08a6e7a09ed",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8800",
+      "normal": "32696ac193e0d21ba703924b44ce5c2513dda91a45860212660104533f1a6e07",
+      "standalone_be32_sum": 1812646529,
+      "standalone_decoded_sha256": "7e946f24309d4081b734db195a98d4665b22dab58baf1a95d16fdedf8de559e1",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8801",
+      "normal": "34323518fccbdc5fe5246ad9a825f7d438c4979f6d36c72e06896010457211e5",
+      "standalone_be32_sum": 3966460337,
+      "standalone_decoded_sha256": "15f676e773638315521397a430eb8c7d986afa571e38d1883eaf3cdb3fe0bacc",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8130",
+      "normal": "370bcbb3c6302d09c07428627dbadff17ab9b880f4ac95a3b8592bd5283394b8",
+      "standalone_be32_sum": 2789130089,
+      "standalone_decoded_sha256": "c299bcdb52758d5f1aba0d9d525263f7571de5dfe8b91952f79452ea7d54568e",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8800",
+      "normal": "37c2a83ce0d8b0d0f61f06196a6285e67075ffb1f4393eef7f6295bd2c2b70cf",
+      "standalone_be32_sum": 3964562753,
+      "standalone_decoded_sha256": "99a07b26ec6207cbc0aabfe464ce1181ed34cedfacdff38587ed8da6c16f1e35",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8800",
+      "normal": "3aeafffa29ce65f207fc9fcdd0fea63b0b246ee8cff17b36b9a89cebeeab4b2c",
+      "standalone_be32_sum": 2888739329,
+      "standalone_decoded_sha256": "58cd5f0aeab21548548446690e7c2fa100e9a6359f5972666cc00fffb4bda06b",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "3fd09aa7dff0662570e01f959f5645065b9e2c046eb9a24334babef8411b5b36",
+      "standalone_be32_sum": 743352513,
+      "standalone_decoded_sha256": "7f80949ddd07072d7ba5a2fbc33f6de49b891e2d5f4274b24691b67184b2d51e",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "45cf758569e7624c73860dbdf4d187e9f5664ef582b32b69ec40c371fc5dce5f",
+      "standalone_be32_sum": 1483265745,
+      "standalone_decoded_sha256": "877852d400b9e01c55a8efaa72de05f8f5791c701f5b55533f6a93fc291a84d7",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8800",
+      "normal": "47710cec8eb8dcb421c3545627d7f465bd7769e00efdd503f4b3fadf66f0ed84",
+      "standalone_be32_sum": 737826525,
+      "standalone_decoded_sha256": "904b98cf476c95908a502f0e701fbaf491de8c569aacb99c557c36891f71ce46",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8800",
+      "normal": "4e71ec5c14cff426578f6c5571d2dc858a6dd8a2bb039e3005bc4f292415bf0c",
+      "standalone_be32_sum": 373184073,
+      "standalone_decoded_sha256": "e3843527ba868c3507e802eaaa5164fbcf18c6d9d0cbac53860825c6aa83f1e6",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8000",
+      "normal": "503640e2cc33d80ca72049bc77d1a595636f92837563cbac4e1e981137769c1b",
+      "standalone_be32_sum": 2818154001,
+      "standalone_decoded_sha256": "826847ff48a3db600f72ccbf2f1336b1c8c58fff405629e67eee1f28d8c13220",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "515b9fa72fb2e23112b61bdd5abc78936e6506e4dfee59292f164ac66afbbdb2",
+      "standalone_be32_sum": 1745712977,
+      "standalone_decoded_sha256": "5a6f508ab3cac2945979433ab10fad1cfd0a66f7929378843d6bb924fc134b10",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "548e7db90e7422e99a064d5b9bb436563fc16229f962029cca670d6a15716e90",
+      "standalone_be32_sum": 1481145839,
+      "standalone_decoded_sha256": "5682f022a365d8eb7298b02ad9ca32bf2bad75d326671a8bff574fcc6da8505d",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "54b82e2012aaa47471edab1efd53022bae1a51d5eaad651957d6a8642bfe5f3b",
+      "standalone_be32_sum": 1449688717,
+      "standalone_decoded_sha256": "201107b32bfbf9e0b9f74ae67515a457a759ed7082f6da6de094016cfad9ebbf",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "58d2cdf0c1ff4565667d9a256b58d45824c3835834cf5095d0ddc5832c013b95",
+      "standalone_be32_sum": 477019857,
+      "standalone_decoded_sha256": "52cd7cfabbc431b06d37ce58185553c4901cffa47cba9d352ce657576ee15bc3",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8800",
+      "normal": "6197076fae58aea40907dfe8834a302cc5f8cf11c9c7bf8f9cde70dd89039d9f",
+      "standalone_be32_sum": 2589883051,
+      "standalone_decoded_sha256": "e70a5db026009dc6e0fc50b7bafa65b63840521a55d50378ffb3ed6c2b7fe2f1",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "6442165371b201ccebe21bc3ec0e0d095e174f7921672341cd957f6f15a7031f",
+      "standalone_be32_sum": 1483504207,
+      "standalone_decoded_sha256": "fa074cd966439ff536614ce9dd4c66218ad272548d12624970932c735f321d07",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "6450c8726699adf1c195018068d43c8ba5e92249ae0ddedfb58a96de39c1dcc4",
+      "standalone_be32_sum": 3593238097,
+      "standalone_decoded_sha256": "365ab5e29029fd7518784fe60b912541de862b438821d91e0944f06910879c14",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "6472a89d424c191c51da8b02fcf74a5cb011782261a7d858cd25464964bacfa4",
+      "standalone_be32_sum": 476611441,
+      "standalone_decoded_sha256": "f8c6b73f7ed88caa402f1589f0ff7b5e8ec6cbf5e7f38fe716e36d2c4ea49cfc",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8800",
+      "normal": "659217ce2a7289f81d03db5fe658808da0cae087154754b5f8373162b2168b28",
+      "standalone_be32_sum": 743330781,
+      "standalone_decoded_sha256": "50a278fea7e66fb332b3597a222cb51eed5506058c73016922c6e1b5b3abc421",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "69451f2e9fd45d6fdf480146410ae8697efe50c57e9749e16e49ae6c22e68540",
+      "standalone_be32_sum": 1481145859,
+      "standalone_decoded_sha256": "717a459b7ef5ba2e7adec5accb2259afa0f96ba8b7ff5b14407c7a76af5ad167",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8301",
+      "normal": "6c5b2b98d9d155e05dc5a2c5bbc450b75d229485a642cd7a0f8d86211d41a397",
+      "standalone_be32_sum": 2755552063,
+      "standalone_decoded_sha256": "a70b1aacd73fa67307e779ce13248067e2aa652d70de57a50a0006792ffce628",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8301",
+      "normal": "6f7232e178b4f8afdd621e7b10bee9012562af957ff01afbf3937f1ce0ddc4d8",
+      "standalone_be32_sum": 708730683,
+      "standalone_decoded_sha256": "eb25c69a3bd58ffcd3887a62323b484ed6470d4cc263d06d46f592ecb5076e9f",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8000",
+      "normal": "70f5d7ae687b437b89bbed17ca6a093d73eaffe16beaf292706b67197911522f",
+      "standalone_be32_sum": 3828503250,
+      "standalone_decoded_sha256": "7cf1515c5cf0c1ecdf1d01f8532cdada95a6e8c84e06c72aa6bf4f3f896d4ae2",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "725143981a65bb6e47c237a25fcfe7597d88d0d11e98f0fd549fdd67193c8a46",
+      "standalone_be32_sum": 3933106417,
+      "standalone_decoded_sha256": "0d5f055ff6276382981a91b66de16f99ee2b8e8489c4e3680675b565c0b61776",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "771895b3602cb333f39498785c10a4f7371a4978d65bf8243c4bc696825a5898",
+      "standalone_be32_sum": 3593238097,
+      "standalone_decoded_sha256": "34442fc07391c9e22ae593f96baf33e4e7cf73375d0c5243aa59d6cc38738e88",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8800",
+      "normal": "7b0d36f4642957fdb00d251fac276b7499eeebde6e895194e27816f58e4f31bf",
+      "standalone_be32_sum": 1812646529,
+      "standalone_decoded_sha256": "c3f2a1c922202046a12d7c4db4162daca4adddaae61ed4326dbb5e62339c14a5",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8800",
+      "normal": "7d64b6dd6e97348d3d28f0b2fdfe256ab976803fa1374e3a617a6ae426a62a7b",
+      "standalone_be32_sum": 373184741,
+      "standalone_decoded_sha256": "f195d862906de479d0c30ddfd70dc1f950e4cebe3ca11bf9367aae3b2def7d4d",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "7e27085b456f334742dd1cede3aa27f951802018be079365d2e6cc3c95c2fca4",
+      "standalone_be32_sum": 2554619109,
+      "standalone_decoded_sha256": "b77dbc62d8583ad31b703f25ec07c6ff6b0b607f01e857aec83236d445939b38",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "7f391cf35bc727bbefc97b3b27786283a6e8e5ca1d82f71dc57c78633843c59f",
+      "standalone_be32_sum": 3623796493,
+      "standalone_decoded_sha256": "f7a0bbd2e6df974043573133905cc9b747cabf848d46e969a0838912aeaa977f",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8301",
+      "normal": "7f72d86c2f0989b75431a2f7e5772ec6b8e96d27e0de6ed656e3a7b26e9efb39",
+      "standalone_be32_sum": 3929973345,
+      "standalone_decoded_sha256": "519a9dbef9fedecf2c46c4b451ecc6b88ff368f6a6ed63880e05f17c7eabfff3",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "8c74ceee4bfffbd5214423a83f55fbbba1133ba05972bad38bc568e2e3607c83",
+      "standalone_be32_sum": 740931441,
+      "standalone_decoded_sha256": "9514f5f983bd380b25c33029450fedf68589a6ce2f014e8de8cc70ecfa951b28",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 9000",
+      "normal": "8f66067ee528deacd2ae44f5339596b5d01fad39e267a1dac5311a9bdc5e927d",
+      "standalone_be32_sum": 1438427345,
+      "standalone_decoded_sha256": "4a25a74ec5f593f791db8eb8fbba8e1843807bbafda1a61ff8999be62c7c6ba6",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "95686ff778853ee747175272e677421e29277f84d2f9c45b4b69dbae6dce554a",
+      "standalone_be32_sum": 1547202653,
+      "standalone_decoded_sha256": "dac798d0eded6b1a10a46a26c6a47e2805307c6af58b22d4938dad023b9ddeb0",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "9c02dedc1b4aa6748cdfd38ce3330856483740cd766db5f31099aa2cf9d6325c",
+      "standalone_be32_sum": 2890568301,
+      "standalone_decoded_sha256": "eb61c4813998aaa44b3f868fe5b883368ad54a09731e21d9f993b379b452a7b9",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "9deb758971da51a8c88bce1c7b989fb7dab57f9408df1b2d171ce28df2b8b631",
+      "standalone_be32_sum": 1550361169,
+      "standalone_decoded_sha256": "f6b3aa853471d80ba22383beb3c97d024411114a01593e62b49bacd7205cc80c",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8801",
+      "normal": "a28534e3aba08f63ac7e3d999e0a75429f8f66fd6cf6b6ac5b17eba273b3537e",
+      "standalone_be32_sum": 3861755465,
+      "standalone_decoded_sha256": "3d8995745f2c384bd2eb0c5f64507ee3c73b6be853ebfd9c6ffef1e03692e2b8",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8301",
+      "normal": "a2b16fd06c10030faa5998605411e642f2b3f8c6371a6e7f1ac6fb4a1280d6f8",
+      "standalone_be32_sum": 1748810241,
+      "standalone_decoded_sha256": "99ba77ae1cedc967096c770b21c066d04a5163f1c5a4aa82f27584c6faced796",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "a3349cf8e2b100b459a1e6349d97d8fe0cd32c03774ccf0ef67a87c767869cfe",
+      "standalone_be32_sum": 1481145839,
+      "standalone_decoded_sha256": "b6168392fa1337ffdd0db8d294faa80633f6ff230983334123156ebea7f6f318",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8000",
+      "normal": "a5c9fca3f857d586b0ed2b0261d718d98f3fc05d16409f0f55d9ae69f4d7cbd0",
+      "standalone_be32_sum": 1478415583,
+      "standalone_decoded_sha256": "0c5373bfe4053384a8392c2f6380acebaeea77e133e1f32dcbb2a929fb6324a4",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "a741ec277f7f326a6aef5cfedd6be08d8ceef3c2341eb131d0a58da8ecebaae2",
+      "standalone_be32_sum": 369677521,
+      "standalone_decoded_sha256": "9187036939a15783f58c2097216604758ab15d06943d7d634377d6d58c21741e",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8800",
+      "normal": "b1515bf9c2578e1b1563184928d290690eba4eb4655e1ca0cda209a9bd9fec70",
+      "standalone_be32_sum": 2589883051,
+      "standalone_decoded_sha256": "cf937078902b996e4bf94e8cc191d2dafd4acc4de7a5043ce0cc5f782313b4c3",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "b1e7a43389e5c22de6c49a6e630625bbe8c1ed29aa03ac60eb16679d22a9cf25",
+      "standalone_be32_sum": 1516819153,
+      "standalone_decoded_sha256": "fe67d3d0337335453c61d2a96efa797928348c7dde70569a0a4497390f651384",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8000",
+      "normal": "b4316dd64b936a04bd1af939a8f09199db319d8620363aae8d8ce0a0c37fad10",
+      "standalone_be32_sum": 409306641,
+      "standalone_decoded_sha256": "179c7346c9ee006528c78f8797500ed3be76a39d1505128b500d370845bc1bc4",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "b848f92ef0758c619c2ea9533f977609f21a939fc389acbb1c6bed58f40ff06c",
+      "standalone_be32_sum": 3662596467,
+      "standalone_decoded_sha256": "7635ad65a251841bed0ebdfbe74cde56eb2c603b7509ec3c5c8ee0af97368b8d",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "be681ed4774d560175e1a50a244f5b573342bbb17aea6ec2b0e34d71502d00ab",
+      "standalone_be32_sum": 475624143,
+      "standalone_decoded_sha256": "c04374371709c560acc59eabaf7a9183254cfe08b9d715b8bf5890dd14ca74de",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "c2ee1c19d4580e92eebeb8d06f7c85d925c51c1a11b9d5a0ceea9699f358eca3",
+      "standalone_be32_sum": 1749991281,
+      "standalone_decoded_sha256": "5c1624fdbcf6af9e79143217557bfbfd350f25cd9d249335f987c2b6dfe2c400",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8130",
+      "normal": "c2fef6caf102ebd0870a68ad78b915ddcf54140ecd95976ccd7cc1fe1bf86070",
+      "standalone_be32_sum": 2789130089,
+      "standalone_decoded_sha256": "4e8e7524e03eeb726ad49b1298a5d973ceda0755f0a1b749d27ab14dae7f6ac5",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8130",
+      "normal": "c3820bc685d9fce27419c21e914c5b628da4cbc6371c6c06bfee93638e222a96",
+      "standalone_be32_sum": 2887407985,
+      "standalone_decoded_sha256": "4b390d0e70e2d1006b58b4a3c7653f4b0a77f6fcf1c752cbc21f3d420b2cea5c",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8800",
+      "normal": "c64a3e5cacc9be1d8fe66c867dbdb6b865123b33301a87d0b36296b27f2ff671",
+      "standalone_be32_sum": 2788068883,
+      "standalone_decoded_sha256": "929d477d27889ddb826b8178a7be088cbd86c96996e7477f35526605fd507fcf",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "c70acdf3a6c86125553e992d090868c61133731a94743502b6f38b3fac445aa2",
+      "standalone_be32_sum": 710564975,
+      "standalone_decoded_sha256": "6b24c78b6c693b9692f1acee0cb6c4297e57ccf0d4c53bf090e79b3539b0599c",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8601",
+      "normal": "c86c4abdcf10f80968c68cd0146f9dd5862c7a4b1a239ac878e56213aad25668",
+      "standalone_be32_sum": 671768965,
+      "standalone_decoded_sha256": "02c111146a6eefed545edd8385af50060daa5efb5eb416081efce40790cac5c9",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "c899834b1afdf47a28458e54260becd9a7f2761607d212f286fec43288f9431c",
+      "standalone_be32_sum": 369664431,
+      "standalone_decoded_sha256": "b4f753ade68b546d8019607096cccc8dc29d3eedfc24fee2725cdf809e38f5d1",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "cb703c6646c6eed82c99660ebe7be6b90c6a1b9a23f97f5d992abb8d39c8529b",
+      "standalone_be32_sum": 408768957,
+      "standalone_decoded_sha256": "b23817e90e079f6b9b08d2a995e98a76eacbd4e8455e3b92536a78eee4f3b7a2",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "ccc8f1ba58df88b04f60cc171eab6a4c6ee130ccb0ded308fd76a77e4dabc2ac",
+      "standalone_be32_sum": 1444843419,
+      "standalone_decoded_sha256": "2edd8052c2ebc896c62d9beea94d09b5a65a4e3a109df4eb1aff7af8902d9e8e",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8801",
+      "normal": "cdeb336128d7bd1ba817ea620c21bf181510a1f1a8d865c281e14f84e8ce7951",
+      "standalone_be32_sum": 2886575281,
+      "standalone_decoded_sha256": "a4f72d6983c9388ba403dd96bf5e15699d31a4f4e0c960dc09bdf4724d7a5ae3",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8800",
+      "normal": "d07f5edb0a2c74605daa2b9d3c39335f7589d804469902e1c5d8922e33d29eea",
+      "standalone_be32_sum": 1810799041,
+      "standalone_decoded_sha256": "74633c7c52b580dedf981d0a5fdfedbf3983769d00ff1e4959ae142dac040f6c",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8801",
+      "normal": "d0f27264133652df342487a04fca6b6ca11032f11f4e30c49856841eb716aec2",
+      "standalone_be32_sum": 4176441118,
+      "standalone_decoded_sha256": "2cf10d5499e8814c90a4603e1804a85bfddc9290c1fdae7179a995ac12e550d6",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8800",
+      "normal": "d53e0fb01fa9b790cafeafadeb8dacf6f43ade11b875dbfb52daf460ead04e3c",
+      "standalone_be32_sum": 3962205825,
+      "standalone_decoded_sha256": "9b083dfb8189463fb98aaf49441f8449c784976aa09f8eb66f71cf16975aa065",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "d588d259cfa6e4dc7436d7ed4999152545b4ca3dbc2414d5fb2bcb9a71f9f208",
+      "standalone_be32_sum": 2821470881,
+      "standalone_decoded_sha256": "2e783912653bd3fd869c6cf3d06fee4a43d53deb47fc8041880ff96ff2b5eea1",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8000",
+      "normal": "d5a366b518ee3246a1ca00a10bdfbfe45bdd9732500cdf8808c8fa916cf446be",
+      "standalone_be32_sum": 439426362,
+      "standalone_decoded_sha256": "0c89b81190d68c26e5ca3300750406126781bc565a17e178d1eed8acac099b12",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "d630e705796db07eb6262266ec53cdccd051128d6393a82aaa7df3ca4f1ff2db",
+      "standalone_be32_sum": 1444843419,
+      "standalone_decoded_sha256": "03530486f7788f09f5c916fe4245e2e23163780e78e0e96112913ac505238eeb",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8801",
+      "normal": "dd74db1b65fcf2c2103f21846a680756f51d42579c18be7ce1c2358dea3d8884",
+      "standalone_be32_sum": 2852815525,
+      "standalone_decoded_sha256": "f47ab6d43b9671700d8216b3343517f8e5cd10c1c5e347930da32be72e991406",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "dd7bad030eb3730a4caabc46a82d0bb81324ff557cb0800f916440d7bcd7ab6a",
+      "standalone_be32_sum": 2588714609,
+      "standalone_decoded_sha256": "4dfed29f73fde93020fd40c7bb1501b7f5e23a0bfd41e87c82e56fe00558d03f",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8601",
+      "normal": "dda66c9f13f46594aaa489bfb7078d1a324d10570d56df7079922c3a5770faab",
+      "standalone_be32_sum": 2550944753,
+      "standalone_decoded_sha256": "ea6aeee4c069fa4f1c875b2822d4269afbda76348144e22979a8ad0a84f94dfc",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "de844299987f3e99c56968cb47376cbc020350f45369559076946aefe1573c80",
+      "standalone_be32_sum": 2588714609,
+      "standalone_decoded_sha256": "0fb79ce635c9c392643b5acb4ac148114e08428940fe69ecf56cb3bb9ca67f0d",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "de8947b5f324df748aa090c097185ced4e8e6f2a57d3c77c10fb65565b85c93e",
+      "standalone_be32_sum": 3832445265,
+      "standalone_decoded_sha256": "0f382749b16478d77019aa9b264dbbae5bfbe52b6d13fd26e0b3ea0f72c9c756",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "e2b70b26a2f26a0e201302965fa6e1bf20f573554e0ca18c207e01098ef0e1ca",
+      "standalone_be32_sum": 3689838433,
+      "standalone_decoded_sha256": "50eb10ab611fbf5a96b5ad5409b8650531e2b12fbab755298e4a3c3aa08711ae",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "e3de44977ee06d860032d23280bcd87360626af47db47b846513acc6aa5b91e1",
+      "standalone_be32_sum": 442055965,
+      "standalone_decoded_sha256": "043309610765aed6f131bdf89860f5351b26d992c0dd9b62c0c2d281479fb8cc",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "e5ea4943d0d238e32124799cff5e9b08cb4f78d64c90d122971a07b806570323",
+      "standalone_be32_sum": 1548271057,
+      "standalone_decoded_sha256": "ca42a0be686bb204501e09f10e48781d0ecd2b047e5bdedb6f7b4053c973e4f3",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8800",
+      "normal": "e65fac15856e8903ad5f36053a1771836a884fbb3ebef3965fd08401e0b91989",
+      "standalone_be32_sum": 737826525,
+      "standalone_decoded_sha256": "e2edcfe0362111549ade6c1fe12ad1e394b5292d6639f846322ed426e1fd6c75",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "ef4740fafa0861286646421b142e1609da49077a7deda5142b872b0c0ea2f093",
+      "standalone_be32_sum": 1546172413,
+      "standalone_decoded_sha256": "c216d82d2f122ae3a9aabcb79e70ea44badd9f7676e42aa78c79ba64c3acf647",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "f0ba4149696a5db0559246d225f4debbfc36be7633f7f471e0343c171828294c",
+      "standalone_be32_sum": 3628878215,
+      "standalone_decoded_sha256": "57326586014ce8889219bf8d3affb90bb2f8b3e6f53fc91cb728636e1107f78a",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8800",
+      "normal": "f162e4a659ed503ba7fa06dfbd3edebf95f1d94633a5e0ca15945a24920233ed",
+      "standalone_be32_sum": 738874333,
+      "standalone_decoded_sha256": "d3cf10642e155527690bf93ee70544b6d80904ed285af7077f0b440f9d4c49f4",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "f5b1ee944e15380d478609409a28ea331d7f74442d7580cb6b8741607a8cdb49",
+      "standalone_be32_sum": 1779068605,
+      "standalone_decoded_sha256": "177e638c90584bddf5f4f174bbb4dcfcfbaad85cd06061c591adbe98774043cf",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8130",
+      "normal": "f6dcce6477a12b00891c55cd9283cadb41c7fc6f982b568b7cb059f188c6092f",
+      "standalone_be32_sum": 2887407985,
+      "standalone_decoded_sha256": "2a970f7e08455eafff4774e2dd7957af7c65a9b3687da6383c25ebd679006e15",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "f7858138c71b93f10033ea47428a1db37911f7e67274c0c0f290a3168d94e116",
+      "standalone_be32_sum": 369664431,
+      "standalone_decoded_sha256": "c0d9cb0c9619e254c1d7343d06707a33bd648ef9f6b256f882ee3bf66dafff57",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8301",
+      "normal": "f993d0bca8558915f527893ca9a975c760788d219c5d1a40abd6fc94ab305753",
+      "standalone_be32_sum": 702444385,
+      "standalone_decoded_sha256": "35a86213b09e268ff093f65de9f71cf6e5cc9b16e829133dc1dda882243ef8b1",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
+    },
+    {
+      "hardware": "SAT 8600",
+      "normal": "fb390db07e0036e4a72c1418dda082052bc9e55c1729104dc6b114f90ab61b86",
+      "standalone_be32_sum": 1449950693,
+      "standalone_decoded_sha256": "0716aa883d2e7bc773593e3e92c78c7006f5c020aa43fd9cd1f0f4980be78b2a",
+      "refusal": "Representation",
+      "reason": "no packaged or listed authentic receiver context; standalone original checksum authority unavailable"
     }
   ],
   "schema": 1

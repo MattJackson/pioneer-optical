@@ -329,7 +329,7 @@ fn unavailable_receiver_fixture_is_exact_and_disjoint() {
     let conditional = conditional_manifest();
     let inventory = inventory();
     assert_eq!(missing.schema, 1);
-    assert_eq!(missing.records.len(), 14);
+    assert_eq!(missing.records.len(), 114);
     let mut hashes = BTreeSet::new();
     for row in &missing.records {
         assert!(hashes.insert(&row.normal));

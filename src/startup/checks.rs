@@ -1,5 +1,5 @@
 //! One set of receiver startup requirements and one transition planner.
-use super::{bank, Ambiguous, Analysis, Setting};
+use super::{bank, capacity, Ambiguous, Analysis, Setting};
 
 /// Caller-selected startup policy, retained in each prepared transition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,6 +24,7 @@ pub enum Check {
 pub struct Checks {
     word: Result<Analysis, Ambiguous>,
     banks: Option<bank::Storage>,
+    capacity: capacity::Evidence,
 }
 impl Checks {
     /// Inspect decoded components without device I/O or selecting writes.
@@ -31,6 +32,7 @@ impl Checks {
         Self {
             word: super::analyze(normal),
             banks: bank::analyze_pair(normal, kernel),
+            capacity: capacity::Evidence::discover(normal, kernel),
         }
     }
     /// Stable reporting order, shared by planning and catalogue consumers.
@@ -52,6 +54,9 @@ impl Checks {
     pub fn plan_to_with_policy(self, target: Self, policy: Policy) -> Result<Plan, Error> {
         let word = target.word.map_err(|_| Error::AmbiguousWord)?;
         bank::check(self.banks, target.banks).map_err(Error::Banks)?;
+        if !self.capacity.relates(target.capacity) {
+            return Err(Error::CapacityRelationUnproved);
+        }
         let setting = match word {
             Analysis::Required(r) => Setting {
                 parameter: r.parameter,
@@ -103,6 +108,8 @@ pub enum Error {
     AmbiguousWord,
     /// Persistent storage requirements are unresolved or need conversion.
     Banks(bank::Error),
+    /// Equal bank address cases have no bound cross-image discriminator relation.
+    CapacityRelationUnproved,
 }
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -111,6 +118,9 @@ impl core::fmt::Display for Error {
                 "target startup word checks are ambiguous; no startup plan can be prepared",
             ),
             Self::Banks(e) => e.fmt(f),
+            Self::CapacityRelationUnproved => f.write_str(
+                "persistent bank capacity discriminator relation is unresolved; provide the complete installed and target Kernel/Normal pairs with supported native query evidence; no settings or firmware were written",
+            ),
         }
     }
 }
@@ -127,6 +137,7 @@ impl crate::CodedError for Error {
         match self {
             Self::AmbiguousWord => "pioneer.preparation.ambiguous_startup",
             Self::Banks(e) => e.code(),
+            Self::CapacityRelationUnproved => "pioneer.startup.capacity_relation_unproved",
         }
     }
 }
@@ -150,12 +161,14 @@ mod tests {
         Checks {
             word: Ok(Analysis::Unknown),
             banks: storage(0xfedc4321, [0x5efffa, 0x5ffffa], [0x7dfffa, 0x7efffa]),
+            capacity: capacity::Evidence::UNKNOWN,
         }
     }
     fn bdr_213u() -> Checks {
         Checks {
             word: Ok(Analysis::Unknown),
             banks: storage(0xfedc4322, [0x5f3ffa, 0x5ffffa], [0x7dbffa, 0x7e7ffa]),
+            capacity: capacity::Evidence::UNKNOWN,
         }
     }
 
@@ -174,26 +187,19 @@ mod tests {
     }
 
     #[test]
-    fn identical_banks_plan_under_either_policy_and_retain_both_checks() {
+    fn descriptive_bank_equality_does_not_manufacture_pairing_evidence() {
         for checks in [bdr_212u(), bdr_213u()] {
             for policy in [Policy::CompatibleBanks, Policy::ExplicitCrossflash] {
-                let plan = checks.plan_to_with_policy(checks, policy).unwrap();
-                assert_eq!(plan.policy(), policy);
-                assert_eq!(plan.target_checks(), checks);
                 assert_eq!(
-                    plan.target_checks().iter().collect::<Vec<_>>(),
+                    checks.plan_to_with_policy(checks, policy),
+                    Err(Error::CapacityRelationUnproved)
+                );
+                assert_eq!(
+                    checks.iter().collect::<Vec<_>>(),
                     vec![
                         Check::ParameterWord(Ok(Analysis::Unknown)),
                         Check::PersistentBanks(checks.banks)
                     ]
-                );
-                assert_eq!(
-                    plan.word_setting(),
-                    Setting {
-                        parameter: 0x9f,
-                        value: 0xffff,
-                        explicit: false
-                    }
                 );
             }
         }

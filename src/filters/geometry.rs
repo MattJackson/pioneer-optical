@@ -16,7 +16,7 @@ static RULES: super::Rules = super::Rules {
     description: "Compares the observed storage contract: H8 bank markers or addresses and spacing, ATA flash or serial ranges, or SCSI serial records. It does not establish physical flash capacity, erase boundaries or safe migration. Correction requires complete copy, erase, commit and recovery proof.",
     role: super::Role::Hardware,
     correctability: super::Correctability::Never,
-    correction: "Never corrected. Values must match; equal geometry does not authorize a bank migration, and a differing storage contract refuses under every policy, including the Recovery family override.",
+    correction: "Never corrected. Values must match; matching capacity case addresses also requires the receiver's capacity-selection relation. Equal geometry does not authorize bank migration, and differing storage contracts refuse under every policy, including the Recovery family override.",
     policies: &[
         super::Policy {
             domains: &[],

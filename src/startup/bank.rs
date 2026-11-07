@@ -123,8 +123,11 @@ impl crate::CodedError for Error {
     }
 }
 
-/// Check storage independently of family equality and native word migration.
-/// No header writes, erased-value assumptions, or implicit conversions occur.
+/// Compare descriptive storage formats and address cases independently of
+/// family equality and native word migration. Equal capacity address cases do
+/// not prove equivalence of the discriminator programs selecting those cases.
+/// Use [`super::checks::Checks::plan_to`] with both components for a complete
+/// startup pairing decision. No writes or implicit conversions occur here.
 pub fn check(installed: Option<Storage>, target: Option<Storage>) -> Result<(), Error> {
     let installed = installed.ok_or(Error::UnknownInstalled)?;
     let target = target.ok_or(Error::UnknownTarget)?;

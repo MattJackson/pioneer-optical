@@ -85,6 +85,36 @@ fn bdr211m_pair_profile_composes_without_editing_firmware_or_parameters() {
         Kind::InstructionOwnedPredicates
     );
     assert!(preservation::discover_pair(&b.normal().image, None).is_none());
+    use pioneer_optical::startup::checks::{Checks, Error as StartupError, Policy};
+    for (source, target, query) in [(&a, &b, 0x57ba40usize), (&b, &a, 0x57c4ee)] {
+        let installed = Checks::discover(&source.normal().image, Some(&source.kernel().image));
+        for policy in [Policy::CompatibleBanks, Policy::ExplicitCrossflash] {
+            installed
+                .plan_to_with_policy(
+                    Checks::discover(&target.normal().image, Some(&target.kernel().image)),
+                    policy,
+                )
+                .unwrap();
+            let mut changed = target.normal().image.clone();
+            changed[query - 0x410000] ^= 1;
+            assert_eq!(
+                installed.plan_to_with_policy(
+                    Checks::discover(&changed, Some(&target.kernel().image)),
+                    policy,
+                ),
+                Err(StartupError::CapacityRelationUnproved)
+            );
+            let mut changed_kernel = target.kernel().image.clone();
+            changed_kernel[0xb6f4] ^= 1;
+            assert_eq!(
+                installed.plan_to_with_policy(
+                    Checks::discover(&target.normal().image, Some(&changed_kernel)),
+                    policy,
+                ),
+                Err(StartupError::CapacityRelationUnproved)
+            );
+        }
+    }
     unchanged_directions(&a, &b);
 }
 

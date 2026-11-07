@@ -484,7 +484,8 @@ fn bdr_212u_and_213u_style_banks_never_convert_under_any_policy() {
         }
     }
     for same in [&u212, &u213] {
-        let checks = Checks::discover(same, None);
+        let kernel = vec![0; 0x10000];
+        let checks = Checks::discover(same, Some(&kernel));
         for policy in [Policy::CompatibleBanks, Policy::ExplicitCrossflash] {
             assert!(checks.plan_to_with_policy(checks, policy).is_ok());
         }

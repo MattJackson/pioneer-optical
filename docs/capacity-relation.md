@@ -1,0 +1,33 @@
+# Capacity-dependent bank selection
+
+`bank::Contract` and `bank::check` describe and compare storage formats. Matching `when_one` and `otherwise` addresses does not establish that two discriminator programs return one on the same installed controller. `Checks::plan_to_with_policy` additionally requires a capacity relation under both ordinary and explicit-crossflash policies. Failure has code `pioneer.startup.capacity_relation_unproved`.
+
+The relation is sufficient when the actual recognized address expression is independent of its discriminator, when both complete decoded components are unchanged, or when both programs carry the complete native transaction certificate. The unchanged case compares SHA-256 identities of both actual inputs and requires a complete 64 KiB Kernel. A missing Kernel is not an identity witness. Public storage enums cannot construct positive capacity evidence. Fixed-address and older resident-owned storage retain their existing comparison behavior.
+
+## Native transaction certificate
+
+The current certificate recognizes two finite entry grammars for the same 4290 identification transaction. It binds Normal entry412000, its complete C initializer, copies/clears and source data, the 51/52-entry static-constructor traversal, every reached constructor body, the complete peripheral prefix, Kernel entry/setup and relevant runtime services, the copied query/builder, diagnostics, and the bank producer/validator call relationship. The forms differ in native relocation and in whether Kernel entry compares Normal28 with KernelFE. No product name, full-image digest or capture identity selects a form.
+
+`startup/capacity/native/shapes.rs` contains 189/190 independently checked instruction/data roles. Each role uses SHA-256 over its complete bytes, normalizing only decoded absolute call/jump operands and constructor-table pointers whose targets resolve to another covered role and checked offset. All other operands remain exact, including RAM/MMIO addresses, loops, bounds, indirect callback constants and initial RAM data. Normalization does not create an unbound address wildcard. These are conservative finite native grammars: additional relocations or constructor forms need their own complete dependency proof.
+
+The two Kernel data fields compared with the Normal descriptor/version are checked against the supplied Normal metadata. Their original branding/version bytes are not fingerprints. The declared Normal length must match the supplied bytes and fit both native capacity cases. Generation equality is required only by the grammar that actually performs that comparison; the other grammar remains valid across the receiver-owned temporary-marker stage. Receiver preparation re-discovers checks after corrections and for each actual stage, and separately verifies that the final Kernel is exactly the requested restored image.
+
+This is the successful, component-bound ordinary Normal-entry cut. Conditional loader/error exits remain owned by the existing receiver and Startup checks; the capacity certificate does not claim that those paths return or eventually reach Normal.
+
+The relevant native effects are:
+
+- Kernel 4060F6 /4062D4 normalizes FF3F100C to 80A5 and 100E to 80. Its surrounding peripheral sequence and the fourteen Normal peripheral bodies have the same effects after the bound relocations.
+- All actual constructor paths use nonnull static objects, bounded registration/fills/copies and timer snapshots. They do not allocate or write the query block, resident code or controller. The only external constructor copy is the existing1058DC interface, with positive bounded sizes. The object-array loop has 26 elements of 272 bytes and a fixed bound callback.
+- Normal copies its complete 652-byte helper block to 04BA..0746. Query 05A2 calls builder 0646 with 4290, byte 1 and long 0, then resident 107C72. The complete 120-byte builder writes 1000=90,1008=42, sets 102A.bit7, and writes 1010..1012=0.
+- The retained query service saves/restores 100C/100E, triggers 100B then 100A and polls their busy bits. Its own valid stack is its only caller-register input. The caller returns zero exactly for identification bytes (EF,14) or (C2,24), and one otherwise.
+- 40B6F4 loads CCR from word 40FF62=8000. LDC.W loads the even-address byte, so I=1. The query and diagnostics preserve that mask. Diagnostic stores and the positive-length1058DC copy cannot alter the controller or query block. Ordinary maskable interrupt command writers therefore do not interpose during the observation.
+
+The installed resident query/copy interfaces and a stable completed identification result until the next command are existing OEM interface dependencies. The certificate preserves their uses; it does not claim physical ROM, global startup termination, arbitrary hardware progress, or absence of NMI/reset/fault behavior. Existing positively mapped resident captures support the service contract without becoming runtime identity requirements. No saved parameter or bank migration is performed.
+
+## Evidence and regression scope
+
+The proof-only fixtures `entry_0_test.zlib` and `entry_1_test.zlib` contain roughly 23 KiB of sparse role bytes each, with synthetic descriptor/version metadata and unbound space filled at test time. They contain neither complete firmware images nor original identifying headers. The native packet binds complete function CFG spans, including untaken branches; the original nonnull arguments, initialized data and loop bounds establish which paths are taken. Unreachable allocator/error bodies are not imported as opaque positive dependencies.
+
+Targeted tests cover both native grammars and directions, every complete role and normalized operand, changed query/predicate/builder, copy bound, constructor table, controller setup and IRQ masking, dynamic component metadata, temporary-marker/restored behavior, exact-input identity, missing Kernel, genuine collapsed native branches, and fixed-bank preservation. The existing private-corpus W1 test also checks both policy paths and changed final Normal/Kernel bytes. CI runs that authenticated corpus test; no original full fixture is committed.
+
+Previously admitted changed distinct-case routes without this complete native witness now refuse, even if their two case-address arrays match. This is a per-update evidence boundary, not a claim that all other devices or capacity queries are physically incompatible. Fixed-bank routes, actual collapsed cases, unchanged complete pairs and the positively bound native transaction retain their respective scopes. Startup CMP correction and other filter owners remain independent obligations.

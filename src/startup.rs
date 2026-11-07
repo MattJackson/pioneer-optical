@@ -15,6 +15,10 @@ pub mod surface;
 /// Read-only recognition of the persistent-bank format check at startup.
 pub mod bank;
 
+// Pairing evidence for a capacity-dependent bank address. Kept separate from
+// the descriptive public bank contract.
+mod capacity;
+
 /// Receiver-owned startup requirements and their shared transition planner.
 pub mod checks;
 

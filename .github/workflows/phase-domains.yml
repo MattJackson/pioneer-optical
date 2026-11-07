@@ -80,15 +80,15 @@ jobs:
           cargo test --locked --release --features envelope --test phase_domain_coverage \
             unsigned_packaged_phase_output_uses_existing_authenticated_encoder \
             -- --ignored --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/phase-authentication-report.txt"
-      - name: Prove exact loading-channel witnesses
+      - name: Prove loading boundaries and shared phase composition
         if: ${{ !cancelled() && steps.inventory.outcome == 'success' && matrix.domain == 'h8sat' && matrix.shard == 0 }}
         env:
           PIONEER_PHASE_CORPUS: ${{ runner.temp }}/phase-inputs
         shell: bash
         run: |
           cargo test --locked --release --features envelope --test loading_channel \
-            real_channel_correction_preserves_independent_requirements_and_roundtrips \
-            -- --ignored --exact --nocapture 2>&1 | tee "$RUNNER_TEMP/loading-witness-report.txt"
+            -- --ignored --skip every_bound_channel_image_roundtrips_in_ci --nocapture \
+            2>&1 | tee "$RUNNER_TEMP/loading-witness-report.txt"
       - name: Prove assigned native loading-channel bindings
         if: ${{ !cancelled() && steps.inventory.outcome == 'success' && matrix.domain == 'h8sat' }}
         env:

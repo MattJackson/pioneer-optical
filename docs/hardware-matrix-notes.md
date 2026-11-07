@@ -44,11 +44,12 @@ them (see CHANGELOG 1.6.0):
   separate obligations. Conditional receiver Kernels are not evidence of a
   packaged or installed Kernel. Missing codec authority remains a refusal;
   historical corpus counts below are not current completion claims.
-- Loading is split into a guarded mapped interrupt channel and independently
-  required input/callback facts. Only completely bound clear-five/clear-seven
-  programs gain the channel correction; direct writes and unbound programs keep
-  their original requirements. See [the native binding and proof limits](loading-interrupt-channel.md).
-  A successful channel correction does not by itself admit a firmware pair.
+- Loading retains strict typed native equality. The experimental mapped-channel
+  correction and independent callback split are deferred because no complete
+  admitted-route gain was demonstrated. Their native, composition and codec
+  evidence is preserved at commit `9e00256`; it is not an active correction.
+  New correction work must first identify an otherwise-eligible real pair and
+  establish a complete before/after route benefit.
 - Startup: historical neutral FFFF selection and persistent word transactions
   are superseded by filter-owned image correction and read-only prerequisites.
   Missing native evidence remains a refusal.

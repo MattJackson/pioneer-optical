@@ -1,0 +1,26 @@
+{
+  "inventory_sha256": "361599af1ab41a384d6427331db84a6a85db59caca7af877362358a773d34ef7",
+  "domains": {
+    "sat1": {
+      "file": "sat1.tar.gz",
+      "sha256": "8e42475eeb4e1485f4b55c4a1ef923a529423d12c8ce8f085db2704015a62465",
+      "bytes": 165828286,
+      "components": 115,
+      "images": 73,
+      "variants": 73,
+      "asset_id": 719076582
+    },
+    "h8sat": {
+      "file": "h8sat.tar.gz",
+      "sha256": "6feee919d04ed783a1e5eb413abf699f290824f9acfefdbc295bb88003133de8",
+      "bytes": 954517283,
+      "components": 763,
+      "images": 460,
+      "variants": 461,
+      "asset_id": 719076584
+    }
+  },
+  "repository": "MattJackson/pioneer-optical",
+  "release_id": 437209022,
+  "publication": "unpublished draft; never publish"
+}

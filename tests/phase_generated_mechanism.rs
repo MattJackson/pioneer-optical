@@ -2,15 +2,13 @@
 #![cfg(feature = "envelope")]
 use pioneer_optical::{
     compatibility::Firmware,
-    filters::{
-        self,
-        phase::{
-            bundle::waveforms::resources::{evaluators, generated},
-            native,
-        },
-        Filter,
+    filters::phase::{
+        bundle::waveforms::resources::{evaluators, generated},
+        native,
     },
 };
+#[path = "support/phase_only.rs"]
+mod phase_only;
 const HASHES: [&str; 2] = [
     "8037cdb3ae67e04a82aa3e9b7a0f52202e17f1e39d1f50b894158d9be0cec898",
     "99ba77ae1cedc967096c770b21c066d04a5163f1c5a4aa82f27584c6faced796",
@@ -71,10 +69,7 @@ fn checksum(n: &mut [u8]) {
 }
 
 #[test]
-fn generated_graphs_plan_prepare_verify_rotation_and_coils_independently() {
-    // Controlled convention mutations of real OEM programs, not claims of new
-    // native direct/swapped package pairs. Both actual evaluator shapes and
-    // parameter/constant calibration contracts run through the production owner.
+fn generated_phase_retains_target_basis_calibration_and_lifecycle() {
     for hash in HASHES {
         let target = fixture(hash);
         let before = generated::observe(&target).unwrap();
@@ -89,45 +84,25 @@ fn generated_graphs_plan_prepare_verify_rotation_and_coils_independently() {
             }
             checksum(&mut donor);
             assert_eq!(generated::rotation(&target, &donor), Ok(16));
-            let installed = filters::Context::new(Firmware {
-                hardware: "SAT 8000",
-                normal: &donor,
-                kernel: None,
-            });
-            let destination = filters::Context::new(Firmware {
-                hardware: "SAT 8000",
-                normal: &target,
-                kernel: None,
-            });
-            let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
-            let plan = filters::runner::plan_with(
-                &installed,
-                &destination,
-                filters::runner::Policy::Strict,
-                registry,
-            )
-            .unwrap();
-            let context = filters::Preparation {
-                target: destination.firmware,
-                normal: None,
-                kernel: None,
-            };
-            let changed = plan
-                .prepare_with(&context, registry)
-                .unwrap()
-                .expect("generated convention operation");
-            plan.verify_with(&context, &changed, registry).unwrap();
-            let after = generated::observe(&changed).unwrap();
-            assert_eq!(after.calibration, before.calibration);
-            assert_eq!(after.coils.assignment, assignment);
-            assert_eq!(&changed[range.clone()], &donor[range]);
-            assert_eq!(generated::transplant(&changed, &donor).unwrap(), changed);
-            let mut broken = changed.clone();
-            broken[before.producer.program.start + 2] ^= 2;
-            assert!(plan.verify_with(&context, &broken, registry).is_err());
-            let mut broken = changed.clone();
-            broken[before.calibration.0.start + 2] ^= 2;
-            assert!(plan.verify_with(&context, &broken, registry).is_err());
+            let changed = phase_only::check(
+                Firmware {
+                    hardware: "SAT 8000",
+                    normal: &donor,
+                    kernel: None,
+                },
+                Firmware {
+                    hardware: "SAT 8000",
+                    normal: &target,
+                    kernel: None,
+                },
+                None,
+                None,
+            );
+            assert_eq!(&changed[range.clone()], &target[range]);
+            assert_eq!(
+                generated::observe(&changed).unwrap().calibration,
+                before.calibration
+            );
             let mut broken = donor.clone();
             broken[before.evaluator.basis.start] ^= 1;
             assert!(generated::transplant(&target, &broken).is_err());
@@ -136,12 +111,10 @@ fn generated_graphs_plan_prepare_verify_rotation_and_coils_independently() {
 }
 
 #[test]
-fn native_generated_calibration_conventions_compose_in_both_directions() {
+fn generated_resource_api_keeps_its_guards_but_phase_ignores_calibration_differences() {
     let a = fixture(HASHES[0]);
     let b = fixture(HASHES[1]);
     for (target, donor, conditional) in [(&a, &b, false), (&b, &a, true)] {
-        // Basis-only transfer is insufficient until the native calibration and
-        // mode contracts are composed (or guarded by exact unit-word reads).
         assert!(generated::rotation(target, donor).is_err());
         let complete = generated::plan(target, donor).unwrap();
         assert_eq!(
@@ -151,63 +124,21 @@ fn native_generated_calibration_conventions_compose_in_both_directions() {
         if conditional {
             assert!(generated::transplant(target, donor).is_err());
         }
-        let installed = filters::Context::new(Firmware {
-            hardware: "SAT 8000",
-            normal: donor,
-            kernel: None,
-        });
-        let destination = filters::Context::new(Firmware {
-            hardware: "SAT 8000",
-            normal: target,
-            kernel: None,
-        });
-        let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
-        let plan = filters::runner::plan_with(
-            &installed,
-            &destination,
-            filters::runner::Policy::Strict,
-            registry,
-        )
-        .unwrap();
-        let context = filters::Preparation {
-            target: destination.firmware,
-            normal: None,
-            kernel: None,
-        };
-        let changed = plan.prepare_with(&context, registry).unwrap().unwrap();
-        plan.verify_with(&context, &changed, registry).unwrap();
-        let words = plan.required_words().unwrap();
-        assert_eq!(words.len(), complete.required_words.len());
-        filters::prerequisites::check(&words, |parameter| {
-            Ok::<_, ()>(
-                complete
-                    .required_words
-                    .iter()
-                    .find(|w| w.parameter == parameter)
-                    .unwrap()
-                    .value,
-            )
-        })
-        .unwrap();
-        if conditional {
-            assert!(filters::prerequisites::check(&words, |_| Ok::<_, ()>(0xffff)).is_err());
-        }
-        let again = filters::Context::new(Firmware {
-            normal: &changed,
-            ..destination.firmware
-        });
-        let again = filters::runner::plan_with(
-            &installed,
-            &again,
-            filters::runner::Policy::Strict,
-            registry,
-        )
-        .unwrap();
-        assert_eq!(
-            again.required_words().unwrap(),
-            words,
-            "conditional contract survives idempotent image"
+        let changed = phase_only::check(
+            Firmware {
+                hardware: "SAT 8000",
+                normal: donor,
+                kernel: None,
+            },
+            Firmware {
+                hardware: "SAT 8000",
+                normal: target,
+                kernel: None,
+            },
+            None,
+            None,
         );
+        assert_eq!(changed, *target);
     }
 }
 
@@ -275,38 +206,23 @@ fn native_generated_directions_round_trip_original_envelopes() {
             (p.hardware.clone(), page::decode(&root, p).unwrap())
         })
         .collect();
-    for (target, donor, words) in [(0, 1, 0), (1, 0, 8)] {
+    for (target, donor) in [(0, 1), (1, 0)] {
         let (hardware, original) = &originals[target];
         let (source_hardware, source) = &originals[donor];
-        let installed = filters::Context::new(Firmware {
-            hardware: source_hardware,
-            normal: &source.normal.image,
-            kernel: source.kernel.as_ref().map(|k| k.image.as_slice()),
-        });
-        let destination = filters::Context::new(Firmware {
-            hardware,
-            normal: &original.normal.image,
-            kernel: original.kernel.as_ref().map(|k| k.image.as_slice()),
-        });
-        let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
-        let plan = filters::runner::plan_with(
-            &installed,
-            &destination,
-            filters::runner::Policy::Strict,
-            registry,
-        )
-        .unwrap();
-        assert_eq!(plan.required_words().unwrap().len(), words);
-        let context = filters::Preparation {
-            target: destination.firmware,
-            normal: Some(&original.normal),
-            kernel: original.kernel.as_ref(),
-        };
-        let changed = plan
-            .prepare_with(&context, registry)
-            .unwrap()
-            .expect("native generated change");
-        plan.verify_with(&context, &changed, registry).unwrap();
+        let changed = phase_only::check(
+            Firmware {
+                hardware: source_hardware,
+                normal: &source.normal.image,
+                kernel: source.kernel.as_ref().map(|k| k.image.as_slice()),
+            },
+            Firmware {
+                hardware,
+                normal: &original.normal.image,
+                kernel: original.kernel.as_ref().map(|k| k.image.as_slice()),
+            },
+            Some(&original.normal),
+            original.kernel.as_ref(),
+        );
         let encoded = original.normal.repack(&changed).unwrap();
         let decoded = if let Some(kernel) = &original.kernel {
             Envelope::load_with_kernel(&encoded, kernel)
@@ -316,7 +232,6 @@ fn native_generated_directions_round_trip_original_envelopes() {
         .unwrap();
         assert_eq!(decoded.image, changed);
         assert_eq!(decoded.repack(&decoded.image).unwrap(), encoded);
-        println!("native generated {source_hardware} -> {hardware}: {} exact read-only words, original-codec round trip passed",words);
     }
 }
 
@@ -356,44 +271,36 @@ fn four_choice_selector_distinguishes_stored_tables_from_runtime_producers() {
 }
 
 #[test]
-fn generated_target_without_complete_bundle_proof_is_not_an_equal_coil_noop() {
-    use filters::phase::bundle;
+fn equal_phase_assignment_is_noop_across_resource_and_encoder_representations() {
     let literal = fixture("87e8152f1de1d3be53eb4ad9144c1bb0c45a9be6f78713a0b7487a637f989bf1");
     for hash in HASHES {
         let target = fixture(hash);
-        let generated_target = generated::observe(&target).unwrap();
-        let source = native::correct_pair(&literal, generated_target.coils.assignment).unwrap();
+        let source = native::correct_pair(
+            &literal,
+            generated::observe(&target).unwrap().coils.assignment,
+        )
+        .unwrap();
         assert!(generated::observe(&source).is_err());
-        assert!(bundle::bind(&target).is_err());
-        assert!(
-            matches!((native::discover(&source), native::discover(&target)), (pioneer_optical::image::layout::Observation::Known(a), pioneer_optical::image::layout::Observation::Known(b)) if a == b)
-        );
         assert_ne!(
             native::encoders::observe(&source).unwrap().representation,
             native::encoders::observe(&target).unwrap().representation
         );
-        let installed = filters::Context::new(Firmware {
-            hardware: "SAT 8000",
-            normal: &source,
-            kernel: None,
-        });
-        let destination = filters::Context::new(Firmware {
-            hardware: "SAT 8000",
-            normal: &target,
-            kernel: None,
-        });
-        let filter = &filters::phase::FILTER;
-        let transition = filters::Transition {
-            installed: &installed,
-            target: &destination,
-        };
-        assert!(matches!(
-            filter.plan(
-                &transition,
-                &filter.inspect(&installed),
-                &filter.inspect(&destination)
+        assert_eq!(
+            phase_only::check(
+                Firmware {
+                    hardware: "SAT 8000",
+                    normal: &source,
+                    kernel: None
+                },
+                Firmware {
+                    hardware: "SAT 8000",
+                    normal: &target,
+                    kernel: None
+                },
+                None,
+                None
             ),
-            Err(pioneer_optical::compatibility::Error::Unsupported)
-        ));
+            target
+        );
     }
 }

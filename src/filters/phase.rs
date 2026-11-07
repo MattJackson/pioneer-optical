@@ -4,7 +4,6 @@
 //! interfaces remain part of identity even when source assignment is normalized.
 /// Sled mechanism convention bundle bound from native code.
 pub mod bundle;
-mod mechanism;
 /// Native phase recognition, operand corrections and instruction contracts.
 pub mod native;
 
@@ -256,7 +255,7 @@ static RULES: super::Rules = super::Rules {
     description: "Identifies which source element drives which phase output (direct 0 or swapped 1) together with the native architecture and output interface: H8 byte or split-word outputs, M32C outputs or the V850 indexed bus. The assignment is not signed waveform winding or physical motor direction.",
     role: super::Role::Hardware,
     correctability: super::Correctability::Guarded,
-    correction: "Corrected in Normal only for pairs the phase owner proves; the native architecture and interface must always match. The matching family drops the assignment only for H8 programs with a complete paired-word grammar.",
+    correction: "Corrects the incoming Normal image's native direct/swapped output mapping while retaining its waveform tables, DSP program, calibration and motion behavior. Architecture and output interface must match. Other filters remain independently enforced.",
     policies: &[
         super::Policy {
             domains: &[],
@@ -264,11 +263,11 @@ static RULES: super::Rules = super::Rules {
         },
         super::Policy {
             domains: &[super::identity::Domain::Sat1],
-            text: "SAT1 phase correction requires a complete command-relative native graph, exact paired Kernel leaves, table ownership and caller/output verification. Other assignment changes remain suspended.",
+            text: "SAT1 phase correction binds complete native output programs and changes only the channel mapping. Output helper behavior and all unrelated bytes are preserved; unrecognized or conflicting programs refuse.",
         },
         super::Policy {
             domains: &[super::identity::Domain::H8Sat],
-            text: "Split-word (F910-F913) corrections bind the complete sled mechanism bundle. Differing bundles use OEM routines and tables through the phase operation, with full resource and caller verification; equal coil assignments do not suppress required mechanism correction. Growth without proved placement remains Unsupported and cannot be waived by Recovery. Bound 0x28F selection requires the existing word to equal 1; the operation never writes it.",
+            text: "Split-word (F910-F913) correction exchanges the corresponding output and control destinations in complete native programs. Equal phase assignments require no correction, even when other mechanism properties differ. No donor tables, DSP program, calibration policy or persistent values are copied.",
         },
         super::Policy {
             domains: &[super::identity::Domain::Ata],
@@ -329,12 +328,14 @@ impl Filter for PhaseFilter {
             return Finding::Conflicting("phase assessment owner/role mismatch".into());
         }
         // This is a native grouping contract, not checksum/file admission.
-        // Complete paired grammar is a reviewed two-way output permutation.
+        // Complete target-native grammars establish two-way output mapping.
         // The candidate projection is the published family grouping and stays
         // assignment-free; correctability is decided per pair in `plan`, where
-        // the complete mechanism bundle is gated.
+        // only its native output mapping is corrected.
         if fact.architecture == Architecture::H8
-            && matches!(native::discover_pair(context.firmware.normal),Observation::Known(p) if p.assignment == fact.assignment)
+            && (matches!(native::discover_pair(context.firmware.normal),Observation::Known(p) if p.assignment == fact.assignment)
+                || native::sat1::phase_only::observe(context.firmware.normal)
+                    .is_ok_and(|phase| phase.assignment == fact.assignment))
             && matches!(&context.native_phase,Observation::Known(actual) if *actual == fact)
         {
             let Value::Variant(_, mut fields) = fact.value() else {
@@ -372,9 +373,13 @@ impl Filter for PhaseFilter {
         {
             return Err(Error::UnresolvedIdentity);
         }
-        let mechanism = mechanism_gate(transition, from, required)?;
-        if from == required && mechanism.is_none() {
+        if from == required {
             return Ok(None);
+        }
+        // Correct only the incoming image's native phase mapping. Donor
+        // waveform, calibration, DSP and motion differences belong elsewhere.
+        if from.architecture == Architecture::H8 {
+            h8_native(transition.target.firmware.normal, required.assignment)?;
         }
         Ok(Some(Box::new(PhaseOperation {
             hardware: transition.target.firmware.hardware.into(),
@@ -382,164 +387,9 @@ impl Filter for PhaseFilter {
             kernel: transition.target.firmware.kernel.map(<[u8]>::to_vec),
             from,
             required,
-            mechanism,
         })))
     }
 }
-/// Split-word coil mapping is one element of the sled mechanism convention.
-/// Differing bundles require a complete mechanism operation, even with equal
-/// coil mappings. Missing composition or placement proof remains Unsupported
-/// and cannot be waived by a family override.
-fn mechanism_gate(
-    transition: &Transition<'_, '_>,
-    from: NativePhase,
-    required: NativePhase,
-) -> Result<Option<mechanism::Mechanism>, Error> {
-    // Complete command-relative SAT1 graphs establish their own authority;
-    // hardware spelling is not a positive correction recipe. Equal coil facts
-    // still require table comparison, and every change binds both exact Kernels.
-    match (
-        native::sat1::observe_normal(transition.installed.firmware.normal),
-        native::sat1::observe_normal(transition.target.firmware.normal),
-    ) {
-        (Ok(source), Ok(target)) => {
-            if source.assignment != required.assignment || target.assignment != from.assignment {
-                return Err(Error::UnresolvedIdentity);
-            }
-            if source.assignment == target.assignment
-                && source.tables.iter().zip(&target.tables).all(|(a, b)| {
-                    transition.installed.firmware.normal[a.clone()]
-                        == transition.target.firmware.normal[b.clone()]
-                })
-            {
-                return Ok(None);
-            }
-            return mechanism::Mechanism::plan_sat1(transition).map(Some);
-        }
-        (Ok(_), Err(_)) | (Err(_), Ok(_)) => return Err(Error::Unsupported),
-        _ => {}
-    }
-    // Other SAT1 programs remain suspended without command-relative proof.
-    let sat1 = |firmware: Firmware<'_>| {
-        super::identity::Domain::from_hardware(firmware.hardware)
-            == Some(super::identity::Domain::Sat1)
-    };
-    if from.assignment != required.assignment
-        && (sat1(transition.installed.firmware) || sat1(transition.target.firmware))
-    {
-        return Err(Error::Unsupported);
-    }
-    if !matches!(from.interface, Interface::H8SplitWord { .. }) {
-        return Ok(None);
-    }
-    // Materialized software mechanisms have their own complete native
-    // observation. They do not acquire fabricated legacy DSP bundle fields.
-    let software = |firmware: Firmware<'_>| {
-        firmware.kernel.and_then(|kernel| {
-            bundle::waveforms::resources::reverse_composition::observe(firmware.normal, kernel)
-        })
-    };
-    match (
-        software(transition.installed.firmware),
-        software(transition.target.firmware),
-    ) {
-        (Some(a), Some(b)) if a.equivalent(&b) => return Ok(None),
-        (Some(_), _) | (_, Some(_)) => return Err(Error::Unsupported),
-        _ => {}
-    }
-    let generated = bundle::waveforms::resources::generated::observe;
-    if let (Ok(a), Ok(b), installed_loader, target_loader) = (
-        generated(transition.installed.firmware.normal),
-        generated(transition.target.firmware.normal),
-        bundle::waveforms::loader::observe(transition.installed.firmware.normal),
-        bundle::waveforms::loader::observe(transition.target.firmware.normal),
-    ) {
-        let matching_loaders = match (&installed_loader, &target_loader) {
-            (Err(_), Err(_)) => true,
-            (Ok(a), Ok(b)) if a.computed && b.computed => {
-                let computed = bundle::waveforms::loader::computed::observe;
-                match (
-                    computed(transition.installed.firmware.normal),
-                    computed(transition.target.firmware.normal),
-                ) {
-                    (Ok(source), Ok(target)) => {
-                        a.loader == b.loader
-                            && source.calibration == target.calibration
-                            && source.arithmetic == target.arithmetic
-                            && transition.installed.firmware.normal[source.basis]
-                                == transition.target.firmware.normal[target.basis]
-                    }
-                    _ => false,
-                }
-            }
-            _ => false,
-        };
-        // Preserve the existing no-op when the actual generated convention
-        // agrees. Relocated calibration services alone request no phase edit.
-        use bundle::waveforms::resources::evaluators::Calibration;
-        let calibration_agrees = match (&a.calibration.1, &b.calibration.1) {
-            (Calibration::Constants(a), Calibration::Constants(b)) => a == b,
-            (
-                Calibration::Parameters {
-                    indices: ai,
-                    defaults: ad,
-                    ..
-                },
-                Calibration::Parameters {
-                    indices: bi,
-                    defaults: bd,
-                    ..
-                },
-            ) => ai == bi && ad == bd,
-            _ => false,
-        };
-        if matching_loaders
-            && calibration_agrees
-            && a.coils.assignment == b.coils.assignment
-            && a.step_minus_source == b.step_minus_source
-            && transition.installed.firmware.normal[a.evaluator.basis.clone()]
-                == transition.target.firmware.normal[b.evaluator.basis.clone()]
-        {
-            return Ok(None);
-        }
-        return mechanism::Mechanism::plan_generated(transition).map(Some);
-    }
-    if let Ok(source) = generated(transition.installed.firmware.normal) {
-        if source.coils.assignment != required.assignment {
-            return Err(Error::UnresolvedIdentity);
-        }
-        return mechanism::Mechanism::plan_reverse(transition).map(Some);
-    }
-    let installed = bundle::bind(transition.installed.firmware.normal);
-    let target = bundle::bind(transition.target.firmware.normal);
-    let calibration_change = matches!(
-        (native::calibration::observe(transition.installed.firmware.normal),
-         native::calibration::observe(transition.target.firmware.normal)),
-        (Ok(a), Ok(b)) if a != b
-    );
-    match (installed, target) {
-        (Ok(a), Ok(b)) if a.without_coil() == b.without_coil() && !calibration_change => {
-            if a.coil != required.assignment || b.coil != from.assignment {
-                return Err(Error::UnresolvedIdentity);
-            }
-            Ok(None)
-        }
-        (Ok(a), Ok(b)) => {
-            if a.coil != required.assignment || b.coil != from.assignment {
-                return Err(Error::UnresolvedIdentity);
-            }
-            mechanism::Mechanism::plan(transition, a.table_select_0x28f || b.table_select_0x28f)
-                .map(Some)
-        }
-        // Equal coil facts do not establish agreement with a generated target
-        // when either complete Bundle is unbound. Positive Bundle proofs above
-        // remain available for generated mechanisms with a native DSP loader.
-        _ if generated(transition.target.firmware.normal).is_ok() => Err(Error::Unsupported),
-        _ if from.assignment != required.assignment => Err(Error::Unsupported),
-        _ => Ok(None),
-    }
-}
-
 fn fact(assessment: &Assessment) -> Result<NativePhase, Error> {
     match &assessment.finding {
         Finding::Known(value) => NativePhase::from_value(value).ok_or(Error::UnresolvedIdentity),
@@ -553,7 +403,6 @@ struct PhaseOperation {
     kernel: Option<Vec<u8>>,
     from: NativePhase,
     required: NativePhase,
-    mechanism: Option<mechanism::Mechanism>,
 }
 impl core::fmt::Debug for PhaseOperation {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -624,26 +473,18 @@ impl Operation for PhaseOperation {
             to: self.required.assignment,
         })
     }
-    fn required_words(&self) -> Vec<super::prerequisites::Word> {
-        self.mechanism
-            .as_ref()
-            .map_or_else(Vec::new, mechanism::Mechanism::required_words)
-    }
     fn integrity(&self) -> Option<Integrity> {
         (self.from.architecture == Architecture::H8).then(super::be32_normal_integrity)
     }
     fn prepare(&self, context: &Preparation<'_>) -> Result<Option<Vec<u8>>, Error> {
         self.bound(context)?;
-        if let Some(mechanism) = &self.mechanism {
-            return self.prepared(context, mechanism.prepare(context)?);
-        }
         let mut image = match self.from.architecture {
             Architecture::H8 => {
                 #[cfg(feature = "envelope")]
                 if let Some(normal) = context.normal {
                     use crate::envelope::Layout;
                     match normal.info().layout {
-                        Layout::NormalScaledKey => {
+                        Layout::NormalScaledKey | Layout::Normal | Layout::NormalReverse => {
                             let modified =
                                 h8_native(context.target.normal, self.required.assignment)?;
                             // Validate the original codec/checksum authority; the
@@ -653,7 +494,6 @@ impl Operation for PhaseOperation {
                                 .ok_or(Error::Representation)?;
                             return self.prepared(context, modified);
                         }
-                        Layout::Normal | Layout::NormalReverse => {}
                         _ => return Err(Error::Unsupported),
                     }
                 }
@@ -712,8 +552,11 @@ impl Operation for PhaseOperation {
         if normal.len() != self.normal.len() {
             return Err(Error::VerificationFailed);
         }
-        if let Some(mechanism) = &self.mechanism {
-            mechanism.verify(context, normal)?;
+        if self.from.architecture == Architecture::H8
+            && native::sat1::phase_only::observe(&self.normal).is_ok()
+        {
+            native::sat1::phase_only::verify(&self.normal, self.required.assignment, normal)
+                .map_err(|_| Error::VerificationFailed)?;
         }
         let firmware = Firmware {
             normal,
@@ -738,11 +581,10 @@ impl PhaseOperation {
 
 /// Bounded H8 operand correction without checksum compensation.
 /// Layout proofs may share this native operation; their integrity is separate.
-#[cfg(feature = "envelope")]
 pub(crate) fn h8_native(normal: &[u8], assignment: native::Assignment) -> Result<Vec<u8>, Error> {
     match native::discover_pair(normal) {
         Observation::Known(_) => native::correct_pair(normal, assignment),
-        _ => native::correct_legacy(normal, assignment),
+        _ => native::sat1::phase_only::correct(normal, assignment),
     }
     .map_err(Error::Phase)
 }

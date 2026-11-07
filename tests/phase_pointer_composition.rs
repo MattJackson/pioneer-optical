@@ -1,4 +1,4 @@
-//! Complete UD02 pointer mechanism composition, using actual paired components.
+//! Explicit pointer resource composition and target-only phase correction.
 #![cfg(feature = "envelope")]
 use pioneer_optical::filters::phase::{
     bundle::{
@@ -110,11 +110,7 @@ mod page;
 #[test]
 #[ignore = "requires PIONEER_HOARD; actual native cross-representation pipeline and original codec"]
 fn computed_target_pointer_source_round_trips_original_codec() {
-    use pioneer_optical::{
-        compatibility::Firmware,
-        envelope::Envelope,
-        filters::{self, Filter},
-    };
+    use pioneer_optical::{compatibility::Firmware, envelope::Envelope};
     use sha2::{Digest, Sha256};
     let root = std::path::PathBuf::from(std::env::var("PIONEER_HOARD").unwrap());
     let (packages, _) = page::hoard_packages(&root).unwrap();
@@ -133,121 +129,25 @@ fn computed_target_pointer_source_round_trips_original_codec() {
         format!("{:x}", Sha256::digest(&source.normal.image)),
         "84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750"
     );
-    let installed = filters::Context::new(Firmware {
-        hardware: &source_hardware,
-        normal: &source.normal.image,
-        kernel: source.kernel.as_ref().map(|k| k.image.as_slice()),
-    });
-    let destination = filters::Context::new(Firmware {
-        hardware: &hardware,
-        normal: &target.normal.image,
-        kernel: target.kernel.as_ref().map(|k| k.image.as_slice()),
-    });
-    let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
-    let started = std::time::Instant::now();
-    let plan = filters::runner::plan_with(
-        &installed,
-        &destination,
-        filters::runner::Policy::Strict,
-        registry,
-    )
-    .unwrap();
-    let words = plan.required_words().unwrap();
-    assert_eq!(words.len(), 1);
-    assert_eq!((words[0].word.parameter, words[0].word.value), (0x28f, 1));
-    let mut reads = Vec::new();
-    filters::prerequisites::check(&words, |parameter| {
-        reads.push(parameter);
-        Ok::<_, ()>(1)
-    })
-    .unwrap();
-    assert_eq!(reads, [0x28f]);
-    for wrong in [0, 0xffff] {
-        assert!(matches!(
-            filters::prerequisites::check(&words, |_| Ok::<_, ()>(wrong)),
-            Err(filters::prerequisites::CheckError::Mismatch { .. })
-        ));
-    }
-    let preparation = filters::Preparation {
-        target: destination.firmware,
-        normal: Some(&target.normal),
-        kernel: target.kernel.as_ref(),
-    };
-    let changed = plan
-        .prepare_with(&preparation, registry)
-        .unwrap()
-        .expect("complete cross-representation operation");
-    plan.verify_with(&preparation, &changed, registry).unwrap();
-    let mut expected = bundle::bind(&source.normal.image).unwrap();
-    expected.table_select_0x28f = false;
-    assert_eq!(bundle::bind(&changed).unwrap(), expected);
-    let independent = resources::observe(&changed).unwrap();
-    assert!(independent.initializer.is_none() && independent.erased_parameter.is_none());
-    assert!(matches!(
-        native::discover(&changed),
-        pioneer_optical::image::layout::Observation::Known(_)
-    ));
-    let source_resources = resources::observe(&source.normal.image).unwrap();
-    for (a, b) in independent
-        .selected
-        .motion
-        .iter()
-        .chain(&independent.selected.coefficients)
-        .zip(
-            source_resources
-                .selected
-                .motion
-                .iter()
-                .chain(&source_resources.selected.coefficients),
-        )
-    {
-        assert_eq!(&changed[a.clone()], &source.normal.image[b.clone()]);
-    }
+    let changed = phase_only::check(
+        Firmware {
+            hardware: &source_hardware,
+            normal: &source.normal.image,
+            kernel: source.kernel.as_ref().map(|k| k.image.as_slice()),
+        },
+        Firmware {
+            hardware: &hardware,
+            normal: &target.normal.image,
+            kernel: target.kernel.as_ref().map(|k| k.image.as_slice()),
+        },
+        Some(&target.normal),
+        target.kernel.as_ref(),
+    );
     let encoded = target.normal.repack(&changed).unwrap();
     let decoded = Envelope::load_with_kernel(&encoded, target.kernel.as_ref().unwrap()).unwrap();
     assert_eq!(decoded.image, changed);
     assert_eq!(decoded.repack(&decoded.image).unwrap(), encoded);
-    let first = changed
-        .iter()
-        .zip(&target.normal.image)
-        .enumerate()
-        .find(|(at, (a, b))| !(16..20).contains(at) && a != b)
-        .unwrap()
-        .0;
-    let mut tampered = changed.clone();
-    tampered[first] ^= 1;
-    assert!(plan.verify_with(&preparation, &tampered, registry).is_err());
-    // Retained generator code remains part of the proof, even though this
-    // operation does not edit it. Other owners cannot invalidate that witness.
-    let generator =
-        filters::phase::bundle::waveforms::resources::generated::observe(&target.normal.image)
-            .unwrap();
-    let witness = generator.producer.program.start;
-    assert_eq!(changed[witness], target.normal.image[witness]);
-    let mut invalid_witness = changed.clone();
-    invalid_witness[witness] ^= 1;
-    assert!(plan
-        .verify_with(&preparation, &invalid_witness, registry)
-        .is_err());
-    // The same Normal cannot borrow an ownership certificate from another
-    // resident Kernel, even when the changed mechanism bytes agree.
-    let mut other_kernel = target.kernel.as_ref().unwrap().image.clone();
-    let last = other_kernel.len() - 1;
-    other_kernel[last] ^= 1;
-    let other_preparation = filters::Preparation {
-        target: Firmware {
-            hardware: &hardware,
-            normal: &target.normal.image,
-            kernel: Some(&other_kernel),
-        },
-        normal: Some(&target.normal),
-        kernel: target.kernel.as_ref(),
-    };
-    assert!(plan
-        .verify_with(&other_preparation, &changed, registry)
-        .is_err());
-    println!(
-        "complete native pointer->{hardware} phase + original codec: {:?}",
-        started.elapsed()
-    );
 }
+
+#[path = "support/phase_only.rs"]
+mod phase_only;

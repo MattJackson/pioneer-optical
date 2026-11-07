@@ -288,28 +288,28 @@ fn plan_pair(installed: &[u8], target: &[u8]) -> Result<Option<Box<dyn Operation
 }
 
 #[test]
-fn mirrored_mechanism_bundle_refuses_coil_only_correction_in_both_directions() {
-    // Opposite coil mapping AND every other element mirrored (XD08 vs XS08U
-    // shape): a coil rewrite alone would leave the DSP loader, 0x127/0x128
-    // conversions, mode sign and 0xEC bit in the target convention.
-    let direct = fixture();
-    let mirrored = native::correct_pair(
-        &bundled(bundle::tests::Convention::Mirrored),
-        native::Assignment::Swapped,
-    )
-    .unwrap();
+fn phase_correction_preserves_differing_target_mechanism_resources() {
+    let direct = complete(fixture());
+    let mirrored = complete(
+        native::correct_pair(
+            &bundled(bundle::tests::Convention::Mirrored),
+            native::Assignment::Swapped,
+        )
+        .unwrap(),
+    );
     for (installed, target) in [(&direct, &mirrored), (&mirrored, &direct)] {
-        assert!(matches!(
-            plan_pair(installed, target),
-            Err(Error::Unsupported)
-        ));
+        let wanted = known(&context(installed)).assignment;
+        let expected = native::correct_pair(target, wanted).unwrap();
+        let operation = plan_pair(installed, target).unwrap().unwrap();
+        assert!(operation.required_words().is_empty());
+        let output = operation
+            .prepare(&preparation(context(target).firmware))
+            .unwrap()
+            .unwrap();
+        assert_eq!(output, expected, "only target output operands change");
     }
-    // Same coil mapping does not hide differing bound elements.
-    let mirrored_same_coil = bundled(bundle::tests::Convention::Mirrored);
-    assert!(matches!(
-        plan_pair(&direct, &mirrored_same_coil),
-        Err(Error::Unsupported)
-    ));
+    let same_assignment = complete(bundled(bundle::tests::Convention::Mirrored));
+    assert!(matches!(plan_pair(&direct, &same_assignment), Ok(None)));
 }
 
 #[test]
@@ -333,40 +333,42 @@ fn coil_only_difference_with_identical_bundle_round_trips_byte_exact() {
 }
 
 #[test]
-fn unbound_bundle_refuses_correction_but_not_an_identical_coil_mapping() {
+fn phase_mapping_does_not_require_an_unrelated_bundle_proof() {
     let mut raw = crate::image::phase::tests::fixture(false);
     raw.resize(0x500, 0xff);
-    let swapped = native::correct_pair(&raw, native::Assignment::Swapped).unwrap();
+    let raw = complete(raw);
+    let swapped = complete(native::correct_pair(&raw, native::Assignment::Swapped).unwrap());
     assert!(bundle::bind(&raw).is_err());
-    assert!(matches!(plan_pair(&raw, &swapped), Err(Error::Unsupported)));
-    assert!(matches!(plan_pair(&swapped, &raw), Err(Error::Unsupported)));
+    for (installed, target) in [(&raw, &swapped), (&swapped, &raw)] {
+        let operation = plan_pair(installed, target).unwrap().unwrap();
+        let output = operation
+            .prepare(&preparation(context(target).firmware))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            output,
+            native::correct_pair(target, known(&context(installed)).assignment).unwrap()
+        );
+    }
     assert!(matches!(plan_pair(&raw, &raw), Ok(None)));
-    // One side bound, the other not: still no coil-only correction.
-    let bound = fixture();
-    assert!(matches!(
-        plan_pair(&bound, &swapped),
-        Err(Error::Unsupported)
-    ));
+    let bound = complete(fixture());
+    assert!(plan_pair(&bound, &swapped).unwrap().is_some());
 }
 
 #[test]
-fn family_override_never_waives_a_mechanism_refusal() {
+fn strict_policy_refuses_an_unresolved_phase_program() {
     let direct = fixture();
-    let mirrored = native::correct_pair(
-        &bundled(bundle::tests::Convention::Mirrored),
-        native::Assignment::Swapped,
-    )
-    .unwrap();
-    let (installed, target) = (context(&direct), context(&mirrored));
+    let unknown = alloc::vec![0xff; direct.len()];
+    let (installed, target) = (context(&direct), context(&unknown));
     let refused = crate::filters::runner::evaluate_with(
         &installed,
         &target,
-        crate::filters::runner::Policy::FamilyOverride,
+        crate::filters::runner::Policy::Strict,
         &[&FILTER],
     )
     .unwrap();
     assert!(refused.admit().is_err());
     let decision = &refused.decisions()[0];
     assert!(!decision.waived);
-    assert_eq!(decision.blocked(), Some(Error::Unsupported));
+    assert_eq!(decision.blocked(), Some(Error::UnresolvedIdentity));
 }

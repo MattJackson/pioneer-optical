@@ -1,5 +1,6 @@
 //! Complete SAT1 command, mode selection and native split-word output graphs.
 use super::*;
+pub mod phase_only;
 use core::ops::Range;
 use h8_asm::{
     isa::{decode_insn, encode_insn, Ea, Insn, Operand as O, Reg, Size},

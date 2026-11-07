@@ -60,17 +60,6 @@ fn compact_proof_spans(hash: &str) -> Vec<(usize, Vec<u8>)> {
         .unwrap_or_default()
 }
 
-fn native_kernel_spans(hash: &str) -> Vec<u8> {
-    let mut kernel = vec![0xff; 0x10000];
-    for (address, bytes) in compact_proof_spans(hash) {
-        if (0x400000..0x410000).contains(&address) {
-            let at = address - 0x400000;
-            kernel[at..at + bytes.len()].copy_from_slice(&bytes);
-        }
-    }
-    kernel
-}
-
 #[test]
 fn native_oem_all_reference_pairs_compose_with_small_routine_spills() {
     for (id, target_hash, donor_hash) in native_oem_pairs() {
@@ -2260,313 +2249,98 @@ fn ud02_retired_reader_space_in_full_images() {
 }
 
 #[test]
-fn mechanism_filter_plans_equal_coil_control_changes_and_checks_all_effects() {
-    use pioneer_optical::{
-        compatibility::{Error, Firmware},
-        filters::{self, Filter},
-    };
+fn equal_phase_assignment_does_not_copy_donor_controls() {
+    use pioneer_optical::compatibility::Firmware;
     let mut checked = 0;
     for (_, target_hash, donor_hash) in native_oem_pairs() {
         let donor = native_spans(&donor_hash);
         let other = native_spans(&target_hash);
-        // An isolated native mode/controller difference exercises the full
-        // operation without assuming ownership of any extra code reservation.
-        let mut target = bundle::conversions::rewrite_controls(&donor, &other).unwrap();
-        target[16..20].fill(0);
-        let sum = target.chunks_exact(4).fold(0u32, |sum, word| {
-            sum.wrapping_add(u32::from_be_bytes(word.try_into().unwrap()))
-        });
-        target[16..20].copy_from_slice(&sum.wrapping_neg().to_be_bytes());
+        let target = bundle::conversions::rewrite_controls(&donor, &other).unwrap();
         if bundle::bind(&target).unwrap() == bundle::bind(&donor).unwrap() {
             continue;
         }
-        checked += 1;
-        let installed = filters::Context::new(Firmware {
-            hardware: "SAT 8000",
-            normal: &donor,
-            kernel: None,
-        });
-        let target_context = filters::Context::new(Firmware {
-            hardware: "SAT 8000",
-            normal: &target,
-            kernel: None,
-        });
-        let filter = &filters::phase::FILTER;
-        let operation = filter
-            .plan(
-                &filters::Transition {
-                    installed: &installed,
-                    target: &target_context,
+        assert_eq!(
+            phase_only::check(
+                Firmware {
+                    hardware: "SAT 8000",
+                    normal: &donor,
+                    kernel: None
                 },
-                &filter.inspect(&installed),
-                &filter.inspect(&target_context),
-            )
-            .unwrap()
-            .expect("different bundle needs operation even with equal coils");
-        let preparation = filters::Preparation {
-            target: target_context.firmware,
-            normal: None,
-            kernel: None,
-        };
-        let changed = operation.prepare(&preparation).unwrap().unwrap();
-        operation.verify(&preparation, &changed).unwrap();
-        let registry: &[&dyn Filter] = &[filter];
-        let plan = filters::runner::plan_with(
-            &installed,
-            &target_context,
-            filters::runner::Policy::Strict,
-            registry,
-        )
-        .unwrap();
-        let composed = plan.prepare_with(&preparation, registry).unwrap().unwrap();
-        plan.verify_with(&preparation, &composed, registry).unwrap();
-        let words = plan.required_words().unwrap();
-        assert_eq!(
-            words.iter().map(|w| w.word).collect::<Vec<_>>(),
-            operation.required_words()
+                Firmware {
+                    hardware: "SAT 8000",
+                    normal: &target,
+                    kernel: None
+                },
+                None,
+                None
+            ),
+            target
         );
-        assert!(words.iter().all(|w| w.filter == "phase"));
-        filters::prerequisites::check(&words, |_| Ok::<_, ()>(1)).unwrap();
-        if !words.is_empty() {
-            assert!(matches!(
-                filters::prerequisites::check(&words, |_| Ok::<_, ()>(0)),
-                Err(filters::prerequisites::CheckError::Mismatch { .. })
-            ));
-        }
-
-        assert_eq!(
-            operation.verify(&preparation, &target),
-            Err(Error::VerificationFailed)
-        );
-        assert_eq!(
-            operation.required_words(),
-            if bundle::bind(&donor).unwrap().table_select_0x28f {
-                vec![filters::prerequisites::Word {
-                    parameter: 0x28f,
-                    value: 1,
-                }]
-            } else {
-                vec![]
-            }
-        );
-        let altered = target
-            .iter()
-            .zip(&changed)
-            .position(|(a, b)| a != b)
-            .unwrap();
-        let mut damaged = changed.clone();
-        damaged[altered] = target[altered];
-        assert_eq!(
-            operation.verify(&preparation, &damaged),
-            Err(Error::VerificationFailed)
-        );
-        let mut substituted = target.clone();
-        substituted[30] ^= 1;
-        let wrong = filters::Preparation {
-            target: Firmware {
-                normal: &substituted,
-                ..target_context.firmware
-            },
-            normal: None,
-            kernel: None,
-        };
-        assert_eq!(operation.prepare(&wrong), Err(Error::ComponentMismatch));
+        checked += 1;
     }
     assert_eq!(checked, 8);
 }
 
 #[test]
-fn complete_mechanisms_plan_prepare_verify_all_eight_native_directions() {
-    use pioneer_optical::{
-        compatibility::Firmware,
-        filters::{self, Filter},
-    };
-    let mut checked = 0;
-    for (id, target_hash, donor_hash) in native_oem_pairs() {
+fn target_only_phase_plan_prepare_verify_all_eight_native_directions() {
+    use pioneer_optical::compatibility::Firmware;
+    let pairs = native_oem_pairs();
+    assert_eq!(pairs.len(), 8);
+    for (_, target_hash, donor_hash) in pairs {
         let mut target = native_spans(&target_hash);
         let donor = native_spans(&donor_hash);
-        let ascending = bundle::bind(&donor).unwrap().loader == bundle::Loader::AscendingNegated17;
-        let kernel = native_kernel_spans(&target_hash);
         target[16..20].fill(0);
-        let sum = target.chunks_exact(4).fold(0u32, |sum, word| {
-            sum.wrapping_add(u32::from_be_bytes(word.try_into().unwrap()))
+        let sum = target.chunks_exact(4).fold(0u32, |sum, w| {
+            sum.wrapping_add(u32::from_be_bytes(w.try_into().unwrap()))
         });
         target[16..20].copy_from_slice(&sum.wrapping_neg().to_be_bytes());
-        let installed = filters::Context::new(Firmware {
-            hardware: "SAT 8000",
-            normal: &donor,
-            kernel: None,
-        });
-        let destination = filters::Context::new(Firmware {
-            hardware: "SAT 8000",
-            normal: &target,
-            kernel: Some(&kernel),
-        });
-        let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
-        let plan = filters::runner::plan_with(
-            &installed,
-            &destination,
-            filters::runner::Policy::Strict,
-            registry,
-        )
-        .unwrap_or_else(|e| panic!("{id}: {e:?}"));
-        let context = filters::Preparation {
-            target: destination.firmware,
-            normal: None,
-            kernel: None,
-        };
-        let changed = plan.prepare_with(&context, registry).unwrap().unwrap();
-        plan.verify_with(&context, &changed, registry).unwrap();
-        if !ascending {
-            let missing = filters::Context::new(Firmware {
+        let changed = phase_only::check(
+            Firmware {
+                hardware: "SAT 8000",
+                normal: &donor,
                 kernel: None,
-                ..destination.firmware
-            });
-            assert!(
-                filters::runner::plan_with(
-                    &installed,
-                    &missing,
-                    filters::runner::Policy::Strict,
-                    registry
-                )
-                .is_err(),
-                "{id}: missing resident evidence"
-            );
-            let before = bundle::waveforms::loader::observe(&target).unwrap();
-            let after = bundle::waveforms::loader::observe(&changed).unwrap();
-            let tail_address = (0x410000 + after.program.end) as u32;
-            for resident in [false, true] {
-                let mut bad_normal = target.clone();
-                let mut bad_kernel = kernel.clone();
-                let bytes = if resident {
-                    &mut bad_kernel
-                } else {
-                    &mut bad_normal
-                };
-                bytes[0x701..0x705].copy_from_slice(&tail_address.to_be_bytes());
-                assert_eq!(
-                    bundle::composition::transplant_reusing_loader(
-                        &bad_normal,
-                        &donor,
-                        &bad_kernel
-                    ),
-                    Err(bundle::composition::Error::ComponentOwnership),
-                    "{id}: tail reference resident={resident}"
-                );
-            }
-            assert!(after.program.end < before.program.end);
-        }
-        assert_eq!(&changed[..16], &target[..16]);
-        assert_eq!(
-            &changed[20..0x1000],
-            &target[20..0x1000],
-            "no header gap allocation"
+            },
+            Firmware {
+                hardware: "SAT 8000",
+                normal: &target,
+                kernel: None,
+            },
+            None,
+            None,
         );
-        assert_eq!(
-            bundle::bind(&changed).unwrap().loader,
-            if ascending {
-                bundle::Loader::Ascending
-            } else {
-                bundle::Loader::Descending
-            }
-        );
-        let original_loader = bundle::waveforms::loader::observe(&target).unwrap();
-        let actual_loader = bundle::waveforms::loader::observe(&changed).unwrap();
-        if ascending {
-            assert_eq!(actual_loader.spans, original_loader.spans);
-            assert_eq!(actual_loader.tables, original_loader.tables);
-        } else {
-            assert_eq!(actual_loader.program.start, original_loader.program.start);
-            assert!(actual_loader.program.end < original_loader.program.end);
-        }
-        assert_eq!(
-            actual_loader.coefficient_getter,
-            original_loader.coefficient_getter
-        );
-        assert_eq!(actual_loader.writer, original_loader.writer);
-        assert_eq!(actual_loader.readback, original_loader.readback);
-        let again = bundle::composition::transplant_specialized_with_kernel(
-            &changed,
-            &donor,
-            Some(&kernel),
-        )
-        .unwrap();
-        assert_eq!(again, changed);
-        let words = plan.required_words().unwrap();
-        assert_eq!(
-            words.len(),
-            usize::from(
-                bundle::bind(&donor).unwrap().table_select_0x28f
-                    || bundle::bind(&target).unwrap().table_select_0x28f
-            )
-        );
-        filters::prerequisites::check(&words, |_| Ok::<_, ()>(1)).unwrap();
-        let graph = bundle::waveforms::resources::observe(&changed).unwrap();
-        let mut broken = changed.clone();
-        broken[graph.selected.coefficients[0].start] ^= 1;
-        assert!(plan.verify_with(&context, &broken, registry).is_err());
-        checked += 1;
+        let mut expected = bundle::bind(&target).unwrap();
+        expected.coil = bundle::bind(&donor).unwrap().coil;
+        assert_eq!(bundle::bind(&changed).unwrap(), expected);
     }
-    assert_eq!(checked, 8);
 }
 
 #[test]
-fn identical_coil_and_math_still_correct_different_calibration_interpretation() {
-    use pioneer_optical::{
-        compatibility::Firmware,
-        filters::{self, Filter},
-    };
+fn identical_phase_assignment_retains_target_calibration_interpretation() {
+    use pioneer_optical::compatibility::Firmware;
     let whole = native_spans("95664992a098ff6c3c8a9c4bae228209d956f4a1462c238fb37863b910b72149");
     let packed = native_spans("e6bdfa9bd0220f618d3e4bf722a590c2e1cf4216431869ab399561b94c71f515");
-    assert_eq!(
-        bundle::bind(&whole).unwrap(),
-        bundle::bind(&packed).unwrap()
+    assert_ne!(
+        native::calibration::observe(&whole),
+        native::calibration::observe(&packed)
     );
-    for (donor, original) in [(&whole, &packed), (&packed, &whole)] {
-        let mut target = original.clone();
-        target[16..20].fill(0);
-        let sum = target.chunks_exact(4).fold(0u32, |sum, word| {
-            sum.wrapping_add(u32::from_be_bytes(word.try_into().unwrap()))
-        });
-        target[16..20].copy_from_slice(&sum.wrapping_neg().to_be_bytes());
-        let installed = filters::Context::new(Firmware {
-            hardware: "SAT 8000",
-            normal: donor,
-            kernel: None,
-        });
-        let destination = filters::Context::new(Firmware {
-            hardware: "SAT 8000",
-            normal: &target,
-            kernel: None,
-        });
-        let filter = &filters::phase::FILTER;
-        let operation = filter
-            .plan(
-                &filters::Transition {
-                    installed: &installed,
-                    target: &destination,
+    for (donor, target) in [(&whole, &packed), (&packed, &whole)] {
+        assert_eq!(
+            phase_only::check(
+                Firmware {
+                    hardware: "SAT 8000",
+                    normal: donor,
+                    kernel: None
                 },
-                &filter.inspect(&installed),
-                &filter.inspect(&destination),
-            )
-            .unwrap()
-            .expect("equal coil/bundle must not hide calibration interpretation");
-        let context = filters::Preparation {
-            target: destination.firmware,
-            normal: None,
-            kernel: None,
-        };
-        let changed = operation.prepare(&context).unwrap().unwrap();
-        operation.verify(&context, &changed).unwrap();
-        assert_eq!(
-            native::calibration::observe(&changed),
-            native::calibration::observe(donor)
+                Firmware {
+                    hardware: "SAT 8000",
+                    normal: target,
+                    kernel: None
+                },
+                None,
+                None
+            ),
+            *target
         );
-        assert_eq!(
-            bundle::bind(&changed).unwrap(),
-            bundle::bind(donor).unwrap()
-        );
-        assert!(operation.required_words().is_empty());
     }
 }
 
@@ -2586,3 +2360,6 @@ fn native_reverse_mechanisms_use_owned_loader_suffixes() {
         result.unwrap();
     }
 }
+
+#[path = "support/phase_only.rs"]
+mod phase_only;

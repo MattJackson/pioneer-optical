@@ -45,8 +45,9 @@ fn preparation(normal: &[u8]) -> Preparation<'_> {
 }
 
 #[test]
-fn filter_corrects_only_the_native_operand_and_requires_installed_word_read_only() {
-    let installed = fixture(0xfe25, 0);
+fn filter_preserves_unchanged_comparison_and_requires_live_word_read_only() {
+    let mut installed = fixture(0xfe24, 0);
+    installed[0x7000] ^= 1;
     let target = fixture(0xfe24, 0);
     let operation = operation(&installed, &target).unwrap().unwrap();
     assert_eq!(operation.filter_id(), "startup-prerequisite");
@@ -54,7 +55,7 @@ fn filter_corrects_only_the_native_operand_and_requires_installed_word_read_only
         operation.required_words(),
         [Word {
             parameter: 0x9f,
-            value: 0xfe25
+            value: 0xfe24
         }]
     );
     assert!(super::super::FILTER
@@ -62,13 +63,10 @@ fn filter_corrects_only_the_native_operand_and_requires_installed_word_read_only
         .unwrap()
         .is_empty());
     let preparation = preparation(&target);
-    let changed = operation.prepare(&preparation).unwrap().unwrap();
-    let mut expected = target.clone();
-    expected[0x8b] = 0x25;
-    assert_eq!(changed, expected);
-    operation.verify(&preparation, &changed).unwrap();
+    assert!(operation.prepare(&preparation).unwrap().is_none());
+    operation.verify(&preparation, &target).unwrap();
     for offset in [0x80, 0x84, 0x8a, 0x8c, 0x8e, 0x1000, 0x6000] {
-        let mut bad = changed.clone();
+        let mut bad = target.clone();
         bad[offset] ^= 1;
         assert!(
             operation.verify(&preparation, &bad).is_err(),
@@ -76,7 +74,7 @@ fn filter_corrects_only_the_native_operand_and_requires_installed_word_read_only
         );
     }
     // Other owners may change disjoint image bytes during atomic composition.
-    let mut composed = changed.clone();
+    let mut composed = target.clone();
     composed[0x7000] ^= 1;
     operation.verify(&preparation, &composed).unwrap();
     assert!(operation.prepare(&self::preparation(&installed)).is_err());
@@ -97,7 +95,44 @@ fn equal_gate_retains_read_only_requirement_without_an_image_effect() {
 }
 
 #[test]
-fn unknown_is_preserved_only_for_identical_native_components() {
+fn differing_primary_comparisons_refuse_without_writer_lifecycle_proof() {
+    for (source, target) in [(0xfe25, 0xfe24), (0xfe24, 0xfe25)] {
+        assert!(matches!(
+            operation(&fixture(source, 0), &fixture(target, 0)),
+            Err(Error::Unsupported)
+        ));
+    }
+}
+
+#[test]
+fn operation_and_final_comparison_cannot_bypass_unchanged_operand_restriction() {
+    let target = fixture(0xfe24, 0);
+    let prepared = preparation(&target);
+    let op = operation(&target, &target).unwrap().unwrap();
+    let mut tampered = target.clone();
+    tampered[0x8b] = 0x25;
+    assert!(matches!(
+        op.verify(&prepared, &tampered),
+        Err(Error::VerificationFailed)
+    ));
+    // Even a stale/preconstructed operation carrying a different desired word
+    // must refuse before encoding or final-output verification can approve it.
+    let forged = StartupOperation {
+        hardware: "SAT 8000".into(),
+        normal: target.clone(),
+        kernel: None,
+        gate: Gate::bind(&target).unwrap(),
+        required: 0xfe25,
+    };
+    assert!(matches!(forged.prepare(&prepared), Err(Error::Unsupported)));
+    assert!(matches!(
+        forged.verify(&prepared, &tampered),
+        Err(Error::Unsupported)
+    ));
+}
+
+#[test]
+fn unresolved_source_keeps_target_word_fallback_and_unknown_exact_pairs() {
     let normal = fixture(0xfe24, 0);
     let mut no_gate = normal.clone();
     no_gate[0x80..0x94].fill(0xff);
@@ -120,30 +155,33 @@ fn unknown_is_preserved_only_for_identical_native_components() {
 #[test]
 fn conditional_alternative_is_not_erased_or_promoted_to_unconditional_acceptance() {
     let target = h8_conditional::tests::fixture(0x1000, 0x4000, 0x5000);
-    let installed = fixture(0xfe24, 5);
+    let installed = fixture(0xfe23, 5);
     let operation = operation(&installed, &target).unwrap().unwrap();
     let prepared = preparation(&target);
-    let changed = operation.prepare(&prepared).unwrap().unwrap();
-    assert_eq!(&changed[0x8c..], &target[0x8c..]);
-    assert_eq!(&changed[..0x8a], &target[..0x8a]);
-    let gate = Gate::bind(&changed).unwrap();
-    assert_eq!(gate.bound.requirement.required, 0xfe24);
+    assert!(operation.prepare(&prepared).unwrap().is_none());
+    operation.verify(&prepared, &target).unwrap();
+    let gate = Gate::bind(&target).unwrap();
+    assert_eq!(gate.bound.requirement.required, 0xfe23);
     assert_eq!(gate.conditional, Gate::bind(&target).unwrap().conditional);
     assert!(self::operation(&fixture(0xfe09, 5), &target).is_err());
     for offset in [0x90, 0x94, 0x4000 + 253, 0x4000 + 279, 0x5000 + 10] {
-        let mut bad = changed.clone();
+        let mut bad = target.clone();
         bad[offset] ^= 1;
         assert!(operation.verify(&prepared, &bad).is_err(), "{offset:#x}");
     }
-    // A conditional shape without its complete predicate cannot be corrected.
+    assert!(matches!(
+        self::operation(&fixture(0xfe24, 5), &target),
+        Err(Error::Unsupported)
+    ));
+    // A conditional shape without its complete predicate cannot be admitted.
     let mut incomplete = target.clone();
     incomplete[0x4000 + 253] ^= 1;
     assert!(self::operation(&installed, &incomplete).is_err());
 }
 
 #[test]
-fn indirect_getter_and_long_branch_keep_the_original_abi_and_call_address() {
-    let installed = fixture(0xfe25, 0);
+fn unchanged_indirect_getter_and_long_branch_keep_original_abi_and_call_address() {
+    let installed = fixture(0xfe24, 0);
     for load_before in [false, true] {
         let mut target = fixture(0xfe24, 0);
         target[0x80..0xa0].fill(0xff);
@@ -162,15 +200,15 @@ fn indirect_getter_and_long_branch_keep_the_original_abi_and_call_address() {
         ]);
         target[0x80..0x80 + code.len()].copy_from_slice(&code);
         let op = operation(&installed, &target).unwrap().unwrap();
-        let changed = op.prepare(&preparation(&target)).unwrap().unwrap();
-        let differences: Vec<_> = target
-            .iter()
-            .zip(&changed)
-            .enumerate()
-            .filter_map(|(i, (a, b))| (a != b).then_some(i))
-            .collect();
-        assert_eq!(differences, [0x8f]);
-        assert_eq!(changed[0x8f], 0x25);
+        assert_eq!(
+            op.required_words(),
+            [Word {
+                parameter: 0x9f,
+                value: 0xfe24
+            }]
+        );
+        assert!(op.prepare(&preparation(&target)).unwrap().is_none());
+        op.verify(&preparation(&target), &target).unwrap();
     }
 }
 
@@ -247,19 +285,19 @@ fn native_accepts(code: &[u8], word: u16, predicate: bool, saved_flag: bool) -> 
 }
 
 #[test]
-fn every_word_and_predicate_outcome_preserves_native_conditional_branch_semantics() {
+fn unchanged_conditional_gate_preserves_native_word_and_predicate_semantics() {
     let conditional = h8_conditional::tests::fixture(0x1000, 0x4000, 0x5000);
-    let donor = fixture(0xfe24, 5);
+    let donor = fixture(0xfe23, 5);
     let op = operation(&donor, &conditional).unwrap().unwrap();
-    let changed = op.prepare(&preparation(&conditional)).unwrap().unwrap();
+    assert!(op.prepare(&preparation(&conditional)).unwrap().is_none());
     for word in 0..=u16::MAX {
         for predicate in [false, true] {
             for saved_flag in [false, true] {
                 let (accepted, calls) =
-                    native_accepts(&changed[0x80..0xbc], word, predicate, saved_flag);
+                    native_accepts(&conditional[0x80..0xbc], word, predicate, saved_flag);
                 assert_eq!(
                     accepted,
-                    word == 0xfe24 || (word == 0xfe09 && predicate),
+                    word == 0xfe23 || (word == 0xfe09 && predicate),
                     "{word:04x}/{predicate}/{saved_flag}"
                 );
                 assert_eq!(calls, usize::from(word == 0xfe09));
@@ -286,10 +324,12 @@ fn native_oem_rejection_continuation_is_preserved_after_the_flag_service() {
     ]);
     target[0x6010..0x6016].copy_from_slice(&[0x5e, 0x40, 0x0a, 0x14, 0x54, 0x70]);
     target[0x6100..0x6106].copy_from_slice(&[0x01, 0x10, 0x6d, 0xf4, 0x0c, 0x8c]);
-    let donor = fixture(0xfe24, 0);
+    let donor = fixture(0xfe13, 0);
     let op = operation(&donor, &target).unwrap().unwrap();
-    let changed = op.prepare(&preparation(&target)).unwrap().unwrap();
-    let mut expected = target.clone();
-    expected[0x8b] = 0x24;
-    assert_eq!(changed, expected);
+    assert!(op.prepare(&preparation(&target)).unwrap().is_none());
+    op.verify(&preparation(&target), &target).unwrap();
+    assert!(matches!(
+        operation(&fixture(0xfe24, 0), &target),
+        Err(Error::Unsupported)
+    ));
 }

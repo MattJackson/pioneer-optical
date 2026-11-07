@@ -1,4 +1,4 @@
-//! Bound startup comparison edits. The existing device word is never changed.
+//! Bound unchanged startup comparisons with read-only live-word prerequisites.
 use super::{h8_conditional, ID};
 use crate::{
     compatibility::Error,
@@ -197,6 +197,12 @@ pub(super) fn plan(transition: &Transition<'_, '_>) -> Result<Option<Box<dyn Ope
             gate.bound.requirement.required
         }
     };
+    // Equal reader layouts and a live word do not establish the automatic OEM
+    // writer's later value or behavior. No changed-comparison domain has a
+    // complete writer-lifecycle witness, so preserve the target operand.
+    if required != gate.bound.requirement.required {
+        return Err(Error::Unsupported);
+    }
     let changed = gate.emit(target.normal, required)?;
     let corrected = Gate::bind(&changed)?;
     if corrected.bound.requirement.required != required || corrected.conditional != gate.conditional
@@ -213,7 +219,7 @@ pub(super) fn plan(transition: &Transition<'_, '_>) -> Result<Option<Box<dyn Ope
 }
 
 /// A native requirement-preservation certificate participates in the same
-/// prepare/verify transaction as a comparison edit, including after phase edits.
+/// prepare/verify transaction as an unchanged comparison, including after phase edits.
 /// Its theorem is target-local predicate/component invariance. Independent bank
 /// selection and the automatic OEM parameter-writer lifecycle are not inferred
 /// merely from equal reader layouts or from this certificate's presence.
@@ -332,6 +338,11 @@ impl core::fmt::Debug for StartupOperation {
 }
 impl StartupOperation {
     fn bound(&self, context: &Preparation<'_>) -> Result<(), Error> {
+        // Enforce the planning restriction again at prepare/final verification;
+        // a stale or constructed operation cannot authorize a CMP rewrite.
+        if self.required != self.gate.bound.requirement.required {
+            return Err(Error::Unsupported);
+        }
         if context.target.hardware != self.hardware
             || context.target.normal != self.normal
             || context.target.kernel != self.kernel.as_deref()

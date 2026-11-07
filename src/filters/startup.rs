@@ -22,14 +22,14 @@ pub static FILTER: Startup = Startup;
 
 /// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
 static RULES: super::Rules = super::Rules {
-    description: "Compares a bound startup gate or a separately proved preservation contract: H8 word 0x009F, ATA word 0x00D9, V850 Kernel identity, or SCSI checksum/header. Fixed and conditional predicates differ. No recognised comparison does not mean no requirement; reader, caller, cache and startup-path evidence remain separate.",
+    description: "Compares a bound startup gate or a separately proved preservation contract: unchanged H8 word 0x009F comparisons, ATA word 0x00D9, V850 Kernel identity, or SCSI checksum/header. Fixed and conditional predicates differ. No recognised comparison does not mean no requirement; reader, caller, cache, startup-path and automatic OEM writer-lifecycle evidence remain separate.",
     role: super::Role::Operational,
     correctability: super::Correctability::Guarded,
-    correction: "H8 startup comparisons are corrected in the Normal image to preserve the installed accepted word, with a read-only live-word prerequisite. Conditional predicates remain intact. Other platforms retain their independent native prerequisites.",
+    correction: "H8 startup comparison operands remain unchanged, with a read-only live-word prerequisite for equal known comparisons or a supported unresolved-source target-word fallback. Differing primary comparisons refuse because no complete OEM writer-lifecycle proof is bound. Separately bound non-comparison preservation and other platforms retain their independent native prerequisites.",
     policies: &[
         super::Policy {
             domains: &[super::identity::Domain::Sat1, super::identity::Domain::H8Sat],
-            text: "A differing native H8 comparison is corrected only with both complete getter bindings. Missing evidence never selects FFFF. An unresolved installed comparison can admit an unchanged bound target only with equal Normal-owned reader layouts and a read-only target-word prerequisite. Bound native loader-flag inventories preserve unchanged startup requirements through the shared correction verifier, while host command, image checksum, generation marker and persistent-bank predicates retain their independent owners. Unknown startup code is preserved only when both Normal and Kernel are unchanged. Recognized native integrity failures still refuse; other unresolved transitions refuse. A missing Kernel-resident getter remains unresolved and cannot use the read-only fallback. Persistent banks and independent hardware checks remain required.",
+            text: "A bound native H8 comparison retains its exact operand and requires a read-only live word. Equal known source and target comparisons retain this prerequisite; differing primary comparisons refuse without a complete automatic OEM writer-lifecycle witness. An unresolved installed comparison can admit an unchanged bound target only with equal Normal-owned reader layouts and a read-only target-word prerequisite. Missing evidence never selects FFFF. Bound native loader-flag inventories establish scoped target-local predicate preservation through the shared verifier; bank selection and the automatic OEM parameter-writer lifecycle are not inferred. Host command, image checksum, generation marker, persistent-bank predicates and independent hardware checks retain their owners. Unknown startup code is preserved only when both Normal and Kernel are unchanged. Recognized native integrity failures and other unresolved transitions refuse. A missing Kernel-resident getter remains unresolved and cannot use the read-only fallback.",
         },
         super::Policy {
             domains: &[super::identity::Domain::Sat1, super::identity::Domain::H8Sat],
@@ -197,8 +197,8 @@ impl Filter for Startup {
         &self,
         _context: &Context<'_>,
     ) -> Result<alloc::vec::Vec<ParameterAction>, Error> {
-        // Startup is an image correction with read-only prerequisites. It never
-        // schedules a separate persistent settings transaction.
+        // Startup uses read-only prerequisites or separately bound component
+        // preservation. It never schedules a persistent settings transaction.
         Ok(vec![])
     }
     fn plan(

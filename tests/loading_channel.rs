@@ -508,6 +508,13 @@ fn known_unavailable_loading_receiver_retains_native_and_integrity_refusals() {
         b.sat.as_ref().unwrap().irq.channel,
         Observation::Unresolved(_)
     ));
+    assert!(matches!(
+        b.sat.as_ref().unwrap().irq.channel_hardware,
+        Observation::Known(pioneer_optical::image::irq::channel::Hardware {
+            mapping: Mapping::Seven,
+            auxiliary: pioneer_optical::image::irq::channel::Auxiliary::LatchedObject,
+        })
+    ));
     assert!(
         matches!(
             loading_channel::FILTER.plan(
@@ -518,7 +525,7 @@ fn known_unavailable_loading_receiver_retains_native_and_integrity_refusals() {
                 &loading_channel::FILTER.inspect(&a),
                 &loading_channel::FILTER.inspect(&b)
             ),
-            Err(Error::Incompatible)
+            Err(Error::Unsupported)
         ),
         "native binding is unavailable independently of checksum authority"
     );
@@ -845,4 +852,77 @@ fn observed_xs06_hardware_matches_without_authorizing_unproved_correction() {
             .blocked(),
         Some(Error::Incompatible)
     );
+}
+
+#[test]
+#[ignore = "requires the exact private corpus components"]
+fn phase_and_loading_compose_on_real_native_targets() {
+    use pioneer_optical::filters::phase;
+    let five = load(FIVE);
+    let seven = load(SEVEN);
+    let registry: &[&dyn Filter] = &[&phase::FILTER, &loading_channel::FILTER];
+    for (source, target) in [(&five, &seven), (&seven, &five)] {
+        let installed = context(source);
+        let incoming = context(target);
+        let unchanged_y = loading::FILTER.inspect(&incoming).finding;
+        let plan = runner::plan_with(&installed, &incoming, Policy::Strict, registry).unwrap();
+        assert_eq!(
+            plan.operations().count(),
+            2,
+            "both native assignments must change"
+        );
+        let preparation = Preparation {
+            target: incoming.firmware,
+            normal: Some(&target.normal),
+            kernel: target.kernel.as_ref(),
+        };
+        let composed = plan.prepare_with(&preparation, registry).unwrap().unwrap();
+        assert_eq!(checksum(&composed), 0);
+        plan.verify_with(&preparation, &composed, registry).unwrap();
+        // One composed result goes through one codec roundtrip, rather than
+        // independently repacking and combining each owner's encoded output.
+        let encoded = target.normal.repack(&composed).unwrap();
+        let decoded =
+            Envelope::load_with_kernel(&encoded, target.kernel.as_ref().unwrap()).unwrap();
+        assert_eq!(decoded.image, composed);
+        plan.verify_with(&preparation, &decoded.image, registry)
+            .unwrap();
+        let after = Context::new(Firmware {
+            normal: &decoded.image,
+            ..incoming.firmware
+        });
+        for owner in registry {
+            assert_eq!(
+                owner.inspect(&after).finding,
+                owner.inspect(&installed).finding
+            );
+        }
+        assert_eq!(loading::FILTER.inspect(&after).finding, unchanged_y);
+        let reverse = runner::plan_with(&incoming, &after, Policy::Strict, registry).unwrap();
+        assert_eq!(reverse.operations().count(), 2);
+        let reverse_context = Preparation {
+            target: after.firmware,
+            normal: Some(&decoded),
+            kernel: target.kernel.as_ref(),
+        };
+        let restored = reverse
+            .prepare_with(&reverse_context, registry)
+            .unwrap()
+            .unwrap();
+        reverse
+            .verify_with(&reverse_context, &restored, registry)
+            .unwrap();
+        assert_eq!(restored, target.normal.image);
+        // This is real firmware facet composition, not whole-pair admission.
+        let full = runner::evaluate(&installed, &incoming, Policy::Strict).unwrap();
+        assert_eq!(
+            full.decisions()
+                .iter()
+                .find(|d| d.id == loading::FILTER.id())
+                .unwrap()
+                .blocked(),
+            Some(Error::Incompatible)
+        );
+        assert!(full.admit().is_err());
+    }
 }

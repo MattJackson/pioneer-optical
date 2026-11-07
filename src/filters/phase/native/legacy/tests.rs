@@ -176,8 +176,8 @@ fn odd_calls_and_relocated_internal_jumps_are_rejected() {
 }
 
 #[test]
-fn sat1_byte_pair_correction_is_suspended_but_other_platforms_keep_it() {
-    use crate::compatibility::{Error, Firmware};
+fn byte_pair_correction_uses_native_programs_across_platform_labels() {
+    use crate::compatibility::Firmware;
     use crate::filters::{phase::FILTER, Context, Filter, Transition};
     for t in templates::TEMPLATES
         .iter()
@@ -185,7 +185,7 @@ fn sat1_byte_pair_correction_is_suspended_but_other_platforms_keep_it() {
     {
         let raw = fixture(t);
         let corrected = correct(&raw, opposite(t.assignment)).unwrap();
-        for (hardware, admitted) in [("SAT 1046", false), ("SAT 8000", true)] {
+        for hardware in ["SAT 1046", "SAT 8000"] {
             let context = |normal| {
                 Context::new(Firmware {
                     hardware,
@@ -202,11 +202,8 @@ fn sat1_byte_pair_correction_is_suspended_but_other_platforms_keep_it() {
                 &FILTER.inspect(&installed),
                 &FILTER.inspect(&target),
             );
-            if admitted {
-                assert!(matches!(plan, Ok(Some(_))), "{hardware}");
-            } else {
-                assert!(matches!(plan, Err(Error::Unsupported)), "{hardware}");
-            }
+            let operation = plan.unwrap().expect("bound native output correction");
+            assert!(operation.required_words().is_empty(), "{hardware}");
         }
     }
 }

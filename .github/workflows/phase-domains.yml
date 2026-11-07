@@ -1,0 +1,87 @@
+name: Phase-only corpus coverage
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev, fix/phase-only-correction]
+    paths:
+      - 'src/**'
+      - 'tests/phase_domain_coverage.rs'
+      - 'tests/phase_sat1_phase_only.rs'
+      - 'tests/fixtures/phase-domain-inventory.json'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/phase-corpus.json'
+      - '.github/scripts/fetch-phase-corpus.py'
+      - '.github/workflows/phase-domains.yml'
+permissions:
+  contents: read
+concurrency:
+  group: phase-domains-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
+    steps:
+      - id: matrix
+        shell: bash
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          rows = [{"domain": domain, "shard": shard, "shards": shards}
+                  for domain, shards in [("sat1", 2), ("h8sat", 8)]
+                  for shard in range(shards)]
+          print("value=" + json.dumps({"include": rows}))
+          PY
+  phase:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    # Draft inputs require repository push access. The token is exposed only
+    # to the download step; it is not persisted by checkout or passed to tests.
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: phase-domain
+          cache-on-failure: true
+      - name: Fetch exact unpublished original-image inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/fetch-phase-corpus.py
+          --config .github/phase-corpus.json
+          --manifest tests/fixtures/phase-domain-inventory.json
+          --domain '${{ matrix.domain }}'
+          --output "$RUNNER_TEMP/phase-inputs"
+      - name: Validate the pinned inventory
+        run: cargo test --locked --release --features envelope --test phase_domain_coverage inventory_covers_every_held_image_and_kernel_variant -- --exact
+      - name: Prove target mappings and every ordered planner pair
+        env:
+          PIONEER_PHASE_CORPUS: ${{ runner.temp }}/phase-inputs
+          PIONEER_PHASE_DOMAIN: ${{ matrix.domain }}
+          PIONEER_PHASE_SHARD: ${{ matrix.shard }}
+          PIONEER_PHASE_SHARDS: ${{ matrix.shards }}
+        shell: bash
+        run: |
+          echo "source=${{ github.sha }} domain=${{ matrix.domain }} shard=${{ matrix.shard }}/${{ matrix.shards }}" > "$RUNNER_TEMP/phase-report.txt"
+          cargo test --locked --release --features envelope --test phase_domain_coverage \
+            every_target_mapping_and_ordered_planner_pair \
+            -- --ignored --exact --nocapture 2>&1 | tee -a "$RUNNER_TEMP/phase-report.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase-${{ matrix.domain }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/phase-report.txt
+          if-no-files-found: ignore
+          retention-days: 14

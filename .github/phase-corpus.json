@@ -22,5 +22,16 @@
   },
   "repository": "MattJackson/pioneer-optical",
   "release_id": 437209022,
-  "publication": "unpublished draft; never publish"
+  "publication": "unpublished draft; never publish",
+  "conditional_receiver_manifest_sha256": "15a3b12b6b9f23376dff8cacbe6bd48de5c5f18eced80de47e14e8c1d0e34465",
+  "supplemental_receivers": {
+    "file": "conditional-receiver-kernels.tar.gz",
+    "sha256": "b5fb502b6bbfcfe1672af21bf8f88cb5b3cf5e83efd348a6215dcc466408e813",
+    "bytes": 137041,
+    "asset_id": 719213796,
+    "components": [
+      "1039c3ab7f97fb53956aea0adef9936c7f754d6ca59fa14d5ac5386df543a89e",
+      "1bd375f6f56d33264053949525a21a06b1d720b7d9c5ebb86334b8ce7895115a"
+    ]
+  }
 }

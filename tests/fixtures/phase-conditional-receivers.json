@@ -1,0 +1,669 @@
+{
+  "schema": 1,
+  "scope": "supplemental conditional original-codec contexts; does not replace package inventory or identify live installed Kernel",
+  "records": [
+    {
+      "normal": "10074482e4e69b0ecaae472a89b17072e817dc3c6df43e1f6ce35afaf7bab325",
+      "packaged_kernel": null,
+      "receivers": [
+        {
+          "kernel": "0382908258a57df4e6616889f3f34afeb11eb632d11f08f46576078a8a824de6",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf/SAT-8D31.envelope-0382908258a5.firmware.tar",
+              "candidate": "Pioneer_BDR_firmware_pack_2022.11.03.zip::BDR-XD07/BDR-XD07J-UHD/S8D31690.104",
+              "member": "components/S8D31690.104.enc",
+              "source_sha256": "30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf"
+            },
+            {
+              "bundle": "bundles/cee79057663278f68d169ec258809d706212cbc99c095cf205317963a35c6917/SAT-8D31.firmware.tar",
+              "candidate": "BDR-XD07J_UHD_FW104EU.exe::Updater.exe::rsrc0",
+              "member": "components/S8D31690.104.enc",
+              "source_sha256": "cee79057663278f68d169ec258809d706212cbc99c095cf205317963a35c6917"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 18640,
+            "offsets": [
+              92416,
+              488192
+            ]
+          },
+          "decoded_normal_sha256": "c2b564ad3d254794ad7b01f1871f80d7a9caba4bea54b80316436e623bf21b79",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        },
+        {
+          "kernel": "08c2f57a97a9b3e8002c8256388b8e6a389e74ee283b5fe355f101cf8f2f6c6c",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/22524d487c88fc7b339518a45caf546b8ac4ae1c6983aa31e1bad1e69e6f38a6/SAT-8D31.firmware.tar",
+              "candidate": "BDR-XD07J_UHD_FW103EU.exe::rsrc0",
+              "member": "components/S8D31690.103.enc",
+              "source_byte_offset": 1681224,
+              "source_sha256": "22524d487c88fc7b339518a45caf546b8ac4ae1c6983aa31e1bad1e69e6f38a6"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 18640,
+            "offsets": [
+              92416,
+              488192
+            ]
+          },
+          "decoded_normal_sha256": "c2b564ad3d254794ad7b01f1871f80d7a9caba4bea54b80316436e623bf21b79",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        }
+      ]
+    },
+    {
+      "normal": "1648c1b818763b5eb94169debfa10efc4a9988760998ae2b1d645419b63d3438",
+      "packaged_kernel": null,
+      "receivers": [
+        {
+          "kernel": "1039c3ab7f97fb53956aea0adef9936c7f754d6ca59fa14d5ac5386df543a89e",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf/SAT-8420.envelope-1039c3ab7f97.firmware.tar",
+              "candidate": "Pioneer_BDR_firmware_pack_2022.11.03.zip::BDR-XU02/BDR-XU02J/S8420000.100",
+              "member": "components/S8420000.100.enc",
+              "source_sha256": "30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 20524,
+            "offsets": [
+              92416,
+              488192
+            ]
+          },
+          "decoded_normal_sha256": "011daeb624fa2e4edb9ec2f065c8b5f0c2b35882492eb5759681f006cf2ece44",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        }
+      ]
+    },
+    {
+      "normal": "5dbdce251ca2ac57944925198482959d7990946832e522f21773ca6ae10069b9",
+      "packaged_kernel": null,
+      "receivers": [
+        {
+          "kernel": "89a14c58719321b54671a6d2878330b1594d83750afcadda41ae1771317e079b",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/a794ed8c0b30b2f0b9f0ba179d1b62e8fc0ad67097b7f2eb9e3723557f67a244/SAT-8D30.firmware.tar",
+              "candidate": "PioneerDriveUpdaterBDR-XD07LE_R-N_V103.dmg::disk image\u00d4\u00ba\u00e0Apple_HFS: 4\u00d4\u00ba\u00e2::/PioneerDriveUpdaterBDR-XD07LE_R-N_V103.app/Contents/Resources/S8D30360.103",
+              "member": "components/S8D30360.103.enc",
+              "source_sha256": "a794ed8c0b30b2f0b9f0ba179d1b62e8fc0ad67097b7f2eb9e3723557f67a244"
+            },
+            {
+              "bundle": "bundles/b27b3a808f28e1cb3e567255c7f32fe5b6ad2c5f9f7c5a6e7c95db561bfbe1e5/SAT-8D30.firmware.tar",
+              "candidate": "BDR-XD07LE_RN_FW103EU.exe::rsrc0",
+              "member": "components/S8D30360.103.enc",
+              "source_byte_offset": 1681224,
+              "source_sha256": "b27b3a808f28e1cb3e567255c7f32fe5b6ad2c5f9f7c5a6e7c95db561bfbe1e5"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 20094,
+            "offsets": [
+              92416,
+              488192
+            ]
+          },
+          "decoded_normal_sha256": "fbc97b8a562a972471bd970d47c212306bfa696defe4c4822e973ec4a43518f0",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        },
+        {
+          "kernel": "9671adfdfef7f0782eef297e10f9ab439f546b47beb99fdd211a067b86a0be78",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf/SAT-8D30.envelope-9671adfdfef7.firmware.tar",
+              "candidate": "Pioneer_BDR_firmware_pack_2022.11.03.zip::BDR-XD07/BDR-XD07LE/S8D30360.104",
+              "member": "components/S8D30360.104.enc",
+              "source_sha256": "30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf"
+            },
+            {
+              "bundle": "bundles/4b8ebccfdaabeb70969e59cd9a4d51b1245174b6e3a916199ce294a030cdb637/SAT-8D30.firmware.tar",
+              "candidate": "PioneerDriveUpdaterBDR-XD07LE_RN_V104EU.dmg::disk image\u00d4\u00ba\u00e0Apple_HFS: 4\u00d4\u00ba\u00e2::/PioneerDriveUpdaterBDR-XD07LE_R-N_V104.app/Contents/Resources/S8D30360.104",
+              "member": "components/S8D30360.104.enc",
+              "source_sha256": "4b8ebccfdaabeb70969e59cd9a4d51b1245174b6e3a916199ce294a030cdb637"
+            },
+            {
+              "bundle": "bundles/746c99dd66751bc725365502ae02a0eedf2821d95511861a412b0387db697d9c/SAT-8D30.firmware.tar",
+              "candidate": "BDR-XD07LE_RN_FW104EU.exe::Updater.exe::rsrc0",
+              "member": "components/S8D30360.104.enc",
+              "source_sha256": "746c99dd66751bc725365502ae02a0eedf2821d95511861a412b0387db697d9c"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 20094,
+            "offsets": [
+              92416,
+              488192
+            ]
+          },
+          "decoded_normal_sha256": "fbc97b8a562a972471bd970d47c212306bfa696defe4c4822e973ec4a43518f0",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        }
+      ]
+    },
+    {
+      "normal": "6dbb0eb2f264c4a90d933e382f2955b5fd04fb2776248134a2b579108cb2105c",
+      "packaged_kernel": null,
+      "receivers": [
+        {
+          "kernel": "1039c3ab7f97fb53956aea0adef9936c7f754d6ca59fa14d5ac5386df543a89e",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf/SAT-8420.envelope-1039c3ab7f97.firmware.tar",
+              "candidate": "Pioneer_BDR_firmware_pack_2022.11.03.zip::BDR-XU02/BDR-XU02J/S8420000.100",
+              "member": "components/S8420000.100.enc",
+              "source_sha256": "30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 20524,
+            "offsets": [
+              92416,
+              488192
+            ]
+          },
+          "decoded_normal_sha256": "918de80dac1d581f6b15a124654ccf39ef72a3dff0a54186800331a8ba1d8258",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        }
+      ]
+    },
+    {
+      "normal": "70a679c71f5d9aaa61da9ad5fff1a05106f3daaceb1da983fa53ee394a1f7b1f",
+      "packaged_kernel": null,
+      "receivers": [
+        {
+          "kernel": "bb4d0f3d76d95d3bdbba74322755d52da2e452c597c1eda1508d4b5f3530a9b7",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf/SAT-8D30.envelope-bb4d0f3d76d9.firmware.tar",
+              "candidate": "Pioneer_BDR_firmware_pack_2022.11.03.zip::BDR-XD07/BDR-XD07BK/S8D30350.104",
+              "member": "components/S8D30350.104.enc",
+              "source_sha256": "30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf"
+            },
+            {
+              "bundle": "bundles/719af62807884576d86ad5fbec6caae78b99ea116667e10451cb90dc8d3bae29/SAT-8D30.firmware.tar",
+              "candidate": "PioneerDriveUpdaterBDR-XD07BK_W_R_V104EU.dmg::disk image\u00d4\u00ba\u00e0Apple_HFS: 4\u00d4\u00ba\u00e2::/PioneerDriveUpdaterBDR-XD07BK_W_R_V104.app/Contents/Resources/S8D30350.104",
+              "member": "components/S8D30350.104.enc",
+              "source_sha256": "719af62807884576d86ad5fbec6caae78b99ea116667e10451cb90dc8d3bae29"
+            },
+            {
+              "bundle": "bundles/ee303c6090e2139ae2677f30821843333edebfae456d8c0a2fa0cb58ae877357/SAT-8D30.firmware.tar",
+              "candidate": "BDR-XD07BK_W_R_FW104EU.exe::Updater.exe::rsrc0",
+              "member": "components/S8D30350.104.enc",
+              "source_sha256": "ee303c6090e2139ae2677f30821843333edebfae456d8c0a2fa0cb58ae877357"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 20094,
+            "offsets": [
+              92416,
+              488192
+            ]
+          },
+          "decoded_normal_sha256": "36bdcd2e4212e8add290d4ccf4419b7f084e8f7dbe68c910c2b0e53fcf1ff749",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        },
+        {
+          "kernel": "a54fbeba73caf66e400615b156cd7649d179375f207a7317597c779983bd41e1",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/3cf58b4af2344a69b555ed01ed25b78e8f1d1dc66e7339e99213b3373e4cb1ff/SAT-8D30.firmware.tar",
+              "candidate": "PioneerDriveUpdaterBDR-XD07BK_W_R_V103.dmg::disk image\u00d4\u00ba\u00e0Apple_HFS: 4\u00d4\u00ba\u00e2::/PioneerDriveUpdaterBDR-XD07BK_W_R_V103.app/Contents/Resources/S8D30350.103",
+              "member": "components/S8D30350.103.enc",
+              "source_sha256": "3cf58b4af2344a69b555ed01ed25b78e8f1d1dc66e7339e99213b3373e4cb1ff"
+            },
+            {
+              "bundle": "bundles/9ad11471d3cacec33eefb9e7977eb52801ce92b953c39886fcdf2eab92ad3510/SAT-8D30.firmware.tar",
+              "candidate": "BDR-XD07BK_W_R_FW103EU.exe::rsrc0",
+              "member": "components/S8D30350.103.enc",
+              "source_byte_offset": 1681224,
+              "source_sha256": "9ad11471d3cacec33eefb9e7977eb52801ce92b953c39886fcdf2eab92ad3510"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 20094,
+            "offsets": [
+              92416,
+              488192
+            ]
+          },
+          "decoded_normal_sha256": "36bdcd2e4212e8add290d4ccf4419b7f084e8f7dbe68c910c2b0e53fcf1ff749",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        },
+        {
+          "kernel": "38e3997654d76a4950b28c1da6832b8b220d99e92e1fe1499af76806306cb1c9",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/32e9876a2f34f841e5c41647ab9ea76245a78196fd04696057599603b7688792/SAT-8D30.firmware.tar",
+              "candidate": "BDR-XD07_1.00.reconstructed.tar::components/kernel.enc",
+              "member": "components/kernel.enc",
+              "source_byte_offset": 512,
+              "source_sha256": "32e9876a2f34f841e5c41647ab9ea76245a78196fd04696057599603b7688792"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 20130,
+            "offsets": [
+              92416,
+              488192
+            ]
+          },
+          "decoded_normal_sha256": "36bdcd2e4212e8add290d4ccf4419b7f084e8f7dbe68c910c2b0e53fcf1ff749",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        }
+      ]
+    },
+    {
+      "normal": "947f6bc1b06b03e4eedfc19a1b5f98002624a174474bc67c1b964cd10456b621",
+      "packaged_kernel": null,
+      "receivers": [
+        {
+          "kernel": "1039c3ab7f97fb53956aea0adef9936c7f754d6ca59fa14d5ac5386df543a89e",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf/SAT-8420.envelope-1039c3ab7f97.firmware.tar",
+              "candidate": "Pioneer_BDR_firmware_pack_2022.11.03.zip::BDR-XU02/BDR-XU02J/S8420000.100",
+              "member": "components/S8420000.100.enc",
+              "source_sha256": "30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 20524,
+            "offsets": [
+              92416,
+              488192
+            ]
+          },
+          "decoded_normal_sha256": "21b38b4a61b5b62988bb224bea576e8193b59132f28f0e45ca6ff37609f44817",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        }
+      ]
+    },
+    {
+      "normal": "a5aa757081478620637ed2950b540f35f1cbb969598532cfc872daba0a0366e6",
+      "packaged_kernel": null,
+      "receivers": [
+        {
+          "kernel": "36996326ae5eaa369ef34a8434514ca137b31a3f144af0955c2d12f4a8b2ea83",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf/SAT-8A10.envelope-36996326ae5e.firmware.tar",
+              "candidate": "Pioneer_BDR_firmware_pack_2022.11.03.zip::BDR-UD04/BDR-UD04B/S8A10000.100",
+              "member": "components/S8A10000.100.enc",
+              "source_sha256": "30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf"
+            },
+            {
+              "bundle": "bundles/a499db1a3ac138c5e5111971577aa48bdd59484f7dbb6f147386714bf1179e60/SAT-8A10.firmware.tar",
+              "candidate": "pioneer autoflasher UD03-UD04.zip::pioneer autoflasher UD03-04/Firmwares/S8A10000.100",
+              "member": "components/S8A10000.100.enc",
+              "source_sha256": "a499db1a3ac138c5e5111971577aa48bdd59484f7dbb6f147386714bf1179e60"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 19088,
+            "offsets": [
+              92416,
+              488192
+            ]
+          },
+          "decoded_normal_sha256": "887c3e73bda21e325f1b24dcc813363bdde9af93f7eb01a16648695d28c9d12e",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        },
+        {
+          "kernel": "07e421c1d1853f11cf5e9a3b4c355949e1dc141f9cf152766b3d79ce5ad23e9f",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf/SAT-8A10.envelope-07e421c1d185.firmware.tar",
+              "candidate": "Pioneer_BDR_firmware_pack_2022.11.03.zip::BDR-UD04/EB1/S8A10000.HE2",
+              "member": "components/S8A10000.HE2.enc",
+              "source_sha256": "30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 19088,
+            "offsets": [
+              92416,
+              488192
+            ]
+          },
+          "decoded_normal_sha256": "887c3e73bda21e325f1b24dcc813363bdde9af93f7eb01a16648695d28c9d12e",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        }
+      ]
+    },
+    {
+      "normal": "dddcf4b8d8d5f63cae0611207dc648893538a0875dd92bb6016388788c3e5d3f",
+      "packaged_kernel": null,
+      "receivers": [
+        {
+          "kernel": "6248a7aee347e88ca0e60571e8e837010183d44b259fd3c0f2359651c983b765",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/aacf84c6220b35e01a74d1d974f77f8e64545ea858b7e04a91f4970b3c9e9733/SAT-8D30.firmware.tar",
+              "candidate": "PioneerDriveUpdaterBDR-AD07BK_W_R_V103.dmg::disk image\u00d4\u00ba\u00e0Apple_HFS: 4\u00d4\u00ba\u00e2::/PioneerDriveUpdaterBDR-AD07BK_W_R_V103.app/Contents/Resources/S8D30320.103",
+              "member": "components/S8D30320.103.enc",
+              "source_sha256": "aacf84c6220b35e01a74d1d974f77f8e64545ea858b7e04a91f4970b3c9e9733"
+            },
+            {
+              "bundle": "bundles/f6555592f9c205f316f7465f5c69d09bd810d69ece0bb589a7345e4b16ae866b/SAT-8D30.firmware.tar",
+              "candidate": "BDR-AD07BK_W_R_FW103EU.exe::rsrc0",
+              "member": "components/S8D30320.103.enc",
+              "source_byte_offset": 1681224,
+              "source_sha256": "f6555592f9c205f316f7465f5c69d09bd810d69ece0bb589a7345e4b16ae866b"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 20094,
+            "offsets": [
+              92416,
+              488192
+            ]
+          },
+          "decoded_normal_sha256": "5977eb5da69edf32ca102b8d65380e65ebd91f1766dae37c2038fab5afb237f3",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        },
+        {
+          "kernel": "500ad9128f21030b54c158261ccbae99a60f7a779795a71d7affbb1c835d59ff",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf/SAT-8D30.envelope-500ad9128f21.firmware.tar",
+              "candidate": "Pioneer_BDR_firmware_pack_2022.11.03.zip::BDR-XD07/BDR-AD07BK/S8D30320.104",
+              "member": "components/S8D30320.104.enc",
+              "source_sha256": "30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf"
+            },
+            {
+              "bundle": "bundles/7a995b89d25571b804eb8415f6f5a92110494071a3a1e4fb2c65d3a6c610b9a6/SAT-8D30.firmware.tar",
+              "candidate": "BDR-AD07BK_W_R_FW104EU.exe::Updater.exe::rsrc0",
+              "member": "components/S8D30320.104.enc",
+              "source_sha256": "7a995b89d25571b804eb8415f6f5a92110494071a3a1e4fb2c65d3a6c610b9a6"
+            },
+            {
+              "bundle": "bundles/f6448240cc98e0da9a67b721760e06d8cda78db139ddd081a92c2fceb4386467/SAT-8D30.firmware.tar",
+              "candidate": "PioneerDriveUpdaterBDR-AD07BK_W_R_V104EU.dmg::disk image\u00d4\u00ba\u00e0Apple_HFS: 4\u00d4\u00ba\u00e2::/PioneerDriveUpdaterBDR-AD07BK_W_R_V104.app/Contents/Resources/S8D30320.104",
+              "member": "components/S8D30320.104.enc",
+              "source_sha256": "f6448240cc98e0da9a67b721760e06d8cda78db139ddd081a92c2fceb4386467"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 20094,
+            "offsets": [
+              92416,
+              488192
+            ]
+          },
+          "decoded_normal_sha256": "5977eb5da69edf32ca102b8d65380e65ebd91f1766dae37c2038fab5afb237f3",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        }
+      ]
+    },
+    {
+      "normal": "01db920b995420d8fa5c1d1a0927d1480ef2b7df11a6941a12ee3878617fa156",
+      "packaged_kernel": null,
+      "receivers": [
+        {
+          "kernel": "87a53f8fa6bc65c824eed777bee438d8ff2812affb644936adae30912bcc415d",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf/SAT-1003.envelope-87a53f8fa6bc.firmware.tar",
+              "candidate": "Pioneer_BDR_firmware_pack_2022.11.03.zip::BDR-202/BDR-202BK/S1003000.108",
+              "member": "components/S1003000.108.enc",
+              "source_sha256": "30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 15712,
+            "offsets": [
+              209408,
+              635392
+            ]
+          },
+          "decoded_normal_sha256": "05413010accb58b75c86a84f1dcdb77aa028acf2e35db569da3e29ad3665591a",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        }
+      ]
+    },
+    {
+      "normal": "76fe0e3331eea46a11cf8a6eec2e083817963bdb9af4b719866dde203bdfd926",
+      "packaged_kernel": null,
+      "receivers": [
+        {
+          "kernel": "1bd375f6f56d33264053949525a21a06b1d720b7d9c5ebb86334b8ce7895115a",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf/SAT-1011.envelope-1bd375f6f56d.firmware.tar",
+              "candidate": "Pioneer_BDR_firmware_pack_2022.11.03.zip::BDR-TD02/BDC-TD02VA/S1011010.100",
+              "member": "components/S1011010.100.enc",
+              "source_sha256": "30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 6560,
+            "offsets": [
+              92416,
+              488192
+            ]
+          },
+          "decoded_normal_sha256": "b2e105311f6e59dc3907f535205ecefe69dd341b9b4ef52537659d99d998c875",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        }
+      ]
+    },
+    {
+      "normal": "896a12dccd888dab96d3ca6dfb3dc02f9eac04f7e6c76de0d3c733d380d4d34e",
+      "packaged_kernel": null,
+      "receivers": [
+        {
+          "kernel": "095bb55ab887cb61dfcf56bb0f1f1f9c5dd1057173d273289ce4b19e150bac48",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/d511103dbceca2cc57c75003ce4b650134e511c47afd6e2d1810478fa9e68a38/SAT-1031.firmware.tar",
+              "candidate": "BDR-PR1EPDVPP100_1.00.candidate.tar::components/S1031790.000.enc",
+              "member": "components/S1031790.000.enc",
+              "source_byte_offset": 512,
+              "source_sha256": "d511103dbceca2cc57c75003ce4b650134e511c47afd6e2d1810478fa9e68a38"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 7432,
+            "offsets": [
+              92416,
+              488192
+            ]
+          },
+          "decoded_normal_sha256": "acb11cd116f7aecada04bce16247ed5eaf89725c90bcf69767178ee23857a696",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        },
+        {
+          "kernel": "16e35e68308085e4eeac3130dea5aa4a64f808c4f4ad6321c7b832895d31751b",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/08d9293044387bdd0cd964d35a6383ca9dddaf69fbca1eb07d24b71cfe09b21c/SAT-1031.envelope-16e35e683080.firmware.tar",
+              "candidate": "Pioneer BDR-PR1EPDV PP100.zip::Pioneer BDR-PR1EPDV PP100/BDR-PR1EPDV kernel i firmware 1.01.zip::S1031790.101",
+              "member": "components/S1031790.101.enc",
+              "source_sha256": "08d9293044387bdd0cd964d35a6383ca9dddaf69fbca1eb07d24b71cfe09b21c"
+            },
+            {
+              "bundle": "bundles/1e44d57504c06db1ec92470400c070e1417e6b4e7e5ffd3554b1e6dd8a08e846/SAT-1031.firmware.tar",
+              "candidate": "UDBDR_V101.bin::bzip2-member::files/drvfwupd/V15x/S1031790.101",
+              "member": "components/S1031790.101.enc",
+              "source_sha256": "1e44d57504c06db1ec92470400c070e1417e6b4e7e5ffd3554b1e6dd8a08e846"
+            },
+            {
+              "bundle": "bundles/8321d1bd65a6630fd680542f9ac377230e1a4e05cb9df854289c88c11839f0c8/SAT-1031.firmware.tar",
+              "candidate": "22388_UDBDR_V101.zip::UDBDR_V101.bin::bzip2-member::files/drvfwupd/V15x/S1031790.101",
+              "member": "components/S1031790.101.enc",
+              "source_sha256": "8321d1bd65a6630fd680542f9ac377230e1a4e05cb9df854289c88c11839f0c8"
+            },
+            {
+              "bundle": "bundles/fb43f12148e2b6154cab7ae43383cac6916dce4340abd342acd8908e347bfb2d/SAT-1031.firmware.tar",
+              "candidate": "22389_TDM_DrvFirm_UpdateV100.zip::BDR-PR1EPDV/BDR-PR1EPDVPP100_FW101.exe::rsrc0",
+              "member": "components/S1031790.101.enc",
+              "source_sha256": "fb43f12148e2b6154cab7ae43383cac6916dce4340abd342acd8908e347bfb2d"
+            },
+            {
+              "bundle": "bundles/fdf9b4e5c6511e964f2a172784fd990b60ff9238be8316832753c376f347ce9a/SAT-1031.firmware.tar",
+              "candidate": "BDR-PR1EPDVPP100_FW101.exe::rsrc0",
+              "member": "components/S1031790.101.enc",
+              "source_byte_offset": 1683784,
+              "source_sha256": "fdf9b4e5c6511e964f2a172784fd990b60ff9238be8316832753c376f347ce9a"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 7432,
+            "offsets": [
+              92416,
+              488192
+            ]
+          },
+          "decoded_normal_sha256": "acb11cd116f7aecada04bce16247ed5eaf89725c90bcf69767178ee23857a696",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        }
+      ]
+    },
+    {
+      "normal": "eb4625368ee4820b6577888fbdb98fa9bb92b4bfb39acbd9f9603fb90dc1c152",
+      "packaged_kernel": null,
+      "receivers": [
+        {
+          "kernel": "87a53f8fa6bc65c824eed777bee438d8ff2812affb644936adae30912bcc415d",
+          "association": "conditional-receiver-context",
+          "provenance": [
+            {
+              "bundle": "bundles/30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf/SAT-1003.envelope-87a53f8fa6bc.firmware.tar",
+              "candidate": "Pioneer_BDR_firmware_pack_2022.11.03.zip::BDR-202/BDR-202BK/S1003000.108",
+              "member": "components/S1003000.108.enc",
+              "source_sha256": "30eab27220c87ce7d9131b72c32f7973d4543d2da993630dcce5cdd495f7b1cf"
+            }
+          ],
+          "native_xor_policy": {
+            "instruction_offset": 15712,
+            "offsets": [
+              209408,
+              635392
+            ]
+          },
+          "decoded_normal_sha256": "2d2d5fcec2920c5cb2236b7ca0187539cfa50150b517901a36fdf75644250415",
+          "checks": [
+            "four-header-fields-equal",
+            "native-xor-policy",
+            "decoded-checksum-zero",
+            "original-update-load-accepted"
+          ]
+        }
+      ]
+    }
+  ]
+}

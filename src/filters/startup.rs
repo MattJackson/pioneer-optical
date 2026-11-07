@@ -9,7 +9,7 @@ use alloc::{boxed::Box, format, vec};
 #[cfg(all(test, feature = "envelope"))]
 mod corpus;
 mod correction;
-mod h8_conditional;
+pub(crate) mod h8_conditional;
 mod m32c;
 mod scsi;
 mod scsi_shapes;

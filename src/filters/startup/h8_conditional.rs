@@ -15,19 +15,19 @@ const BASE: u32 = 0x410000;
 const RANGE_CALLS: [usize; 7] = [288, 326, 374, 396, 418, 440, 468];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ByteHalf {
+pub(crate) enum ByteHalf {
     Low,
     High,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct WordByte {
+pub(crate) struct WordByte {
     pub parameter: u16,
     pub half: ByteHalf,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct NumberByte {
+pub(crate) struct NumberByte {
     pub source: WordByte,
     pub weight: u32,
 }
@@ -39,13 +39,13 @@ pub(super) struct NumberByte {
 /// subtracts decimal_zero from each byte without digit validation and wraps at
 /// 32 bits. Code bytes are assembled in the listed most-significant-first order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum AuditedPredicate {
+pub(crate) enum AuditedPredicate {
     PrefixCodeRangesV1,
 }
 
 /// Coordinates are evidence only and never enter predicate identity bytes.
 #[derive(Clone, Debug)]
-pub(super) struct Evidence {
+pub(crate) struct Evidence {
     pub gate: u32,
     pub predicate: u32,
     pub range_helper: u32,
@@ -66,7 +66,7 @@ pub(super) struct Evidence {
 }
 
 impl Evidence {
-    pub(super) fn predicate_value(&self) -> crate::filters::Value {
+    pub(crate) fn predicate_value(&self) -> crate::filters::Value {
         use crate::filters::Value as V;
         let byte = |source: WordByte| {
             V::Sequence(vec![
@@ -137,7 +137,7 @@ fn matches(code: &[u8], shape: &[u8], links: &[(usize, usize)]) -> bool {
 
 /// Recognize only stored Normal code. A miss leaves the independently proven
 /// FE23 selection intact and provides no unconditional acceptance of FE09.
-pub(super) fn discover(normal: &[u8], bound: &crate::startup::BoundSelection) -> Option<Evidence> {
+pub(crate) fn discover(normal: &[u8], bound: &crate::startup::BoundSelection) -> Option<Evidence> {
     if bound.requirement.parameter != 0x9f
         || bound.requirement.required == 0xfe09
         || bound.requirement.argument_register != 0

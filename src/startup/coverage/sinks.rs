@@ -475,8 +475,28 @@ pub struct Certificate {
     /// Normal-owned rejection entry points; resident references need their own
     /// predicate binding and are never silently assigned to a Normal caller.
     pub entries: Vec<u32>,
+    pub(super) generation: Option<GenerationPredicate>,
 }
+
+/// Positive native evidence only; an absent pattern implies no byte relation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum GenerationPredicate {
+    KernelFeEqualsNormal28,
+}
+
 impl Certificate {
+    /// Recheck the recognized native generation relation on final components.
+    /// Discovery remains available without the resident bytes for inspection.
+    pub(super) fn generation_integrity(&self, normal: &[u8], kernel: Option<&[u8]>) -> bool {
+        match self.generation {
+            Some(GenerationPredicate::KernelFeEqualsNormal28) => normal
+                .get(0x28)
+                .zip(kernel.and_then(|kernel| kernel.get(0xfe)))
+                .is_some_and(|(normal, kernel)| normal == kernel),
+            None => true,
+        }
+    }
+
     /// Refuse a resident direct call or literal alias to a Normal rejection
     /// entry. Its caller predicate is outside this Normal-owned certificate.
     pub fn accepts_kernel(&self, kernel: &[u8]) -> bool {
@@ -520,6 +540,7 @@ fn discover_with_failure(
 ) -> Option<Certificate> {
     let mut protected = Vec::new();
     let mut scopes = Vec::new();
+    let mut generation = None;
     let Observation::Known(reader) = crate::image::layout::discover_h8_reader(normal, None) else {
         return None;
     };
@@ -649,6 +670,7 @@ fn discover_with_failure(
                 {
                     protected.push(at..at + 28);
                     scopes.push((at..at + 28, Vec::new()));
+                    generation = Some(GenerationPredicate::KernelFeEqualsNormal28);
                     continue;
                 }
             }
@@ -683,7 +705,11 @@ fn discover_with_failure(
     protected.dedup();
     entries.sort_unstable();
     entries.dedup();
-    Some(Certificate { protected, entries })
+    Some(Certificate {
+        protected,
+        entries,
+        generation,
+    })
 }
 
 #[cfg(test)]

@@ -309,7 +309,11 @@ pub fn discover(normal: &[u8], kernel: &[u8]) -> Option<(Certificate, ResidentVa
     protected.dedup();
     entries.sort_unstable();
     entries.dedup();
-    let certificate = Certificate { protected, entries };
+    let certificate = Certificate {
+        protected,
+        entries,
+        generation: None,
+    };
     if !certificate.accepts_kernel(kernel) {
         return None;
     }

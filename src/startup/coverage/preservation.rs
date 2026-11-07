@@ -76,20 +76,23 @@ impl Certificate {
             && discover_pair(normal, kernel).as_ref() == Some(self)
     }
 
-    /// Recheck resident native integrity after the shared integrity repair.
+    /// Recheck paired native integrity after the shared integrity repair.
     /// The existing encoder and receiver still own final authentication.
     pub fn final_integrity(&self, normal: &[u8], kernel: Option<&[u8]>) -> bool {
         if self.kernel != kernel.map(|bytes| Sha256::digest(bytes).into()) {
             return false;
         }
         match &self.evidence {
+            Evidence::Normal(normal_predicates)
+            | Evidence::InstructionOwned(normal_predicates, _) => {
+                normal_predicates.generation_integrity(normal, kernel)
+            }
             Evidence::FixedBank(_, resident) => {
                 kernel.is_some_and(|kernel| resident.final_integrity(normal, kernel))
             }
             Evidence::Legacy(legacy) => {
                 kernel.is_some_and(|kernel| legacy.final_integrity(normal, kernel))
             }
-            _ => true,
         }
     }
 }

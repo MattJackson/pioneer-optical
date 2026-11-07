@@ -385,6 +385,16 @@ fn startup_sink_fixtures() -> Vec<Vec<u8>> {
 fn native_startup_sink_certificates_verify_real_instructions_and_refuse_new_sinks() {
     let fixtures = startup_sink_fixtures();
     assert_eq!(fixtures.len(), 6);
+    // Compact native instructions retain the generation predicate. Supply its
+    // matching header bytes without claiming these are authenticated Kernels.
+    let kernels: Vec<_> = fixtures
+        .iter()
+        .map(|normal| {
+            let mut kernel = [0xff; 0x100];
+            kernel[0xfe] = normal[0x28];
+            kernel
+        })
+        .collect();
     let owner = &filters::startup::FILTER;
     let registry: &[&dyn Filter] = &[owner];
     for (index, normal) in fixtures.iter().enumerate() {
@@ -393,12 +403,12 @@ fn native_startup_sink_certificates_verify_real_instructions_and_refuse_new_sink
         let installed = Context::new(Firmware {
             hardware: "SAT 8000",
             normal: &fixtures[(index + 1) % fixtures.len()],
-            kernel: None,
+            kernel: Some(&kernels[(index + 1) % fixtures.len()]),
         });
         let target = Context::new(Firmware {
             hardware: "SAT 8000",
             normal,
-            kernel: None,
+            kernel: Some(&kernels[index]),
         });
         let plan = filters::runner::plan_with(
             &installed,

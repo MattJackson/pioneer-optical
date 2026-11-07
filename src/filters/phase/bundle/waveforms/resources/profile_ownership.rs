@@ -67,7 +67,10 @@ fn prove_inner(
     known_complete_bodies: &[Range<usize>],
     data: Option<&SoftwareData>,
 ) -> Option<Vec<Range<usize>>> {
-    let authority = super::profile_code::observe(normal)?;
+    // Classification authority is optional: without a complete native match,
+    // every instruction candidate and raw pointer window remains scanned.
+    // Absence never grants an exemption or certifies an allocation.
+    let authority = super::profile_code::observe(normal);
     if kernel.len() != crate::image::KERNEL_LEN || retired.is_empty() {
         return None;
     }
@@ -120,7 +123,7 @@ fn prove_inner(
         retired,
         replaced,
         &interiors,
-        Some(&authority),
+        authority.as_ref(),
         data,
     )?;
     check_component(
@@ -132,7 +135,9 @@ fn prove_inner(
         None,
         None,
     )?;
-    let mut protected = authority.protected_normal();
+    let mut protected = authority
+        .as_ref()
+        .map_or_else(Vec::new, |a| a.protected_normal());
     protected.extend(known_complete_bodies.iter().cloned());
     Some(protected)
 }
@@ -337,7 +342,7 @@ fn software_data(
             at += d.len;
         }
     }
-    let authority = super::profile_code::observe(normal)?;
+    let authority = super::profile_code::observe(normal);
     let mut fields = Vec::new();
     for field in (20..52).step_by(8) {
         let at = graph.selector.start + field - 2;
@@ -385,7 +390,9 @@ fn software_data(
             let code_interior = |at| {
                 normal_at(at).is_some_and(|at| {
                     instructions.iter().any(|r| r.start < at && at < r.end)
-                        || authority.instruction_interior((BASE + at) as u32)
+                        || authority
+                            .as_ref()
+                            .is_some_and(|a| a.instruction_interior((BASE + at) as u32))
                 })
             };
             for at in (offset.unwrap_or(0) % 2..bytes.len()).step_by(2) {
@@ -443,7 +450,9 @@ fn software_data(
                 }
                 let code = normal_at(at).is_some_and(|at| {
                     (0..4).all(|i| instructions.iter().any(|r| r.contains(&(at + i))))
-                        || authority.instruction_bytes((BASE + at) as u32, 4)
+                        || authority
+                            .as_ref()
+                            .is_some_and(|a| a.instruction_bytes((BASE + at) as u32, 4))
                 });
                 if !code
                     && !normal_at(at).is_some_and(|at| {
@@ -458,7 +467,9 @@ fn software_data(
             }
         }
     }
-    let mut protected = authority.protected_normal();
+    let mut protected = authority
+        .as_ref()
+        .map_or_else(Vec::new, |a| a.protected_normal());
     protected.extend(arrays.iter().cloned());
     protected.extend(bodies);
     protected.push(coils.leaf);

@@ -53,7 +53,15 @@ fn complete_controller_graph_and_private_state_are_required() {
     }
     let mut changed = k.clone();
     changed[1] ^= 1;
-    assert!(plan(&t, &s, &changed).is_none());
+    assert!(
+        plan(&t, &s, &changed).is_some(),
+        "unrelated retained Kernel bytes are not an identity gate"
+    );
+    changed[0x801..0x805].copy_from_slice(&0xa05ddeu32.to_be_bytes());
+    assert!(
+        plan(&t, &s, &changed).is_none(),
+        "resident reference to private state"
+    );
 }
 #[test]
 #[ignore = "requires locally reconstructed exact Normal/Kernel evidence"]
@@ -919,4 +927,208 @@ fn native_movers_share_signed_delta_position_and_phase_units() {
             }
         }
     }
+}
+
+#[test]
+fn relocated_controller_and_profile_are_discovered_as_one_graph() {
+    use pioneer_optical::filters::phase::bundle::waveforms::resources::native_graph;
+    let target = fixture("target");
+    let source = fixture("source");
+    let kernel = fixture("kernel");
+    let (_, mut code, data) = profile::source_graph_parts(source.len()).unwrap();
+    code.extend(
+        [
+            (0x5d011e, 0x5d0126),
+            (0x5d003e, 0x5d0046),
+            (0x5d6bce, 0x5d6c28),
+            (0x5d64bc, 0x5d6508),
+            (0x5d796c, 0x5d7b1c),
+            (0x5f0102, 0x5f0164),
+            (0x5eb350, 0x5eb3c2),
+        ]
+        .into_iter()
+        .map(|(a, z)| a - 0x410000..z - 0x410000),
+    );
+    let pointers = 0x6934b6 - 0x410000..0x6934ca - 0x410000;
+    let spans: Vec<_> = code
+        .iter()
+        .chain(&data)
+        .chain([&pointers])
+        .cloned()
+        .collect();
+    let mut next = 0x10000;
+    let mapping: Vec<_> = spans
+        .iter()
+        .map(|r| {
+            let start = next;
+            next = (next + r.len() + 1) & !1;
+            (
+                0x410000 + r.start as u32,
+                0x410000 + r.end as u32,
+                0x410000 + start as u32,
+            )
+        })
+        .collect();
+    let mut relocated = source.clone();
+    for (i, (span, &(_, _, to))) in spans.iter().zip(&mapping).enumerate() {
+        let bytes = if i < code.len() {
+            native_graph::canonical(&source[span.clone()], &mapping).unwrap()
+        } else {
+            let mut bytes = source[span.clone()].to_vec();
+            if i == spans.len() - 1 {
+                for word in bytes.chunks_exact_mut(4) {
+                    let value = u32::from_be_bytes(word.try_into().unwrap());
+                    if let Some(&(a, _, to)) =
+                        mapping.iter().find(|(a, z, _)| (*a..*z).contains(&value))
+                    {
+                        word.copy_from_slice(&(to + value - a).to_be_bytes());
+                    }
+                }
+            }
+            bytes
+        };
+        let at = (to - 0x410000) as usize;
+        relocated[at..at + bytes.len()].copy_from_slice(&bytes);
+        relocated[span.clone()].fill(255);
+    }
+    let original = plan(&target, &source, &kernel).unwrap();
+    let moved = plan(&target, &relocated, &kernel).expect("relocated complete source graph");
+    assert_eq!(moved.writes, original.writes);
+}
+
+#[test]
+fn target_roles_bind_complete_controller_and_profile_graph() {
+    let mut target = fixture("target");
+    let clients = include_bytes!(
+        "../src/filters/phase/bundle/waveforms/resources/trajectory_code/target-clients.bin"
+    );
+    let mut cursor = 0;
+    for (a, z) in [
+        (0x5381c0, 0x5387a2),
+        (0x538900, 0x538a5a),
+        (0x4f52fc, 0x4f53be),
+        (0x538f82, 0x538f90),
+        (0x5a4d0c, 0x5a4edc),
+        (0x5a29fe, 0x5a2a2a),
+    ] {
+        let len = z - a;
+        target[a - 0x410000..z - 0x410000].copy_from_slice(&clients[cursor..cursor + len]);
+        cursor += len;
+    }
+    let roles = bridge::TargetRoles::discover(&target).expect("target native roles");
+    assert_eq!(roles.address(0x5398a6), Some(0x5398a6));
+    assert_eq!(roles.services().unwrap().state_getter, 0x538f56);
+    assert!(!roles.protected().is_empty());
+}
+
+#[test]
+fn relocated_target_controller_is_independently_observed() {
+    use pioneer_optical::filters::phase::bundle::waveforms::resources::native_graph;
+    let mut target = fixture("target");
+    let native: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/phase-native-spans.json")).unwrap();
+    let native = native
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| {
+            f["original_sha256"]
+                == "87e8152f1de1d3be53eb4ad9144c1bb0c45a9be6f78713a0b7487a637f989bf1"
+        })
+        .unwrap();
+    for span in native["spans"].as_array().unwrap() {
+        let at = span[0].as_u64().unwrap() as usize;
+        let bytes = span[1].as_str().unwrap();
+        for i in 0..bytes.len() / 2 {
+            target[at + i] = u8::from_str_radix(&bytes[i * 2..i * 2 + 2], 16).unwrap();
+        }
+    }
+    let source = fixture("source");
+    let clients = include_bytes!(
+        "../src/filters/phase/bundle/waveforms/resources/trajectory_code/target-clients.bin"
+    );
+    let extra = [
+        (0x5381c0, 0x5387a2),
+        (0x538900, 0x538a5a),
+        (0x4f52fc, 0x4f53be),
+        (0x538f82, 0x538f90),
+        (0x5a4d0c, 0x5a4edc),
+        (0x5a29fe, 0x5a2a2a),
+    ];
+    let mut cursor = 0;
+    for (a, z) in extra {
+        let len = z - a;
+        target[a - 0x410000..z - 0x410000].copy_from_slice(&clients[cursor..cursor + len]);
+        cursor += len;
+    }
+    let roles = bridge::TargetRoles::discover(&target).unwrap();
+    let original = target.clone();
+    let delta = 0x10000;
+    let mapping: Vec<_> = roles
+        .protected()
+        .iter()
+        .map(|r| {
+            (
+                0x410000 + r.start as u32,
+                0x410000 + r.end as u32,
+                0x410000 + r.start as u32 + delta,
+            )
+        })
+        .collect();
+    let (_, _, mut scalar, pointers) = profile::target_graph_parts(0).unwrap();
+    scalar.extend([
+        0x5a4d0c - 0x410000..0x5a4edc - 0x410000,
+        0x5a29fe - 0x410000..0x5a2a2a - 0x410000,
+    ]);
+    for r in roles.protected() {
+        target[r.clone()].fill(255);
+    }
+    for r in roles.protected() {
+        let old = 0x410000 + r.start as u32;
+        let body = if scalar.contains(r) {
+            original[r.clone()].to_vec()
+        } else if pointers.contains(r) {
+            original[r.clone()]
+                .chunks_exact(4)
+                .flat_map(|w| {
+                    let old = u32::from_be_bytes(w.try_into().unwrap());
+                    mapping
+                        .iter()
+                        .find(|&&(a, z, _)| (a..z).contains(&old))
+                        .map_or(old, |&(a, _, to)| to + old - a)
+                        .to_be_bytes()
+                })
+                .collect()
+        } else {
+            native_graph::relocate(&original[r.clone()], old, old + delta, &mapping).unwrap()
+        };
+        let at = r.start + delta as usize;
+        target[at..at + body.len()].copy_from_slice(&body);
+    }
+    let roles = bridge::TargetRoles::discover(&target).unwrap();
+    let (code, data) = profile::shared_lengths();
+    let slots = profile::SharedPlacements {
+        code: core::array::from_fn(|i| 0x1000 + i * 0x400..0x1000 + i * 0x400 + code[i]),
+        data: core::array::from_fn(|i| 0x8000 + i * 0x400..0x8000 + i * 0x400 + data[i]),
+    };
+    let kernel = vec![255; 65536];
+    let shared = profile::shared_plan_with_roles(
+        &target,
+        &source,
+        &kernel,
+        slots,
+        roles.private_ram(),
+        roles.services().unwrap(),
+        &roles,
+    )
+    .unwrap();
+    let plan =
+        bridge::plan_with_profile_with_roles(&target, &source, &kernel, shared.profile, &roles)
+            .unwrap();
+    for (r, b) in plan.writes {
+        target[r].copy_from_slice(&b);
+    }
+    let observed = bridge::observe_native_roles(&target, &kernel)
+        .expect("independent relocated controller observation");
+    assert_eq!(observed.entry(), 0x5398a6 + delta);
 }

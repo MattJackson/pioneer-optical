@@ -6,6 +6,8 @@ use core::ops::Range;
 pub mod coefficient_bridge;
 /// Complete computed/scaled DSP graph and native direction transformation.
 pub mod computed;
+/// Computed donor lowering into a plain target with explicit service obligations.
+pub mod computed_bridge;
 /// Complete DSP read-helper ABI proof.
 pub mod readback;
 mod shapes;

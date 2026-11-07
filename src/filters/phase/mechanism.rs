@@ -9,8 +9,10 @@ pub(super) struct Mechanism {
     image: Vec<u8>,
     selection_required: bool,
     specialized: bool,
+    reader_retired: bool,
     generated: bool,
     generated_words: Vec<Word>,
+    sat1: bool,
     sat1_kernel: Option<Vec<u8>>,
     cross: Option<bundle::waveforms::resources::cross_representation::Plan>,
     pointer: Option<bundle::waveforms::resources::pointer_composition::Plan>,
@@ -30,8 +32,24 @@ impl Mechanism {
             bundle::composition::Space::default(),
             None,
         );
-        let (image, specialized) = match direct {
-            Ok(image) => (image, false),
+        let direct = direct.map(|image| (image, false)).or_else(|error| {
+            transition
+                .target
+                .firmware
+                .kernel
+                .and_then(|kernel| {
+                    bundle::composition::transplant_reusing_reader_with_kernel(
+                        transition.target.firmware.normal,
+                        &donor,
+                        kernel,
+                    )
+                    .ok()
+                })
+                .map(|image| (image, true))
+                .ok_or(error)
+        });
+        let (image, specialized, reader_retired) = match direct {
+            Ok((image, reader_retired)) => (image, false, reader_retired),
             Err(_) => {
                 let image = bundle::composition::transplant_specialized_with_kernel(
                     transition.target.firmware.normal,
@@ -54,7 +72,7 @@ impl Mechanism {
                     Ok(image) => image,
                     Err(_) => return Self::plan_cross(transition),
                 };
-                (image, true)
+                (image, true, false)
             }
         };
         Ok(Self {
@@ -62,8 +80,10 @@ impl Mechanism {
             image,
             selection_required,
             specialized,
+            reader_retired,
             generated: false,
             generated_words: Vec::new(),
+            sat1: false,
             sat1_kernel: None,
             cross: None,
             pointer: None,
@@ -87,8 +107,10 @@ impl Mechanism {
             image: cross.image().to_vec(),
             selection_required: false,
             specialized: false,
+            reader_retired: false,
             generated: false,
             generated_words: Vec::new(),
+            sat1: false,
             sat1_kernel: None,
             cross: Some(cross),
             pointer: None,
@@ -110,8 +132,10 @@ impl Mechanism {
             image: pointer.image().to_vec(),
             selection_required: false,
             specialized: false,
+            reader_retired: false,
             generated: false,
             generated_words: Vec::new(),
+            sat1: false,
             sat1_kernel: None,
             cross: None,
             pointer: Some(pointer),
@@ -133,8 +157,10 @@ impl Mechanism {
             image: reverse.image().to_vec(),
             selection_required: false,
             specialized: false,
+            reader_retired: false,
             generated: false,
             generated_words: Vec::new(),
+            sat1: false,
             sat1_kernel: None,
             cross: None,
             pointer: None,
@@ -154,8 +180,10 @@ impl Mechanism {
             image: plan.image,
             selection_required: false,
             specialized: false,
+            reader_retired: false,
             generated: true,
             generated_words: plan.required_words,
+            sat1: false,
             sat1_kernel: None,
             cross: None,
             pointer: None,
@@ -163,18 +191,10 @@ impl Mechanism {
         })
     }
     pub(super) fn plan_sat1(transition: &Transition<'_, '_>) -> Result<Self, Error> {
-        let target_kernel = transition
-            .target
-            .firmware
-            .kernel
-            .ok_or(Error::Unsupported)?;
-        let donor_kernel = transition
-            .installed
-            .firmware
-            .kernel
-            .ok_or(Error::Unsupported)?;
+        let target_kernel = transition.target.firmware.kernel;
+        let donor_kernel = transition.installed.firmware.kernel;
         let donor = transition.installed.firmware.normal.to_vec();
-        let image = super::native::sat1::transplant(
+        let image = super::native::sat1::transplant_optional(
             transition.target.firmware.normal,
             target_kernel,
             &donor,
@@ -186,9 +206,11 @@ impl Mechanism {
             image,
             selection_required: false,
             specialized: false,
+            reader_retired: false,
             generated: false,
             generated_words: Vec::new(),
-            sat1_kernel: Some(donor_kernel.to_vec()),
+            sat1: true,
+            sat1_kernel: donor_kernel.map(<[u8]>::to_vec),
             cross: None,
             pointer: None,
             reverse: None,
@@ -275,12 +297,12 @@ impl Mechanism {
                 )
                 .map_err(|_| Error::VerificationFailed);
         }
-        if let Some(donor_kernel) = &self.sat1_kernel {
-            return super::native::sat1::verify(
+        if self.sat1 {
+            return super::native::sat1::verify_optional(
                 context.target.normal,
-                context.target.kernel.ok_or(Error::VerificationFailed)?,
+                context.target.kernel,
                 &self.donor,
-                donor_kernel,
+                self.sat1_kernel.as_deref(),
                 normal,
             )
             .map_err(|_| Error::VerificationFailed);
@@ -293,6 +315,16 @@ impl Mechanism {
                 context.target.kernel,
             )
             .map_err(|_| Error::VerificationFailed);
+        }
+        bundle::composition::verify_program_bytes(&self.image, normal)
+            .map_err(|_| Error::VerificationFailed)?;
+        if self.reader_retired {
+            bundle::composition::verify_reader_retirement(
+                context.target.normal,
+                context.target.kernel.ok_or(Error::VerificationFailed)?,
+                normal,
+            )
+            .map_err(|_| Error::VerificationFailed)?;
         }
         bundle::composition::verify_effective_result(
             context.target.normal,

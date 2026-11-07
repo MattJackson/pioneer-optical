@@ -882,6 +882,16 @@ pub fn discover(normal: &[u8]) -> Observation<Phase> {
         }
         result = Some(found);
     }
+    if sat1::cross_interface::observe_normal(normal).is_ok() {
+        let found = Phase {
+            assignment: Assignment::Direct,
+            interface: Interface::BytePair,
+        };
+        if result.is_some_and(|value| value != found) {
+            return Observation::Conflicting;
+        }
+        result = Some(found);
+    }
     for t in templates::TEMPLATES {
         let prefix = [Some(t.bytes[0]), Some(t.bytes[1])];
         for at in super::bundle::sites(normal, &regions.stored, &prefix) {

@@ -134,3 +134,70 @@ fn computed_target_literal_source_round_trips_original_codec() {
         started.elapsed()
     );
 }
+
+#[test]
+#[ignore = "requires PIONEER_HOARD; one computed recipe with native basis ownership"]
+fn computed_generated_recipe_transfers_owned_dsp_basis() {
+    use pioneer_optical::filters::phase::bundle::waveforms::{
+        loader::computed, resources::generated,
+    };
+    let root = std::path::PathBuf::from(std::env::var("PIONEER_HOARD").unwrap());
+    let (packages, _) = page::hoard_packages(&root).unwrap();
+    let package = packages
+        .iter()
+        .find(|p| p.component == "459673172ab424ff3a698d58d03421364ebb596435eb39a265728da02eb22851")
+        .unwrap();
+    let envelope = page::decode(&root, package).unwrap();
+    let target = &envelope.normal.image;
+    let kernel = &envelope.kernel.as_ref().unwrap().image;
+    let software = generated::observe(target).unwrap();
+    let dsp = computed::observe(target).unwrap();
+    let mut donor = target.clone();
+    donor[dsp.basis.start] ^= 1;
+    assert!(generated::plan(target, &donor).is_err());
+    let plan = generated::plan_with_kernel(target, &donor, Some(kernel)).unwrap();
+    assert_eq!(
+        plan.image[software.evaluator.basis.clone()],
+        donor[software.evaluator.basis]
+    );
+    assert_eq!(plan.image[dsp.basis.clone()], donor[dsp.basis]);
+    generated::verify_with_kernel(target, &donor, &plan.image, Some(kernel)).unwrap();
+    donor[16..20].fill(0);
+    let sum = donor.chunks_exact(4).fold(0u32, |sum, word| {
+        sum.wrapping_add(u32::from_be_bytes(word.try_into().unwrap()))
+    });
+    donor[16..20].copy_from_slice(&sum.wrapping_neg().to_be_bytes());
+    let installed = filters::Context::new(Firmware {
+        hardware: &package.hardware,
+        normal: &donor,
+        kernel: Some(kernel),
+    });
+    let destination = filters::Context::new(Firmware {
+        hardware: &package.hardware,
+        normal: target,
+        kernel: Some(kernel),
+    });
+    let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
+    let operation = filters::runner::plan_with(
+        &installed,
+        &destination,
+        filters::runner::Policy::Strict,
+        registry,
+    )
+    .unwrap();
+    let preparation = filters::Preparation {
+        target: destination.firmware,
+        normal: Some(&envelope.normal),
+        kernel: envelope.kernel.as_ref(),
+    };
+    let changed = operation
+        .prepare_with(&preparation, registry)
+        .unwrap()
+        .expect("same-label computed recipe correction");
+    operation
+        .verify_with(&preparation, &changed, registry)
+        .unwrap();
+    let encoded = envelope.normal.repack(&changed).unwrap();
+    let decoded = Envelope::load_with_kernel(&encoded, envelope.kernel.as_ref().unwrap()).unwrap();
+    assert_eq!(decoded.image, changed);
+}

@@ -90,6 +90,7 @@ pub struct Function {
 pub struct Authority {
     /// Complete function bodies and decoded boundaries.
     pub functions: Vec<Function>,
+    switch: Range<usize>,
 }
 impl Authority {
     /// Entries without a complete native client/callee link.
@@ -246,10 +247,12 @@ fn graph(bytes: &[u8], spec: &Spec) -> Option<Function> {
             return None;
         }
         if op == "JMP" {
-            if pc == 0x4d3c06 && spec.entry == 0x4d37f4 {
+            if spec.offset == 0 && pc == spec.entry + (0x4d3c06 - 0x4d37f4) {
                 for word in SWITCH.chunks_exact(2) {
                     todo.push((
-                        0x4d3c08 + u32::from(u16::from_be_bytes([word[0], word[1]])),
+                        spec.entry
+                            + (0x4d3c08 - 0x4d37f4)
+                            + u32::from(u16::from_be_bytes([word[0], word[1]])),
                         changed,
                     ));
                 }
@@ -308,28 +311,61 @@ fn graph(bytes: &[u8], spec: &Spec) -> Option<Function> {
 /// Bind exact unchanged bodies and switch data, with full local CFG/stack and
 /// client/callee linkage. The caller must preserve all returned witnesses.
 pub fn observe(normal: &[u8]) -> Option<Authority> {
-    if normal.get(0x59e498 - BASE as usize..0x59e55a - BASE as usize)? != SWITCH {
-        return None;
-    }
     let regions = crate::image::regions(normal)?;
+    let stored: Vec<_> = regions
+        .stored
+        .iter()
+        .map(|bytes| {
+            let at = bytes.as_ptr() as usize - normal.as_ptr() as usize;
+            at..at + bytes.len()
+        })
+        .collect();
+    let code: Vec<_> = SPECS
+        .iter()
+        .map(|s| (s.entry - BASE) as usize..(s.end - BASE) as usize)
+        .collect();
+    let switch = 0x59e498 - BASE as usize..0x59e55a - BASE as usize;
+    let exact = normal.get(switch.clone()) == Some(SWITCH)
+        && SPECS.iter().zip(&code).all(|(s, r)| {
+            normal.get(r.clone()) == BYTES.get(s.offset..s.offset + r.len())
+                && stored
+                    .iter()
+                    .any(|owner| owner.start <= r.start && r.end <= owner.end)
+        });
+    let (locations, switch) = if exact {
+        (code, switch)
+    } else {
+        // The complete native instruction graph permits only coherent typed
+        // address relocation. Scalar switch offsets and external operands are
+        // exact, and ambiguous or incomplete matches provide no authority.
+        let mut reference = vec![255; switch.end];
+        for (s, r) in SPECS.iter().zip(&code) {
+            reference[r.clone()].copy_from_slice(BYTES.get(s.offset..s.offset + r.len())?);
+        }
+        reference[switch.clone()].copy_from_slice(SWITCH);
+        let model = super::native_graph::Graph::new(&reference, BASE, &code, &[switch])?;
+        let mut matches = model.discover(normal, BASE, &stored);
+        if matches.len() != 1 {
+            return None;
+        }
+        let mut ranges = matches.pop()?.ranges;
+        let switch = ranges.pop()?;
+        (ranges, switch)
+    };
     let mut functions = Vec::new();
-    for spec in SPECS {
-        let range = (spec.entry - BASE) as usize..(spec.end - BASE) as usize;
-        if !regions.stored.iter().any(|b| {
-            let at = b.as_ptr() as usize - normal.as_ptr() as usize;
-            at <= range.start && range.end <= at + b.len()
-        }) {
-            return None;
-        }
-        let bytes = normal.get(range)?;
-        if bytes != BYTES.get(spec.offset..spec.offset + bytes.len())? {
-            return None;
-        }
-        functions.push(graph(bytes, spec)?);
+    for (original, range) in SPECS.iter().zip(locations) {
+        let spec = Spec {
+            base: BASE,
+            entry: BASE.checked_add(u32::try_from(range.start).ok()?)?,
+            end: BASE.checked_add(u32::try_from(range.end).ok()?)?,
+            offset: original.offset,
+        };
+        functions.push(graph(normal.get(range)?, &spec)?);
     }
-    let authority = Authority { functions };
+    let authority = Authority { functions, switch };
     authority.unlinked().is_empty().then_some(authority)
 }
+
 impl Authority {
     /// File spans of all unchanged classification witnesses, including switch.
     pub fn protected_normal(&self) -> Vec<Range<usize>> {
@@ -338,7 +374,7 @@ impl Authority {
             .iter()
             .map(|f| (f.span.start - BASE) as usize..(f.span.end - BASE) as usize)
             .collect();
-        ranges.push(0x59e498 - BASE as usize..0x59e55a - BASE as usize);
+        ranges.push(self.switch.clone());
         ranges
     }
 }
@@ -372,6 +408,49 @@ mod tests {
             bad[(at - BASE) as usize] ^= 1;
             assert!(observe(&bad).is_none());
         }
+    }
+    #[test]
+    fn relocated_complete_authority_keeps_native_boundaries() {
+        let original = fixture();
+        let mut moved = vec![255; original.len()];
+        let delta = 0x1000;
+        let mut mapping: Vec<_> = SPECS
+            .iter()
+            .map(|s| (s.entry, s.end, s.entry + delta))
+            .collect();
+        mapping.push((0x59e498, 0x59e55a, 0x59e498 + delta));
+        for spec in SPECS {
+            let from = (spec.entry - BASE) as usize..(spec.end - BASE) as usize;
+            let body =
+                super::super::native_graph::canonical(&original[from.clone()], &mapping).unwrap();
+            moved[from.start + delta as usize..from.end + delta as usize].copy_from_slice(&body);
+        }
+        moved[(0x59e498 + delta - BASE) as usize..(0x59e55a + delta - BASE) as usize]
+            .copy_from_slice(SWITCH);
+        let authority = observe(&moved).expect("complete relocated native graph");
+        assert!(authority.unlinked().is_empty());
+        assert!(authority.instruction_bytes(0x4d394f + delta, 4));
+        assert!(!authority.instruction_bytes(0x4d394f, 4));
+        assert!(authority
+            .protected_normal()
+            .contains(&((0x59e498 + delta - BASE) as usize..(0x59e55a + delta - BASE) as usize)));
+        moved[(0x4d37f4 + delta - BASE) as usize] ^= 1;
+        assert!(observe(&moved).is_none());
+    }
+    #[test]
+    fn absent_optional_authority_never_exempts_references() {
+        let mut normal = vec![255; 0x200000];
+        let kernel = vec![255; crate::image::KERNEL_LEN];
+        let retired = [0x1000..0x1100];
+        assert!(
+            super::super::profile_ownership::prove(&normal, &kernel, &retired, &retired, &[])
+                .is_some()
+        );
+        normal[0x400..0x404].copy_from_slice(&[0x5e, 0x41, 0x10, 0x04]);
+        assert!(
+            super::super::profile_ownership::prove(&normal, &kernel, &retired, &retired, &[])
+                .is_none()
+        );
     }
     #[test]
     fn profile_storage_closure_keeps_real_typed_and_resident_references() {

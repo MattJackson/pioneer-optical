@@ -126,9 +126,13 @@ fn generated_source_literal_target_round_trips_and_remains_recognizable() {
     entered[0x400] = 0x5e;
     entered[0x401..0x404].copy_from_slice(&address.to_be_bytes()[1..]);
     assert!(r::reverse_composition::observe(&entered, kernel).is_none());
+    r::trajectory_bridge::observe_native_roles(&changed, kernel)
+        .expect("independent native target-role discovery");
     let mut resident = kernel.clone();
     let last = resident.len() - 1;
     resident[last] ^= 1;
+    assert!(r::reverse_composition::observe(&changed, &resident).is_some());
+    resident[0x401..0x405].copy_from_slice(&0xa05ddeu32.to_be_bytes());
     assert!(r::reverse_composition::observe(&changed, &resident).is_none());
     let full = filters::runner::evaluate(&installed, &destination, filters::runner::Policy::Strict)
         .unwrap();

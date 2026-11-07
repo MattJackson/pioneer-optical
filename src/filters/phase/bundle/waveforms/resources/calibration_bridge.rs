@@ -78,7 +78,7 @@ pub fn plan(target: &[u8], donor: &[u8]) -> Result<Plan, Error> {
         });
     }
     Ok(Plan {
-        image: copy_constants(target, donor)?,
+        image: copy_getter(target, donor)?,
         required_words: Vec::new(),
     })
 }
@@ -102,13 +102,51 @@ pub fn transplant(target: &[u8], donor: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(plan.image)
 }
 
-fn copy_constants(target: &[u8], donor: &[u8]) -> Result<Vec<u8>, Error> {
+fn copy_getter(target: &[u8], donor: &[u8]) -> Result<Vec<u8>, Error> {
     let before = evaluators::observe(target)?;
     let source = evaluators::observe(donor)?;
     let (destination, current) = evaluators::calibration(target, &before)?;
     let (origin, required) = evaluators::calibration(donor, &source)?;
     if current == required {
         return Ok(target.to_vec());
+    }
+    // The complete parameter grammar already binds each branch and fallback.
+    // Preserve target helper calls and its self-call relocation; only transfer
+    // the donor's logical word indices and erased-word fallback immediates.
+    if let (
+        evaluators::Calibration::Parameters {
+            helpers: current_helpers,
+            ..
+        },
+        evaluators::Calibration::Parameters {
+            indices,
+            defaults,
+            helpers,
+        },
+    ) = (&current, &required)
+    {
+        if current_helpers != helpers {
+            return Err(Error::ResourceMismatch);
+        }
+        let mut changed = target.to_vec();
+        for (offset, value) in [246, 220, 194, 168, 140, 110, 80, 50]
+            .into_iter()
+            .zip(indices.iter().copied())
+            .chain(
+                [262, 236, 210, 184, 158, 128, 98, 68]
+                    .into_iter()
+                    .zip(defaults.iter().map(|v| *v as u16)),
+            )
+        {
+            let at = destination.start + offset;
+            changed[at..at + 2].copy_from_slice(&value.to_be_bytes());
+        }
+        if evaluators::observe(&changed)? != before
+            || evaluators::calibration(&changed, &before)?.1 != required
+        {
+            return Err(Error::ResourceMismatch);
+        }
+        return Ok(changed);
     }
     if !matches!(required, evaluators::Calibration::Constants(_))
         || origin.len() > destination.len()

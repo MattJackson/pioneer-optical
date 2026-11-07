@@ -24,10 +24,16 @@ pub mod dsp_control_bridge;
 pub mod evaluators;
 /// Complete generated-table phase graph and convention transfer.
 pub mod generated;
+/// Native target DSP services used by inverse controller composition.
+pub mod inverse_controller;
+/// Native DSP-coordinate conversions using retained software-target state.
+pub mod inverse_calibration;
 /// Native evaluator materialization under exact read-only calibration guards.
 pub mod materialized;
 /// Complete native COMP inflater binding and arithmetic relocation.
 pub mod native_comp;
+/// Complete decoded native graph discovery and coherent operand relocation.
+pub mod native_graph;
 /// Native pointer dispatcher and command caller adaptation.
 pub mod pointer_bridge;
 /// Complete guarded pointer-donor composition into the native computed target.
@@ -43,6 +49,8 @@ pub mod reverse_composition;
 mod shapes;
 /// Software-table dispatch and selector observation; generation proof is separate.
 pub mod software;
+/// Complete ordinary dispatcher and ROM-selector waveform roles.
+pub mod static_tables;
 /// Native trajectory controller and timer lifecycle adaptation.
 pub mod trajectory_bridge;
 /// Native source trajectory profile and target speed-coordinate adaptation.

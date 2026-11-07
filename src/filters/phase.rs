@@ -363,16 +363,17 @@ impl Filter for PhaseFilter {
         }
         let from = fact(target)?;
         let required = fact(installed)?;
-        // Interface is always checked, including equal assignments.
-        if !from.same_interface(required) {
-            return Err(Error::Incompatible);
-        }
         if !matches!(&transition.installed.native_phase,Observation::Known(p) if *p==required)
             || !matches!(&transition.target.native_phase,Observation::Known(p) if *p==from)
         {
             return Err(Error::UnresolvedIdentity);
         }
         let mechanism = mechanism_gate(transition, from, required)?;
+        // A differing native interface needs a complete mechanism operation;
+        // assignment-only patching never establishes an interface conversion.
+        if !from.same_interface(required) && mechanism.is_none() {
+            return Err(Error::Incompatible);
+        }
         if from == required && mechanism.is_none() {
             return Ok(None);
         }
@@ -395,6 +396,19 @@ fn mechanism_gate(
     from: NativePhase,
     required: NativePhase,
 ) -> Result<Option<mechanism::Mechanism>, Error> {
+    if transition.installed.firmware.normal == transition.target.firmware.normal
+        && transition.installed.firmware.kernel == transition.target.firmware.kernel
+    {
+        return Ok(None);
+    }
+    // Byte-pair SAT1 programs need their command/table proof even when their
+    // coarse phase labels match. The optional-component planner owns every
+    // accepted graph; missing proofs are not converted into an equal-label no-op.
+    if native::sat1::byte_pair::observe_normal(transition.installed.firmware.normal).is_ok()
+        || native::sat1::byte_pair::observe_normal(transition.target.firmware.normal).is_ok()
+    {
+        return mechanism::Mechanism::plan_sat1(transition).map(Some);
+    }
     // Complete command-relative SAT1 graphs establish their own authority;
     // hardware spelling is not a positive correction recipe. Equal coil facts
     // still require table comparison, and every change binds both exact Kernels.
@@ -512,13 +526,16 @@ fn mechanism_gate(
     }
     let installed = bundle::bind(transition.installed.firmware.normal);
     let target = bundle::bind(transition.target.firmware.normal);
-    let calibration_change = matches!(
-        (native::calibration::observe(transition.installed.firmware.normal),
-         native::calibration::observe(transition.target.firmware.normal)),
-        (Ok(a), Ok(b)) if a != b
-    );
     match (installed, target) {
-        (Ok(a), Ok(b)) if a.without_coil() == b.without_coil() && !calibration_change => {
+        (Ok(a), Ok(b))
+            if matches!(
+                bundle::composition::equivalent(
+                    transition.target.firmware.normal,
+                    transition.installed.firmware.normal,
+                ),
+                Ok(true)
+            ) =>
+        {
             if a.coil != required.assignment || b.coil != from.assignment {
                 return Err(Error::UnresolvedIdentity);
             }

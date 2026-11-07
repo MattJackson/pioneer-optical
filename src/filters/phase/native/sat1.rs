@@ -1,5 +1,10 @@
 //! Complete SAT1 command, mode selection and native split-word output graphs.
 use super::*;
+pub mod byte_pair;
+pub mod cross_interface;
+pub mod generated;
+pub mod packed;
+pub mod reverse_interface;
 use core::ops::Range;
 use h8_asm::{
     isa::{decode_insn, encode_insn, Ea, Insn, Operand as O, Reg, Size},
@@ -234,7 +239,7 @@ struct Bound {
     caller_code: Vec<u8>,
     output_code: Vec<u8>,
     compact: bool,
-    selector_compact: bool,
+    selector_compact: usize,
 }
 fn read(bytes: &[u8], at: usize, n: usize) -> u32 {
     integer(&bytes[at..at + n])
@@ -276,7 +281,7 @@ fn encode(i: Insn) -> Result<Vec<u8>, Error> {
 }
 // Derive transformations solely from the complete observed native instruction
 // stream. The map relocates every internal relative branch through h8-asm.
-fn transform(code: &[u8], selector: bool) -> Result<(Vec<u8>, Vec<usize>), Error> {
+fn legacy_transform(code: &[u8], selector: bool) -> Result<(Vec<u8>, Vec<usize>), Error> {
     let insns = decoded(code)?;
     let mut edited = Vec::new();
     let mut map = alloc::vec![usize::MAX;code.len()+1];
@@ -336,11 +341,55 @@ fn transform(code: &[u8], selector: bool) -> Result<(Vec<u8>, Vec<usize>), Error
     }
     Ok((out, map))
 }
-fn derived(shape: &[Option<u8>], selector: bool) -> Result<Vec<Option<u8>>, Error> {
+fn transform(code: &[u8], selector: bool) -> Result<(Vec<u8>, Vec<usize>), Error> {
+    if !selector {
+        return Ok((code.to_vec(), (0..=code.len()).collect()));
+    }
+    let mut map: Vec<usize> = (0..=code.len()).collect();
+    // The complete caller first copies the mode byte into the sign-extended
+    // saved word. Its MOV leaves Z set exactly when mode == 0. For nonzero
+    // modes, unsigned (mode - 4) < 2 recognizes precisely 4 and 5. CCR.C is
+    // extracted into the original boolean register; the bound mode getter
+    // overwrites these arithmetic flags before the caller can consume them.
+    if code.get(16..36)
+        != Some(&[
+            0x47, 0x10, 0x79, 0x2e, 0, 4, 0x4d, 6, 0x79, 0x2e, 0, 5, 0x4f, 4, 0x18, 0, 0x40, 2,
+            0xf0, 1,
+        ])
+    {
+        return Err(Error::Unresolved);
+    }
+    let compact = [
+        0x47, 6, // zero mode: set carry
+        0x88, 0xfc, // add.b #-4,r0l
+        0xa8, 2, // cmp.b #2,r0l: carry iff original mode was4 or5
+        0x40, 2, // retain comparison carry
+        0x04, 1, // orc #1,ccr
+        0x02, 0, // stc ccr,r0h
+        0xe0, 1, // and.b #1,r0h
+    ];
+    decoded(&compact)?;
+    map[16..36].fill(usize::MAX);
+    for (at, value) in map.iter_mut().enumerate().skip(36) {
+        *value = at - 6;
+    }
+    let mut out = code[..16].to_vec();
+    out.extend_from_slice(&compact);
+    out.extend_from_slice(&code[36..]);
+    // The replaced region contains all of its own edges. Every remaining
+    // relative transfer has both endpoints after it, so displacement is stable.
+    Ok((out, map))
+}
+
+fn derived(shape: &[Option<u8>], selector: bool, legacy: bool) -> Result<Vec<Option<u8>>, Error> {
     // Wildcard operands are zero only while deriving recognition masks. No
     // replacement firmware is emitted from this recognition-only material.
     let concrete: Vec<_> = shape.iter().map(|x| x.unwrap_or(0)).collect();
-    let (code, map) = transform(&concrete, selector)?;
+    let (code, map) = if legacy {
+        legacy_transform(&concrete, selector)?
+    } else {
+        transform(&concrete, selector)?
+    };
     let mut result: Vec<_> = code.into_iter().map(Some).collect();
     for (at, _, len) in decoded(&concrete)? {
         if map[at] == usize::MAX {
@@ -370,7 +419,7 @@ fn consumer_shape(t: &Template, compact: bool) -> Result<Vec<Option<u8>>, Error>
         shape[r.start..r.end].fill(None);
     }
     if compact {
-        derived(&shape, false)
+        derived(&shape, false, true)
     } else {
         Ok(shape)
     }
@@ -383,9 +432,9 @@ fn bind(normal: &[u8]) -> Result<Bound, Error> {
         (Assignment::Direct, DIRECT_CALLER),
         (Assignment::Swapped, SWAPPED_CALLER),
     ] {
-        for selector_compact in [false, true] {
-            let shape = if selector_compact {
-                derived(original, true)?
+        for selector_compact in [0, 4, 6] {
+            let shape = if selector_compact != 0 {
+                derived(original, true, selector_compact == 4)?
             } else {
                 original.to_vec()
             };
@@ -439,7 +488,7 @@ fn bind(normal: &[u8]) -> Result<Bound, Error> {
                     if !fits(&matching, &shape) {
                         continue;
                     }
-                    let shift = if selector_compact { 4 } else { 0 };
+                    let shift = selector_compact;
                     let field = |offset| {
                         read(
                             &caller,
@@ -702,11 +751,9 @@ fn field(code: &mut [u8], at: usize, width: usize, value: u32) -> Result<(), Err
 /// Persistent state is never written: only Normal instructions and ROM tables
 /// change, while all original RAM slots and opaque target services remain.
 ///
-/// The native sign-extended mode comparisons are narrowed to their original byte
-/// argument; signed branch outcomes agree for every 8-bit input. The complete
-/// mode getter kills differing H before any use. Removing identity calls and
-/// their dead literal frees18 bytes in the existing output body; a six-byte
-/// caller epilogue can occupy that positively owned tail without moving entries.
+/// The native mode validity predicate is lowered to an equivalent unsigned
+/// byte predicate, freeing six bytes inside the caller. All target encoder
+/// calls and the entire output footprint are retained.
 pub fn transplant(
     target: &[u8],
     target_kernel: &[u8],
@@ -726,26 +773,38 @@ pub fn transplant(
     ownership(target, target_kernel, &a)?;
     let original = bind(target)?;
     let source = bind(donor)?;
-    let mut caller = if source.selector_compact {
-        source.caller_code.clone()
-    } else {
-        transform(&source.caller_code, true)?.0
+    let mut caller = match source.selector_compact {
+        6 => source.caller_code.clone(),
+        4 => {
+            // Reconstitute the original validity block from its proven lowered
+            // grammar, then apply the encoder-preserving six-byte lowering.
+            let mut canonical = source.caller_code[..16].to_vec();
+            canonical.extend_from_slice(
+                &DIRECT_CALLER[16..36]
+                    .iter()
+                    .map(|b| b.unwrap())
+                    .collect::<Vec<_>>(),
+            );
+            canonical.extend_from_slice(&source.caller_code[32..]);
+            transform(&canonical, true)?.0
+        }
+        _ => transform(&source.caller_code, true)?.0,
     };
     let mut output = if source.compact {
         source.output_code.clone()
     } else {
         transform(&source.output_code, false)?.0
     };
-    if output.len() != 156 || !matches!(caller.len(), 142 | 148) {
+    if !matches!(output.len(), 156 | 174) || !matches!(caller.len(), 140 | 146) {
         return Err(Error::ResourceMismatch);
     }
     // Both original callers share the same symbolic prefix and opaque calls.
     for (at, width, value) in [
-        (34, 4, a.state[2]),
-        (41, 3, a.helpers[0]),
-        (59, 3, a.helpers[1]),
-        (78, 4, (0x410000 + a.jump_table.start) as u32),
-        (86, 4, (0x410000 + a.caller.start + 92) as u32),
+        (32, 4, a.state[2]),
+        (39, 3, a.helpers[0]),
+        (57, 3, a.helpers[1]),
+        (76, 4, (0x410000 + a.jump_table.start) as u32),
+        (84, 4, (0x410000 + a.caller.start + 90) as u32),
     ] {
         field(&mut caller, at, width, value)?;
     }
@@ -755,14 +814,26 @@ pub fn transplant(
         [130, 110, 122, 98, 138]
     };
     for (at, table) in slots.into_iter().zip(&a.tables) {
-        field(&mut caller, at - 4, 4, (0x410000 + table.start) as u32)?;
+        field(&mut caller, at - 6, 4, (0x410000 + table.start) as u32)?;
     }
     for (at, i, _) in decoded(&output)? {
         if i.mnemonic == "MOV"
             && matches!(i.operands[0], O::Immediate { bits: 32, .. })
             && i.operands[1] == O::Register(Reg::Long(4))
         {
-            field(&mut output, at + 2, 4, a.encoders[1])?;
+            let value = if matches!(i.operands[0], O::Immediate { value, .. } if value == b.encoders[0])
+            {
+                a.encoders[0]
+            } else {
+                a.encoders[1]
+            };
+            field(&mut output, at + 2, 4, value)?;
+        }
+    }
+    for (at, i, _) in decoded(&output)? {
+        if i.mnemonic == "JSR" && matches!(i.operands[0], O::Address(Ea::Absolute { bits: 24, .. }))
+        {
+            field(&mut output, at + 1, 3, a.encoders[0])?;
         }
     }
     let call = caller.len() - 8;
@@ -779,19 +850,9 @@ pub fn transplant(
     encoding::nops(&mut changed[a.output.clone()]).ok_or(Error::Unresolved)?;
     changed[a.output.start..a.output.start + output.len()].copy_from_slice(&output);
     if caller.len() > a.caller.len() {
-        if a.caller.len() != 146 || caller.len() != 148 {
-            return Err(Error::ResourceMismatch);
-        }
-        // All native conditional edges and the internal table destinations stay
-        // before142. Only the LDM/RTS epilogue crosses this typed terminal jump.
-        changed[a.caller.start..a.caller.start + 142].copy_from_slice(&caller[..142]);
-        let tail = a.output.start + 156;
-        changed[a.caller.start + 142..a.caller.end]
-            .copy_from_slice(&encoding::jump((0x410000 + tail) as u32).ok_or(Error::Unresolved)?);
-        changed[tail..tail + 6].copy_from_slice(&caller[142..]);
-    } else {
-        changed[a.caller.start..a.caller.start + caller.len()].copy_from_slice(&caller);
+        return Err(Error::ResourceMismatch);
     }
+    changed[a.caller.start..a.caller.start + caller.len()].copy_from_slice(&caller);
     changed[a.jump_table.clone()].copy_from_slice(&donor[b.jump_table.clone()]);
     for (x, y) in a.tables.iter().zip(&b.tables) {
         changed[x.clone()].copy_from_slice(&donor[y.clone()]);
@@ -841,6 +902,96 @@ pub fn verify(
         if expected[r.clone()] != changed[r.clone()] {
             return Err(Error::Verification);
         }
+    }
+    Ok(())
+}
+
+/// Plan using exactly the resident components supplied with each image.
+/// Byte-pair graphs retain all target code and require no donor Kernel. A
+/// missing target Kernel cannot prove that changed native resources have no
+/// resident aliases; only an unchanged complete graph is admitted in that case.
+pub fn transplant_optional(
+    target: &[u8],
+    target_kernel: Option<&[u8]>,
+    donor: &[u8],
+    donor_kernel: Option<&[u8]>,
+) -> Result<Vec<u8>, Error> {
+    if observe_normal(target).is_ok() && byte_pair::observe_normal(donor).is_ok() {
+        return cross_interface::transplant(target, target_kernel.ok_or(Error::Ownership)?, donor);
+    }
+    if let (Ok(a), Ok(b)) = (
+        byte_pair::observe_normal(target),
+        byte_pair::observe_normal(donor),
+    ) {
+        if let Some(kernel) = target_kernel {
+            return byte_pair::transplant(target, kernel, donor);
+        }
+        if a.complete_command
+            && b.complete_command
+            && a.shape == b.shape
+            && a.coefficients
+                .iter()
+                .zip(&b.coefficients)
+                .all(|(x, y)| match (x, y) {
+                    (byte_pair::Coefficients::Rom(x), byte_pair::Coefficients::Rom(y)) => {
+                        target[x.clone()] == donor[y.clone()]
+                    }
+                    _ => false,
+                })
+        {
+            return Ok(target.to_vec());
+        }
+        return Err(Error::Ownership);
+    }
+    let a = match target_kernel {
+        Some(kernel) => observe(target, kernel)?,
+        None => observe_normal(target)?,
+    };
+    let b = match donor_kernel {
+        Some(kernel) => observe(donor, kernel)?,
+        None => observe_normal(donor)?,
+    };
+    if a.assignment == b.assignment
+        && a.tables
+            .iter()
+            .zip(&b.tables)
+            .all(|(x, y)| target[x.clone()] == donor[y.clone()])
+    {
+        return Ok(target.to_vec());
+    }
+    let target_kernel = target_kernel.ok_or(Error::Ownership)?;
+    let donor_kernel = donor_kernel.ok_or(Error::ResourceMismatch)?;
+    transplant(target, target_kernel, donor, donor_kernel)
+}
+
+/// Verify an optional-component operation without manufacturing resident bytes.
+pub fn verify_optional(
+    target: &[u8],
+    target_kernel: Option<&[u8]>,
+    donor: &[u8],
+    donor_kernel: Option<&[u8]>,
+    changed: &[u8],
+) -> Result<(), Error> {
+    if observe_normal(target).is_ok() && byte_pair::observe_normal(donor).is_ok() {
+        return cross_interface::verify(
+            target,
+            target_kernel.ok_or(Error::Ownership)?,
+            donor,
+            changed,
+        );
+    }
+    if byte_pair::observe_normal(target).is_ok() && byte_pair::observe_normal(donor).is_ok() {
+        if let Some(kernel) = target_kernel {
+            return byte_pair::verify(target, kernel, donor, changed);
+        }
+    } else if let (Some(a), Some(b)) = (target_kernel, donor_kernel) {
+        return verify(target, a, donor, b, changed);
+    }
+    // With no resident ownership proof this API only admits an unmodified
+    // graph. Comparing all bytes is deliberately conservative under composition.
+    let expected = transplant_optional(target, target_kernel, donor, donor_kernel)?;
+    if expected != changed {
+        return Err(Error::Verification);
     }
     Ok(())
 }

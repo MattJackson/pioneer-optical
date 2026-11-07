@@ -397,3 +397,52 @@ fn generated_target_without_complete_bundle_proof_is_not_an_equal_coil_noop() {
         ));
     }
 }
+
+#[test]
+fn generated_noncyclic_basis_requires_exclusive_native_ownership() {
+    let target = fixture(HASHES[1]);
+    let binding = generated::observe(&target).unwrap();
+    let mut donor = target.clone();
+    donor[binding.evaluator.basis.start] ^= 1;
+    assert!(generated::plan(&target, &donor).is_err());
+    let kernel = vec![255; 65536];
+    let plan = generated::plan_with_kernel(&target, &donor, Some(&kernel)).unwrap();
+    assert_eq!(
+        plan.image[binding.evaluator.basis.clone()],
+        donor[binding.evaluator.basis.clone()]
+    );
+    generated::verify_with_kernel(&target, &donor, &plan.image, Some(&kernel)).unwrap();
+    let mut hostile = kernel;
+    let address = 0x410000 + binding.evaluator.basis.start as u32;
+    hostile[..6].copy_from_slice(&[
+        0x7a,
+        0x00,
+        (address >> 24) as u8,
+        (address >> 16) as u8,
+        (address >> 8) as u8,
+        address as u8,
+    ]);
+    assert!(generated::plan_with_kernel(&target, &donor, Some(&hostile)).is_err());
+}
+
+#[test]
+fn generated_parameter_recipe_retains_native_service_calls() {
+    let target = fixture(HASHES[0]);
+    let binding = generated::observe(&target).unwrap();
+    assert!(matches!(
+        binding.calibration.1,
+        evaluators::Calibration::Parameters { .. }
+    ));
+    let mut donor = target.clone();
+    donor[binding.calibration.0.start + 246..binding.calibration.0.start + 248]
+        .copy_from_slice(&0x123u16.to_be_bytes());
+    donor[binding.calibration.0.start + 262..binding.calibration.0.start + 264]
+        .copy_from_slice(&(-123i16).to_be_bytes());
+    let plan = generated::plan(&target, &donor).unwrap();
+    assert!(plan.required_words.is_empty());
+    assert_eq!(
+        generated::observe(&plan.image).unwrap().calibration.1,
+        generated::observe(&donor).unwrap().calibration.1
+    );
+    generated::verify(&target, &donor, &plan.image).unwrap();
+}

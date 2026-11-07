@@ -120,7 +120,8 @@ pub fn transplant(
     if let Some((cells, bytes)) = pointer_cells {
         changed[cells].copy_from_slice(&bytes);
     }
-    let mut writes = Vec::new();
+    let mut writes =
+        resources::static_tables::writes(target, installed).map_err(Error::Resources)?;
     for tables in core::iter::once(&destination.selected).chain(&destination.erased_parameter) {
         for (to, from) in tables.motion.iter().chain(&tables.coefficients).zip(
             source
@@ -142,7 +143,11 @@ pub fn transplant(
             loader::Table::Literal(_) => None,
         })
         .collect();
+    let selector = resources::static_tables::observe(target)
+        .map_err(Error::Resources)?
+        .selector;
     let protected = core::iter::once(&destination.dispatch)
+        .chain(core::iter::once(&selector))
         .chain(&target_loader.spans)
         .chain(destination.initializer.as_ref())
         .chain(reservation.as_ref())
@@ -176,11 +181,16 @@ pub fn specialize_ascending(target: &[u8], installed: &[u8]) -> Result<Vec<u8>, 
     let source = resources::observe(installed).map_err(Error::Resources)?;
     let source_loader = loader::observe(installed).map_err(Error::Loader)?;
     let target_loader = loader::observe(target).map_err(Error::Loader)?;
+    let selector = resources::static_tables::observe(target)
+        .map_err(Error::Resources)?
+        .selector;
     let protected = core::iter::once(&destination.dispatch)
+        .chain(core::iter::once(&selector))
         .chain(&target_loader.spans)
         .chain(&destination.initializer)
         .collect::<Vec<_>>();
-    let mut writes = Vec::new();
+    let mut writes =
+        resources::static_tables::writes(target, installed).map_err(Error::Resources)?;
     for tables in core::iter::once(&destination.selected).chain(&destination.erased_parameter) {
         for (to, from) in tables.motion.iter().zip(&source.selected.motion) {
             writes.push((to.clone(), installed[from.clone()].to_vec()));

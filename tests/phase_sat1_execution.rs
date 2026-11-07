@@ -152,6 +152,17 @@ impl Cpu<'_> {
                     self.v = false;
                 }
                 ("MOV", a, O::Register(r)) => self.set(r, self.value(a)),
+                ("ORC", O::Immediate { value: 1, .. }, O::Register(Reg::Ccr)) => {
+                    self.c = true;
+                }
+                ("STC", O::Register(Reg::Ccr), O::Register(r)) => {
+                    let value = u32::from(self.c)
+                        | (u32::from(self.v) << 1)
+                        | (u32::from(self.z) << 2)
+                        | (u32::from(self.n) << 3);
+                    let (n, shift, mask) = Self::coords(r);
+                    self.r[n] = (self.r[n] & !(mask << shift)) | ((value & mask) << shift);
+                }
                 ("EXTU", O::Register(Reg::Word(r)), _) => {
                     self.set(Reg::Word(r), self.get(Reg::Word(r)) & 255)
                 }
@@ -391,6 +402,15 @@ fn complete_native_sat1_transplant_matches_donor_execution() {
             execute(&donor.0, &donor.1, &b, 1, 2, 0, false, 1, true).0
         );
 
+        // Every possible mode byte covers the lowered validity predicate;
+        // unlike a hand-picked boundary list this exercises wrapped subtraction.
+        for mode in 0..=u8::MAX {
+            assert_eq!(
+                execute(&changed, &target.1, &a, 17, mode, 1, false, 1, true),
+                execute(&donor.0, &donor.1, &b, 17, mode, 1, false, 1, true),
+                "mode validity {mode}"
+            );
+        }
         for command in [false, true] {
             for phase in 0..64 {
                 for mode in [0, 1, 2, 3, 4, 5, 6, 127, 128, 129, 254, 255] {

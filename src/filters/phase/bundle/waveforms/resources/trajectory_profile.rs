@@ -89,6 +89,69 @@ const SOURCE: &[(u32, u32, [u8; 32])] = &[
         ],
     ),
 ];
+
+// Complete SOURCE bodies, scalar tables and diagnostic strings, in proof order.
+// Captured from the same decoded OEM provenance as SOURCE; never an image ID
+// allowlist. Every discovered instruction operand and data byte is compared.
+const SOURCE_NATIVE: &[u8] = include_bytes!("trajectory_code/profile-source.bin");
+
+/// Reference bytes and ordered complete code/data spans for graph composition.
+pub type SourceGraphParts = (Vec<u8>, Vec<Range<usize>>, Vec<Range<usize>>);
+
+/// Canonical reference image and code/data role spans for composing a larger
+/// graph with controller callers. Reference coordinates are role labels only;
+/// discovery binds actual image coordinates before any source bytes are used.
+pub fn source_graph_parts(image_len: usize) -> Option<SourceGraphParts> {
+    let mut reference = alloc::vec![0xff; image_len.max((SOURCE[6].1 - BASE) as usize)];
+    let mut encoded = SOURCE_NATIVE.iter().copied();
+    for &(a, z, digest) in SOURCE {
+        let r = (a - BASE) as usize..(z - BASE) as usize;
+        for byte in &mut reference[r.clone()] {
+            *byte = encoded.next()?;
+        }
+        digest_is(&reference[r], &digest)?;
+    }
+    if encoded.next().is_some() {
+        return None;
+    }
+    let spans: Vec<Range<usize>> = SOURCE
+        .iter()
+        .map(|&(a, z, _)| (a - BASE) as usize..(z - BASE) as usize)
+        .collect();
+    Some((reference, spans[..6].to_vec(), spans[6..].to_vec()))
+}
+
+/// Produce a donor scratch view from a unique relocated native profile graph.
+/// Fixed external service and RAM operands remain exact preconditions.
+pub fn canonical_source(source: &[u8]) -> Option<Vec<u8>> {
+    if bind(source, SOURCE).is_some() {
+        return Some(source.to_vec());
+    }
+    let (reference, code, data) = source_graph_parts(source.len())?;
+    let spans: Vec<_> = code.iter().chain(&data).cloned().collect();
+    let graph = super::native_graph::Graph::new(&reference, BASE, &spans[..6], &spans[6..])?;
+    let regions = crate::image::regions(source)?;
+    let stored: Vec<_> = regions
+        .stored
+        .iter()
+        .map(|r| {
+            let at = r.as_ptr() as usize - source.as_ptr() as usize;
+            at..at + r.len()
+        })
+        .collect();
+    let bindings = graph.discover(source, BASE, &stored);
+    if bindings.len() != 1 {
+        return None;
+    }
+    // Reconstruct only proved nodes. Their reverse-relocated bodies are equal
+    // to reference by graph matching; external operands were never normalized.
+    let mut view = source.to_vec();
+    for r in spans {
+        view.get_mut(r.clone())?.copy_from_slice(&reference[r]);
+    }
+    Some(view)
+}
+
 const TARGET: &[(u32, u32, [u8; 32])] = &[
     (
         0x5378b6,
@@ -320,6 +383,8 @@ pub fn plan(
     private_ram: u32,
     services: Services,
 ) -> Option<Plan> {
+    let canonical = canonical_source(source)?;
+    let source = canonical.as_slice();
     bind(source, SOURCE)?;
     bind(target, TARGET)?;
     valid_slot(target, &code, lengths()[0])?;
@@ -384,6 +449,23 @@ fn emit_graph(
     private_ram: u32,
     services: Services,
 ) -> Option<EmittedGraph> {
+    emit_graph_with_tables(
+        source,
+        destinations,
+        data_entries,
+        private_ram,
+        services,
+        [0x5a4bf8, 0x5a4b54],
+    )
+}
+fn emit_graph_with_tables(
+    source: &[u8],
+    destinations: [u32; 7],
+    data_entries: [u32; 5],
+    private_ram: u32,
+    services: Services,
+    coordinate_tables: [u32; 2],
+) -> Option<EmittedGraph> {
     let mut raw = Vec::new();
     raw.push((0x5d5aa6, bytes(source, 0x5d5aa6, 0x5d5d60)?.to_vec()));
     raw.push((0x5d5d60, bytes(source, 0x5d5d60, 0x5d5fdc)?.to_vec()));
@@ -427,14 +509,14 @@ fn emit_graph(
                     value: 0x65f196,
                     bits,
                 } => Operand::Immediate {
-                    value: 0x5a4bf8,
+                    value: coordinate_tables[0],
                     bits,
                 },
                 Operand::Immediate {
                     value: 0x65f142,
                     bits,
                 } => Operand::Immediate {
-                    value: 0x5a4b54,
+                    value: coordinate_tables[1],
                     bits,
                 },
                 other => other,
@@ -776,6 +858,8 @@ pub fn shared_plan(
     private_ram: u32,
     services: Services,
 ) -> Option<SharedPlan> {
+    let canonical = canonical_source(source)?;
+    let source = canonical.as_slice();
     bind(source, SOURCE)?;
     bind(target, TARGET)?;
     bind(target, SHARED_CLIENTS)?;
@@ -924,6 +1008,9 @@ pub fn shared_plan(
 }
 
 fn shared_glue(entries: [u32; 13]) -> Option<[Vec<u8>; 4]> {
+    shared_glue_with_controller(entries, 0x539406)
+}
+fn shared_glue_with_controller(entries: [u32; 13], controller: u32) -> Option<[Vec<u8>; 4]> {
     // Preserve the original caller registers and stack argument. The inverse
     // suffix accepts R0L=index; ER3 holds the live object across OEM lookups.
     let mut converter = alloc::vec![0x01, 0x30, 0x6d, 0xf0, 0x0f, 0x83, 0x6e, 0x08, 0, 0x10];
@@ -968,7 +1055,7 @@ fn shared_glue(entries: [u32; 13]) -> Option<[Vec<u8>; 4]> {
         .ok()?,
     );
     guard.extend([0x46, 2, 0x19, 0x99]);
-    guard.extend(jump(0x539406)?);
+    guard.extend(jump(controller)?);
     let guard = checked_glue(guard)?;
     Some([converter, init_dispatch, update_dispatch, guard])
 }
@@ -1040,51 +1127,9 @@ fn pointer(n: &[u8], at: u32) -> Option<u32> {
 /// Restore only typed relocatable address fields. Complete canonical digests
 /// below, rather than a partial instruction signature, establish the semantics.
 fn canonical(body: &[u8], mapping: &[(u32, u32, u32)]) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
-    let mut at = 0;
-    while at < body.len() {
-        let d = decode_insn(&body[at..], Target::H8S2000, Mode::Advanced).ok()?;
-        if encode_insn(d.insn, Target::H8S2000, Mode::Advanced).ok()? != body[at..at + d.len] {
-            return None;
-        }
-        let mut insn = d.insn;
-        for op in &mut insn.operands {
-            let v = match *op {
-                Operand::Address(Ea::Absolute { value, .. })
-                | Operand::Immediate { value, bits: 32 } => Some(value),
-                Operand::Address(Ea::Displacement {
-                    value, bits: 32, ..
-                }) => Some(value as u32),
-                _ => None,
-            };
-            let Some(v) = v else { continue };
-            if let Some(&(a, _, to)) = mapping.iter().find(|(a, z, _)| (*a..*z).contains(&v)) {
-                let value = to.checked_add(v - a)?;
-                *op = match *op {
-                    Operand::Address(Ea::Absolute { bits, .. }) => {
-                        Operand::Address(Ea::Absolute { value, bits })
-                    }
-                    Operand::Immediate { bits, .. } => Operand::Immediate { value, bits },
-                    Operand::Address(Ea::Displacement { base, bits, .. }) => {
-                        Operand::Address(Ea::Displacement {
-                            base,
-                            bits,
-                            value: value as i32,
-                        })
-                    }
-                    _ => return None,
-                };
-            }
-        }
-        let b = encode_insn(insn, Target::H8S2000, Mode::Advanced).ok()?;
-        if b.len() != d.len {
-            return None;
-        }
-        out.extend(b);
-        at += d.len;
-    }
-    Some(out)
+    super::native_graph::canonical(body, mapping)
 }
+
 fn digest_is(body: &[u8], digest: &[u8; 32]) -> Option<()> {
     (Sha256::digest(body).as_slice() == digest).then_some(())
 }
@@ -1334,6 +1379,345 @@ pub fn observe_shared(
     })
 }
 
+type ProfileRoleMappings = (Vec<u8>, Vec<(u32, u32, u32)>, Vec<(u32, u32, u32)>);
+fn profile_role_mappings(
+    roles: &super::trajectory_bridge::TargetRoles,
+) -> Option<ProfileRoleMappings> {
+    let (reference, code, _, pointers) = target_graph_parts(0)?;
+    let mut addresses = Vec::new();
+    for r in code {
+        let mut at = r.start;
+        while at < r.end {
+            let d = decode_insn(reference.get(at..r.end)?, Target::H8S2000, Mode::Advanced).ok()?;
+            for op in d.insn.operands {
+                let value = match op {
+                    Operand::Address(Ea::Absolute { value, .. })
+                    | Operand::Immediate { value, bits: 32 } => Some(value),
+                    Operand::Address(Ea::Displacement {
+                        value, bits: 32, ..
+                    }) => Some(value as u32),
+                    Operand::Address(Ea::PcRelative { value, .. }) => {
+                        (BASE + (at + d.len) as u32).checked_add_signed(value)
+                    }
+                    _ => None,
+                };
+                if let Some(value) = value {
+                    addresses.push(value);
+                }
+            }
+            at += d.len;
+        }
+    }
+    for r in pointers {
+        for word in reference.get(r)?.chunks_exact(4) {
+            addresses.push(u32::from_be_bytes(word.try_into().ok()?));
+        }
+    }
+    addresses.sort_unstable();
+    addresses.dedup();
+    let mut forward = Vec::new();
+    let mut reverse = Vec::new();
+    for old in addresses {
+        if let Some(actual) = roles.address(old) {
+            forward.push((old, old.checked_add(1)?, actual));
+            reverse.push((actual, actual.checked_add(1)?, old));
+        }
+    }
+    Some((reference, forward, reverse))
+}
+
+/// Recognize an emitted profile graph at independently discovered native target
+/// roles. Every retained body is checked against decoded reference instructions
+/// with typed edges rebound to those roles; no synthetic target image is used.
+pub fn observe_shared_with_roles(
+    n: &[u8],
+    kernel: &[u8],
+    roots: SharedEntries,
+    services: Services,
+    private_ram: u32,
+    roles: &super::trajectory_bridge::TargetRoles,
+) -> Option<ObservedShared> {
+    if kernel.len() != crate::image::KERNEL_LEN
+        || private_ram == 0
+        || private_ram.checked_add(3)? > 0x1000000
+    {
+        return None;
+    }
+    let (reference, forward, reverse) = profile_role_mappings(roles)?;
+    for &(a, z, _) in TARGET[2..].iter().chain(DEFAULT_BOOT).chain(SHARED_CLIENTS) {
+        if matches!(a, 0x5392d2 | 0x539406) {
+            continue;
+        }
+        let actual = roles.span(span(a, z))?;
+        valid_slot(n, &actual, (z - a) as usize)?;
+        let expected = bytes(&reference, a, z)?;
+        let rebound = if matches!(a, 0x537e30 | 0x4aef86 | 0x57cf52 | 0x580614) {
+            super::native_graph::relocate(expected, a, roles.address(a)?, &forward)?
+        } else if a == 0x5bcc34 {
+            let mut out = Vec::new();
+            for word in expected.chunks_exact(4) {
+                let old = u32::from_be_bytes(word.try_into().ok()?);
+                out.extend_from_slice(&roles.address(old).unwrap_or(old).to_be_bytes());
+            }
+            out
+        } else {
+            expected.to_vec()
+        };
+        if n.get(actual)? != rebound {
+            return None;
+        }
+    }
+    let init_dispatch = flow(n, roles.address(0x539496)?, "JSR")?;
+    let update_dispatch = flow(n, roles.address(0x5393f2)?, "JSR")?;
+    if flow(n, roles.address(0x53951c)?, "JSR")? != update_dispatch {
+        return None;
+    }
+    let guard = flow(n, roles.address(0x5385d4)?, "JSR")?;
+    if [0x53898e, 0x5389e2]
+        .into_iter()
+        .any(|at| roles.address(at).and_then(|at| flow(n, at, "JSR")) != Some(guard))
+    {
+        return None;
+    }
+    let converter = flow(n, init_dispatch.checked_add(8)?, "JMP")?;
+    let entries = [
+        roots.init,
+        roots.update,
+        roots.ctor,
+        flow(n, converter.checked_add(26)?, "JSR")?,
+        flow(n, roots.prepare.checked_add(10)?, "JSR")?,
+        flow(n, roots.prepare.checked_add(2)?, "JSR")?,
+        roots.prepare,
+        flow(n, init_dispatch.checked_add(4)?, "JMP")?,
+        flow(n, update_dispatch.checked_add(6)?, "JMP")?,
+        converter,
+        init_dispatch,
+        update_dispatch,
+        guard,
+    ];
+    let data_entries = [
+        pointer(n, roots.init.checked_add(0xa6)?)?,
+        pointer(n, roots.update.checked_add(0x1f4)?)?,
+        pointer(n, roots.update.checked_add(0x82)?)?,
+        pointer(n, roots.init.checked_add(0x1fe)?)?,
+        pointer(n, roots.update.checked_add(0x26)?)?,
+    ];
+    let (code_lengths, data_lengths) = shared_lengths();
+    let mut code: [Range<usize>; 13] = core::array::from_fn(|_| 0..0);
+    let mut data: [Range<usize>; 5] = core::array::from_fn(|_| 0..0);
+    for i in 0..13 {
+        code[i] = observed_slot(n, entries[i], code_lengths[i])?;
+    }
+    for i in 0..5 {
+        data[i] = observed_slot(n, data_entries[i], data_lengths[i])?;
+    }
+    let mut ranges: Vec<_> = code.iter().chain(&data).cloned().collect();
+    ranges.push(roles.span(span(0x537e26, 0x537e30))?);
+    for (i, r) in ranges.iter().enumerate() {
+        if ranges[..i].iter().any(|s| overlap(r, s)) {
+            return None;
+        }
+    }
+    let old_entries = [0x5d5aa6, 0x5d5d60, 0x5d5fe6, 0x5d6018, 0x5d6068, 0x5d60b4];
+    let mut mapping: Vec<_> = (0..6)
+        .map(|i| {
+            (
+                entries[i],
+                entries[i] + code_lengths[i] as u32,
+                old_entries[i],
+            )
+        })
+        .collect();
+    for (i, old) in [0x65f142, 0x65f196, 0x65f24a, 0x65f2fe, 0x65ed70]
+        .into_iter()
+        .enumerate()
+    {
+        mapping.push((
+            data_entries[i],
+            data_entries[i] + data_lengths[i] as u32,
+            old,
+        ));
+    }
+    mapping.extend([
+        (private_ram, private_ram + 3, 0x32be),
+        (
+            services.report[0],
+            services.report[0].checked_add(1)?,
+            0x5f0102,
+        ),
+        (
+            services.report[1],
+            services.report[1].checked_add(1)?,
+            0x5f0102,
+        ),
+        (
+            services.state_getter,
+            services.state_getter.checked_add(1)?,
+            0x5d73fe,
+        ),
+        (
+            services.hardware_mode,
+            services.hardware_mode.checked_add(1)?,
+            0x5d7428,
+        ),
+    ]);
+    let bodies: Vec<_> = code
+        .iter()
+        .take(6)
+        .map(|r| canonical(&n[r.clone()], &mapping))
+        .collect::<Option<_>>()?;
+    digest_is(&bodies[0], &SOURCE[0].2)?;
+    let mut update = bodies[1].clone();
+    update.extend(canonical(
+        n.get(roles.span(span(0x537e26, 0x537e30))?)?,
+        &mapping,
+    )?);
+    digest_is(&update, &SOURCE[1].2)?;
+    digest_is(&bodies[2], &SPECIALIZED[0])?;
+    digest_is(&bodies[3], &SPECIALIZED[1])?;
+    digest_is(&bodies[4], &SOURCE[4].2)?;
+    let mut inverse = canonical(
+        &bodies[5],
+        &[
+            (
+                roles.address(0x5a4bf8)?,
+                roles.address(0x5a4bf8)?.checked_add(1)?,
+                0x5a4bf8,
+            ),
+            (
+                roles.address(0x5a4b54)?,
+                roles.address(0x5a4b54)?.checked_add(1)?,
+                0x5a4b54,
+            ),
+        ],
+    )?;
+    let mut at = 0;
+    while at < inverse.len() {
+        let d = decode_insn(&inverse[at..], Target::H8S2000, Mode::Advanced).ok()?;
+        let mut insn = d.insn;
+        for op in &mut insn.operands {
+            *op = match *op {
+                Operand::Address(Ea::Absolute {
+                    value: 0x3265,
+                    bits,
+                }) => Operand::Address(Ea::Absolute {
+                    value: 0x32bf,
+                    bits,
+                }),
+                Operand::Address(Ea::Absolute {
+                    value: 0x3266,
+                    bits,
+                }) => Operand::Address(Ea::Absolute {
+                    value: 0x32c0,
+                    bits,
+                }),
+                Operand::Immediate { value: 13, bits } => Operand::Immediate { value: 9, bits },
+                Operand::Immediate { value: 28, bits } => Operand::Immediate { value: 12, bits },
+                Operand::Immediate {
+                    value: 0x5a4bf8,
+                    bits,
+                } => Operand::Immediate {
+                    value: 0x65f196,
+                    bits,
+                },
+                Operand::Immediate {
+                    value: 0x5a4b54,
+                    bits,
+                } => Operand::Immediate {
+                    value: 0x65f142,
+                    bits,
+                },
+                other => other,
+            };
+        }
+        let b = encode_insn(insn, Target::H8S2000, Mode::Advanced).ok()?;
+        if b.len() != d.len {
+            return None;
+        }
+        inverse[at..at + d.len].copy_from_slice(&b);
+        at += d.len;
+    }
+    digest_is(&inverse, &SOURCE[5].2)?;
+    let tables: Vec<_> = data[..4]
+        .iter()
+        .flat_map(|r| n[r.clone()].iter().copied())
+        .collect();
+    digest_is(&tables, &SOURCE[6].2)?;
+    digest_is(&n[data[4].clone()], &SOURCE[7].2)?;
+    for i in 7..9 {
+        digest_is(
+            &canonical(
+                &fragments(
+                    n,
+                    &[(entries[i], entries[i] + code_lengths[i] as u32)],
+                    0x1000,
+                )?,
+                &reverse,
+            )?,
+            &SPECIALIZED[i - 5],
+        )?;
+    }
+    for (i, body) in shared_glue_with_controller(entries, roles.address(0x539406)?)?
+        .iter()
+        .enumerate()
+    {
+        if n[code[9 + i].clone()] != *body {
+            return None;
+        }
+    }
+    let mut prepare = alloc::vec![0xf8, 1];
+    prepare.extend(call(entries[5])?);
+    prepare.extend([0x0d, 0x08, 0xf8, 1]);
+    prepare.extend(call(entries[4])?);
+    prepare.extend([0x54, 0x70]);
+    if n[code[6].clone()] != prepare {
+        return None;
+    }
+    let mut client_mapping = forward.clone();
+    for (old, actual) in [(0x5378b6, init_dispatch), (0x537b58, update_dispatch)] {
+        client_mapping.retain(|&(a, z, _)| !(a..z).contains(&old));
+        client_mapping.push((old, old + 1, actual));
+    }
+    let mut index_bodies: Vec<_> = code.to_vec();
+    for &(a, z, _) in &SHARED_CLIENTS[1..3] {
+        let actual = roles.span(span(a, z))?;
+        valid_slot(n, &actual, (z - a) as usize)?;
+        let expected = super::native_graph::relocate(
+            bytes(&reference, a, z)?,
+            a,
+            roles.address(a)?,
+            &client_mapping,
+        )?;
+        if n.get(actual.clone())? != expected {
+            return None;
+        }
+        index_bodies.push(actual);
+    }
+    index_bodies.extend(
+        TARGET[2..3]
+            .iter()
+            .chain(&DEFAULT_BOOT[..3])
+            .map(|(a, z, _)| roles.span(span(*a, *z)))
+            .collect::<Option<Vec<_>>>()?,
+    );
+    validate_indices(n, kernel, &index_bodies)?;
+    for at in [0x539496, 0x5393f2, 0x53951c, 0x5385d4, 0x53898e, 0x5389e2] {
+        ranges.push(roles.span(span(at, at + 4))?);
+    }
+    let data_authority = profile_data_authority(n, &code, &data)?;
+    Some(ObservedShared {
+        placements: SharedPlacements { code, data },
+        data_authority,
+        ranges,
+        invariants: TARGET[2..]
+            .iter()
+            .chain(DEFAULT_BOOT)
+            .chain(SHARED_CLIENTS)
+            .map(|(a, z, _)| roles.span(span(*a, *z)))
+            .collect::<Option<Vec<_>>>()?,
+    })
+}
+
 // PR1 specialized nonnull constructor/mode-one chooser; UD04 native special
 // init/update fragments, with all internal branch destinations based at1000.
 const SPECIALIZED: [[u8; 32]; 4] = [
@@ -1478,4 +1862,461 @@ fn profile_data_authority(
         arrays: arrays.clone(),
         fields,
     })
+}
+
+#[cfg(all(test, feature = "envelope"))]
+mod discovery_tests {
+    use super::*;
+    fn fixture() -> Vec<u8> {
+        let f: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/phase-trajectory-profile.json"
+        )))
+        .unwrap();
+        let f = f
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["role"] == "source")
+            .unwrap();
+        let mut image = alloc::vec![255; f["size"].as_u64().unwrap() as usize];
+        for s in f["spans"].as_array().unwrap() {
+            let at = s[0].as_u64().unwrap() as usize;
+            let hex = s[1].as_str().unwrap();
+            for i in 0..hex.len() / 2 {
+                image[at + i] = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap();
+            }
+        }
+        image
+    }
+    #[test]
+    fn emitted_profile_observer_checks_actual_target_roles() {
+        let f: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/phase-trajectory-bridge.json"
+        )))
+        .unwrap();
+        let f = f
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["role"] == "target")
+            .unwrap();
+        let mut target = alloc::vec![255; f["size"].as_u64().unwrap() as usize];
+        for s in f["spans"].as_array().unwrap() {
+            let at = s[0].as_u64().unwrap() as usize;
+            let hex = s[1].as_str().unwrap();
+            for i in 0..hex.len() / 2 {
+                target[at + i] = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap();
+            }
+        }
+        let packed = include_bytes!("trajectory_code/target-clients.bin");
+        let mut cursor = 0;
+        for (a, z) in [
+            (0x5381c0, 0x5387a2),
+            (0x538900, 0x538a5a),
+            (0x4f52fc, 0x4f53be),
+            (0x538f82, 0x538f90),
+            (0x5a4d0c, 0x5a4edc),
+            (0x5a29fe, 0x5a2a2a),
+        ] {
+            let len = (z - a) as usize;
+            target[span(a, z)].copy_from_slice(&packed[cursor..cursor + len]);
+            cursor += len;
+        }
+        let roles = super::super::trajectory_bridge::TargetRoles::discover(&target).unwrap();
+        // Move every original target role coherently before planning. Only
+        // declared pointer tables are interpreted as pointers; scalar bytes stay
+        // exact. This exercises actual retained clients and target table bases.
+        let original = target.clone();
+        let delta = 0x10000;
+        let mapping: Vec<_> = roles
+            .protected()
+            .iter()
+            .map(|r| {
+                (
+                    BASE + r.start as u32,
+                    BASE + r.end as u32,
+                    BASE + r.start as u32 + delta,
+                )
+            })
+            .collect();
+        let (_, _, mut scalar, pointers) = target_graph_parts(0).unwrap();
+        scalar.extend([span(0x5a4d0c, 0x5a4edc), span(0x5a29fe, 0x5a2a2a)]);
+        for r in roles.protected() {
+            target[r.clone()].fill(255);
+        }
+        for r in roles.protected() {
+            let old = BASE + r.start as u32;
+            let body = if scalar.contains(r) {
+                original[r.clone()].to_vec()
+            } else if pointers.contains(r) {
+                original[r.clone()]
+                    .chunks_exact(4)
+                    .flat_map(|word| {
+                        let old = u32::from_be_bytes(word.try_into().unwrap());
+                        mapping
+                            .iter()
+                            .find(|&&(a, z, _)| (a..z).contains(&old))
+                            .map_or(old, |&(a, _, to)| to + old - a)
+                            .to_be_bytes()
+                    })
+                    .collect()
+            } else {
+                super::super::native_graph::relocate(
+                    &original[r.clone()],
+                    old,
+                    old + delta,
+                    &mapping,
+                )
+                .unwrap()
+            };
+            let at = r.start + delta as usize;
+            target[at..at + body.len()].copy_from_slice(&body);
+        }
+        let roles = super::super::trajectory_bridge::TargetRoles::discover(&target)
+            .expect("relocated target roles");
+        let (code_lengths, data_lengths) = shared_lengths();
+        let slots = SharedPlacements {
+            code: core::array::from_fn(|i| {
+                0x1000 + i * 0x400..0x1000 + i * 0x400 + code_lengths[i]
+            }),
+            data: core::array::from_fn(|i| {
+                0x8000 + i * 0x400..0x8000 + i * 0x400 + data_lengths[i]
+            }),
+        };
+        let services = Services {
+            report: [0x410800, 0x410804],
+            state_getter: roles.address(0x538f56).unwrap(),
+            hardware_mode: roles.address(0x538f7e).unwrap(),
+        };
+        let kernel = alloc::vec![255; crate::image::KERNEL_LEN];
+        let plan = shared_plan_with_roles(
+            &target,
+            &fixture(),
+            &kernel,
+            slots.clone(),
+            0xa05ddd,
+            services,
+            &roles,
+        )
+        .expect("native profile plan");
+        let roots = SharedEntries {
+            init: BASE + slots.code[0].start as u32,
+            update: BASE + slots.code[1].start as u32,
+            ctor: BASE + slots.code[2].start as u32,
+            prepare: plan.profile.prepare,
+        };
+        for (r, b) in plan.profile.writes {
+            target[r].copy_from_slice(&b);
+        }
+        assert!(!roles.verify(&target));
+        let observed =
+            observe_shared_with_roles(&target, &kernel, roots, services, 0xa05ddd, &roles)
+                .expect("emitted graph at native roles");
+        assert_eq!(observed.placements.code, slots.code);
+        target[roles.span(span(0x5a4b54, 0x5a4d0c)).unwrap().start] ^= 1;
+        assert!(
+            observe_shared_with_roles(&target, &kernel, roots, services, 0xa05ddd, &roles)
+                .is_none()
+        );
+    }
+    #[test]
+    fn target_parts_decode_as_complete_native_code() {
+        let (reference, code, data, pointers) = target_graph_parts(0).unwrap();
+        assert_eq!(code.len(), 8);
+        assert_eq!(data.len(), 3);
+        assert_eq!(pointers.len(), 1);
+        super::super::native_graph::Graph::with_pointer_tables(
+            &reference, BASE, &code, &data, &pointers,
+        )
+        .expect("complete target code and explicit data classes");
+    }
+    #[test]
+    fn relocated_complete_profile_is_discovered_and_corruption_rejected() {
+        let original = fixture();
+        let mut image = original.clone();
+        let mapping: Vec<_> = SOURCE.iter().map(|&(a, z, _)| (a, z, a + 0x4000)).collect();
+        for &(a, z, _) in SOURCE {
+            image[span(a, z)].fill(255);
+        }
+        for (i, &(a, z, _)) in SOURCE.iter().enumerate() {
+            let body = &original[span(a, z)];
+            let moved = if i < 6 {
+                canonical(body, &mapping).unwrap()
+            } else {
+                body.to_vec()
+            };
+            image[span(a + 0x4000, z + 0x4000)].copy_from_slice(&moved);
+        }
+        let view = canonical_source(&image).expect("complete relocated code/data graph");
+        for &(a, z, _) in SOURCE {
+            assert_eq!(view[span(a, z)], original[span(a, z)]);
+        }
+        image[(SOURCE[6].0 - BASE + 0x4000) as usize] ^= 1;
+        assert!(canonical_source(&image).is_none());
+    }
+}
+
+/// Reference bytes followed by ordered code, scalar data, and pointer tables.
+pub type TargetGraphParts = (
+    Vec<u8>,
+    Vec<Range<usize>>,
+    Vec<Range<usize>>,
+    Vec<Range<usize>>,
+);
+/// Complete retained target profile, bootstrap clients and shared clients.
+/// The initialized RAM blob remains opaque: no guessed pointers are relocated.
+/// Combine these parts with the enclosing controller/service graph before
+/// discovery; these parts alone do not prove caller or service ownership.
+pub fn target_graph_parts(image_len: usize) -> Option<TargetGraphParts> {
+    let proof: Vec<_> = TARGET
+        .iter()
+        .chain(DEFAULT_BOOT)
+        .chain(SHARED_CLIENTS)
+        .copied()
+        .collect();
+    let end = proof.iter().map(|&(_, z, _)| (z - BASE) as usize).max()?;
+    let mut reference = alloc::vec![0xff; image_len.max(end)];
+    let packed = include_bytes!("trajectory_code/profile-target.bin");
+    let mut at = 0;
+    for &(a, z, digest) in &proof {
+        let r = span(a, z);
+        let next = at + r.len();
+        let body = packed.get(at..next)?;
+        digest_is(body, &digest)?;
+        reference[r].copy_from_slice(body);
+        at = next;
+    }
+    if at != packed.len() {
+        return None;
+    }
+    let code = TARGET[..3]
+        .iter()
+        .chain(&DEFAULT_BOOT[..3])
+        .chain(&SHARED_CLIENTS[1..3])
+        .map(|&(a, z, _)| span(a, z))
+        .collect();
+    let data = [TARGET[3], DEFAULT_BOOT[3], SHARED_CLIENTS[3]]
+        .into_iter()
+        .map(|(a, z, _)| span(a, z))
+        .collect();
+    let pointers = alloc::vec![span(SHARED_CLIENTS[0].0, SHARED_CLIENTS[0].1)];
+    Some((reference, code, data, pointers))
+}
+
+/// Compose a shared profile against independently discovered native target roles.
+#[allow(clippy::too_many_arguments)]
+pub fn shared_plan_with_roles(
+    target: &[u8],
+    source: &[u8],
+    kernel: &[u8],
+    placement: SharedPlacements,
+    private_ram: u32,
+    services: Services,
+    roles: &super::trajectory_bridge::TargetRoles,
+) -> Option<SharedPlan> {
+    let canonical = canonical_source(source)?;
+    let source = canonical.as_slice();
+    bind(source, SOURCE)?;
+    if !roles.verify(target) {
+        return None;
+    }
+    validate_default_with_roles(target, kernel, roles)?;
+    if private_ram == 0
+        || private_ram.checked_add(3)? > 0x1000000
+        || services
+            .report
+            .into_iter()
+            .chain([services.state_getter, services.hardware_mode])
+            .any(|a| a & 1 != 0 || a > 0xfffffe)
+    {
+        return None;
+    }
+    let (code_lengths, data_lengths) = shared_lengths();
+    let slots: Vec<_> = placement
+        .code
+        .iter()
+        .zip(code_lengths)
+        .chain(placement.data.iter().zip(data_lengths))
+        .collect();
+    let protected: Vec<_> = TARGET[2..]
+        .iter()
+        .chain(DEFAULT_BOOT)
+        .chain(SHARED_CLIENTS)
+        .map(|(a, z, _)| roles.span(span(*a, *z)))
+        .chain([roles.span(span(0x537e26, 0x537e30))])
+        .collect::<Option<Vec<_>>>()?;
+    for (i, (r, len)) in slots.iter().enumerate() {
+        valid_slot(target, r, *len)?;
+        if slots[..i].iter().any(|(other, _)| overlap(r, other))
+            || protected.iter().any(|p| overlap(p, r))
+        {
+            return None;
+        }
+    }
+    let entries: [u32; 13] = core::array::from_fn(|i| BASE + placement.code[i].start as u32);
+    let data_entries: [u32; 5] = core::array::from_fn(|i| BASE + placement.data[i].start as u32);
+    let source_entries = [
+        entries[0],
+        entries[1],
+        roles.address(0x537e26)?,
+        entries[2],
+        entries[3],
+        entries[4],
+        entries[5],
+    ];
+    let (graph, source_mapping) = emit_graph_with_tables(
+        source,
+        source_entries,
+        data_entries,
+        private_ram,
+        services,
+        [roles.address(0x5a4bf8)?, roles.address(0x5a4b54)?],
+    )?;
+    let mut writes = Vec::new();
+    for (raw, slot) in [(0, 0), (1, 1), (3, 2), (4, 3), (5, 4), (6, 5), (7, 6)] {
+        writes.push((placement.code[slot].clone(), graph[raw].clone()));
+    }
+    // Reuse the native ten-byte abort setter. Its complete grammar is the same
+    // as the source setter, with only its absolute volatile byte relocated.
+    let abort = reemit(
+        target.get(roles.span(span(0x537e26, 0x537e30))?)?,
+        &[(0x3264, 0x3265, private_ram)],
+        services,
+        0,
+    )?;
+    if abort != graph[2] {
+        return None;
+    }
+    writes.push((roles.span(span(0x537e26, 0x537e30))?, abort));
+    writes.push((
+        placement.code[7].clone(),
+        fragments_with_roles(
+            target,
+            roles,
+            &[
+                (0x5378b6, 0x5378c2),
+                (0x5378c6, 0x5378e0),
+                (0x537b52, 0x537b58),
+            ],
+            entries[7],
+        )?,
+    ));
+    writes.push((
+        placement.code[8].clone(),
+        fragments_with_roles(
+            target,
+            roles,
+            &[
+                (0x537b58, 0x537b6a),
+                (0x537b70, 0x537bc4),
+                (0x537d4a, 0x537d52),
+                (0x537e16, 0x537e26),
+            ],
+            entries[8],
+        )?,
+    ));
+    for (i, body) in shared_glue_with_controller(entries, roles.address(0x539406)?)?
+        .into_iter()
+        .enumerate()
+    {
+        writes.push((placement.code[9 + i].clone(), body));
+    }
+    for (slot, (a, z)) in [
+        (0x65f142, 0x65f196),
+        (0x65f196, 0x65f24a),
+        (0x65f24a, 0x65f2fe),
+        (0x65f2fe, 0x65f372),
+        (0x65ed70, 0x65eda9),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        writes.push((placement.data[slot].clone(), bytes(source, a, z)?.to_vec()));
+    }
+    let retired = alloc::vec![
+        roles.span(span(0x5378b6, 0x537b58))?,
+        roles.span(span(0x537b58, 0x537e26))?
+    ];
+    let mut replaced = retired.clone();
+    for (at, old, new) in [
+        (0x539496, 0x5378b6, entries[10]),
+        (0x5393f2, 0x537b58, entries[11]),
+        (0x53951c, 0x537b58, entries[11]),
+        (0x5385d4, 0x539406, entries[12]),
+        (0x53898e, 0x539406, entries[12]),
+        (0x5389e2, 0x539406, entries[12]),
+        (0x539b1a, 0x539406, entries[12]),
+    ] {
+        if target.get(roles.span(span(at, at + 4))?)? != call(roles.address(old)?)? {
+            return None;
+        }
+        let r = roles.span(span(at, at + 4))?;
+        replaced.push(r.clone());
+        if at != 0x539b1a {
+            writes.push((r, call(new)?));
+        }
+    }
+    let bodies = [
+        roles.span(span(0x5378b6, 0x537b58))?,
+        roles.span(span(0x537b58, 0x537e26))?,
+        roles.span(span(0x5392d2, 0x539406))?,
+        roles.span(span(0x539406, 0x539550))?,
+    ];
+    super::retirement::references_clear(target, kernel, &retired, &replaced, &bodies)?;
+    // Query original entry references without claiming its retained body as free
+    // storage. All four native callers must pass through the zero-distance guard.
+    let entry_query = roles.span(span(0x539406, 0x539407))?;
+    replaced.push(entry_query.clone());
+    super::retirement::references_clear(target, kernel, &[entry_query], &replaced, &bodies)?;
+    for (i, (r, b)) in writes.iter().enumerate() {
+        if r.len() != b.len() || writes[..i].iter().any(|(other, _)| overlap(r, other)) {
+            return None;
+        }
+    }
+    Some(SharedPlan {
+        profile: Plan {
+            writes,
+            entries: source_mapping,
+            prepare: entries[6],
+        },
+        retired,
+        replaced_by_outer: roles.span(span(0x539b1a, 0x539b1e))?,
+    })
+}
+
+pub(super) fn validate_default_with_roles(
+    target: &[u8],
+    kernel: &[u8],
+    roles: &super::trajectory_bridge::TargetRoles,
+) -> Option<()> {
+    if kernel.len() != crate::image::KERNEL_LEN {
+        return None;
+    }
+    let initialized = 0x5993d6 + (0x3265 - 0x2e6a);
+    if target.get(roles.span(span(initialized, initialized + 3))?)? != [42, 39, 19] {
+        return None;
+    }
+    let bodies = TARGET[..3]
+        .iter()
+        .chain(DEFAULT_BOOT[..3].iter())
+        .map(|(a, z, _)| roles.span(span(*a, *z)))
+        .collect::<Option<Vec<_>>>()?;
+    validate_indices(target, kernel, &bodies)
+}
+fn fragments_with_roles(
+    target: &[u8],
+    roles: &super::trajectory_bridge::TargetRoles,
+    ranges: &[(u32, u32)],
+    entry: u32,
+) -> Option<Vec<u8>> {
+    let ranges = ranges
+        .iter()
+        .map(|&(a, z)| {
+            let r = roles.span(span(a, z))?;
+            Some((BASE + r.start as u32, BASE + r.end as u32))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    fragments(target, &ranges, entry)
 }

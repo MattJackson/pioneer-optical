@@ -1,4 +1,4 @@
-//! Complete native generated-table convention and bounded row permutation.
+//! Complete native generated-table convention and owned basis composition.
 //! Native calibration and selector contracts are composed explicitly; resident
 //! arithmetic calls stay target-owned. A shifted basis alone never makes
 //! different calibration sources equivalent.
@@ -116,8 +116,9 @@ pub fn plan(target: &[u8], installed: &[u8]) -> Result<Plan, Error> {
     plan_with_kernel(target, installed, None)
 }
 
-/// Include the exact resident component when a co-resident computed DSP body
-/// changes instruction placement. Software-only corrections require no Kernel.
+/// Include the exact resident component when instruction placement changes or
+/// a noncyclic software/computed basis recipe needs exclusive-reference proof.
+/// Cyclic software-only corrections require no Kernel.
 pub fn plan_with_kernel(
     target: &[u8],
     installed: &[u8],
@@ -127,13 +128,10 @@ pub fn plan_with_kernel(
     let computed_donor = super::loader::computed::observe(installed);
     let staged = match (&computed_target, &computed_donor) {
         (Ok(a), Ok(b)) => {
-            if target[a.basis.clone()] != installed[b.basis.clone()]
-                || a.calibration != b.calibration
-                || a.arithmetic != b.arithmetic
-            {
+            if a.calibration != b.calibration || a.arithmetic != b.arithmetic {
                 return Err(Error::ResourceMismatch);
             }
-            if a.loader.loader == b.loader.loader {
+            let mut staged = if a.loader.loader == b.loader.loader {
                 target.to_vec()
             } else {
                 super::loader::computed::specialize_direction(
@@ -142,7 +140,19 @@ pub fn plan_with_kernel(
                     kernel.ok_or(Error::ResourceMismatch)?,
                 )
                 .map_err(|_| Error::ResourceMismatch)?
+            };
+            if target[a.basis.clone()] != installed[b.basis.clone()] {
+                super::retirement::references_clear(
+                    target,
+                    kernel.ok_or(Error::ResourceMismatch)?,
+                    core::slice::from_ref(&a.basis),
+                    &[a.basis.clone(), a.loader.program.clone()],
+                    core::slice::from_ref(&a.loader.program),
+                )
+                .ok_or(Error::ResourceMismatch)?;
+                staged[a.basis.clone()].copy_from_slice(&installed[b.basis.clone()]);
             }
+            staged
         }
         (Err(_), Err(_))
             if super::loader::observe(target).is_err()
@@ -190,7 +200,20 @@ pub fn plan_with_kernel(
         })
         .collect();
     if shifts.len() != 1 {
-        return Err(Error::ResourceMismatch);
+        // Different amplitudes or repeated rows are legitimate donor recipes,
+        // but require exclusive ownership of the target basis. The fully bound
+        // evaluators are its permitted consumers; all other Normal/Kernel
+        // references must remain outside the replaced table.
+        let mut replaced = before.evaluator.programs.clone();
+        replaced.push(before.evaluator.basis.clone());
+        super::retirement::references_clear(
+            target,
+            kernel.ok_or(Error::ResourceMismatch)?,
+            core::slice::from_ref(&before.evaluator.basis),
+            &replaced,
+            &before.evaluator.programs,
+        )
+        .ok_or(Error::ResourceMismatch)?;
     }
     changed = evaluators::rewrite_basis(&changed, installed)?;
     changed = native::correct_pair(&changed, donor.coils.assignment)

@@ -51,6 +51,78 @@ fn programs(normal: &[u8]) -> Result<Vec<Program>, Error> {
     .collect()
 }
 
+/// One declared native JSR in a bound conversion's logical instruction stream.
+#[derive(Clone, Debug)]
+pub(crate) struct NativeCall {
+    /// Offset of the JSR opcode, not its three-byte target operand.
+    pub(crate) offset: usize,
+    pub(crate) target: u32,
+}
+
+/// Complete OEM conversion grammar and its original physical placement.
+#[derive(Clone, Debug)]
+pub(crate) struct NativeProgram {
+    pub(crate) element: Element,
+    pub(crate) variant: u8,
+    pub(crate) entry: u32,
+    pub(crate) body: native::placement::Body,
+    pub(crate) calls: Vec<NativeCall>,
+}
+
+/// Bind only recognized original/compact native conversion grammars. Every
+/// instruction must decode and re-encode byte identically; calls are exposed
+/// in their template-declared semantic order for a separate ABI proof.
+pub(crate) fn bind_native(normal: &[u8]) -> Result<Vec<NativeProgram>, Error> {
+    use h8_asm::{
+        isa::{decode_insn, encode_insn},
+        Mode, Target,
+    };
+    programs(normal)?
+        .into_iter()
+        .map(|program| {
+            let mut at = 0;
+            while at < program.body.bytes.len() {
+                let decoded =
+                    decode_insn(&program.body.bytes[at..], Target::H8S2000, Mode::Advanced)
+                        .map_err(|_| Error::InvalidProgram)?;
+                let encoded = encode_insn(decoded.insn, Target::H8S2000, Mode::Advanced)
+                    .map_err(|_| Error::InvalidProgram)?;
+                if program.body.bytes.get(at..at + decoded.len) != Some(encoded.as_slice()) {
+                    return Err(Error::InvalidProgram);
+                }
+                at += decoded.len;
+            }
+            let bound_calls: Vec<_> = calls(&program.template)?
+                .into_iter()
+                .map(|field| NativeCall {
+                    offset: field - 1,
+                    target: u32::from_be_bytes([
+                        0,
+                        program.body.bytes[field],
+                        program.body.bytes[field + 1],
+                        program.body.bytes[field + 2],
+                    ]),
+                })
+                .collect();
+            if bound_calls.iter().any(|call| {
+                call.target & 1 != 0
+                    || call.target < 0x400000
+                    || call.target >= 0x410000 + normal.len() as u32
+            }) {
+                return Err(Error::InvalidProgram);
+            }
+            Ok(NativeProgram {
+                element: program.element,
+                variant: program.variant,
+                entry: u32::try_from(BASE_ADDRESS + program.at)
+                    .map_err(|_| Error::InvalidProgram)?,
+                body: program.body,
+                calls: bound_calls,
+            })
+        })
+        .collect()
+}
+
 /// Complete bound native conversion bodies, including any instruction spill.
 pub(crate) fn protected_ranges(normal: &[u8]) -> Result<Vec<Range<usize>>, Error> {
     Ok(programs(normal)?
@@ -1121,6 +1193,145 @@ pub fn verify_specialized_callers(normal: &[u8], kernel: Option<&[u8]>) -> Resul
     Ok(())
 }
 
+fn transplanted_body(
+    target: &[u8],
+    program: &Program,
+    desired: &Program,
+    native_math: bool,
+    kernel: Option<&[u8]>,
+    compact_even_if_fits: bool,
+) -> Result<Vec<u8>, Error> {
+    let mut bytes = transplant_program(target, program, desired)?;
+    if native_math && (compact_even_if_fits || bytes.len() > program.body.spans[0].len()) {
+        if let Some(smaller) = compact_body(&bytes, desired.element, desired.variant) {
+            let proved = match desired.element {
+                Element::CalibrationBase => {
+                    scratch_callers(target, kernel, program, None, u32::MAX)
+                }
+                Element::CalibrationOffset => true,
+                Element::CalibrationStep => {
+                    let fields = calls(&desired.template)?;
+                    let field = *fields.last().ok_or(Error::InvalidProgram)?;
+                    let address =
+                        u32::from_be_bytes([0, bytes[field], bytes[field + 1], bytes[field + 2]])
+                            as usize;
+                    address.checked_sub(BASE_ADDRESS).is_some_and(|helper| {
+                        scratch_callers(target, kernel, program, Some(helper), 0xff00)
+                    })
+                }
+                _ => false,
+            };
+            if proved {
+                bytes = smaller;
+            }
+        }
+    }
+    Ok(bytes)
+}
+
+/// Exact whole-instruction suffix sizes for all growing specialized conversions.
+/// Callers still establish storage ownership and allocate disjoint reservations.
+pub fn required_spills(
+    target: &[u8],
+    installed: &[u8],
+    kernel: Option<&[u8]>,
+) -> Result<[usize; 3], Error> {
+    let from = programs(target)?;
+    let required = programs(installed)?;
+    let mut lengths = [0; 3];
+    for (i, (program, desired)) in from.iter().zip(&required).enumerate() {
+        if program.variant == desired.variant {
+            continue;
+        }
+        let bytes = transplanted_body(target, program, desired, true, kernel, false)?;
+        let original = &program.body.spans[0];
+        if bytes.len() <= original.len() {
+            continue;
+        }
+        let address =
+            u32::try_from(BASE_ADDRESS + original.start).map_err(|_| Error::InvalidSpace)?;
+        let (_, spill) =
+            native::placement::split_closed(&bytes, address, original.len(), BASE_ADDRESS as u32)
+                .ok_or(Error::InvalidProgram)?;
+        if program
+            .body
+            .spans
+            .get(1)
+            .is_some_and(|range| range.len() >= spill.len())
+        {
+            continue;
+        }
+        lengths[i] = spill.len();
+    }
+    Ok(lengths)
+}
+
+/// Stage only complete conversions that fit their original native bodies.
+/// The mechanism composer may subsequently prove ownership of their retired
+/// suffixes; shrinking here is not by itself permission to reuse those bytes.
+pub(crate) fn rewrite_shrinking(
+    target: &[u8],
+    installed: &[u8],
+    kernel: Option<&[u8]>,
+) -> Result<Vec<u8>, Error> {
+    let from = programs(target)?;
+    let required = programs(installed)?;
+    let mut changed = target.to_vec();
+    let mut expected = Vec::new();
+    let mut written: Vec<Range<usize>> = Vec::new();
+    for (program, desired) in from.iter().zip(&required) {
+        let original = &program.body.spans[0];
+        let mut bytes = transplanted_body(target, program, desired, true, kernel, true)?;
+        if bytes.len() > original.len()
+            || (program.variant == desired.variant && bytes.len() == original.len())
+        {
+            expected.push(program.variant);
+            continue;
+        }
+        if program.body.spans.len() != 1 || written.iter().any(|range| overlaps(range, original)) {
+            return Err(Error::InvalidSpace);
+        }
+        pad_nops(&mut bytes, original.len())?;
+        changed[original.clone()].copy_from_slice(&bytes);
+        written.push(original.clone());
+        expected.push(desired.variant);
+    }
+    if programs(&changed)?.iter().map(|p| p.variant).ne(expected) {
+        return Err(Error::VerificationFailed);
+    }
+    verify_specialized_callers(&changed, kernel)?;
+    Ok(changed)
+}
+
+/// A complete shrinking body and its structurally retired suffix.
+pub(crate) struct Retirement {
+    pub(crate) program: Range<usize>,
+    pub(crate) tail: Range<usize>,
+}
+
+/// Locate structurally retired suffixes. The allocator separately requires NOP
+/// staging bytes and proves ownership; final verification also uses this after
+/// those bytes contain another bound conversion's spill.
+pub(crate) fn retired_tails(target: &[u8], changed: &[u8]) -> Result<Vec<Retirement>, Error> {
+    let mut tails = Vec::new();
+    for (before, after) in programs(target)?.iter().zip(programs(changed)?) {
+        let original = &before.body.spans[0];
+        let current = &after.body.spans[0];
+        if before.body.spans.len() == 1
+            && after.body.spans.len() == 1
+            && original.start == current.start
+            && current.end < original.end
+        {
+            let tail = current.end..original.end;
+            tails.push(Retirement {
+                program: original.clone(),
+                tail,
+            });
+        }
+    }
+    Ok(tails)
+}
+
 fn rewrite_with_layout(
     target: &[u8],
     installed: &[u8],
@@ -1143,34 +1354,7 @@ fn rewrite_with_layout(
         if program.variant == desired.variant {
             continue;
         }
-        let mut bytes = transplant_program(target, program, desired)?;
-        if native_math && bytes.len() > program.body.spans[0].len() {
-            if let Some(smaller) = compact_body(&bytes, desired.element, desired.variant) {
-                let proved = match desired.element {
-                    Element::CalibrationBase => {
-                        scratch_callers(target, kernel, program, None, u32::MAX)
-                    }
-                    Element::CalibrationOffset => true,
-                    Element::CalibrationStep => {
-                        let fields = calls(&desired.template)?;
-                        let field = *fields.last().ok_or(Error::InvalidProgram)?;
-                        let address = u32::from_be_bytes([
-                            0,
-                            bytes[field],
-                            bytes[field + 1],
-                            bytes[field + 2],
-                        ]) as usize;
-                        address.checked_sub(BASE_ADDRESS).is_some_and(|helper| {
-                            scratch_callers(target, kernel, program, Some(helper), 0xff00)
-                        })
-                    }
-                    _ => false,
-                };
-                if proved {
-                    bytes = smaller;
-                }
-            }
-        }
+        let bytes = transplanted_body(target, program, desired, native_math, kernel, false)?;
         if !compact && program.body.spans.len() != 1 {
             return Err(Error::InvalidProgram);
         }
@@ -1385,6 +1569,33 @@ mod tests {
     }
     fn spaces() -> [Option<Range<usize>>; 3] {
         [Some(0x500..0x580), Some(0x580..0x600), Some(0x600..0x680)]
+    }
+
+    #[test]
+    fn native_binding_preserves_complete_programs_and_declared_call_roles() {
+        for variants in [[0, 0, 0], [1, 1, 1], [1, 2, 2]] {
+            let image = fixture(variants, 0x410700);
+            let bound = bind_native(&image).unwrap();
+            assert_eq!(bound.len(), 3);
+            for (i, program) in bound.iter().enumerate() {
+                assert_eq!(program.variant as usize, variants[i]);
+                assert_eq!(program.entry, 0x410000 + ((i + 1) * 0x100) as u32);
+                assert_eq!(program.body.spans.len(), 1);
+                assert_eq!(program.body.bytes, image[program.body.spans[0].clone()]);
+                assert_eq!(
+                    program.element,
+                    [
+                        Element::CalibrationBase,
+                        Element::CalibrationOffset,
+                        Element::CalibrationStep
+                    ][i]
+                );
+                for (role, call) in program.calls.iter().enumerate() {
+                    assert_eq!(program.body.bytes[call.offset], 0x5e);
+                    assert_eq!(call.target, 0x410700 + role as u32 * 2);
+                }
+            }
+        }
     }
 
     #[test]

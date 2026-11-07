@@ -10,6 +10,12 @@ use h8_asm::{
     Mode, Target,
 };
 use sha2::{Digest, Sha256};
+mod software_roles;
+mod target_roles;
+/// Complete native software controller/profile source roles.
+pub use software_roles::SoftwareRoles;
+/// Native target code/data locations bound by complete coherent graphs.
+pub use target_roles::TargetRoles;
 const BASE: u32 = 0x410000;
 const ENTRY: u32 = 0x5398a6;
 const CONTROLLER: u32 = ENTRY + 104;
@@ -377,10 +383,6 @@ const RETAINED: &[(u32, u32, [u8; 32])] = &[
         ],
     ),
 ];
-const KERNEL: [u8; 32] = [
-    186, 133, 71, 211, 218, 135, 252, 50, 216, 209, 74, 142, 178, 243, 159, 222, 169, 198, 192,
-    172, 126, 107, 169, 31, 243, 236, 209, 116, 248, 228, 94, 65,
-];
 /// All writes are staged; the caller owns the two supplied profile slots and
 /// commits this plan atomically with its software-table/encoder composition.
 #[derive(Clone, Debug)]
@@ -414,6 +416,13 @@ fn bind(n: &[u8], proofs: &[(u32, u32, [u8; 32])]) -> Option<()> {
     }
     Some(())
 }
+/// Bind relocated source controller/profile nodes as one coherent native graph.
+/// The returned canonical view is read only: its role-address copies are never
+/// written to the target image or offered as allocatable storage.
+fn canonical_source(source: &[u8]) -> Option<Vec<u8>> {
+    SoftwareRoles::discover(source)?.canonical_view(source)
+}
+
 fn overlap(a: &Range<usize>, b: &Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
 }
@@ -553,6 +562,8 @@ pub fn plan(
     code: Range<usize>,
     data: Range<usize>,
 ) -> Option<Plan> {
+    let canonical = canonical_source(source)?;
+    let source = canonical.as_slice();
     validate(target, source, kernel)?;
     for &(a, z, _) in TARGET {
         if overlap(&code, &span(a, z)) || overlap(&data, &span(a, z)) {
@@ -567,9 +578,13 @@ fn validate(target: &[u8], source: &[u8], kernel: &[u8]) -> Option<()> {
     bind(target, DIRECTION)?;
     bind(target, RETAINED)?;
     bind(source, SOURCE)?;
-    if kernel.len() != crate::image::KERNEL_LEN || Sha256::digest(kernel).as_slice() != KERNEL {
+    if kernel.len() != crate::image::KERNEL_LEN {
         return None;
     }
+    // Kernel code is retained verbatim; no transplanted source call is rebound
+    // to a new resident service. Its relevant obligations are the native
+    // reference, default-index and private-RAM closures below, not package
+    // identity. The outer immutable operation pins the exact supplied Kernel.
     trajectory_profile::validate_default(target, kernel)?;
     entries_clear(target, kernel)?;
     private_clear(target, kernel)?;
@@ -604,6 +619,8 @@ pub fn plan_with_profile(
     kernel: &[u8],
     profile: trajectory_profile::Plan,
 ) -> Option<Plan> {
+    let canonical = canonical_source(source)?;
+    let source = canonical.as_slice();
     validate(target, source, kernel)?;
     assemble(target, source, profile)
 }
@@ -773,6 +790,7 @@ fn assemble(target: &[u8], source: &[u8], profile: trajectory_profile::Plan) -> 
 /// old DSP loader signature, marker, or saved patch plan.
 #[derive(Clone, Debug)]
 pub struct Observed {
+    entry: u32,
     profile: trajectory_profile::ObservedShared,
     code: Vec<Range<usize>>,
     protected: Vec<Range<usize>>,
@@ -794,7 +812,7 @@ impl Observed {
     /// Controller entry accepts native E1 count and canonical R1H direction;
     /// source count normalization and target status completion are explicit.
     pub const fn entry(&self) -> u32 {
-        ENTRY
+        self.entry
     }
     /// Re-recognize complete bytes and inbound references, without interpreting
     /// firmware or assuming disjoint writes cannot introduce a new caller.
@@ -834,14 +852,20 @@ pub struct ObservationFailure {
 /// Diagnostic form of `observe`, with identical acceptance conditions.
 pub fn observe_detailed(normal: &[u8], kernel: &[u8]) -> Result<Observed, ObservationFailure> {
     let mut stage = "retained-services";
-    observe_inner(normal, kernel, &mut stage).ok_or(ObservationFailure { stage })
+    observe_inner(normal, kernel, &mut stage)
+        .or_else(|| {
+            stage = "retained-role-discovery";
+            let roles = TargetRoles::locate_emitted(normal)?;
+            observe_inner_with_roles(normal, kernel, &mut stage, &roles)
+        })
+        .ok_or(ObservationFailure { stage })
 }
 fn observe_inner(normal: &[u8], kernel: &[u8], stage: &mut &'static str) -> Option<Observed> {
     let service_witness = observe_services(normal)?;
     *stage = "native-input-preparation";
     bind(normal, DIRECTION)?;
-    *stage = "exact-kernel";
-    if kernel.len() != crate::image::KERNEL_LEN || Sha256::digest(kernel).as_slice() != KERNEL {
+    *stage = "resident-component";
+    if kernel.len() != crate::image::KERNEL_LEN {
         return None;
     }
     *stage = "profile-entries";
@@ -1050,6 +1074,7 @@ fn observe_inner(normal: &[u8], kernel: &[u8], stage: &mut &'static str) -> Opti
         fingerprint.update(normal.get(r.clone())?);
     }
     Some(Observed {
+        entry: ENTRY,
         profile,
         code: bodies,
         protected,
@@ -1085,4 +1110,517 @@ fn observe_services(normal: &[u8]) -> Option<Vec<Range<usize>>> {
         witnesses.push(span(a, z));
     }
     Some(witnesses)
+}
+
+/// Compose a profile against independently discovered target native roles.
+pub fn plan_with_profile_with_roles(
+    target: &[u8],
+    source: &[u8],
+    kernel: &[u8],
+    profile: trajectory_profile::Plan,
+    roles: &TargetRoles,
+) -> Option<Plan> {
+    if !roles.verify(target) || kernel.len() != crate::image::KERNEL_LEN {
+        return None;
+    }
+    let canonical = canonical_source(source)?;
+    let source = canonical.as_slice();
+    trajectory_profile::validate_default_with_roles(target, kernel, roles)?;
+    entries_clear_with_roles(target, kernel, roles)?;
+    let allowed = [
+        span(ENTRY, 0x539b2c),
+        span(0x53957e, 0x53959e),
+        span(0x5395d6, 0x5395e2),
+        span(0x53966e, 0x539766),
+    ]
+    .into_iter()
+    .map(|r| roles.span(r))
+    .collect::<Option<Vec<_>>>()?;
+    private_refs_clear(target, kernel, &allowed)?;
+    assemble_with_roles(target, source, profile, roles)
+}
+
+fn assemble_with_roles(
+    target: &[u8],
+    source: &[u8],
+    profile: trajectory_profile::Plan,
+    roles: &TargetRoles,
+) -> Option<Plan> {
+    let entry = |old| {
+        profile
+            .entries
+            .iter()
+            .find(|(a, _)| *a == old)
+            .map(|(_, b)| *b)
+    };
+    let mut mapping = profile.entries.clone();
+    mapping.extend(
+        [
+            (0x5d6d62, 0x538c7a),
+            (0x5d6c72, 0x538b74),
+            (0x5d6c40, 0x538b24),
+            (0x5d6c48, 0x538b2c),
+            (0x5d6bce, 0x538a88),
+            (0x5d7d6c, 0x539d58),
+            (0x5d7d7e, 0x539d6a),
+            (0x5d7d8a, 0x539d76),
+            (0x5d7da0, 0x539d8c),
+            (0x5d7dac, 0x539d98),
+            (0x5cedae, 0x530bae),
+            (0x5f0c26, 0x551f0e),
+            (0x5f0cb6, 0x551f60),
+            (0x5f0ce0, 0x551f8a),
+        ]
+        .into_iter()
+        .map(|(a, b)| Some((a, roles.address(b)?)))
+        .collect::<Option<Vec<_>>>()?,
+    );
+    let mut replacement = Vec::new();
+    // Save caller registers and allocate an aligned local complete35-byte object.
+    emit(
+        &mut replacement,
+        bytes(source, 0x5d7a0c, 0x5d7a18)?,
+        &[(16, 36)],
+    )?;
+    // OEM MOV.L ER1,ER4.
+    emit(&mut replacement, &[0x0f, 0x94], &[])?;
+    // Source init's exact unsigned count normalization and zero branch, moved
+    // before object construction. 0xffff rounds to zero; skipping the controller
+    // prevents its zero-count initializer from exposing an uninitialized table.
+    // Native caller wrappers still execute their existing completion/status path.
+    emit(&mut replacement, bytes(source, 0x5d5aae, 0x5d5ab0)?, &[])?;
+    let guard_at = replacement.len();
+    emit(&mut replacement, bytes(source, 0x5d5b3e, 0x5d5b4c)?, &[])?;
+    call(&mut replacement, profile.prepare)?;
+    emit(&mut replacement, &[0x0f, 0xf0, 0x0f, 0x85], &[])?;
+    emit(
+        &mut replacement,
+        &[0x7a, 1, 0, 0, 0, 0, 1, 0, 0x69, 0x81, 0x0b, 0x90],
+        &[(0, roles.address(VTABLE)?)],
+    )?;
+    call(&mut replacement, entry(0x5d5fe6)?)?;
+    emit(
+        &mut replacement,
+        &[
+            0xf0, 1, 0x6a, 0xa0, 0, 0xa0, 0x5d, 0xdc, 0x0f, 0xc1, 0x0f, 0xd0,
+        ],
+        &[],
+    )?;
+    call(&mut replacement, roles.address(CONTROLLER)?)?;
+    emit(
+        &mut replacement,
+        &[0x18, 0, 0x6a, 0xa0, 0, 0xa0, 0x5d, 0xdc],
+        &[],
+    )?;
+    let epilogue = replacement.len();
+    // Re-encode only the native BEQ displacement; its condition/register flow
+    // and the short branch skipping INC remain the original source block.
+    let branch = guard_at + 10;
+    let d = decode_insn(&replacement[branch..], Target::H8S2000, Mode::Advanced).ok()?;
+    let mut i = d.insn;
+    let Operand::Address(Ea::PcRelative { bits, .. }) = i.operands[0] else {
+        return None;
+    };
+    i.operands[0] = Operand::Address(Ea::PcRelative {
+        bits,
+        value: (epilogue - branch - d.len) as i32,
+    });
+    let encoded = encode_insn(i, Target::H8S2000, Mode::Advanced).ok()?;
+    replacement[branch..branch + d.len].copy_from_slice(&encoded);
+    emit(
+        &mut replacement,
+        bytes(source, 0x5d7b0e, 0x5d7b1c)?,
+        &[(16, 36)],
+    )?;
+    if replacement.len() > 104 {
+        return None;
+    }
+    let pad = 104 - replacement.len();
+    nops(&mut replacement, pad)?;
+    let mut controller = copied(source, 0x5d7a0c, 0x5d7b1c, &mapping)?;
+    // These two complete source blocks are native mode-nine peripheral hooks.
+    // Keep target hardware-specific mode-nine implementations and their ABI.
+    for (old, to) in [(0x5d7aa4, 0x4f52fc), (0x5d7afe, 0x4f5366)] {
+        let mut block = Vec::new();
+        emit(&mut block, &[0xf8, 9], &[])?;
+        call(&mut block, roles.address(to)?)?;
+        nops(&mut block, 4)?;
+        controller[(old - 0x5d7a0c) as usize..(old - 0x5d7a0c) as usize + 10]
+            .copy_from_slice(&block);
+    }
+    replacement.extend(controller);
+    replacement.extend(copied(source, 0x5d796c, 0x5d7a0c, &mapping)?);
+    // Tail-jump preserves the original variadic stack frame for both source masks.
+    emit(
+        &mut replacement,
+        &[0xf8, 4, 0x5a, 0x54, 0xc4, 0xc4],
+        &[(0x54c4c4, roles.address(0x54c4c4)?)],
+    )?;
+    let mut vtable = bytes(source, 0x6934b6, 0x6934ca)?.to_vec();
+    if vtable[..16].iter().any(|b| *b != 0) || vtable[16..] != 0x5d796cu32.to_be_bytes() {
+        return None;
+    }
+    vtable[16..].copy_from_slice(&roles.address(CALLBACK)?.to_be_bytes());
+    replacement.extend(vtable);
+    let pad = (0x539b2c - ENTRY) as usize - replacement.len();
+    nops(&mut replacement, pad)?;
+    let mut stop = target.get(roles.span(span(0x53957e, 0x53959e))?)?.to_vec();
+    let mut empty = Vec::new();
+    nops(&mut empty, 10)?;
+    stop[8..18].copy_from_slice(&empty);
+    let mut dead = Vec::new();
+    nops(&mut dead, (0x539766 - 0x53966e) as usize)?;
+    let mut initializers = Vec::new();
+    nops(&mut initializers, 12)?;
+    let mut writes = Vec::new();
+    let [helpers, tail] = roles.auxiliary_slots()?;
+    for (i, (r, b)) in profile.writes.iter().enumerate() {
+        if r.len() != b.len()
+            || profile.writes[..i]
+                .iter()
+                .any(|(other, _)| overlap(r, other))
+        {
+            return None;
+        }
+        if helpers.start <= r.start && r.end <= helpers.end {
+            dead[r.start - helpers.start..r.end - helpers.start].copy_from_slice(b);
+        } else if tail.start <= r.start && r.end <= tail.end {
+            replacement[r.start - (roles.address(ENTRY)? - BASE) as usize
+                ..r.end - (roles.address(ENTRY)? - BASE) as usize]
+                .copy_from_slice(b);
+        } else {
+            if [
+                helpers.clone(),
+                roles.span(span(ENTRY, 0x539b2c))?,
+                roles.span(span(0x53957e, 0x53959e))?,
+                roles.span(span(0x5395d6, 0x5395e2))?,
+            ]
+            .iter()
+            .any(|own| overlap(r, own))
+            {
+                return None;
+            }
+            writes.push((r.clone(), b.clone()));
+        }
+    }
+    writes.extend([
+        (roles.span(span(ENTRY, 0x539b2c))?, replacement),
+        (roles.span(span(0x53957e, 0x53959e))?, stop),
+        (roles.span(span(0x53966e, 0x539766))?, dead),
+        (roles.span(span(0x5395d6, 0x5395e2))?, initializers),
+    ]);
+    Some(Plan {
+        writes,
+        controller: roles.address(CONTROLLER)?,
+        callback: roles.address(CALLBACK)?,
+        profile,
+    })
+}
+
+fn entries_clear_with_roles(n: &[u8], k: &[u8], roles: &TargetRoles) -> Option<()> {
+    let graph = [
+        roles.span(span(0x538350, 0x53836e))?,
+        roles.span(span(0x5388a4, 0x5388c4))?,
+        roles.span(span(0x53956c, 0x53957e))?,
+        roles.span(span(0x5395e8, 0x539620))?,
+        roles.span(span(0x539620, 0x53962e))?,
+        roles.span(span(ENTRY, 0x539b2c))?,
+        roles.span(span(0x53966e, 0x539766))?,
+    ];
+    let mut retired = graph.to_vec();
+    // Caller preparation begins at a legitimate existing native entry; every
+    // following byte must be reached through the explicit SUB.B R1L,R1L.
+    retired[0].start += 1;
+    retired[1].start += 1;
+    retirement::references_clear(
+        n,
+        k,
+        &retired,
+        &graph,
+        &[
+            graph[0].clone(),
+            graph[1].clone(),
+            graph[2].clone(),
+            graph[3].clone(),
+            graph[4].clone(),
+            graph[5].clone(),
+            roles.span(span(0x53966e, 0x5396a8))?,
+            roles.span(span(0x5396a8, 0x539766))?,
+        ],
+    )
+}
+
+fn observe_inner_with_roles(
+    normal: &[u8],
+    kernel: &[u8],
+    stage: &mut &'static str,
+    roles: &TargetRoles,
+) -> Option<Observed> {
+    let service_witness = roles.protected().to_vec();
+    *stage = "native-input-preparation";
+
+    *stage = "resident-component";
+    if kernel.len() != crate::image::KERNEL_LEN {
+        return None;
+    }
+    *stage = "profile-entries";
+    let roots = trajectory_profile::SharedEntries {
+        init: observed_call(normal, roles.address(CONTROLLER + (0x5d7a6a - 0x5d7a0c))?)?,
+        update: observed_call(normal, roles.address(CALLBACK + (0x5d79f8 - 0x5d796c))?)?,
+        ctor: observed_call(normal, roles.address(ENTRY + 50)?)?,
+        prepare: observed_call(normal, roles.address(ENTRY + 30)?)?,
+    };
+    *stage = "profile";
+    let profile = trajectory_profile::observe_shared_with_roles(
+        normal,
+        kernel,
+        roots,
+        roles.services()?,
+        PRIVATE,
+        roles,
+    )?;
+    *stage = "private-ram";
+    let mut private_owners = profile.placements.code.to_vec();
+    private_owners.extend([
+        roles.span(span(ENTRY, VTABLE))?,
+        roles.span(span(0x537e26, 0x537e30))?,
+        roles.span(span(0x53957e, 0x53959e))?,
+    ]);
+    private_refs_clear(normal, kernel, &private_owners)?;
+    *stage = "stack-wrapper";
+    let mut expected = Vec::new();
+    // Complete OEM register/stack wrapper, including the lifted source unsigned
+    // normalization block. Only prepare/ctor entries are relocated here.
+    emit(
+        &mut expected,
+        &[
+            0x01, 0, 0x6d, 0xf3, 0x01, 0x20, 0x6d, 0xf4, 0x79, 0x37, 0, 0x24, 0x0f, 0x94, 0x0d,
+            0x9a, 0x0d, 0xa1, 0x73, 0x09, 0x47, 0x02, 0x0b, 0x5a, 0x0d, 0xaa, 0x58, 0x70, 0, 0x30,
+        ],
+        &[],
+    )?;
+    call(&mut expected, roots.prepare)?;
+    emit(
+        &mut expected,
+        &[
+            0x0f, 0xf0, 0x0f, 0x85, 0x7a, 1, 0, 0, 0, 0, 1, 0, 0x69, 0x81, 0x0b, 0x90,
+        ],
+        &[(0, roles.address(VTABLE)?)],
+    )?;
+    call(&mut expected, roots.ctor)?;
+    emit(
+        &mut expected,
+        &[
+            0xf0, 1, 0x6a, 0xa0, 0, 0xa0, 0x5d, 0xdc, 0x0f, 0xc1, 0x0f, 0xd0,
+        ],
+        &[],
+    )?;
+    call(&mut expected, roles.address(CONTROLLER)?)?;
+    emit(
+        &mut expected,
+        &[
+            0x18, 0, 0x6a, 0xa0, 0, 0xa0, 0x5d, 0xdc, 0x79, 0x17, 0, 0x24, 1, 0x20, 0x6d, 0x76, 1,
+            0, 0x6d, 0x73, 0x54, 0x70,
+        ],
+        &[],
+    )?;
+    nops(&mut expected, 12)?;
+    if normal.get(roles.span(span(ENTRY, CONTROLLER))?)? != expected {
+        return None;
+    }
+    *stage = "controller-callback";
+    let mut reverse = alloc::vec![
+        (roots.init, 0x5d5aa6),
+        (roots.update, 0x5d5d60),
+        (BASE + profile.placements.code[3].start as u32, 0x5d6018),
+        (roles.address(0x538c7a)?, 0x5d6d62),
+        (roles.address(0x538b74)?, 0x5d6c72),
+        (roles.address(0x538b24)?, 0x5d6c40),
+        (roles.address(0x538b2c)?, 0x5d6c48),
+        (roles.address(0x538a88)?, 0x5d6bce),
+        (roles.address(0x539d58)?, 0x5d7d6c),
+        (roles.address(0x539d6a)?, 0x5d7d7e),
+        (roles.address(0x539d76)?, 0x5d7d8a),
+        (roles.address(0x539d8c)?, 0x5d7da0),
+        (roles.address(0x539d98)?, 0x5d7dac),
+        (roles.address(0x530bae)?, 0x5cedae),
+        (roles.address(0x551f0e)?, 0x5f0c26),
+        (roles.address(0x551f60)?, 0x5f0cb6),
+        (roles.address(0x551f8a)?, 0x5f0ce0),
+    ];
+    reverse.sort_unstable();
+    if reverse.windows(2).any(|w| w[0].0 == w[1].0) {
+        return None;
+    }
+    let mut controller = copied(
+        normal,
+        roles.address(CONTROLLER)?,
+        roles.address(CONTROLLER + 272)?,
+        &reverse,
+    )?;
+    for (old, target, source) in [
+        (0x5d7aa4, 0x4f52fc, 0x5b8cc8),
+        (0x5d7afe, 0x4f5366, 0x5b8df6),
+    ] {
+        let off = (old - 0x5d7a0c) as usize;
+        let mut hook = Vec::new();
+        emit(&mut hook, &[0xf8, 9], &[])?;
+        call(&mut hook, roles.address(target)?)?;
+        nops(&mut hook, 4)?;
+        if controller.get(off..off + 10)? != hook {
+            return None;
+        }
+        let mut original = Vec::new();
+        call(&mut original, 0x5b8a5e)?;
+        emit(&mut original, &[0xf9, 9], &[])?;
+        call(&mut original, source)?;
+        controller[off..off + 10].copy_from_slice(&original);
+    }
+    let mut canonical = copied(
+        normal,
+        roles.address(CALLBACK)?,
+        roles.address(CALLBACK + 160)?,
+        &reverse,
+    )?;
+    canonical.extend(controller);
+    let (_, _, digest) = SOURCE
+        .iter()
+        .find(|(a, z, _)| *a == 0x5d796c && *z == 0x5d7b1c)?;
+    if Sha256::digest(&canonical).as_slice() != digest {
+        return None;
+    }
+    *stage = "vtable-reporter";
+    let mut reporter = Vec::new();
+    emit(
+        &mut reporter,
+        &[0xf8, 4, 0x5a, 0x54, 0xc4, 0xc4],
+        &[(0x54c4c4, roles.address(0x54c4c4)?)],
+    )?;
+    if normal.get(roles.span(span(REPORT, VTABLE))?)? != reporter {
+        return None;
+    }
+    let vtable = normal.get(roles.span(span(VTABLE, VTABLE + 20))?)?;
+    if vtable[..16].iter().any(|b| *b != 0)
+        || vtable[16..] != roles.address(CALLBACK)?.to_be_bytes()
+    {
+        return None;
+    }
+    *stage = "stop";
+    let mut stop = alloc::vec![0x6a, 0x28, 0, 0xa0, 0x5d, 0xdc, 0x47, 0x14];
+    nops(&mut stop, 10)?;
+    emit(
+        &mut stop,
+        &[
+            0xf8, 1, 0x6a, 0xa8, 0, 0xa0, 0x5d, 0xdd, 0x40, 2, 0x55, 0xb4, 0x54, 0x70,
+        ],
+        &[],
+    )?;
+    let stop = super::native_graph::relocate(
+        &stop,
+        0x53957e,
+        roles.address(0x53957e)?,
+        &[(0x539550, 0x539554, roles.address(0x539550)?)],
+    )?;
+    if normal.get(roles.span(span(0x53957e, 0x53959e))?)? != stop
+        || normal
+            .get(roles.span(span(0x5395d6, 0x5395e2))?)?
+            .iter()
+            .any(|b| *b != 0)
+    {
+        return None;
+    }
+    *stage = "inbound-closure";
+    let mut retired = profile.placements.code.to_vec();
+    retired.extend(profile.placements.data.iter().cloned());
+    retired.push(roles.span(span(ENTRY, VTABLE + 20))?);
+    // Close the wrapper's mode/direction specialization and the legacy guard:
+    // unknown calls cannot bypass the native preparation/zero-count boundary.
+    retired.extend([
+        roles.span(span(0x53956c, 0x53957e))?,
+        roles.span(span(0x5395e8, 0x539620))?,
+        roles.span(span(0x539620, 0x53962e))?,
+        roles.span(span(0x538351, 0x53836e))?,
+        roles.span(span(0x5388a5, 0x5388c4))?,
+        roles.span(span(0x539406, 0x539407))?,
+    ]);
+    let mut replaced = retired.clone();
+    replaced.extend(profile.ranges.iter().cloned());
+    replaced.extend([
+        roles.span(span(0x538350, 0x53836e))?,
+        roles.span(span(0x5388a4, 0x5388c4))?,
+    ]);
+    replaced.extend([
+        roles.span(span(ENTRY, 0x539b2c))?,
+        roles.span(span(0x5392d2, 0x539406))?,
+        roles.span(span(0x539406, 0x539550))?,
+    ]);
+    let mut bodies = profile.placements.code.to_vec();
+    bodies.extend([
+        roles.span(span(ENTRY, CONTROLLER))?,
+        roles.span(span(CONTROLLER, CALLBACK))?,
+        roles.span(span(CALLBACK, REPORT))?,
+        roles.span(span(REPORT, VTABLE))?,
+        roles.span(span(0x5392d2, 0x539406))?,
+        roles.span(span(0x539406, 0x539550))?,
+    ]);
+    // A materialized software graph must establish exclusive scalar ownership;
+    // passing the generic reference scan alone does not establish that claim.
+    let dispatch = super::dispatch_bridge::observe(normal).ok()?;
+    let authority = match dispatch.kind {
+        super::dispatch_bridge::Kind::Software => {
+            super::profile_ownership::prove_with_software_tables(
+                normal,
+                kernel,
+                &retired,
+                &replaced,
+                &bodies,
+                &profile.data_authority,
+            )
+        }
+        super::dispatch_bridge::Kind::Literal => {
+            super::profile_ownership::prove(normal, kernel, &retired, &replaced, &bodies)
+        }
+        super::dispatch_bridge::Kind::Pointer => None,
+    }?;
+    let mut protected = profile.ranges.clone();
+    protected.extend(profile.invariants.iter().cloned());
+    protected.extend(authority);
+    protected.extend(service_witness);
+    protected.extend(
+        RETAINED
+            .iter()
+            .chain(DIRECTION)
+            .map(|(a, z, _)| roles.span(span(*a, *z)))
+            .collect::<Option<Vec<_>>>()?,
+    );
+    protected.extend([
+        roles.span(span(ENTRY, VTABLE + 20))?,
+        roles.span(span(0x53957e, 0x53959e))?,
+        roles.span(span(0x5395d6, 0x5395e2))?,
+    ]);
+    protected.sort_unstable_by_key(|r| (r.start, r.end));
+    protected.dedup();
+    let mut fingerprint = Sha256::new();
+    for r in &protected {
+        fingerprint.update((r.start as u32).to_be_bytes());
+        fingerprint.update((r.end as u32).to_be_bytes());
+        fingerprint.update(normal.get(r.clone())?);
+    }
+    Some(Observed {
+        entry: roles.address(ENTRY)?,
+        profile,
+        code: bodies,
+        protected,
+        fingerprint: fingerprint.finalize().into(),
+    })
+}
+
+/// Rediscover emitted controller and retained target roles without an original
+/// image, saved operation, or fixed controller location.
+pub fn observe_native_roles(normal: &[u8], kernel: &[u8]) -> Result<Observed, ObservationFailure> {
+    let roles = TargetRoles::locate_emitted(normal).ok_or(ObservationFailure {
+        stage: "retained-role-discovery",
+    })?;
+    let mut stage = "retained-roles";
+    observe_inner_with_roles(normal, kernel, &mut stage, &roles).ok_or(ObservationFailure { stage })
 }

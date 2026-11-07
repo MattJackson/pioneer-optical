@@ -2462,17 +2462,24 @@ fn complete_mechanisms_plan_prepare_verify_all_eight_native_directions() {
             &target[20..0x1000],
             "no header gap allocation"
         );
+        let original_loader = bundle::waveforms::loader::observe(&target).unwrap();
+        let actual_loader = bundle::waveforms::loader::observe(&changed).unwrap();
+        let retained_pointer_loader =
+            ascending && actual_loader.loader == bundle::Loader::AscendingNegated17;
         assert_eq!(
-            bundle::bind(&changed).unwrap().loader,
-            if ascending {
+            actual_loader.loader,
+            if retained_pointer_loader {
+                bundle::Loader::AscendingNegated17
+            } else if ascending {
                 bundle::Loader::Ascending
             } else {
                 bundle::Loader::Descending
             }
         );
-        let original_loader = bundle::waveforms::loader::observe(&target).unwrap();
-        let actual_loader = bundle::waveforms::loader::observe(&changed).unwrap();
-        if ascending {
+        if retained_pointer_loader {
+            assert_eq!(actual_loader.spans.len(), 2);
+            bundle::composition::verify_reader_retirement(&target, &kernel, &changed).unwrap();
+        } else if ascending {
             assert_eq!(actual_loader.spans, original_loader.spans);
             assert_eq!(actual_loader.tables, original_loader.tables);
         } else {
@@ -2485,12 +2492,15 @@ fn complete_mechanisms_plan_prepare_verify_all_eight_native_directions() {
         );
         assert_eq!(actual_loader.writer, original_loader.writer);
         assert_eq!(actual_loader.readback, original_loader.readback);
-        let again = bundle::composition::transplant_specialized_with_kernel(
-            &changed,
-            &donor,
-            Some(&kernel),
-        )
-        .unwrap();
+        let again = bundle::composition::transplant(&changed, &donor, Default::default(), None)
+            .or_else(|_| {
+                bundle::composition::transplant_specialized_with_kernel(
+                    &changed,
+                    &donor,
+                    Some(&kernel),
+                )
+            })
+            .unwrap();
         assert_eq!(again, changed);
         let words = plan.required_words().unwrap();
         assert_eq!(
@@ -2584,5 +2594,459 @@ fn native_reverse_mechanisms_use_owned_loader_suffixes() {
         let result = bundle::composition::transplant_reusing_loader(&target, &donor, &kernel);
         println!("{id}: {:?}", result.as_ref().map(|_| ()));
         result.unwrap();
+    }
+}
+
+#[test]
+fn retired_reader_composition_binds_resident_and_final_normal_references() {
+    let target_hash = "87e8152f1de1d3be53eb4ad9144c1bb0c45a9be6f78713a0b7487a637f989bf1";
+    let target = native_spans(target_hash);
+    let donor = native_spans("84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750");
+    let kernel = native_kernel_spans(target_hash);
+    let changed =
+        bundle::composition::transplant_reusing_reader_with_kernel(&target, &donor, &kernel)
+            .unwrap();
+    let reader = native::calibration::callers::observe(&target)
+        .unwrap()
+        .reader;
+    let tail = reader + 36..reader + 66;
+    let mut expected = bundle::bind(&donor).unwrap();
+    expected.table_select_0x28f = bundle::bind(&target).unwrap().table_select_0x28f;
+    assert_eq!(bundle::bind(&changed).unwrap(), expected);
+    bundle::composition::verify_reader_retirement(&target, &kernel, &changed).unwrap();
+    assert!(
+        bundle::composition::transplant_reusing_reader_with_kernel(&target, &donor, &[]).is_err()
+    );
+    let address = (0x410000 + tail.start) as u32;
+    let bytes = address.to_be_bytes();
+    let call = [0x5e, bytes[1], bytes[2], bytes[3]];
+    let mut resident_entry = kernel.clone();
+    resident_entry[0x800..0x804].copy_from_slice(&call);
+    assert!(bundle::composition::transplant_reusing_reader_with_kernel(
+        &target,
+        &donor,
+        &resident_entry
+    )
+    .is_err());
+    let mut late_entry = changed.clone();
+    late_entry[0x800..0x804].copy_from_slice(&call);
+    assert!(bundle::composition::verify_reader_retirement(&target, &kernel, &late_entry).is_err());
+}
+
+#[test]
+fn static_equivalence_compares_waveforms_in_both_native_selection_branches() {
+    let target = native_spans("84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750");
+    assert!(bundle::composition::equivalent(&target, &target).unwrap());
+    let exchanged = native::correct_pair(&target, native::Assignment::Swapped).unwrap();
+    assert_ne!(
+        bundle::bind(&target).unwrap().coil,
+        bundle::bind(&exchanged).unwrap().coil
+    );
+    assert!(bundle::composition::equivalent(&target, &exchanged).unwrap());
+    let resources = bundle::waveforms::resources::observe(&target).unwrap();
+    assert!(resources.erased_parameter.is_some());
+    for tables in core::iter::once(&resources.selected).chain(&resources.erased_parameter) {
+        for span in tables.motion.iter().chain(&tables.coefficients) {
+            let mut donor = target.clone();
+            donor[span.start] ^= 1;
+            assert_eq!(bundle::bind(&target), bundle::bind(&donor));
+            assert!(!bundle::composition::equivalent(&target, &donor).unwrap());
+        }
+    }
+    let mut donor = target.clone();
+    donor[resources.selected.coefficients[0].start] ^= 1;
+    let changed =
+        bundle::composition::transplant(&target, &donor, Default::default(), None).unwrap();
+    assert_eq!(bundle::bind(&target), bundle::bind(&changed));
+    assert_eq!(
+        changed[resources.selected.coefficients[0].clone()],
+        donor[resources.selected.coefficients[0].clone()]
+    );
+}
+
+#[test]
+fn static_owner_corrects_equal_coil_waveform_changes() {
+    use pioneer_optical::{
+        compatibility::Firmware,
+        filters::{self, Filter},
+    };
+    let mut target =
+        native_spans("84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750");
+    target[16..20].fill(0);
+    let sum = target.chunks_exact(4).fold(0u32, |sum, word| {
+        sum.wrapping_add(u32::from_be_bytes(word.try_into().unwrap()))
+    });
+    target[16..20].copy_from_slice(&sum.wrapping_neg().to_be_bytes());
+    let resources = bundle::waveforms::resources::observe(&target).unwrap();
+    let mut donor = target.clone();
+    donor[resources.selected.coefficients[0].start] ^= 1;
+    assert_eq!(bundle::bind(&target), bundle::bind(&donor));
+    let installed = filters::Context::new(Firmware {
+        hardware: "SAT 8410",
+        normal: &donor,
+        kernel: None,
+    });
+    let destination = filters::Context::new(Firmware {
+        hardware: "SAT 8410",
+        normal: &target,
+        kernel: None,
+    });
+    let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
+    let plan = filters::runner::plan_with(
+        &installed,
+        &destination,
+        filters::runner::Policy::Strict,
+        registry,
+    )
+    .unwrap();
+    let words = plan.required_words().unwrap();
+    assert_eq!(
+        words
+            .iter()
+            .map(|w| (w.word.parameter, w.word.value))
+            .collect::<Vec<_>>(),
+        vec![(0x28f, 1)]
+    );
+    let preparation = filters::Preparation {
+        target: destination.firmware,
+        normal: None,
+        kernel: None,
+    };
+    let changed = plan
+        .prepare_with(&preparation, registry)
+        .unwrap()
+        .expect("equal labels still need waveform correction");
+    plan.verify_with(&preparation, &changed, registry).unwrap();
+    assert_eq!(
+        changed[resources.selected.coefficients[0].clone()],
+        donor[resources.selected.coefficients[0].clone()]
+    );
+    let mut corrupt = changed.clone();
+    corrupt[resources.selected.coefficients[0].start] ^= 1;
+    assert!(plan.verify_with(&preparation, &corrupt, registry).is_err());
+}
+
+#[test]
+#[ignore = "requires PIONEER_HOARD; complete static phase owner and original codec"]
+fn owned_reader_static_phase_round_trips_original_codec() {
+    use pioneer_optical::{
+        compatibility::Firmware,
+        envelope::Envelope,
+        filters::{self, Filter},
+    };
+    let root = std::path::PathBuf::from(std::env::var("PIONEER_HOARD").unwrap());
+    let (packages, _) = page::hoard_packages(&root).unwrap();
+    let get = |model: &str, revision: &str| {
+        let p = packages
+            .iter()
+            .find(|p| p.model == model && p.revision == revision)
+            .unwrap();
+        (p.hardware.clone(), page::decode(&root, p).unwrap())
+    };
+    let (target_hardware, target) = get("BDR-UD04", "1.14");
+    let (source_hardware, source) = get("BDR-UD02D", "1.00");
+    let installed = filters::Context::new(Firmware {
+        hardware: &source_hardware,
+        normal: &source.normal.image,
+        kernel: source.kernel.as_ref().map(|k| k.image.as_slice()),
+    });
+    let destination = filters::Context::new(Firmware {
+        hardware: &target_hardware,
+        normal: &target.normal.image,
+        kernel: target.kernel.as_ref().map(|k| k.image.as_slice()),
+    });
+    let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
+    let plan = filters::runner::plan_with(
+        &installed,
+        &destination,
+        filters::runner::Policy::Strict,
+        registry,
+    )
+    .unwrap();
+    let words = plan.required_words().unwrap();
+    assert_eq!(
+        words
+            .iter()
+            .map(|w| (w.word.parameter, w.word.value))
+            .collect::<Vec<_>>(),
+        vec![(0x28f, 1)]
+    );
+    filters::prerequisites::check(&words, |_| Ok::<_, ()>(1)).unwrap();
+    assert!(filters::prerequisites::check(&words, |_| Ok::<_, ()>(0xffff)).is_err());
+    let preparation = filters::Preparation {
+        target: destination.firmware,
+        normal: Some(&target.normal),
+        kernel: target.kernel.as_ref(),
+    };
+    let changed = plan.prepare_with(&preparation, registry).unwrap().unwrap();
+    plan.verify_with(&preparation, &changed, registry).unwrap();
+    let loader = bundle::waveforms::loader::observe(&changed).unwrap();
+    assert_eq!(
+        loader.spans.len(),
+        2,
+        "the complete OEM pointer loader uses the owned reader suffix"
+    );
+    assert_eq!(
+        loader.loader,
+        bundle::bind(&source.normal.image).unwrap().loader
+    );
+    let encoded = target.normal.repack(&changed).unwrap();
+    let decoded = Envelope::load_with_kernel(&encoded, target.kernel.as_ref().unwrap()).unwrap();
+    assert_eq!(decoded.image, changed);
+    assert_eq!(decoded.repack(&decoded.image).unwrap(), encoded);
+    let mut tampered = changed.clone();
+    tampered[loader.spans[1].start] ^= 1;
+    assert!(plan.verify_with(&preparation, &tampered, registry).is_err());
+}
+
+#[test]
+fn equal_static_mechanisms_keep_the_in_place_coil_only_owner() {
+    use pioneer_optical::{
+        compatibility::Firmware,
+        filters::{self, Filter},
+    };
+    let mut target =
+        native_spans("84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750");
+    target[16..20].fill(0);
+    let sum = target.chunks_exact(4).fold(0u32, |sum, word| {
+        sum.wrapping_add(u32::from_be_bytes(word.try_into().unwrap()))
+    });
+    target[16..20].copy_from_slice(&sum.wrapping_neg().to_be_bytes());
+    let donor = native::correct_pair(&target, native::Assignment::Swapped).unwrap();
+    let installed = filters::Context::new(Firmware {
+        hardware: "SAT 8410",
+        normal: &donor,
+        kernel: None,
+    });
+    let destination = filters::Context::new(Firmware {
+        hardware: "SAT 8410",
+        normal: &target,
+        kernel: None,
+    });
+    let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
+    let plan = filters::runner::plan_with(
+        &installed,
+        &destination,
+        filters::runner::Policy::Strict,
+        registry,
+    )
+    .unwrap();
+    assert!(plan.required_words().unwrap().is_empty());
+    let preparation = filters::Preparation {
+        target: destination.firmware,
+        normal: None,
+        kernel: None,
+    };
+    let changed = plan.prepare_with(&preparation, registry).unwrap().unwrap();
+    plan.verify_with(&preparation, &changed, registry).unwrap();
+    assert_eq!(
+        bundle::bind(&changed).unwrap().coil,
+        native::Assignment::Swapped
+    );
+    assert!(bundle::composition::equivalent(&target, &changed).unwrap());
+}
+
+#[test]
+fn static_owner_corrects_ordinary_and_selector_waveforms() {
+    use pioneer_optical::{
+        compatibility::Firmware,
+        filters::{self, Filter},
+    };
+    let mut target =
+        native_spans("84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750");
+    target[16..20].fill(0);
+    let sum = target.chunks_exact(4).fold(0u32, |sum, word| {
+        sum.wrapping_add(u32::from_be_bytes(word.try_into().unwrap()))
+    });
+    target[16..20].copy_from_slice(&sum.wrapping_neg().to_be_bytes());
+    let roles = bundle::waveforms::resources::static_tables::observe(&target).unwrap();
+    for (role, span) in roles.tables.iter().enumerate() {
+        let mut donor = target.clone();
+        donor[span.start] ^= 1;
+        assert_eq!(bundle::bind(&target), bundle::bind(&donor));
+        assert!(!bundle::composition::equivalent(&target, &donor).unwrap());
+        let installed = filters::Context::new(Firmware {
+            hardware: "SAT 8410",
+            normal: &donor,
+            kernel: None,
+        });
+        let destination = filters::Context::new(Firmware {
+            hardware: "SAT 8410",
+            normal: &target,
+            kernel: None,
+        });
+        let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
+        let plan = filters::runner::plan_with(
+            &installed,
+            &destination,
+            filters::runner::Policy::Strict,
+            registry,
+        )
+        .unwrap_or_else(|e| panic!("role {role}: {e:?}"));
+        let preparation = filters::Preparation {
+            target: destination.firmware,
+            normal: None,
+            kernel: None,
+        };
+        let changed = plan
+            .prepare_with(&preparation, registry)
+            .unwrap()
+            .expect("ordinary/selector role correction");
+        plan.verify_with(&preparation, &changed, registry).unwrap();
+        assert_eq!(changed[span.clone()], donor[span.clone()]);
+        let mut corrupt = changed.clone();
+        corrupt[span.start] ^= 1;
+        assert!(plan.verify_with(&preparation, &corrupt, registry).is_err());
+    }
+    // A selector detached from the dispatcher's actual state pointer has no
+    // authority, even though all its table constants still point into the image.
+    let mut detached = target.clone();
+    detached[roles.selector.start + 47] ^= 4;
+    assert!(bundle::waveforms::resources::static_tables::observe(&detached).is_err());
+}
+
+#[test]
+#[ignore = "requires PIONEER_PHASE_CORPUS; exact SAT9/slim class crossing codecs"]
+fn static_sat9_crossings_share_only_proved_retired_native_storage() {
+    use pioneer_optical::{
+        compatibility::Firmware,
+        envelope::Envelope,
+        filters::{self, Filter},
+    };
+    let root = std::path::PathBuf::from(std::env::var("PIONEER_PHASE_CORPUS").unwrap());
+    let inventory: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/phase-domain-inventory.json")).unwrap();
+    let records = inventory["domains"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["id"] == "h8sat")
+        .unwrap()["records"]
+        .as_array()
+        .unwrap();
+    let read = |hash: &str| {
+        let raw = std::fs::read(root.join(format!("{hash}.enc"))).unwrap();
+        assert_eq!(format!("{:x}", Sha256::digest(&raw)), hash);
+        raw
+    };
+    let load = |hash: &str| {
+        let record = records.iter().find(|r| r["normal"] == hash).unwrap();
+        let kernel = record["kernel"]
+            .as_str()
+            .map(|hash| Envelope::load(&read(hash)).unwrap());
+        let raw = read(hash);
+        let normal = match &kernel {
+            Some(k) => Envelope::load_with_kernel(&raw, k),
+            None => Envelope::load(&raw),
+        }
+        .unwrap();
+        (
+            record["hardware"].as_str().unwrap().to_owned(),
+            normal,
+            kernel,
+        )
+    };
+    let originals = [
+        "0014aa5d3df1c1858262f6960c11e557623c267cd495658bb73385813c820a39",
+        "0099a5d0b3be15371e3fa380c8724f4e080aff2a83c2cfbc21fbe00b3590e407",
+        "82d2aa5b0657a09ba58343903ec7c1a18e03e47676433de2eb73820b4a01f396",
+        "a37a4f222e2fa7e225f6451b30eb2e459f1933ab38c81a4d7967c10d77bc1373",
+    ]
+    .map(load);
+    for (to, from) in [
+        (0, 2),
+        (1, 2),
+        (2, 0),
+        (2, 1),
+        (3, 2),
+        (2, 3),
+        (3, 0),
+        (0, 3),
+    ] {
+        let (hardware, target, kernel) = &originals[to];
+        let (source_hardware, source, source_kernel) = &originals[from];
+        let installed = filters::Context::new(Firmware {
+            hardware: source_hardware,
+            normal: &source.image,
+            kernel: source_kernel.as_ref().map(|k| k.image.as_slice()),
+        });
+        let destination = filters::Context::new(Firmware {
+            hardware,
+            normal: &target.image,
+            kernel: kernel.as_ref().map(|k| k.image.as_slice()),
+        });
+        let registry: &[&dyn Filter] = &[&filters::phase::FILTER];
+        let plan = filters::runner::plan_with(
+            &installed,
+            &destination,
+            filters::runner::Policy::Strict,
+            registry,
+        )
+        .unwrap_or_else(|e| panic!("{from}->{to}: {e:?}"));
+        let preparation = filters::Preparation {
+            target: destination.firmware,
+            normal: Some(target),
+            kernel: kernel.as_ref(),
+        };
+        let changed = plan
+            .prepare_with(&preparation, registry)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "{from}->{to} prepare: {e:?}; original checksum {:08x}",
+                    target.image.chunks_exact(4).fold(0u32, |sum, word| sum
+                        .wrapping_add(u32::from_be_bytes(word.try_into().unwrap())))
+                )
+            })
+            .unwrap();
+        plan.verify_with(&preparation, &changed, registry).unwrap();
+        let words = plan.required_words().unwrap();
+        let selection = bundle::bind(&target.image).unwrap().table_select_0x28f
+            || bundle::bind(&source.image).unwrap().table_select_0x28f;
+        assert_eq!(words.len(), usize::from(selection));
+        filters::prerequisites::check(&words, |_| Ok::<_, ()>(1)).unwrap();
+        if selection {
+            assert!(filters::prerequisites::check(&words, |_| Ok::<_, ()>(0xffff)).is_err());
+        }
+        let encoded = target.repack(&changed).unwrap();
+        let decoded = match kernel {
+            Some(k) => Envelope::load_with_kernel(&encoded, k),
+            None => Envelope::load(&encoded),
+        }
+        .unwrap();
+        assert_eq!(decoded.image, changed);
+        assert_eq!(decoded.repack(&decoded.image).unwrap(), encoded);
+        let output = bundle::bind(&changed).unwrap();
+        let mut expected = bundle::bind(&source.image).unwrap();
+        expected.table_select_0x28f = bundle::bind(&target.image).unwrap().table_select_0x28f;
+        if expected.loader == bundle::Loader::AscendingNegated17
+            && matches!(
+                bundle::bind(&target.image).unwrap().loader,
+                bundle::Loader::Ascending | bundle::Loader::Descending
+            )
+        {
+            expected.loader = bundle::Loader::Ascending;
+        }
+        assert_eq!(output, expected);
+        if from == 2 || (from == 1 && to == 2) || (from == 3 && to == 0) {
+            // Both growing-conversion directions must reject a late new entry
+            // into their positively reclaimed native code/data storage.
+            let (_, jump) = changed
+                .windows(4)
+                .enumerate()
+                .find(|(at, bytes)| {
+                    at % 2 == 0 && bytes[0] == 0x5a && target.image[*at..*at + 4] != **bytes
+                })
+                .expect("native conversion spill jump");
+            let mut late = changed.clone();
+            late[0x800..0x804].copy_from_slice(&[0x5e, jump[1], jump[2], jump[3]]);
+            assert!(plan.verify_with(&preparation, &late, registry).is_err());
+        }
+        let loader = bundle::waveforms::loader::observe(&changed).unwrap();
+        let writer = bundle::waveforms::loader::writer::observe(&changed, loader.writer).unwrap();
+        let mut changed_witness = changed.clone();
+        changed_witness[writer.program.start + 103] ^= 2;
+        assert!(plan
+            .verify_with(&preparation, &changed_witness, registry)
+            .is_err());
     }
 }

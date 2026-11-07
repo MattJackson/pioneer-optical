@@ -91,9 +91,14 @@ pub fn plan(
         .iter()
         .map(|a| *a as usize - BASE..*a as usize - BASE + 256)
         .collect();
-    let old_profile = [span(0x5378b6, 0x537b58), span(0x537b58, 0x537e26)];
-    let old_tables = span(0x5a4d0c, 0x5a4edc);
-    let old_controller = span(0x5398a6, 0x539b2c);
+    let roles = trajectory_bridge::TargetRoles::discover(target).ok_or(Error::Graph)?;
+    let resolve = |r| roles.span(r).ok_or(Error::Graph);
+    let old_profile = [
+        resolve(span(0x5378b6, 0x537b58))?,
+        resolve(span(0x537b58, 0x537e26))?,
+    ];
+    let old_tables = resolve(span(0x5a4d0c, 0x5a4edc))?;
+    let old_controller = resolve(span(0x5398a6, 0x539b2c))?;
     let mut owned = motion.clone();
     owned.extend(coefficients.clone());
     owned.extend(loader.spans.clone());
@@ -130,24 +135,13 @@ pub fn plan(
     protected.push(original_coils.leaf);
     protected.extend(bundle::conversions::protected_ranges(target).map_err(|_| Error::Graph)?);
     protected.extend(native::calibration::protected_ranges(target).map_err(|_| Error::Graph)?);
-    // The two bound adjacent target profile functions supply their combined
-    // storage only after shared_plan proves and redirects every existing client.
-    if old_profile[0].end != old_profile[1].start {
-        return Err(Error::Graph);
-    }
+    // Bound profile bodies supply storage only after shared_plan proves and
+    // redirects every existing client. Their actual layout need not be adjacent.
     let (code_sizes, data_sizes) = trajectory_profile::shared_lengths();
     let mut code: [Range<usize>; 13] = core::array::from_fn(|_| 0..0);
-    code[0] = old_profile[0].start..old_profile[0].start + code_sizes[0];
-    code[1] = code[0].end..code[0].end + code_sizes[1];
-    if code[1].end > old_profile[1].end {
-        return Err(Error::Space);
-    }
-    let mut slots = vec![
-        code[1].end..old_profile[1].end,
-        old_tables,
-        motion[4].clone(),
-    ];
-    let auxiliary = trajectory_bridge::auxiliary_slots();
+    let mut slots = old_profile.to_vec();
+    slots.extend([old_tables, motion[4].clone()]);
+    let auxiliary = roles.auxiliary_slots().ok_or(Error::Graph)?;
     // Keep diagnostic bytes outside the waveform allocation. Their opaque
     // logging consumer is not an exclusive-data proof; unused controller-tail
     // bytes remain padding and the final observer scans the strings normally.
@@ -178,7 +172,6 @@ pub fn plan(
     let mut requests: Vec<_> = code_sizes
         .iter()
         .enumerate()
-        .skip(2)
         .map(|(i, n)| (*n, false, i))
         .chain(
             data_sizes
@@ -201,13 +194,14 @@ pub fn plan(
             code[i] = r;
         }
     }
-    let shared = trajectory_profile::shared_plan(
+    let shared = trajectory_profile::shared_plan_with_roles(
         target,
         source,
         kernel,
         trajectory_profile::SharedPlacements { code, data },
-        trajectory_bridge::private_ram(),
-        trajectory_bridge::services(),
+        roles.private_ram(),
+        roles.services().ok_or(Error::Graph)?,
+        &roles,
     )
     .ok_or(Error::Native)?;
     if !old_controller.contains(&shared.replaced_by_outer.start)
@@ -215,8 +209,14 @@ pub fn plan(
     {
         return Err(Error::Graph);
     }
-    let trajectory = trajectory_bridge::plan_with_profile(target, source, kernel, shared.profile)
-        .ok_or(Error::Native)?;
+    let trajectory = trajectory_bridge::plan_with_profile_with_roles(
+        target,
+        source,
+        kernel,
+        shared.profile,
+        &roles,
+    )
+    .ok_or(Error::Native)?;
     let mut image = target.to_vec();
     for r in &merged {
         image[r.clone()].fill(255);
@@ -277,9 +277,10 @@ pub fn plan(
     }
     let observed = observe(&image, kernel).ok_or(Error::Verification)?;
     protected.extend(observed.protected().iter().cloned());
-    let authority = super::profile_code::observe(target).ok_or(Error::Ownership)?;
+    let authority = super::profile_code::observe(target);
     if authority
-        .protected_normal()
+        .as_ref()
+        .map_or_else(Vec::new, |a| a.protected_normal())
         .iter()
         .any(|r| target.get(r.clone()) != image.get(r.clone()))
     {

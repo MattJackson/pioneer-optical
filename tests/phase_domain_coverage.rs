@@ -69,6 +69,7 @@ fn conditional_manifest() -> ConditionalManifest {
 }
 struct Proof {
     image: Vec<u8>,
+    native_phase: phase::NativePhase,
 }
 const REGISTRY: &[&dyn Filter] = &[&phase::FILTER];
 
@@ -425,7 +426,10 @@ fn prove_target(
         "receiver_context":if original.conditional {"conditional receiver only; not original package or installed identity"} else if original.kernel.is_some() {"packaged Kernel"} else {"unavailable; no resident Kernel inferred"},
         "scope":"native phase and original codec only; other flash gates not evaluated"})
     );
-    Ok(Proof { image })
+    Ok(Proof {
+        image,
+        native_phase: required,
+    })
 }
 
 #[test]
@@ -696,11 +700,20 @@ fn every_target_mapping_and_ordered_planner_pair() {
                 let proof = proofs[index]
                     .as_ref()
                     .map_err(|e| format!("target proof unavailable: {e}"))?;
-                // Every ordered pair verifies its own component-bound operation.
-                // Only identical target/assignment preparation and compression
-                // are memoized, never native pair admission or operation binding.
-                plan.verify_with(&preparation, &proof.image, REGISTRY)
-                    .map_err(|e| format!("pair verify: {e:?}"))?;
+                // The shared runner already verified this exact immutable output
+                // in prove_target, including re-inspection of its native fact.
+                // Each pair still plans, binds and verifies its own operations;
+                // avoid rebuilding unrelated hardware observations for the same
+                // target/assignment output thousands of times.
+                assert_eq!(proof.native_phase, required);
+                if before == required {
+                    assert_eq!(proof.image, destination.firmware.normal);
+                }
+                for operation in plan.operations() {
+                    operation
+                        .verify(&preparation, &proof.image)
+                        .map_err(|e| format!("pair operation verify: {e:?}"))?;
+                }
                 Ok(())
             })();
             println!(

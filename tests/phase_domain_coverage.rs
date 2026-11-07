@@ -691,6 +691,7 @@ fn every_target_mapping_and_ordered_planner_pair() {
     let mut native_proofs = 0;
     let mut supplemental_native_proofs = 0;
     let mut supplemental_codec_proofs = 0;
+    let mut supplemental_unsupported_mappings = 0;
     let mut original_context_refusals = 0;
     let mut original_context_codec_proofs = 0;
     let mut conditional_records = 0;
@@ -715,8 +716,9 @@ fn every_target_mapping_and_ordered_planner_pair() {
         {
             conditional_records += 1;
             // Always exercise the original absent-context input before introducing
-            // any explicit conditional receiver. Only Representation refusal is
-            // a missing-context result; mapping/verification failures stay fatal.
+            // any explicit conditional receiver. Representation refusal is a
+            // missing-context result. Exact deferred call rewrites are counted
+            // separately; other mapping/verification failures stay fatal.
             for assignment in [Assignment::Direct, Assignment::Swapped] {
                 let base = standalone[b]
                     .as_ref()
@@ -732,7 +734,9 @@ fn every_target_mapping_and_ordered_planner_pair() {
                     original_context_codec_proofs += 1;
                 }
                 if let Err(reason) = base {
-                    if matches!(
+                    if reason == CALL_REWRITE_UNPROVED {
+                        unsupported_target_mappings += 1;
+                    } else if matches!(
                         reason.as_str(),
                         "phase prepare: Representation" | "original integrity: Representation"
                     ) {
@@ -745,7 +749,8 @@ fn every_target_mapping_and_ordered_planner_pair() {
                     }
                 }
             }
-            // Every supplemental alternative receives full two-assignment proof.
+            // Every supplemental alternative exercises both assignments, with
+            // exact unsupported call rewrites distinguished from native proofs.
             // The first listed receiver alone binds this record's ordered-pair
             // lane; no success-driven substitution or invented package is used.
             for (index, receiver) in row.receivers.iter().enumerate() {
@@ -769,6 +774,9 @@ fn every_target_mapping_and_ordered_planner_pair() {
                     );
                     match &effect {
                         Ok(_) => supplemental_codec_proofs += 1,
+                        Err(reason) if reason == CALL_REWRITE_UNPROVED => {
+                            supplemental_unsupported_mappings += 1;
+                        }
                         Err(reason) => failures.push(format!(
                             "{} conditional {} {assignment:?}: {reason}",
                             record.normal, receiver.kernel
@@ -948,9 +956,7 @@ fn every_target_mapping_and_ordered_planner_pair() {
     assert_eq!(targets, expected_targets);
     assert_eq!(pairs, expected_targets * expected_sources);
     assert_eq!(pairs, same_interface + cross_interface + unavailable_pairs);
-    println!(
-        "{}",
-        json!({"event":"coverage-summary","domain":domain.id,"shard":shard,"shards":shards,
+    let mut summary = json!({"event":"coverage-summary","domain":domain.id,"shard":shard,"shards":shards,
         "unique_images_in_domain":domain.image_count,"retained_input_records":domain.records.len(),
         "execution":if focused {"one explicitly selected local direction"} else {"exhaustive CI target shard"},
         "target_records":targets,"native_mapping_proofs":native_proofs,
@@ -962,21 +968,24 @@ fn every_target_mapping_and_ordered_planner_pair() {
         "original_standalone_representation_refusals":original_context_refusals,
         "original_context_codec_proofs":original_context_codec_proofs,
         "conditionally_tested_records":conditional_records,"conditional_native_mapping_proofs":supplemental_native_proofs,
-        "conditional_receiver_variants":conditional_variants,"expected_conditional_codec_proofs":conditional_variants*2,
+        "conditional_receiver_variants":conditional_variants,
+        "expected_conditional_codec_proofs":conditional_variants*2-supplemental_unsupported_mappings,
         "conditional_codec_proofs":supplemental_codec_proofs,"conditional_receivers_do_not_identify_installed_kernel":true,
         "primary_codec_proofs_include_conditional_receivers":conditional_records>0,
         "records_without_listed_receiver_context":receiver_unavailable-conditional_records,
         "expected_representation_refusals":expected_refusals,
         "native_only_same_interface_pairs":native_only_pairs,
-        "codec_roundtrip_complete":expected_refusals==0 && unsupported_target_mappings==0 && failures.is_empty(),
+        "codec_roundtrip_complete":expected_refusals==0 && unsupported_target_mappings==0 && supplemental_unsupported_mappings==0 && failures.is_empty(),
         "authenticated_delivery_complete":false,"corrected_receiver_authentication_proofs":0,
         "original_conditional_receiver_update_checks":conditional_variants,
         "original_packaged_update_authentication":"not evaluated by this corpus test",
         "strict_delivery_required":strict_delivery,
         "strict_delivery_scope":"original codec completeness; authenticated emission and full admission are separate",
         "failed_obligations":failures.len(),"overall_phase_domain_complete":false,
-        "scope":"same-interface native phase only; cross-interface and other flash gates are separate unresolved obligations"})
-    );
+        "scope":"same-interface native phase only; cross-interface and other flash gates are separate unresolved obligations"});
+    summary["requested_conditional_assignments"] = json!(conditional_variants * 2);
+    summary["unsupported_conditional_mapping_stages"] = json!(supplemental_unsupported_mappings);
+    println!("{summary}");
     assert!(
         failures.is_empty(),
         "{} incomplete phase/codec obligations; first20: {:#?}; every failure is in the JSON rows",
@@ -1002,7 +1011,16 @@ fn every_target_mapping_and_ordered_planner_pair() {
             "strict delivery completeness: authentic receiver contexts remain unavailable"
         );
     }
-    assert_eq!(supplemental_codec_proofs, conditional_variants * 2);
+    assert_eq!(
+        supplemental_codec_proofs + supplemental_unsupported_mappings,
+        conditional_variants * 2,
+        "each conditional assignment has a codec proof or exact unsupported call-rewrite expectation"
+    );
+    assert_eq!(
+        supplemental_native_proofs + supplemental_unsupported_mappings,
+        conditional_variants * 2,
+        "unsupported conditional mappings cannot count as native proofs"
+    );
 }
 
 /// Raw codec proof deliberately retains an unsigned capture's signature field.

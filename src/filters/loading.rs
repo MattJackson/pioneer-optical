@@ -1,7 +1,8 @@
 //! Native loading/input/interrupt observations in the matrix's mixed column.
 //! An H8 controller effect, physical input and installed route remain distinct
 //! kinds. ATA supplies its architecture-native mechanical/event contract; this
-//! never claims that an independent hardware IRQ is absent.
+//! never claims that an independent hardware IRQ is absent. A selected controller
+//! observation is not a census of installed vectors or callbacks.
 use super::{Assessment, Context, Filter, Role, Value};
 use crate::image::{inputs, irq, layout::Observation, matrix::AtaInput, peripheral};
 use alloc::{format, vec, vec::Vec};
@@ -13,7 +14,7 @@ pub static FILTER: Loading = Loading;
 
 /// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
 static RULES: super::Rules = super::Rules {
-    description: "Identifies the loading input, interrupt-register operation or installed callback route: the H8 FFC5 transformation new = (old & mask) | set, a physical input predicate (address, bit, level) or a vector route, and the ATA mechanical/event input contract. The variant is part of the value: equal numbers under different variants are not equal.",
+    description: "Compares a native interrupt-controller operation, physical loading-input predicate or installed callback route; the variant is part of the value. A selected controller observation does not describe every installed vector or callback; supporting observations do not widen that value. Direct writes and masked updates have different state effects. Correction would also need the installed vector/callback, polling, acknowledgement and mechanical contracts bound.",
     role: super::Role::Hardware,
     correctability: super::Correctability::Never,
     correction: "Never corrected. Values must match.",
@@ -166,7 +167,7 @@ impl Filter for Loading {
         ID
     }
     fn name(&self) -> &'static str {
-        "Loading input / interrupt setup"
+        "Loading / IRQ"
     }
     fn rules(&self) -> Option<&'static super::Rules> {
         Some(&RULES)

@@ -130,9 +130,9 @@
     {
       "correctability": "Never",
       "correction": "Never corrected. Values must match; equal geometry does not authorize a bank migration, and a differing storage contract refuses under every policy, including the Recovery family override.",
-      "description": "Identifies the persistent storage the firmware uses: H8 bank markers and spacing or native bank bases, ATA flash regions or serial word ranges, SCSI serial records. Addresses, marker constants, record widths and bank spacing are different quantities; geometry does not describe the calibration records stored inside it.",
+      "description": "Compares the observed storage contract: H8 bank markers or addresses and spacing, ATA flash or serial ranges, or SCSI serial records. It does not establish physical flash capacity, erase boundaries or safe migration. Correction requires complete copy, erase, commit and recovery proof.",
       "id": "persistent-storage-geometry",
-      "name": "Persistent storage geometry",
+      "name": "Storage geometry",
       "policies": [
         {
           "platforms": [],
@@ -148,9 +148,9 @@
     {
       "correctability": "Never",
       "correction": "Never corrected. Values must match.",
-      "description": "Identifies the startup tray inputs or, where no input reader resolves, the complete native initialization program: role-bound closed/open input predicates (address, encoding, bit, active level) on every SAT platform where they resolve, the SAT1 E46B register value or older H8 initializer, ordered M32C register writes, or a bounded M7900 I/O block. A projected summary bit is never a register value to write, and one architecture's program never stands in for another's.",
+      "description": "Compares role-bound native closed/open input predicates (address, encoding, bit and active level), or a supported architecture-specific initialization program. Predicates do not prove a sensor count or cover every output, configuration or feedback role. Shared sub-roles can overlap Loading observations without establishing equivalent wiring or mechanical states. Correction would need those residual roles and all affected movement/error paths bound.",
       "id": "startup-inputs-initialization",
-      "name": "Startup inputs / initialization",
+      "name": "Startup inputs",
       "policies": [
         {
           "platforms": [
@@ -174,9 +174,9 @@
     {
       "correctability": "Never",
       "correction": "Never corrected. Values must match; no host-setup correction is implemented.",
-      "description": "Identifies the host-interface register setup written by the firmware: the masked H8 FE94 initialization (bit 7) or the complete older H8 host initializer, and M32C or V850 host register mappings with their reset writes. These representations are not interchangeable.",
+      "description": "Compares observed host setup: masked H8 FE94 bit 7, a bound older initializer, or architecture-specific host/reset coordinates. The bit is an observation, not an established voltage or protocol mode. Correction requires the physical meaning and Normal/Kernel reset and resume behavior to be established.",
       "id": "host-interface-setup",
-      "name": "Host interface setup",
+      "name": "Host setup",
       "policies": [
         {
           "platforms": [],
@@ -188,9 +188,9 @@
     {
       "correctability": "Never",
       "correction": "Never corrected. Values must match.",
-      "description": "Identifies the loading input, interrupt-register operation or installed callback route: the H8 FFC5 transformation new = (old & mask) | set, a physical input predicate (address, bit, level) or a vector route, and the ATA mechanical/event input contract. The variant is part of the value: equal numbers under different variants are not equal.",
+      "description": "Compares a native interrupt-controller operation, physical loading-input predicate or installed callback route; the variant is part of the value. A selected controller observation does not describe every installed vector or callback; supporting observations do not widen that value. Direct writes and masked updates have different state effects. Correction would also need the installed vector/callback, polling, acknowledgement and mechanical contracts bound.",
       "id": "loading-input-interrupt-setup",
-      "name": "Loading input / interrupt setup",
+      "name": "Loading / IRQ",
       "policies": [
         {
           "platforms": [],
@@ -202,9 +202,9 @@
     {
       "correctability": "Never",
       "correction": "Never corrected. Any known layout difference refuses. Where the installed record region overlaps non-erased bytes of the target Normal, the refusal reports that collision.",
-      "description": "Locates the retained primary parameter words and compares their complete native record contract: address mode and base, record size and count, header size, word encoding and record-selection rule. Geometry identifies the storage; this identifies the records within it.",
+      "description": "Compares the parameter read contract: address basis and base, record count and size, header size, word encoding and record selection. It does not prove the writer, erase, rollover, initialization or recovery lifecycle. Layout and geometry can be coupled; changing an address alone is not a relocation recipe. Correction would require the complete persistent-data lifecycle and coupled storage contract to remain valid without writing separate persistent data.",
       "id": "persistent-parameter-layout",
-      "name": "Persistent parameter layout",
+      "name": "Parameter layout",
       "policies": [
         {
           "platforms": [],
@@ -216,9 +216,9 @@
     {
       "correctability": "Guarded",
       "correction": "Corrects the incoming Normal image's native direct/swapped output mapping while retaining its waveform tables, DSP program, calibration and motion behavior. Architecture and output interface must match. Other filters remain independently enforced.",
-      "description": "Identifies which source element drives which phase output (direct 0 or swapped 1) together with the native architecture and output interface: H8 byte or split-word outputs, M32C outputs or the V850 indexed bus. The assignment is not signed waveform winding or physical motor direction.",
+      "description": "Compares the native output assignment together with architecture and output interface. Supported corrections change only the incoming firmware channel mapping while retaining its DSP program, waveform tables, calibration and motion behavior. This is not a change of drive voltage, motor type or byte-versus-word output interface.",
       "id": "phase",
-      "name": "Phase output assignment",
+      "name": "Phase",
       "policies": [
         {
           "platforms": [],
@@ -254,9 +254,9 @@
     {
       "correctability": "Guarded",
       "correction": "H8 startup comparisons are corrected in the Normal image to preserve the installed accepted word, with a read-only live-word prerequisite. Conditional predicates remain intact. Other platforms retain their independent native prerequisites.",
-      "description": "Identifies what the firmware requires before it starts: the accepted value of H8 startup word 0x009F, the ATA 0x00D9 predicate, the V850 expected Kernel identity, or the SCSI resident checksum and image-pair header. Evaluated on every image and planned per update; never part of the hardware family.",
+      "description": "Compares a bound startup gate or a separately proved preservation contract: H8 word 0x009F, ATA word 0x00D9, V850 Kernel identity, or SCSI checksum/header. Fixed and conditional predicates differ. No recognised comparison does not mean no requirement; reader, caller, cache and startup-path evidence remain separate.",
       "id": "startup-prerequisite",
-      "name": "Startup prerequisite",
+      "name": "Startup",
       "policies": [
         {
           "platforms": [

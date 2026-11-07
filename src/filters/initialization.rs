@@ -18,7 +18,7 @@ pub static FILTER: Initialization = Initialization;
 
 /// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
 static RULES: super::Rules = super::Rules {
-    description: "Identifies the startup tray inputs or, where no input reader resolves, the complete native initialization program: role-bound closed/open input predicates (address, encoding, bit, active level) on every SAT platform where they resolve, the SAT1 E46B register value or older H8 initializer, ordered M32C register writes, or a bounded M7900 I/O block. A projected summary bit is never a register value to write, and one architecture's program never stands in for another's.",
+    description: "Compares role-bound native closed/open input predicates (address, encoding, bit and active level), or a supported architecture-specific initialization program. Predicates do not prove a sensor count or cover every output, configuration or feedback role. Shared sub-roles can overlap Loading observations without establishing equivalent wiring or mechanical states. Correction would need those residual roles and all affected movement/error paths bound.",
     role: super::Role::Hardware,
     correctability: super::Correctability::Never,
     correction: "Never corrected. Values must match.",
@@ -184,7 +184,7 @@ impl Filter for Initialization {
         ID
     }
     fn name(&self) -> &'static str {
-        "Startup inputs / initialization"
+        "Startup inputs"
     }
     fn rules(&self) -> Option<&'static super::Rules> {
         Some(&RULES)

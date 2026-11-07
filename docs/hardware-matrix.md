@@ -43,14 +43,28 @@ timestamp. The only provenance is the source line: crate version, git revision
 
 ## Page
 
-Tabs: Groups (matching families by platform, with phase-normalized subgroups and
-unresolved reasons), Matrix, Compare, All firmware, SAT compare, Hardware key
-(family rules, then per platform every filter's description, correction policy,
-platform rules and value groupings with counts, typed values and evidence) and,
-when supplied, Routes. Report details holds the counts, the reference
-comparisons, revision consistency and decode failures. Hand-written notes that
-are not rules are in [hardware-matrix-notes.md](hardware-matrix-notes.md),
-linked from the page.
+Tabs: Groups, Matrix, Compare, All firmware, SAT compare, Filter values,
+Definitions and, when supplied, Routes. Filter values groups native observations
+with counts; exact values and evidence expand on demand. Definitions contains
+each owner's description, correction policy and platform rules once. Other
+views use the owner's short name and link to that definition. Candidate groups
+show concise Phase/Startup values; candidate membership is not route admission.
+Startup evidence and preservation scope do not establish an available update
+route. Native values, hashes, predicate bytes and proof obligations remain in
+expandable Details; presentation changes preserve the underlying identity and
+route payload. Updating a report after runtime changes requires fresh measured
+data and a route export from that integration, with source/data/HTML hashes.
+
+Compact headlines consume each finding's optional `inspection.label` or
+`summary`, with its native state as the fallback for older exports. Inspection
+`details` retain the typed reader, requirement, preservation scope and missing
+obligations in expandable evidence. The template never infers a state from
+diagnostic prose. Definition links retain individual `#definition-<owner-id>`
+anchors; the report still opens at `#groups` by default.
+
+Report details holds counts, reference comparisons, revision consistency and
+decode failures. Hand-written notes that are not rules are in
+[hardware-matrix-notes.md](hardware-matrix-notes.md), linked from the page.
 
 ## Routes export (hook for freemkv-crossflash)
 

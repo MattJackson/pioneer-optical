@@ -13,7 +13,7 @@ pub static FILTER: GeometryFilter = GeometryFilter;
 
 /// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
 static RULES: super::Rules = super::Rules {
-    description: "Identifies the persistent storage the firmware uses: H8 bank markers and spacing or native bank bases, ATA flash regions or serial word ranges, SCSI serial records. Addresses, marker constants, record widths and bank spacing are different quantities; geometry does not describe the calibration records stored inside it.",
+    description: "Compares the observed storage contract: H8 bank markers or addresses and spacing, ATA flash or serial ranges, or SCSI serial records. It does not establish physical flash capacity, erase boundaries or safe migration. Correction requires complete copy, erase, commit and recovery proof.",
     role: super::Role::Hardware,
     correctability: super::Correctability::Never,
     correction: "Never corrected. Values must match; equal geometry does not authorize a bank migration, and a differing storage contract refuses under every policy, including the Recovery family override.",
@@ -34,7 +34,7 @@ impl Filter for GeometryFilter {
         "persistent-storage-geometry"
     }
     fn name(&self) -> &'static str {
-        "Persistent storage geometry"
+        "Storage geometry"
     }
     fn rules(&self) -> Option<&'static super::Rules> {
         Some(&RULES)

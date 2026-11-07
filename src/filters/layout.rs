@@ -21,7 +21,7 @@ pub static FILTER: LayoutFilter = LayoutFilter;
 
 /// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
 static RULES: super::Rules = super::Rules {
-    description: "Locates the retained primary parameter words and compares their complete native record contract: address mode and base, record size and count, header size, word encoding and record-selection rule. Geometry identifies the storage; this identifies the records within it.",
+    description: "Compares the parameter read contract: address basis and base, record count and size, header size, word encoding and record selection. It does not prove the writer, erase, rollover, initialization or recovery lifecycle. Layout and geometry can be coupled; changing an address alone is not a relocation recipe. Correction would require the complete persistent-data lifecycle and coupled storage contract to remain valid without writing separate persistent data.",
     role: super::Role::Hardware,
     correctability: super::Correctability::Never,
     correction: "Never corrected. Any known layout difference refuses. Where the installed record region overlaps non-erased bytes of the target Normal, the refusal reports that collision.",
@@ -38,7 +38,7 @@ impl Filter for LayoutFilter {
         "persistent-parameter-layout"
     }
     fn name(&self) -> &'static str {
-        "Persistent parameter layout"
+        "Parameter layout"
     }
     fn rules(&self) -> Option<&'static super::Rules> {
         Some(&RULES)

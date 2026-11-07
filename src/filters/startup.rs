@@ -22,7 +22,7 @@ pub static FILTER: Startup = Startup;
 
 /// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
 static RULES: super::Rules = super::Rules {
-    description: "Identifies what the firmware requires before it starts: the accepted value of H8 startup word 0x009F, the ATA 0x00D9 predicate, the V850 expected Kernel identity, or the SCSI resident checksum and image-pair header. Evaluated on every image and planned per update; never part of the hardware family.",
+    description: "Compares a bound startup gate or a separately proved preservation contract: H8 word 0x009F, ATA word 0x00D9, V850 Kernel identity, or SCSI checksum/header. Fixed and conditional predicates differ. No recognised comparison does not mean no requirement; reader, caller, cache and startup-path evidence remain separate.",
     role: super::Role::Operational,
     correctability: super::Correctability::Guarded,
     correction: "H8 startup comparisons are corrected in the Normal image to preserve the installed accepted word, with a read-only live-word prerequisite. Conditional predicates remain intact. Other platforms retain their independent native prerequisites.",
@@ -185,7 +185,7 @@ impl Filter for Startup {
         ID
     }
     fn name(&self) -> &'static str {
-        "Startup prerequisite"
+        "Startup"
     }
     fn rules(&self) -> Option<&'static super::Rules> {
         Some(&RULES)

@@ -13,7 +13,7 @@ pub static FILTER: Host = Host;
 
 /// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
 static RULES: super::Rules = super::Rules {
-    description: "Identifies the host-interface register setup written by the firmware: the masked H8 FE94 initialization (bit 7) or the complete older H8 host initializer, and M32C or V850 host register mappings with their reset writes. These representations are not interchangeable.",
+    description: "Compares observed host setup: masked H8 FE94 bit 7, a bound older initializer, or architecture-specific host/reset coordinates. The bit is an observation, not an established voltage or protocol mode. Correction requires the physical meaning and Normal/Kernel reset and resume behavior to be established.",
     role: super::Role::Hardware,
     correctability: super::Correctability::Never,
     correction: "Never corrected. Values must match; no host-setup correction is implemented.",
@@ -56,7 +56,7 @@ impl Filter for Host {
         ID
     }
     fn name(&self) -> &'static str {
-        "Host interface setup"
+        "Host setup"
     }
     fn rules(&self) -> Option<&'static super::Rules> {
         Some(&RULES)

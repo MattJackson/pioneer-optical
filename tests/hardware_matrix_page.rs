@@ -212,6 +212,14 @@ fn page_is_deterministic_self_contained_and_escapes_script_text() {
     let body = &body[body.find('>').unwrap() + 1..body.find("</script>").unwrap()];
     let embedded: Json = serde_json::from_str(body).unwrap();
     assert_eq!(embedded, data);
+    // Presentation preserves the exact native findings and supplied route payload.
+    assert_eq!(embedded["images"], data["images"]);
+    assert_eq!(embedded["routes"], data["routes"]);
+    assert_eq!(html.matches("<section id=\"definitions\"").count(), 1);
+    assert!(html.contains("<section id=\"groups\""));
+    assert!(html.contains("f?.inspection?.label||f?.summary||findingState(f)"));
+    assert!(html.contains("function inspectionDetails(f)"));
+    assert!(html.contains("const anchor=t.startsWith('definition-')?t:null"));
 }
 
 #[test]
@@ -229,6 +237,11 @@ fn every_rule_statement_comes_from_code_not_the_template() {
             assert!(!page::TEMPLATE.contains(&quoted), "{quoted}");
         }
         assert!(!page::TEMPLATE.contains(rules.correction));
+        assert!(!page::TEMPLATE.contains(rules.description));
+    }
+    // The one Definitions renderer owns these fields; value and comparison rows link to it.
+    for field in ["esc(o.description)", "esc(o.correction)", "o.policies.map"] {
+        assert_eq!(page::TEMPLATE.matches(field).count(), 1, "{field}");
     }
     for rule in pioneer_optical::filters::identity::RULES {
         assert!(!page::TEMPLATE.contains(rule));

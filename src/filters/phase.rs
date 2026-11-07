@@ -252,7 +252,7 @@ pub static FILTER: PhaseFilter = PhaseFilter;
 
 /// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
 static RULES: super::Rules = super::Rules {
-    description: "Identifies which source element drives which phase output (direct 0 or swapped 1) together with the native architecture and output interface: H8 byte or split-word outputs, M32C outputs or the V850 indexed bus. The assignment is not signed waveform winding or physical motor direction.",
+    description: "Compares the native output assignment together with architecture and output interface. Supported corrections change only the incoming firmware channel mapping while retaining its DSP program, waveform tables, calibration and motion behavior. This is not a change of drive voltage, motor type or byte-versus-word output interface.",
     role: super::Role::Hardware,
     correctability: super::Correctability::Guarded,
     correction: "Corrects the incoming Normal image's native direct/swapped output mapping while retaining its waveform tables, DSP program, calibration and motion behavior. Architecture and output interface must match. Other filters remain independently enforced.",
@@ -284,7 +284,7 @@ impl Filter for PhaseFilter {
         "phase"
     }
     fn name(&self) -> &'static str {
-        "Phase output assignment"
+        "Phase"
     }
     fn rules(&self) -> Option<&'static super::Rules> {
         Some(&RULES)

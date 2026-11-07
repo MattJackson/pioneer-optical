@@ -3,6 +3,43 @@
 //! Every definition runs for every firmware context. Recognition, comparison,
 //! candidate projection and correction decisions belong to that definition;
 //! the shared runner does not maintain platform-specific filter lists.
+//!
+//! # Meaning of a filter and a correction
+//!
+//! A filter owns a typed, evidence-bound comparison contract, not an isolated
+//! address, bit, or an entire physical subsystem. Its observed fields and proof
+//! limits are defined once in that owner's `Rules`; reports should render those
+//! definitions in one lookup section and use short names elsewhere.
+//!
+//! `Never` means no correction is implemented for a difference. It is not a
+//! declaration of physical impossibility. `Guarded` means some directed pairs
+//! have a correction implementation; it never promises universal coverage.
+//! Candidate-family equality is a search projection, not pair admission.
+//!
+//! A supported correction must preserve the installed hardware's required OEM
+//! behavior through the actual incoming firmware, including dependent paths,
+//! persistent data, and component/codec prerequisites. Changing a configuration
+//! bit is not valid if its electrical or mechanical meaning is unproved.
+//! A stage proof, reversible edit, or raw codec roundtrip is not full admission.
+//! Unknown physical semantics or incomplete native evidence must remain explicit.
+//! An observed controller transform is not every installed vector/callback, and
+//! role-bound input predicates are not the complete output/configuration or
+//! feedback contract. Shared sub-roles can occur in more than one observation.
+//! Those residual contracts must be bound before a new correction can admit a
+//! pair; documenting them adds no correction, schema split or family merge.
+//! Parameter read layout and storage geometry can be coupled, but neither is
+//! authority for persistent writes or the full erase/rollover/recovery lifecycle.
+//!
+//! Corrections are confined to Normal/Kernel firmware components. Existing drive
+//! data may supply enforced read-only prerequisites; separate persistent data
+//! must not be written, erased, migrated, reformatted, or temporarily replaced.
+//! Ordinary OEM persistence must retain its semantics; observing an initializer
+//! does not authorize invoking it as a conversion step or broadening its trigger.
+//! The current operation API emits Normal only, with Kernel as immutable input
+//! authority. A future Kernel edit requires component-aware preparation and
+//! verification; it cannot be returned through a Normal byte vector.
+//! See `Filter::plan` and the shared runner for the enforcing pair decisions.
+
 use crate::compatibility::{Error, Firmware};
 use crate::image::matrix::{AtaEvidence, SatEvidence, SatPlatform};
 use alloc::{boxed::Box, string::String, vec::Vec};

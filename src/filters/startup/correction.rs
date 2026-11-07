@@ -214,6 +214,9 @@ pub(super) fn plan(transition: &Transition<'_, '_>) -> Result<Option<Box<dyn Ope
 
 /// A native requirement-preservation certificate participates in the same
 /// prepare/verify transaction as a comparison edit, including after phase edits.
+/// Its theorem is target-local predicate/component invariance. Independent bank
+/// selection and the automatic OEM parameter-writer lifecycle are not inferred
+/// merely from equal reader layouts or from this certificate's presence.
 #[derive(Debug)]
 struct PreservationOperation {
     hardware: String,

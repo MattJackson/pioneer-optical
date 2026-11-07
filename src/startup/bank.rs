@@ -16,6 +16,8 @@ pub enum Addresses {
     /// An older implementation uses absolute addresses.
     Fixed([u32; 2]),
     /// A capacity discriminator selects one of two address expressions.
+    /// Equality records the two address cases, not equivalence of the native
+    /// discriminator programs or their external service effects.
     Capacity {
         /// Addresses when the discriminator returns one.
         when_one: [u32; 2],

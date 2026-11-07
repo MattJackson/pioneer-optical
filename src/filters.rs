@@ -29,6 +29,11 @@
 //! pair; documenting them adds no correction, schema split or family merge.
 //! Parameter read layout and storage geometry can be coupled, but neither is
 //! authority for persistent writes or the full erase/rollover/recovery lifecycle.
+//! In particular, matching both branches of a capacity-dependent bank map does
+//! not prove that two discriminator implementations choose the same branch.
+//! A Startup preservation certificate proves its named local predicates and
+//! protected components; it is not a proof of every automatic parameter writer
+//! or eventual device startup. Keep those boundaries explicit in evidence.
 //!
 //! Corrections are confined to Normal/Kernel firmware components. Existing drive
 //! data may supply enforced read-only prerequisites; separate persistent data

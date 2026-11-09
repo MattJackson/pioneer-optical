@@ -32,9 +32,6 @@ fn every_registered_filter_declares_rules_matching_its_behaviour() {
         assert!(!rules.description.trim().is_empty(), "{}", filter.id());
         assert!(!rules.correction.trim().is_empty(), "{}", filter.id());
         assert!(rules.policies.iter().all(|p| !p.text.trim().is_empty()));
-        if rules.correctability == Correctability::Operational {
-            assert_eq!(rules.role, Role::Operational, "{}", filter.id());
-        }
         for domain in Domain::ALL {
             let hardware = match domain {
                 Domain::Sat1 => "SAT 1050",
@@ -44,10 +41,10 @@ fn every_registered_filter_declares_rules_matching_its_behaviour() {
             };
             let context = empty(hardware);
             assert_eq!(filter.inspect(&context).role, rules.role, "{}", filter.id());
-            if rules.correctability != Correctability::Never {
+            if rules.correctability != Correctability::Fixed {
                 continue;
             }
-            // Declared never-correctable: a known difference refuses, a match passes.
+            // Declared fixed: a known difference refuses, a match passes.
             let at = |value| Assessment::known(filter.id(), rules.role, Value::U8(value), "test");
             let transition = Transition {
                 installed: &context,
@@ -59,12 +56,12 @@ fn every_registered_filter_declares_rules_matching_its_behaviour() {
     }
     assert_eq!(
         rules("persistent-storage-geometry").correctability,
-        Correctability::Never
+        Correctability::Fixed
     );
-    assert_eq!(rules("phase").correctability, Correctability::Guarded);
+    assert_eq!(rules("phase").correctability, Correctability::Correctable);
     assert_eq!(
         rules("startup-prerequisite").correctability,
-        Correctability::Operational
+        Correctability::Correctable
     );
 }
 
@@ -163,7 +160,7 @@ fn phase_output_mapping_preserves_independent_mechanism_properties() {
 fn layout_is_required_and_never_corrected() {
     let declared = rules("persistent-parameter-layout");
     assert_eq!(declared.role, Role::Hardware);
-    assert_eq!(declared.correctability, Correctability::Never);
+    assert_eq!(declared.correctability, Correctability::Fixed);
     let layout = crate::filters::filters()
         .iter()
         .find(|f| f.id() == "persistent-parameter-layout")

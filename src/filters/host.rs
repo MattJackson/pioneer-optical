@@ -15,7 +15,7 @@ pub static FILTER: Host = Host;
 static RULES: super::Rules = super::Rules {
     description: "Compares observed host setup: masked H8 FE94 bit 7, a bound older initializer, or architecture-specific host/reset coordinates. The bit is an observation, not an established voltage or protocol mode. Correction requires the physical meaning and Normal/Kernel reset and resume behavior to be established.",
     role: super::Role::Hardware,
-    correctability: super::Correctability::Never,
+    correctability: super::Correctability::Fixed,
     correction: "Never corrected. Values must match; no host-setup correction is implemented.",
     policies: &[
         super::Policy {

@@ -23,7 +23,7 @@ pub static FILTER: LayoutFilter = LayoutFilter;
 static RULES: super::Rules = super::Rules {
     description: "Compares the parameter read contract: address basis and base, record count and size, header size, word encoding and record selection. It does not prove the writer, erase, rollover, initialization or recovery lifecycle. Layout and geometry can be coupled; changing an address alone is not a relocation recipe. Correction would require the complete persistent-data lifecycle and coupled storage contract to remain valid without writing separate persistent data.",
     role: super::Role::Hardware,
-    correctability: super::Correctability::Never,
+    correctability: super::Correctability::Fixed,
     correction: "Never corrected. Any known layout difference refuses. Where the installed record region overlaps non-erased bytes of the target Normal, the refusal reports that collision.",
     policies: &[
         super::Policy {

@@ -21,7 +21,7 @@ pub static FILTER: Initialization = Initialization;
 static RULES: super::Rules = super::Rules {
     description: "Compares role-bound native closed/open input predicates (address, encoding, bit and active level), or a supported architecture-specific initialization program. Predicates do not prove a sensor count or cover every output, configuration or feedback role. Shared sub-roles can overlap Loading observations without establishing equivalent wiring or mechanical states. Correction would need those residual roles and all affected movement/error paths bound.",
     role: super::Role::Hardware,
-    correctability: super::Correctability::Never,
+    correctability: super::Correctability::Fixed,
     correction: "Never corrected. Values must match.",
     policies: &[
         super::Policy {

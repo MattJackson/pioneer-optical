@@ -16,7 +16,7 @@ pub static FILTER: Loading = Loading;
 static RULES: super::Rules = super::Rules {
     description: "Compares a native interrupt-controller operation, physical loading-input predicate or installed callback route; the variant is part of the value. A selected controller observation does not describe every installed vector or callback; supporting observations do not widen that value. Direct writes and masked updates have different state effects. Correction would also need the installed vector/callback, polling, acknowledgement and mechanical contracts bound.",
     role: super::Role::Hardware,
-    correctability: super::Correctability::Never,
+    correctability: super::Correctability::Fixed,
     correction: "Never corrected. Values must match.",
     policies: &[
         super::Policy {

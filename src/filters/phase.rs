@@ -254,7 +254,7 @@ pub static FILTER: PhaseFilter = PhaseFilter;
 static RULES: super::Rules = super::Rules {
     description: "Compares the native output assignment together with architecture and output interface. Supported corrections change only the incoming firmware channel mapping while retaining its DSP program, waveform tables, calibration and motion behavior. This is not a change of drive voltage, motor type or byte-versus-word output interface.",
     role: super::Role::Hardware,
-    correctability: super::Correctability::Guarded,
+    correctability: super::Correctability::Correctable,
     correction: "Corrects supported incoming Normal channel operands while preserving execution, waveform tables, DSP program, calibration and motion behavior. Architecture and output interface must match. Other filters remain independently enforced.",
     policies: &[
         super::Policy {

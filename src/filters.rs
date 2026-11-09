@@ -11,9 +11,9 @@
 //! limits are defined once in that owner's `Rules`; reports should render those
 //! definitions in one lookup section and use short names elsewhere.
 //!
-//! `Never` means no correction is implemented for a difference. It is not a
-//! declaration of physical impossibility. `Guarded` means some directed pairs
-//! have a correction implementation; it never promises universal coverage.
+//! A filter is either `Fixed` (values must match; each refusal states why no
+//! correction exists) or `Correctable` (some directed pairs have a tested
+//! correction; every other difference still refuses with a stated reason).
 //! Candidate-family equality is a search projection, not pair admission.
 //!
 //! A supported correction must preserve the installed hardware's required OEM
@@ -134,13 +134,10 @@ pub enum Role {
 #[cfg_attr(feature = "envelope", derive(serde::Serialize))]
 pub enum Correctability {
     /// Values must match. Every known difference refuses.
-    Never,
-    /// The owner plans a guarded firmware correction for proven pairs only;
-    /// every other difference refuses.
-    Guarded,
-    /// An operational requirement planned against the requested firmware,
-    /// never a hardware identity input.
-    Operational,
+    Fixed,
+    /// The owner plans a tested Normal/Kernel correction for proven pairs
+    /// only; every other difference refuses.
+    Correctable,
 }
 
 /// One owner rule, scoped to platform domains (empty means every platform).

@@ -530,7 +530,8 @@ fn main() {
             json!({
                 "from": from,
                 "to": to,
-                "hardware": format!("{:?}", Domain::from_hardware(from.rsplit(" · ").next().unwrap_or_default())),
+                "hardware": Domain::from_hardware(from.rsplit(" · ").next().unwrap_or_default())
+                    .map_or_else(|| "unknown".to_owned(), |d| format!("{d:?}")),
                 "status": status,
                 "steps": steps,
                 "blocking_filters": blocking,

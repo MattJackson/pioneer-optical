@@ -75,6 +75,35 @@ fn h8_value(
     (Value::Variant(1, vec![Value::U16(requirement.parameter), Value::U16(requirement.required)]),
         format!("Accepted native word comparison at {:#x}, bound to complete getter {:#x} with R{} argument and exact parameter layout. Positive selection does not establish absence of other conditions", requirement.check_address, requirement.getter_address, requirement.argument_register))
 }
+/// Exact reason for a stored-code miss of the native 0x009F comparison. A
+/// bare read or no read is not an absence proof; the joined startup path stays open.
+fn h8_miss(miss: &crate::startup::unbound::Miss) -> alloc::string::String {
+    use crate::startup::unbound::Getter;
+    let getter = match miss.getter {
+        Getter::Bound(component, entry, register) => {
+            format!("bound {component:?} getter {entry:#x} (R{register} index)")
+        }
+        Getter::Unbound(crate::image::layout::Unresolved::ResidentCodeRequired(entry)) => {
+            format!("getter is Kernel-resident at {entry:#x}; that exact Kernel is not supplied")
+        }
+        Getter::Unbound(reason) => format!("getter unresolved: {reason:?}"),
+        Getter::Conflicting => "getter candidates conflict".into(),
+    };
+    let other = miss.other_parameter.map_or(alloc::string::String::new(), |r| {
+        format!(
+            "; a loader-flag comparison of word {:#06x} at {:#x} is not the startup word",
+            r.parameter, r.check_address
+        )
+    });
+    let list = |at: &[u32]| {
+        at.iter()
+            .map(|a| format!("{a:#x}"))
+            .collect::<alloc::vec::Vec<_>>()
+            .join(", ")
+    };
+    format!("Native H8 accepted startup word remains unresolved: stored Normal code has no recognized word 0x009F comparison with a loader-flag mismatch arm ({getter}; immediate 0x009F getter reads [{}] with no recognized comparison; Kernel loader-flag 0x400A1A wrappers [{}]{other}). A read without a comparison, or no read, is not proof of absence: a joined startup-path proof through Normal and Kernel is required. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance", list(&miss.reads), list(&miss.loader_flag_wrappers))
+}
+
 fn scsi_value(value: &scsi::Evidence) -> Value {
     Value::Variant(
         20,
@@ -107,7 +136,10 @@ pub fn inspect(context: &Context<'_>) -> Assessment {
             }
             Observation::Conflicting => Assessment::conflicting(ID, Role::Operational, "Native H8 startup comparisons conflict"),
             Observation::Unresolved(reason) => Assessment::unresolved(ID, Role::Operational,
-                format!("Native H8 accepted startup word remains unresolved: {reason:?}. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance")),
+                match crate::startup::unbound::inspect(context.firmware.normal, context.firmware.kernel) {
+                    Some(miss) => h8_miss(&miss),
+                    None => format!("Native H8 accepted startup word remains unresolved: {reason:?}. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance"),
+                }),
         };
     }
     if context.firmware.hardware.starts_with("ATA ") {

@@ -22,6 +22,9 @@ mod capacity;
 /// Receiver-owned startup requirements and their shared transition planner.
 pub mod checks;
 
+/// Exact native facts retained when no 0x009F comparison is recognized.
+pub mod unbound;
+
 /// Startup word selected for an update, not a saved historical value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Setting {

@@ -33,6 +33,10 @@ static RULES: super::Rules = super::Rules {
             text: "SAT1 has no recognized tray input reader and keeps its native E46B register value (bits 4 and 0) or its older initialization program.",
         },
         super::Policy {
+            domains: &[super::identity::Domain::Ata],
+            text: "V850 slim drives: the value is the loading program's fixed direct I/O, plus the fixed outputs of directly called helpers followed exactly one level when the direct set lacks an output. Deeper, indirect or byte-wide helper paths are not bound (they are named as evidence), and equality means the same bound I/O set.",
+        },
+        super::Policy {
             domains: &[],
             text: "An architecture tag, an external initializer address or an unexamined program is not a known value. Such images stay Unresolved and receive no family ID.",
         },
@@ -271,6 +275,14 @@ pub fn inspect(context: &Context<'_>) -> Assessment {
                     p.opened.pin.address, p.opened.pin.bit, p.opened.arrival, p.opened.confirmation)),
             (_, _, Observation::Unresolved(_)) if matches!(slim, Some(Ok(_))) => {
                 let Some(Ok(slim)) = slim else { unreachable!() };
+                if !slim.closed.unbound.is_empty() || !slim.opened.unbound.is_empty() {
+                    return Assessment::known(ID, Role::Hardware, v850_slim_value(&slim), format!(
+                        "Fixed direct and one-helper-level peripheral bit I/O of the V850 slim-mechanism [LOADIN] state machine Normal+{:#x}..{:#x} and [LOADOUT] state machine Normal+{:#x}..{:#x} (bus-decoded Normal): closed {}; open {}. The direct inputs are the state machines' own tst1 reads; outputs are the fixed set1/clr1 levels driven by directly called helpers, followed exactly one level. Not bound and not part of the value: closed {}; open {}. RAM gates, evidence only: closed {:?}; open {:?}",
+                        slim.closed.start, slim.closed.end, slim.opened.start, slim.opened.end,
+                        v850_io_text(&slim.closed.io), v850_io_text(&slim.opened.io),
+                        slim.closed.unbound.join("; "), slim.opened.unbound.join("; "),
+                        slim.closed.gates, slim.opened.gates));
+                }
                 Assessment::known(ID, Role::Hardware, v850_slim_value(&slim), format!(
                     "Complete direct peripheral bit I/O of the V850 slim-mechanism [LOADIN] state machine Normal+{:#x}..{:#x} and [LOADOUT] state machine Normal+{:#x}..{:#x} (bus-decoded Normal), each walked instruction by instruction from its unique diagnostic reference to its closing dispose: closed {}; open {}. Inputs are listed without a level because the program branches on both levels; outputs keep each driven level. Called helpers are not followed. RAM gates, evidence only: closed {:?}; open {:?}",
                     slim.closed.start, slim.closed.end, slim.opened.start, slim.opened.end,

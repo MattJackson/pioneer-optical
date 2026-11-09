@@ -201,6 +201,9 @@ pub(super) struct Program {
     pub end: usize,
     /// gp-relative RAM bit operations (mnemonic, displacement, bit): evidence.
     pub gates: Vec<(&'static str, u16, u8)>,
+    /// Helper paths not bound (failed closed or deeper calls): evidence only.
+    /// Empty unless the direct set was incomplete.
+    pub unbound: Vec<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Slim {
@@ -228,20 +231,30 @@ fn length(b: &[u8], at: usize) -> Option<usize> {
 /// Longest referenced state machine walked before giving up.
 const PROGRAM: usize = 0x1000;
 
-fn program(b: &[u8], label: &[u8]) -> Result<Program, String> {
-    let name = core::str::from_utf8(&label[..label.len() - 3]).unwrap_or("?");
-    let start = reference(b, label)
-        .ok_or_else(|| format!("{name} has no unique diagnostic and unique reference"))?;
-    let (mut io, mut gates) = (Vec::new(), Vec::new());
+/// Direct bit I/O, RAM gates and `jarl` targets of one walked routine.
+struct Walk {
+    io: Vec<Io>,
+    gates: Vec<(&'static str, u16, u8)>,
+    calls: Vec<usize>,
+    end: usize,
+}
+/// Walk instruction by instruction from `start` to the closing `dispose`
+/// (or, for a called helper, also `jmp [lp]`). A helper must be straight
+/// line code: no switch table and no indirect jump.
+fn walk(b: &[u8], name: &str, start: usize, helper: bool) -> Result<Walk, String> {
+    let (mut io, mut gates, mut calls) = (Vec::new(), Vec::new(), Vec::new());
     let mut at = start;
-    // Walk instruction by instruction from the diagnostic case to the state
-    // machine's single closing dispose; called helpers are not followed.
     let end = loop {
-        let w = half(b, at).ok_or_else(|| format!("{name} program is truncated"))?;
-        if w & 0xffc0 == 0x0640 {
+        let w = half(b, at).ok_or_else(|| format!("{name} code is truncated"))?;
+        if w & 0xffc0 == 0x0640 || (helper && w == 0x007f) {
             break at;
         }
-        let len = length(b, at).ok_or_else(|| format!("{name} program is truncated"))?;
+        if helper && (w & 0xffe0 == 0x0040 || w & 0xffe0 == 0x0060 || w & 0xffe0 == 0x06e0) {
+            return Err(format!(
+                "{name} dispatches indirectly at Normal+{at:#x}; its reached pins are not fixed"
+            ));
+        }
+        let len = length(b, at).ok_or_else(|| format!("{name} code is truncated"))?;
         let disp = half(b, at + 2).unwrap_or(0);
         let reg1 = w & 31;
         if len == 4 && w & 0x07e0 == 0x07c0 {
@@ -268,38 +281,118 @@ fn program(b: &[u8], label: &[u8]) -> Result<Program, String> {
             return Err(format!(
                 "{name} transfers peripheral data at Normal+{at:#x}; not a fixed bit I/O set"
             ));
+        } else if len == 4
+            && w >> 11 == 31
+            && matches!((w >> 5) & 0x3f, 0x3c | 0x3d)
+            && disp & 1 == 0
+        {
+            // jarl disp22, lp
+            let d = ((u32::from(w & 0x3f) << 16) | u32::from(disp)) as i32;
+            let d = (d << 10) >> 10;
+            if let Some(target) = at.checked_add_signed(d as isize) {
+                calls.push(target);
+            }
         }
         at += len;
         if at - start > PROGRAM {
             return Err(format!(
-                "{name} state machine has no closing dispose within {PROGRAM:#x} bytes"
+                "{name} has no closing dispose within {PROGRAM:#x} bytes"
             ));
         }
     };
+    Ok(Walk {
+        io,
+        gates,
+        calls,
+        end,
+    })
+}
+fn complete(io: &[Io]) -> bool {
+    io.iter().any(|x| matches!(x, Io::Input(_))) && io.iter().any(|x| matches!(x, Io::Output(..)))
+}
+fn io_text(io: &[Io]) -> String {
+    io.iter()
+        .map(|x| match x {
+            Io::Input(p) => format!("{:#010x}.b{}", p.address, p.bit),
+            Io::Output(p, l) => format!("{:#010x}.b{}<-{}", p.address, p.bit, u8::from(*l)),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn program(b: &[u8], label: &[u8]) -> Result<Program, String> {
+    let name = core::str::from_utf8(&label[..label.len() - 3]).unwrap_or("?");
+    let start = reference(b, label)
+        .ok_or_else(|| format!("{name} has no unique diagnostic and unique reference"))?;
+    // From the diagnostic case to the state machine's single closing dispose.
+    let program = walk(b, &format!("{name} state machine"), start, false)?;
+    let Walk {
+        mut io,
+        mut gates,
+        mut calls,
+        end,
+    } = program;
     io.sort();
     io.dedup();
+    let mut unbound = Vec::new();
+    if !complete(&io) {
+        // Follow exactly one level into each directly called helper and take
+        // only the fixed outputs it drives itself. A helper that fails closed
+        // contributes nothing; its own further calls are not followed. Both
+        // are named as unbound paths.
+        let direct = io_text(&io);
+        calls.sort();
+        calls.dedup();
+        let mut reached = Vec::new();
+        for &target in &calls {
+            match walk(b, &format!("helper Normal+{target:#x}"), target, true) {
+                Err(e) => unbound.push(e),
+                Ok(helper) => {
+                    let outputs: Vec<Io> = helper
+                        .io
+                        .into_iter()
+                        .filter(|x| matches!(x, Io::Output(..)))
+                        .collect();
+                    if !helper.calls.is_empty() && !outputs.is_empty() {
+                        let mut deeper = helper.calls;
+                        deeper.sort();
+                        deeper.dedup();
+                        let deeper: Vec<String> =
+                            deeper.iter().map(|t| format!("Normal+{t:#x}")).collect();
+                        unbound.push(format!(
+                            "helper Normal+{target:#x} calls {} further, not followed",
+                            deeper.join(", ")
+                        ));
+                    }
+                    reached.extend(outputs);
+                }
+            }
+        }
+        if reached.is_empty() {
+            return Err(format!(
+                "{name} state machine Normal+{start:#x}..{end:#x} directly accesses only [{direct}] and none of its {} directly called helpers drives a fixed output at one level{}",
+                calls.len(),
+                if unbound.is_empty() { String::new() } else { format!("; unbound: {}", unbound.join("; ")) }
+            ));
+        }
+        io.extend(reached);
+        io.sort();
+        io.dedup();
+        if !complete(&io) {
+            return Err(format!(
+                "{name} state machine Normal+{start:#x}..{end:#x} and one helper level access only [{}]; no complete bound input and output set",
+                io_text(&io)
+            ));
+        }
+    }
     gates.sort();
     gates.dedup();
-    if !io.iter().any(|x| matches!(x, Io::Input(_)))
-        || !io.iter().any(|x| matches!(x, Io::Output(..)))
-    {
-        let read: Vec<String> = io
-            .iter()
-            .map(|x| match x {
-                Io::Input(p) => format!("{:#010x}.b{}", p.address, p.bit),
-                Io::Output(p, l) => format!("{:#010x}.b{}<-{}", p.address, p.bit, u8::from(*l)),
-            })
-            .collect();
-        return Err(format!(
-            "{name} state machine Normal+{start:#x}..{end:#x} directly accesses only [{}]; its actuator (solenoid/motor) is driven only through called helpers, so the program has no complete bound input and output set",
-            read.join(", ")
-        ));
-    }
     Ok(Program {
         io,
         start,
         end,
         gates,
+        unbound,
     })
 }
 
@@ -341,6 +434,10 @@ pub(super) fn bus(normal: &[u8]) -> Bus {
         slim,
     }
 }
+
+#[cfg(test)]
+#[path = "v850_k06.rs"]
+mod k06;
 
 #[cfg(test)]
 pub(super) mod tests {
@@ -649,6 +746,101 @@ pub(super) mod tests {
         assert!(slim(&twice).is_err());
         // Inputs only: the actuator is unbound, so no value.
         let reads = slim_fixture(K15_LOADIN, "2706000000000000c0ff13f440063f00");
-        assert!(slim(&reads).unwrap_err().contains("actuator"));
+        assert!(slim(&reads).unwrap_err().contains("drives a fixed output"));
+    }
+
+    /// `[LOADOUT]` reading 0xFFFFF413.b7 and calling one helper at +0x400.
+    fn with_helper(helper: &[u8]) -> Vec<u8> {
+        // ref; tst1 7, -3053[r0]; jarl +0x3f6, lp; dispose 0, {lp}, lp
+        let mut raw = slim_fixture(K15_LOADIN, "270600000000c0ff13f480fff60340063f00");
+        raw[0x2400..0x2400 + helper.len()].copy_from_slice(helper);
+        raw
+    }
+    #[test]
+    fn one_helper_level_adds_only_fixed_outputs_of_closed_helpers() {
+        use Io::{Input, Output};
+        // set1 6, -3054[r0]; jmp [lp]
+        let raw = with_helper(&[0xc0, 0x37, 0x12, 0xf4, 0x7f, 0x00]);
+        let opened = slim(&raw).unwrap().opened;
+        assert_eq!(
+            opened.io,
+            [
+                Input(pin(0xffff_f413, 7)),
+                Output(pin(0xffff_f412, 6), true)
+            ]
+        );
+        assert!(opened.unbound.is_empty());
+        // Its own output still counts; the further call is named, not followed.
+        let deeper = with_helper(&[0xc0, 0x37, 0x12, 0xf4, 0x80, 0xff, 0x10, 0x00, 0x7f, 0x00]);
+        let opened = slim(&deeper).unwrap().opened;
+        assert_eq!(opened.io.len(), 2);
+        assert!(opened.unbound[0].contains("not followed"));
+        // A helper failing closed (switch, byte-wide store) adds no pins.
+        for bad in [
+            &[0x4a, 0x00, 0xc0, 0x37, 0x12, 0xf4, 0x7f, 0x00][..],
+            &[0x40, 0x5f, 0x12, 0xf4, 0xc0, 0x37, 0x12, 0xf4, 0x7f, 0x00],
+        ] {
+            let error = slim(&with_helper(bad)).unwrap_err();
+            assert!(
+                error.contains("none of its 1 directly called helpers"),
+                "{error}"
+            );
+        }
+        // Helper inputs are not taken: a tst1-only helper binds no output.
+        assert!(slim(&with_helper(&[0xc0, 0x37 | 0xc0, 0x12, 0xf4, 0x7f, 0x00])).is_err());
+    }
+
+    fn k06(ranges: &[(usize, &str)]) -> Vec<u8> {
+        let mut raw = alloc::vec![0xff; 0x198000];
+        for &(at, hex) in ranges {
+            let data = bytes(hex);
+            raw[at..at + data.len()].copy_from_slice(&data);
+        }
+        raw
+    }
+    #[test]
+    fn k06_revisions_bind_equal_direct_and_one_level_io() {
+        use Io::{Input, Output};
+        let a = slim(&k06(k06::K06_100)).unwrap();
+        let b = slim(&k06(k06::K06_105)).unwrap();
+        let motor = [
+            Output(pin(0xffff_f412, 6), false),
+            Output(pin(0xffff_f412, 6), true),
+            Output(pin(0xffff_f412, 7), false),
+            Output(pin(0xffff_f412, 7), true),
+        ];
+        let mut closed = alloc::vec![
+            Input(pin(0xffff_f400, 6)),
+            Input(pin(0xffff_f412, 4)),
+            Input(pin(0xffff_f413, 5)),
+        ];
+        closed.extend(motor);
+        let mut opened = alloc::vec![
+            Input(pin(0xffff_f400, 6)),
+            Input(pin(0xffff_f412, 2)),
+            Input(pin(0xffff_f412, 4)),
+            Input(pin(0xffff_f413, 5)),
+        ];
+        opened.extend(motor);
+        assert_eq!(a.closed.io, closed);
+        assert_eq!(a.opened.io, opened);
+        assert_eq!((&b.closed.io, &b.opened.io), (&a.closed.io, &a.opened.io));
+        // The mode dispatch's F400.b2 store and the motor-voltage call are
+        // named as unbound, never added to the value.
+        for program in [&a.closed, &a.opened] {
+            assert!(!program
+                .io
+                .iter()
+                .any(|x| matches!(x, Output(p, _) if p.address == 0xffff_f400)));
+            let unbound = program.unbound.join("; ");
+            assert!(
+                unbound.contains("helper Normal+0x4df20 dispatches indirectly"),
+                "{unbound}"
+            );
+            assert!(
+                unbound.contains("helper Normal+0xed300 calls Normal+0x458c0, Normal+0xae16c"),
+                "{unbound}"
+            );
+        }
     }
 }

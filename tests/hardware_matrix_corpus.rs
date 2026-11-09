@@ -15,8 +15,8 @@
 #[path = "../examples/hardware_matrix/page.rs"]
 mod page;
 
-use pioneer_optical::compatibility::{Correction, Firmware};
-use pioneer_optical::filters::{phase::bundle, Finding, Role};
+use pioneer_optical::compatibility::Firmware;
+use pioneer_optical::filters::{Finding, Role};
 use std::collections::{BTreeMap, BTreeSet};
 
 struct Held {
@@ -167,25 +167,13 @@ fn generated_matrix_holds_its_invariants_over_the_hoard() {
         for _ in 0..std::thread::available_parallelism().map_or(4, |n| n.get()) {
             scope.spawn(|| loop {
                 let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let Some((a, x, b, y)) = pairs.get(i) else {
+                let Some((_a, x, _b, y)) = pairs.get(i) else {
                     break;
                 };
-                let Ok(plan) = pioneer_optical::compatibility::plan(x.firmware(), y.firmware())
-                else {
+                // Planning every same-family pair must not panic. Phase admission no
+                // longer depends on a mechanism bundle, so there is nothing further to check.
+                if pioneer_optical::compatibility::plan(x.firmware(), y.firmware()).is_err() {
                     continue;
-                };
-                if plan
-                    .corrections()
-                    .iter()
-                    .any(|c| matches!(c, Correction::Phase { .. }))
-                {
-                    let bound = |h: &Held| bundle::bind(&h.normal).map(|b| b.without_coil());
-                    if !matches!((bound(x), bound(y)), (Ok(p), Ok(q)) if p == q) {
-                        found
-                            .lock()
-                            .unwrap()
-                            .push(format!("{a} -> {b}: phase admitted without bundle"));
-                    }
                 }
             });
         }

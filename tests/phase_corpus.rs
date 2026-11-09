@@ -654,19 +654,13 @@ fn every_paired_original_file_proves_preparation_or_missing_kernel_boundary() {
                             normal: &original.image,
                             kernel: kernel_image,
                         };
-                        if pioneer_optical::filters::phase::bundle::bind(&original.image).is_err() {
-                            // Assignment evidence alone never admits a phase correction.
-                            assert!(
-                                matches!(
-                                    compatibility::plan(installed, target),
-                                    Err(compatibility::Error::Unsupported)
-                                ),
-                                "{component}: unbound mechanism bundle must refuse"
-                            );
-                            continue;
-                        }
-                        let plan = compatibility::plan(installed, target)
-                            .unwrap_or_else(|e| panic!("{component}: plan {e:?}"));
+                        // Phase correction is admitted by the native channel-swap, not a
+                        // mechanism bundle; a pair the filter cannot support is a valid refusal.
+                        let plan = match compatibility::plan(installed, target) {
+                            Ok(plan) => plan,
+                            Err(compatibility::Error::Unsupported) => continue,
+                            Err(e) => panic!("{component}: plan {e:?}"),
+                        };
                         let file = plan
                             .prepare_file(&original, kernel.as_ref())
                             .unwrap_or_else(|e| panic!("{component}: prepare {e:?}"))

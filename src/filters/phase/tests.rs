@@ -338,7 +338,8 @@ fn phase_mapping_does_not_require_an_unrelated_bundle_proof() {
     raw.resize(0x500, 0xff);
     let raw = complete(raw);
     let swapped = complete(native::correct_pair(&raw, native::Assignment::Swapped).unwrap());
-    assert!(bundle::bind(&raw).is_err());
+    // `raw` carries only the native coil program, not a complete mechanism
+    // bundle, yet the phase mapping still applies.
     for (installed, target) in [(&raw, &swapped), (&swapped, &raw)] {
         let operation = plan_pair(installed, target).unwrap().unwrap();
         let output = operation

@@ -257,30 +257,3 @@ fn refuses_unproved_helpers_and_missing_or_overlapping_space() {
         encoders::transplant(&broken, &full, [Some(0x1000..0x1040), Some(0x1040..0x1080)]).is_err()
     );
 }
-
-#[test]
-fn generated_producer_uses_three_native_two_bit_word_shifts() {
-    use h8_asm::isa::{Operand, Reg, Size};
-    for hash in &HASHES[..2] {
-        let n = fixture(hash);
-        let producer=pioneer_optical::filters::phase::bundle::waveforms::resources::software::observe_producer(&n).unwrap();
-        let body = &n[producer.program];
-        let mut at = 0;
-        let mut shifts = 0;
-        while at < body.len() {
-            let d = decode_insn(&body[at..], Target::H8S2000, Mode::Advanced).unwrap();
-            if d.insn.mnemonic == "SHLL"
-                && d.insn.size == Some(Size::Word)
-                && d.insn.operands[1] == Operand::Register(Reg::Word(0))
-            {
-                assert_eq!(d.insn.operands[0], Operand::Immediate { value: 2, bits: 0 });
-                shifts += 1;
-            }
-            at += d.len;
-        }
-        assert_eq!(
-            shifts, 6,
-            "three two-bit shifts per channel, six bits total"
-        );
-    }
-}

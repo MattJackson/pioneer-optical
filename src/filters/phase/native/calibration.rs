@@ -6,15 +6,6 @@ use core::ops::Range;
 /// Native four-mode caller and low-byte return contract.
 pub mod callers;
 
-/// Complete reader and caller bodies whose unchanged operands remain authoritative.
-pub(crate) fn protected_ranges(normal: &[u8]) -> Result<Vec<Range<usize>>, Error> {
-    let reader = bind(normal)?;
-    let caller = callers::observe(normal)?;
-    let mut ranges = reader.body.spans;
-    ranges.push(caller.program);
-    Ok(ranges)
-}
-
 /// Interpretation established by the complete native reader program.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Convention {
@@ -304,34 +295,6 @@ pub fn transplant_effective(target: &[u8], donor: &[u8]) -> Result<Vec<u8>, Erro
     } else {
         transplant(target, donor, None)
     }
-}
-
-/// Identify the tail retired by a shrinking, complete OEM reader transplant.
-/// The caller's low-byte contract and all visible Normal references must hold.
-pub(crate) fn retired_tail(target: &[u8], changed: &[u8]) -> Result<Option<Range<usize>>, Error> {
-    let before = bind(target)?;
-    let after = bind(changed)?;
-    if before.body.spans.len() != 1
-        || after.body.spans.len() != 1
-        || before.at != after.at
-        || after.body.spans[0].end >= before.body.spans[0].end
-    {
-        return Ok(None);
-    }
-    if callers::observe(target)? != callers::observe(changed)? {
-        return Err(Error::Unresolved);
-    }
-    let tail = after.body.spans[0].end..before.body.spans[0].end;
-    super::placement::retirement_references_clear(target, &before.body.spans[0], &tail)
-        .ok_or(Error::InvalidSpace)?;
-    for bytes in changed[tail.clone()].chunks_exact(2) {
-        let d = h8_asm::isa::decode_insn(bytes, h8_asm::Target::H8S2000, h8_asm::Mode::Advanced)
-            .map_err(|_| Error::InvalidSpace)?;
-        if d.insn.mnemonic != "NOP" {
-            return Err(Error::InvalidSpace);
-        }
-    }
-    Ok(Some(tail))
 }
 
 #[cfg(test)]

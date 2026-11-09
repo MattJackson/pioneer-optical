@@ -93,7 +93,11 @@ fn v850_term(pin: v850::Pin) -> Value {
     // The native arrival and confirmation consumers wait for bit == 0.
     Value::Variant(
         1,
-        vec![Value::U32(pin.address), Value::U8(pin.bit), Value::Bool(false)],
+        vec![
+            Value::U32(pin.address),
+            Value::U8(pin.bit),
+            Value::Bool(false),
+        ],
     )
 }
 fn v850_value(predicates: &v850::Predicates) -> Value {
@@ -105,6 +109,42 @@ fn v850_value(predicates: &v850::Predicates) -> Value {
             Value::Sequence(vec![v850_term(predicates.opened.pin)]),
         ],
     )
+}
+fn v850_io(io: &v850::Io) -> Value {
+    match *io {
+        v850::Io::Input(pin) => {
+            Value::Variant(1, vec![Value::U32(pin.address), Value::U8(pin.bit)])
+        }
+        v850::Io::Output(pin, level) => Value::Variant(
+            2,
+            vec![
+                Value::U32(pin.address),
+                Value::U8(pin.bit),
+                Value::Bool(level),
+            ],
+        ),
+    }
+}
+fn v850_slim_value(slim: &v850::Slim) -> Value {
+    // Ordered closed/open roles; each is the sorted physical I/O set.
+    Value::Variant(
+        7,
+        vec![
+            Value::Sequence(slim.closed.io.iter().map(v850_io).collect()),
+            Value::Sequence(slim.opened.io.iter().map(v850_io).collect()),
+        ],
+    )
+}
+fn v850_io_text(io: &[v850::Io]) -> alloc::string::String {
+    io.iter()
+        .map(|x| match *x {
+            v850::Io::Input(p) => format!("in {:#010x}.b{}", p.address, p.bit),
+            v850::Io::Output(p, l) => {
+                format!("out {:#010x}.b{} <- {}", p.address, p.bit, u8::from(l))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 fn legacy_program(normal: &[u8], start: usize) -> Option<Vec<u8>> {
     use h8_asm::{isa::decode_insn, Mode, Target};
@@ -147,10 +187,18 @@ pub fn inspect(context: &Context<'_>) -> Assessment {
                     format!("Complete role-bound native closed/open predicates; physical address, instruction address encoding, bit and active level retained. No feature-flag projection.{startup}"));
             }
             Observation::Conflicting => {
-                return Assessment::conflicting(ID, Role::Hardware, "Native startup input predicates conflict")
+                return Assessment::conflicting(
+                    ID,
+                    Role::Hardware,
+                    "Native startup input predicates conflict",
+                )
             }
             Observation::Unresolved(reason) if sat.platform != SatPlatform::Sat1 => {
-                return Assessment::unresolved(ID, Role::Hardware, format!("Native startup input predicates unresolved: {reason:?}"))
+                return Assessment::unresolved(
+                    ID,
+                    Role::Hardware,
+                    format!("Native startup input predicates unresolved: {reason:?}"),
+                )
             }
             Observation::Unresolved(_) => {}
         }
@@ -177,15 +225,26 @@ pub fn inspect(context: &Context<'_>) -> Assessment {
             Observation::Unresolved(crate::image::layout::Unresolved::ReaderNotRecognized)
         };
         let m79 = m7900::discover(context.firmware.normal);
-        let (v85, diagnostics) = if hardware.starts_with("ATA ") {
+        let v850::Bus {
+            arrival: v85,
+            diagnostics,
+            slim,
+        } = if hardware.starts_with("ATA ") {
             v850::bus(context.firmware.normal)
         } else {
-            (Observation::Unresolved(crate::image::layout::Unresolved::ReaderNotRecognized), false)
+            v850::Bus {
+                arrival: Observation::Unresolved(
+                    crate::image::layout::Unresolved::ReaderNotRecognized,
+                ),
+                diagnostics: false,
+                slim: None,
+            }
         };
         let known = [
             matches!(m32, Observation::Known(_)),
             matches!(m79, Observation::Known(_)),
             matches!(v85, Observation::Known(_)),
+            matches!(slim, Some(Ok(_))),
         ];
         let conflicting = [
             matches!(m32, Observation::Conflicting),
@@ -193,7 +252,11 @@ pub fn inspect(context: &Context<'_>) -> Assessment {
             matches!(v85, Observation::Conflicting),
         ];
         if known.iter().filter(|&&k| k).count() > 1 || conflicting.contains(&true) {
-            return Assessment::conflicting(ID, Role::Hardware, "Independent architecture initialization contracts disagree");
+            return Assessment::conflicting(
+                ID,
+                Role::Hardware,
+                "Independent architecture initialization contracts disagree",
+            );
         }
         return match (m32, m79, v85) {
             (Observation::Known(program), _, _) => Assessment::known(ID, Role::Hardware, m32c_value(&program.operations),
@@ -206,6 +269,18 @@ pub fn inspect(context: &Context<'_>) -> Assessment {
                 format!("Complete V850 loading-arrival predicates bound by the native [LOADIN]/[LOADOUT] state machines (bus-decoded Normal): closed waits for {:#010x}.b{} == 0 (arrival test Normal+{:#x}, confirmation reread Normal+{:#x}); open waits for {:#010x}.b{} == 0 (arrival Normal+{:#x}, confirmation Normal+{:#x}). One physical input per role; code offsets, RAM slots and state numbers are evidence only. Settle timings, timeouts, motor outputs and the V850 initialization program are not part of this value",
                     p.closed.pin.address, p.closed.pin.bit, p.closed.arrival, p.closed.confirmation,
                     p.opened.pin.address, p.opened.pin.bit, p.opened.arrival, p.opened.confirmation)),
+            (_, _, Observation::Unresolved(_)) if matches!(slim, Some(Ok(_))) => {
+                let Some(Ok(slim)) = slim else { unreachable!() };
+                Assessment::known(ID, Role::Hardware, v850_slim_value(&slim), format!(
+                    "Complete direct peripheral bit I/O of the V850 slim-mechanism [LOADIN] state machine Normal+{:#x}..{:#x} and [LOADOUT] state machine Normal+{:#x}..{:#x} (bus-decoded Normal), each walked instruction by instruction from its unique diagnostic reference to its closing dispose: closed {}; open {}. Inputs are listed without a level because the program branches on both levels; outputs keep each driven level. Called helpers are not followed. RAM gates, evidence only: closed {:?}; open {:?}",
+                    slim.closed.start, slim.closed.end, slim.opened.start, slim.opened.end,
+                    v850_io_text(&slim.closed.io), v850_io_text(&slim.opened.io), slim.closed.gates, slim.opened.gates))
+            }
+            (_, _, Observation::Unresolved(_)) if matches!(slim, Some(Err(_))) => {
+                let Some(Err(reason)) = slim else { unreachable!() };
+                Assessment::unresolved(ID, Role::Hardware, format!(
+                    "V850 [LOADIN]/[LOADOUT] state machines carry no motor-arrival/confirmation pair, and their slim-mechanism I/O is not bound: {reason}"))
+            }
             (_, _, Observation::Unresolved(reason)) if diagnostics => Assessment::unresolved(ID, Role::Hardware, format!(
                 "V850 [LOADIN]/[LOADOUT] state machines are present but carry no recognized motor-arrival test with a same-pin confirmation reread ({reason:?}). Their tray inputs are not a bound closed/open predicate pair; an architecture tag or the unexamined V850 initialization program is not a known value")),
             _ => Assessment::unresolved(ID, Role::Hardware,
@@ -405,6 +480,47 @@ mod tests {
             panic!();
         };
         assert!(reason.contains("[LOADIN]/[LOADOUT]"));
+    }
+    #[test]
+    fn v850_slim_io_is_the_ata_value_when_no_arrival_pair_binds() {
+        use super::super::Finding;
+        let input = |address, bit| Value::Variant(1, vec![Value::U32(address), Value::U8(bit)]);
+        let output = |address, bit, level| {
+            Value::Variant(
+                2,
+                vec![Value::U32(address), Value::U8(bit), Value::Bool(level)],
+            )
+        };
+        let stored = crate::image::layout::encode_v850_bus(&v850::tests::k16()).unwrap();
+        assert_eq!(
+            inspect(&context("ATA 0068", &stored)).finding,
+            Finding::Known(Value::Variant(
+                7,
+                vec![
+                    Value::Sequence(vec![
+                        input(0xffff_f413, 5),
+                        output(0xffff_f412, 1, false),
+                        output(0xffff_f412, 1, true),
+                    ]),
+                    Value::Sequence(vec![
+                        input(0xffff_f400, 6),
+                        output(0xffff_f412, 6, false),
+                        output(0xffff_f412, 6, true),
+                    ]),
+                ],
+            ))
+        );
+        let k15 = crate::image::layout::encode_v850_bus(&v850::tests::k15()).unwrap();
+        assert_ne!(
+            inspect(&context("ATA 0064", &k15)).finding,
+            inspect(&context("ATA 0068", &stored)).finding
+        );
+        // An arrival-pair image never takes the slim value.
+        let arrival = crate::image::layout::encode_v850_bus(&v850::tests::fixture()).unwrap();
+        assert!(matches!(
+            inspect(&context("ATA 0009", &arrival)).finding,
+            Finding::Known(Value::Variant(6, _))
+        ));
     }
     #[test]
     fn physical_levels_encodings_and_roles_are_not_projected_away() {

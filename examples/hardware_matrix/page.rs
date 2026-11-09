@@ -445,6 +445,27 @@ fn known_label(id: &str, value: &Value) -> String {
             };
             Some(format!("V850 closed: {}; open: {}", pins(g(0)), pins(g(1))))
         }
+        ("startup-inputs-initialization", 7) => {
+            let io = |v: Option<&Value>| {
+                join(
+                    seq(v),
+                    |term| {
+                        let (t, f) = var(Some(term));
+                        let pin = format!(
+                            "{}.b{}",
+                            hexw(num(f.first()), 8),
+                            num(f.get(1)).map_or("?".into(), |b| b.to_string())
+                        );
+                        match t {
+                            Some(2) => format!("out {pin} ← {}", u8::from(boolean(f.get(2)))),
+                            _ => format!("in {pin}"),
+                        }
+                    },
+                    ", ",
+                )
+            };
+            Some(format!("Closed I/O: {}; open I/O: {}", io(g(0)), io(g(1))))
+        }
         ("host-interface-setup", 2) => Some(format!(
             "Complete older H8 host initializer ({} bytes)",
             bytes(g(0)).len()

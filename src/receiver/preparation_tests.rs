@@ -657,22 +657,30 @@ fn captured_receiver_evidence_does_not_require_a_distribution_signature() {
 }
 
 #[test]
-fn explicit_family_override_does_not_waive_receiver_or_restore_checks() {
+fn explicit_family_override_does_not_waive_native_owner_receiver_or_restore_checks() {
     let installed = update_with_bound_startup(true, 1, 0x12, true);
     let receiver = Receiver::from_installed(&installed).unwrap();
+    // The family byte is a native loading-input fact. R1A makes this
+    // uncorrectable owner mismatch mandatory even with a family override.
+    assert_eq!(
+        receiver
+            .prepare_without_family_check(update_with_bound_startup(false, 0, 0x13, true))
+            .unwrap_err(),
+        PreparationError::PhaseCorrection(crate::compatibility::Error::Incompatible)
+    );
     assert!(receiver
-        .prepare_without_family_check(update_with_bound_startup(false, 0, 0x13, true))
+        .prepare_without_family_check(update_with_bound_startup(false, 0, 0x12, true))
         .is_ok());
     assert_eq!(
         receiver
-            .prepare_without_family_check(update_with_bound_startup(true, 0, 0x13, true))
+            .prepare_without_family_check(update_with_bound_startup(true, 0, 0x12, true))
             .unwrap_err(),
         PreparationError::UnsupportedFinalStage
     );
     let entry_only = Receiver::detect(installed.normal()).unwrap();
     assert_eq!(
         entry_only
-            .prepare_without_family_check(update_with_bound_startup(false, 0, 0x13, true))
+            .prepare_without_family_check(update_with_bound_startup(false, 0, 0x12, true))
             .unwrap_err(),
         PreparationError::UnknownInstalledKernel
     );
@@ -701,7 +709,7 @@ fn normal_only_uses_installed_kernel_without_selecting_a_kernel_write() {
 }
 
 #[test]
-fn normal_only_force_waives_family_but_not_authentication_or_missing_evidence() {
+fn normal_only_force_preserves_native_owner_authentication_and_missing_evidence_checks() {
     let installed = update_with_bound_startup(false, 0, 0x12, true);
     let receiver = Receiver::from_installed(&installed).unwrap();
     let other = update_with_bound_startup(false, 0, 0x13, true);
@@ -711,8 +719,15 @@ fn normal_only_force_waives_family_but_not_authentication_or_missing_evidence() 
             Error::FamilyMismatch { .. }
         ))
     ));
+    // Broad family override cannot waive the loading-input owner's failure.
+    assert_eq!(
+        receiver
+            .prepare_normal_without_family_check(other.normal_transfer())
+            .unwrap_err(),
+        PreparationError::PhaseCorrection(crate::compatibility::Error::Incompatible)
+    );
     assert!(receiver
-        .prepare_normal_without_family_check(other.normal_transfer())
+        .prepare_normal_without_family_check(installed.normal_transfer())
         .is_ok());
     let mut invalid = other.normal_transfer().to_vec();
     invalid[crate::envelope::builder::NORMAL_SIGNATURE_RANGE].fill(0);
@@ -1266,9 +1281,43 @@ fn family_override_does_not_admit_unproved_startup_across_layouts() {
         .candidate
     };
     assert_ne!(candidate(&installed), candidate(&target));
-    // A family override cannot substitute an unproved startup contract. The
-    // independent phase rewrite still preserves the requested layout bytes.
+    // Both the uncorrectable layout and unproved startup remain blocked.
+    // R1A retains the layout owner's Incompatible refusal ahead of startup's
+    // UnresolvedIdentity. The independent phase rewrite preserves layout bytes.
     for (installed, target) in [(&installed, &target), (&target, &installed)] {
+        fn context(pair: &Update) -> crate::filters::Context<'_> {
+            crate::filters::Context::new(crate::compatibility::Firmware {
+                hardware: &pair.normal().info().hardware_version,
+                normal: &pair.normal().image,
+                kernel: Some(&pair.kernel().image),
+            })
+        }
+        let (a, b) = (context(installed), context(target));
+        let plan = crate::filters::runner::evaluate(
+            &a,
+            &b,
+            crate::filters::runner::Policy::FamilyOverride,
+        )
+        .unwrap();
+        for (id, error) in [
+            (
+                "persistent-parameter-layout",
+                crate::compatibility::Error::Incompatible,
+            ),
+            (
+                "startup-prerequisite",
+                crate::compatibility::Error::UnresolvedIdentity,
+            ),
+        ] {
+            let decision = plan
+                .decisions()
+                .iter()
+                .find(|decision| decision.id == id)
+                .unwrap();
+            assert_eq!(decision.blocked(), Some(error));
+            assert!(!decision.waived);
+            assert!(decision.operation().is_none());
+        }
         let receiver = Receiver::from_installed(installed).unwrap();
         for result in [
             receiver
@@ -1281,7 +1330,7 @@ fn family_override_does_not_admit_unproved_startup_across_layouts() {
             assert!(matches!(
                 result,
                 Err(PreparationError::PhaseCorrection(
-                    crate::compatibility::Error::UnresolvedIdentity
+                    crate::compatibility::Error::Incompatible
                 ))
             ));
         }

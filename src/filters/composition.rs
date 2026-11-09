@@ -252,9 +252,9 @@ mod tests {
     fn malformed_and_overlapping_integrity_fields_refuse() {
         let reversed = Range { start: 2, end: 1 };
         for fields in [
-            vec![1..1],
-            vec![0..4],
-            vec![4..5],
+            core::iter::once(1..1).collect(),
+            core::iter::once(0..4).collect(),
+            core::iter::once(4..5).collect(),
             vec![reversed],
             vec![0..2, 1..3],
             vec![0..1, 0..1],
@@ -479,11 +479,11 @@ mod tests {
         let original = [0, 0];
         let reversed = Range { start: 3, end: 2 };
         for fields in [
-            vec![2..2],
+            core::iter::once(2..2).collect(),
             vec![reversed],
             vec![1..3, 2..4],
-            vec![3..5],
-            vec![5..6],
+            core::iter::once(3..5).collect(),
+            core::iter::once(5..6).collect(),
         ] {
             refuse_extent_before_repair(
                 &original,
@@ -557,7 +557,13 @@ mod tests {
                 effect(Role::Normal, &original, &[0, 2]),
             ],
         ] {
-            for fields in [vec![], vec![0..1], vec![0..0], vec![0..3], vec![0..1, 0..1]] {
+            for fields in [
+                vec![],
+                core::iter::once(0..1).collect(),
+                core::iter::once(0..0).collect(),
+                core::iter::once(0..3).collect(),
+                vec![0..1, 0..1],
+            ] {
                 assert_eq!(
                     compose_component(Role::Normal, &original, &effects, &fields, |image| Ok(
                         image.to_vec()

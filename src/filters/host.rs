@@ -22,6 +22,10 @@ static RULES: super::Rules = super::Rules {
             domains: &[],
             text: "A detector miss is never an absent host or an invented FE94 zero; it stays Unresolved.",
         },
+        super::Policy {
+            domains: &[super::identity::Domain::H8Sat],
+            text: "FE94 bit 7 is not corrected because it follows the board's host connection (written 0xC0 by every USB-bridged external drive, 0x40 by every native-SATA drive) and the same native host bring-up also changes the ATAPI transport register FEC0 (0xC6 vs 0xC7), whose bit 0 the Kernel link-event handler drives at runtime, so a one-bit FE94 edit would not make the incoming host setup match the installed board.",
+        },
     ],
 };
 const ID: &str = "host-interface-setup";

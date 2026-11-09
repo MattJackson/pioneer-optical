@@ -107,7 +107,7 @@ function label(r){return `${r.model} · ${r.sat} · ${r.destination} · ${r.revi
 function shortName(id){return owners.find(o=>o.id===id)?.name||id;}
 function ownerName(id){return shortName(id);}
 function definitionLink(id){return '<a href="#definition-'+esc(id)+'" data-definition="'+esc(id)+'">'+esc(shortName(id))+'</a>';}
-function correctabilityBadge(o){return o.correctability==='Guarded'?'<span class="correctable-badge" title="Supported pairs only; see this filter’s definition">Correctable</span>':'';}
+function correctabilityBadge(o){return o.correctability!=='Never'?'<span class="correctable-badge" title="Supported pairs only; see this filter’s definition">Correctable</span>':'';}
 function summaryLabel(f){return f?.inspection?.label||f?.summary||findingState(f);}
 function inspectionDetails(f){const details=f?.inspection?.details;if(!details)return '';return '<ul>'+[...(Array.isArray(details)?details:[details])].map(t=>'<li>'+esc(t)+'</li>').join('')+'</ul>';}
 

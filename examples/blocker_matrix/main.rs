@@ -12,7 +12,6 @@
 //! and `<DIR>/summary.json` (per-filter classes, sole-blocker counts, blocker
 //! sets, top unresolved reasons, and any disagreement with the product plan).
 #[path = "../hardware_matrix/page.rs"]
-#[allow(dead_code)]
 mod page;
 
 use pioneer_optical::compatibility::{self, Error, Firmware};
@@ -25,6 +24,9 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+
+/// Per-filter tally: classes, blocking pairs, sole-blocker pairs, unresolved reasons.
+type Tally = (BTreeMap<String, u64>, u64, u64, BTreeMap<String, u64>);
 
 struct Held {
     component: String,
@@ -194,8 +196,8 @@ fn main() {
         .collect();
     let mut work: BTreeMap<(usize, u32, usize), usize> = BTreeMap::new();
     for &(a, b) in &pairs {
-        for k in 0..ids.len() {
-            work.entry((k, installed_key[a][k], b)).or_insert(a);
+        for (k, &key) in installed_key[a].iter().enumerate() {
+            work.entry((k, key, b)).or_insert(a);
         }
     }
     let work: Vec<((usize, u32, usize), usize)> = work.into_iter().collect();
@@ -322,8 +324,7 @@ fn main() {
     let mut tsv =
         std::io::BufWriter::new(std::fs::File::create(out.join("pairs.tsv")).expect("pairs.tsv"));
     writeln!(tsv, "installed\ttarget\tdomain\t{}", ids.join("\t")).unwrap();
-    let mut per: BTreeMap<&str, (BTreeMap<String, u64>, u64, u64, BTreeMap<String, u64>)> =
-        ids.iter().map(|id| (*id, Default::default())).collect();
+    let mut per: BTreeMap<&str, Tally> = ids.iter().map(|id| (*id, Default::default())).collect();
     let mut sets: BTreeMap<String, u64> = BTreeMap::new();
     let (mut correctable, mut definite, mut open) = (0u64, 0u64, 0u64);
     for r in &rows {
@@ -376,7 +377,7 @@ fn main() {
         .into_iter()
         .map(|(id, (classes, blocking, sole, reasons))| {
             let mut top: Vec<_> = reasons.into_iter().collect();
-            top.sort_by(|a, b| b.1.cmp(&a.1));
+            top.sort_by_key(|entry| std::cmp::Reverse(entry.1));
             top.truncate(25);
             (
                 id.to_owned(),
@@ -390,7 +391,7 @@ fn main() {
         })
         .collect();
     let mut sets: Vec<_> = sets.into_iter().collect();
-    sets.sort_by(|a, b| b.1.cmp(&a.1));
+    sets.sort_by_key(|entry| std::cmp::Reverse(entry.1));
     let summary = json!({
         "filters": ids,
         "images": held.len(),

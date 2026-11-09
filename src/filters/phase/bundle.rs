@@ -1,6 +1,6 @@
 //! Native code pattern search over stored Normal regions.
 //!
-//! [`sites`] reports the even stored-region offsets where a masked byte template
+//! `sites` reports the even stored-region offsets where a masked byte template
 //! (call targets are holes) matches through h8-asm. It is the shared primitive
 //! the native phase detectors use to locate complete output and calibration
 //! programs without defaulting any unmatched element.

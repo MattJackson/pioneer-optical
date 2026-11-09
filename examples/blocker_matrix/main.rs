@@ -30,6 +30,7 @@ type Tally = (BTreeMap<String, u64>, u64, u64, BTreeMap<String, u64>);
 
 struct Held {
     component: String,
+    model: String,
     hardware: String,
     normal: Vec<u8>,
     kernel: Option<Vec<u8>>,
@@ -111,9 +112,10 @@ fn main() {
 
     let (packages, _) = page::hoard_packages(&hoard).expect("hoard index");
     let mut held = Vec::new();
-    let (_, failures) = page::analyze_hoard(&hoard, &packages, |_, decoded, analysis| {
+    let (_, failures) = page::analyze_hoard(&hoard, &packages, |package, decoded, analysis| {
         held.push(Held {
             component: analysis.component.clone(),
+            model: package.model.clone(),
             hardware: analysis.hardware.clone(),
             normal: decoded.normal.image.clone(),
             kernel: decoded.kernel.as_ref().map(|k| k.image.clone()),
@@ -457,6 +459,96 @@ fn main() {
         serde_json::to_string_pretty(&summary).unwrap(),
     )
     .expect("summary.json");
+    // Routes for the hardware matrix page: one row per directed
+    // model + hardware pair, aggregating every revision pair inside it.
+    struct Route {
+        pairs: u64,
+        pass: u64,
+        classes: Vec<BTreeMap<String, u64>>,
+        example: Vec<Option<(String, String)>>,
+    }
+    let group = |h: &Held| format!("{} · {}", h.model, h.hardware);
+    let mut routes: BTreeMap<(String, String), Route> = BTreeMap::new();
+    for r in &rows {
+        let route = routes
+            .entry((group(&held[r.a]), group(&held[r.b])))
+            .or_insert_with(|| Route {
+                pairs: 0,
+                pass: 0,
+                classes: vec![BTreeMap::new(); ids.len()],
+                example: vec![None; ids.len()],
+            });
+        route.pairs += 1;
+        if r.classes.iter().all(|c| passes(c)) {
+            route.pass += 1;
+        }
+        for (k, id) in ids.iter().enumerate() {
+            *route.classes[k].entry(r.classes[k].clone()).or_default() += 1;
+            if r.classes[k] != "match" && route.example[k].is_none() {
+                route.example[k] = Some((
+                    page::label(id, &inspected[r.a].1[k].finding),
+                    page::label(id, &inspected[r.b].1[k].finding),
+                ));
+            }
+        }
+    }
+    let route_rows: Vec<Json> = routes
+        .into_iter()
+        .map(|((from, to), route)| {
+            let status = if route.pass == route.pairs {
+                "correctable".to_owned()
+            } else if route.pass == 0 {
+                "not correctable".to_owned()
+            } else {
+                format!(
+                    "partly correctable ({}/{} revision pairs)",
+                    route.pass, route.pairs
+                )
+            };
+            let mut steps = Vec::new();
+            let mut blocking = Vec::new();
+            for (k, owner) in registry.iter().enumerate() {
+                let classes = &route.classes[k];
+                if classes.keys().all(|c| c == "match") {
+                    continue;
+                }
+                let summary = classes
+                    .iter()
+                    .map(|(c, n)| format!("{c} {n}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let blocks = classes.keys().any(|c| !passes(c));
+                if blocks {
+                    blocking.push(owner.name().to_owned());
+                }
+                let detail = match (&route.example[k], blocks) {
+                    (Some((a, b)), true) => format!(" — {a} → {b}"),
+                    _ => String::new(),
+                };
+                steps.push(format!("{}: {summary}{detail}", owner.name()));
+            }
+            json!({
+                "from": from,
+                "to": to,
+                "hardware": format!("{:?}", Domain::from_hardware(from.rsplit(" · ").next().unwrap_or_default())),
+                "status": status,
+                "steps": steps,
+                "blocking_filters": blocking,
+                "revision_pairs": route.pairs,
+            })
+        })
+        .collect();
+    std::fs::write(
+        out.join("routes.json"),
+        serde_json::to_string(&json!({
+            "format": "pioneer-blocker-matrix-routes",
+            "version": 1,
+            "routes": route_rows,
+        }))
+        .unwrap(),
+    )
+    .expect("routes.json");
+
     println!(
         "pairs {} | pass all filters {} | blocked (definite) {} | blocked (only unresolved) {} | product disagreements {}",
         rows.len(),

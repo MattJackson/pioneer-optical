@@ -92,6 +92,31 @@ shown when present. `from`, `to`, `hardware`, `status` and `steps` (strings or
 arrays) get their own columns. Any other route fields appear under the route's
 Details. The page shows routes as supplied and does not evaluate them.
 
+## Per-filter pair verdicts (blocker_matrix)
+
+`examples/blocker_matrix` scores every registered filter independently on every
+directed same-platform pair in a hoard, so a pair blocked by one filter still
+shows what each other filter would say. Product admission is unchanged:
+`compatibility::plan` stops at the first refusing owner.
+
+```text
+cargo run --release --all-features --example blocker_matrix -- <HOARD> --out <DIR>
+cargo run --release --all-features --example hardware_matrix -- <HOARD> \
+    --out Pioneer-Hardware-Matrix.html --routes <DIR>/routes.json
+```
+
+`<DIR>` receives `pairs.tsv` (one row per directed pair, one column per
+filter), `summary.json` (per-filter classes, sole-blocker counts, blocker sets,
+unresolved reasons) and `routes.json`. The routes have one row per directed
+model + hardware pair: `status` is correctable, partly correctable (n/m revision
+pairs) or not correctable, and `steps` lists every filter that is not a plain
+match, with its verdict counts and, for refusals, an example of the two values.
+Classes are `match`, `accepted`, `correctable`, `incompatible`, `refused:<error>`,
+`missing-input` (the owner needs a paired Kernel that is not held) and
+`unresolved`. Every pair that passes all filters is also planned with
+`compatibility::plan` and its corrected file is prepared and verified with
+`prepare_file`; any failure is reported as a disagreement.
+
 ## Tests
 
 - CI: `tests/hardware_matrix_page.rs` runs the generator on a small synthetic

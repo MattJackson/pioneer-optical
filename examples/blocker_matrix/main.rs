@@ -76,6 +76,16 @@ fn reason(installed: &Assessment, target: &Assessment) -> String {
     text.chars().take(200).collect()
 }
 
+/// A final missing-input refusal: the owner needs resident/Kernel code and this
+/// image's paired Kernel is not held, so the code cannot be read. Using another
+/// revision's Kernel would be a guess; the pair is not correctable for this
+/// release because that Kernel is missing.
+fn missing_kernel(assessment: &Assessment, image: &Held) -> bool {
+    image.kernel.is_none()
+        && matches!(&assessment.finding, Finding::Unresolved(reason)
+            if reason.contains("resident") || reason.contains("ResidentCodeRequired"))
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let (mut hoard, mut out) = (None, None);
@@ -279,6 +289,13 @@ fn main() {
                             solved[&(k, installed_key[a][k], b)].clone()
                         };
                         let (x, y) = (&inspected[a].1[k], &inspected[b].1[k]);
+                        let c = if c == "unresolved"
+                            && (missing_kernel(x, &held[a]) || missing_kernel(y, &held[b]))
+                        {
+                            "missing-input".to_owned()
+                        } else {
+                            c
+                        };
                         reasons.push((!passes(&c)).then(|| reason(x, y)));
                         classes.push(c);
                     }

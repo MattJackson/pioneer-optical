@@ -3,8 +3,9 @@ use crate::startup::bank;
 use crate::startup::checks::{Checks, Error, Policy};
 
 fn distinct_cases() -> Vec<u8> {
-    // Native producer/validator fixture. Its deliberately absent discriminator
-    // implementation must never acquire a transaction certificate.
+    // Versioned capacity fixture with distinct address cases but no recognized
+    // discriminator copy, so the program digest never resolves: equal cases
+    // alone must never relate.
     bank::versioned_fixture(0xfedc_4321, [0xfffa, 0x1_fffa])
 }
 

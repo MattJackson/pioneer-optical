@@ -87,6 +87,15 @@ pub fn analyze_pair(normal: &[u8], kernel: Option<&[u8]>) -> Option<Storage> {
     legacy::state_selector(kernel, 0x400000).or_else(|| legacy::kernel_sequences(kernel))
 }
 
+/// CPU address of the capacity discriminator routine, when the versioned
+/// contract selects persistent-bank addresses by a runtime capacity query.
+/// This is the entry the capacity owner fingerprints (via h8-asm) to prove two
+/// firmwares resolve the discriminator identically. `None` when there is no
+/// versioned capacity contract (fixed or state-header storage needs no proof).
+pub(crate) fn discriminator_entry(normal: &[u8]) -> Option<u32> {
+    Some(discover(normal)?.layout(normal)?.capacity_query)
+}
+
 /// A storage transition cannot be established from the supplied components.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {

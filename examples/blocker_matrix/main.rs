@@ -295,8 +295,17 @@ fn main() {
                             solved[&(k, installed_key[a][k], b)].clone()
                         };
                         let (x, y) = (&inspected[a].1[k], &inspected[b].1[k]);
+                        let known = |f: &Assessment| {
+                            !matches!(f.finding, Finding::Unresolved(_) | Finding::Conflicting(_))
+                        };
                         let c = if c == "unresolved"
-                            && (missing_kernel(x, &held[a]) || missing_kernel(y, &held[b]))
+                            && (missing_kernel(x, &held[a])
+                                || missing_kernel(y, &held[b])
+                                // Both sides known but the owner refused as unresolved:
+                                // the plan needs a paired Kernel that is not held.
+                                || (known(x)
+                                    && known(y)
+                                    && (held[a].kernel.is_none() || held[b].kernel.is_none())))
                         {
                             "missing-input".to_owned()
                         } else {

@@ -181,6 +181,12 @@
         {
           "platforms": [],
           "text": "A detector miss is never an absent host or an invented FE94 zero; it stays Unresolved."
+        },
+        {
+          "platforms": [
+            "SAT 8xxx/9xxx"
+          ],
+          "text": "FE94 bit 7 is not corrected because it follows the board's host connection (written 0xC0 by every USB-bridged external drive, 0x40 by every native-SATA drive) and the same native host bring-up also changes the ATAPI transport register FEC0 (0xC6 vs 0xC7), whose bit 0 the Kernel link-event handler drives at runtime, so a one-bit FE94 edit would not make the incoming host setup match the installed board."
         }
       ],
       "role": "Hardware"
@@ -195,6 +201,10 @@
         {
           "platforms": [],
           "text": "Additional recognizer misses are not proof of absence and are never hashed as negative facts."
+        },
+        {
+          "platforms": [],
+          "text": "FFC5 write 0x20 versus clear bit 5 is not correctable because the clear belongs to a peripheral driver that the 0x20 firmware entirely lacks: it unmasks interrupt-controller source 0x200040 and ASIC line FFFDFF29 bit 7 for a serial-attached device's fault-report interrupt, initialized over F904/F950-F953. Matching FFC5 would mean adding or removing that driver, and held bytes do not show whether the other board carries or can do without that device. Neither FFC5 operation is a loading input; both families poll their tray switch elsewhere."
         }
       ],
       "role": "Hardware"
@@ -376,9 +386,9 @@
           "summary": "Not established"
         },
         {
-          "evidence": "Native H8 accepted startup word remains unresolved: ReaderNotRecognized. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance",
+          "evidence": "Native H8 accepted startup word remains unresolved: stored Normal code has no recognized word 0x009F comparison with a loader-flag mismatch arm (getter unresolved: ReaderNotRecognized; immediate 0x009F getter reads [] with no recognized comparison; Kernel loader-flag 0x400A1A wrappers []). A read without a comparison, or no read, is not proof of absence: a joined startup-path proof through Normal and Kernel is required. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance",
           "finding": {
-            "Unresolved": "Native H8 accepted startup word remains unresolved: ReaderNotRecognized. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance"
+            "Unresolved": "Native H8 accepted startup word remains unresolved: stored Normal code has no recognized word 0x009F comparison with a loader-flag mismatch arm (getter unresolved: ReaderNotRecognized; immediate 0x009F getter reads [] with no recognized comparison; Kernel loader-flag 0x400A1A wrappers []). A read without a comparison, or no read, is not proof of absence: a joined startup-path proof through Normal and Kernel is required. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance"
           },
           "id": "startup-prerequisite",
           "inspection": {
@@ -398,7 +408,7 @@
             "requirement": "No fixed comparison",
             "state": "Reader not recognized"
           },
-          "label": "Unresolved: Native H8 accepted startup word remains unresolved: ReaderNotRecognized. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance",
+          "label": "Unresolved: Native H8 accepted startup word remains unresolved: stored Normal code has no recognized word 0x009F comparison with a loader-flag mismatch arm (getter unresolved: ReaderNotRecognized; immediate 0x009F getter reads [] with no recognized comparison; Kernel loader-flag 0x400A1A wrappers []). A read without a comparison, or no read, is not proof of absence: a joined startup-path proof through Normal and Kernel is required. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance",
           "role": "Operational",
           "state": "Unresolved",
           "summary": "Not established"
@@ -493,9 +503,9 @@
           "summary": "Not established"
         },
         {
-          "evidence": "Native H8 accepted startup word remains unresolved: ReaderNotRecognized. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance",
+          "evidence": "Native H8 accepted startup word remains unresolved: stored Normal code has no recognized word 0x009F comparison with a loader-flag mismatch arm (getter unresolved: ReaderNotRecognized; immediate 0x009F getter reads [] with no recognized comparison; Kernel loader-flag 0x400A1A wrappers []). A read without a comparison, or no read, is not proof of absence: a joined startup-path proof through Normal and Kernel is required. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance",
           "finding": {
-            "Unresolved": "Native H8 accepted startup word remains unresolved: ReaderNotRecognized. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance"
+            "Unresolved": "Native H8 accepted startup word remains unresolved: stored Normal code has no recognized word 0x009F comparison with a loader-flag mismatch arm (getter unresolved: ReaderNotRecognized; immediate 0x009F getter reads [] with no recognized comparison; Kernel loader-flag 0x400A1A wrappers []). A read without a comparison, or no read, is not proof of absence: a joined startup-path proof through Normal and Kernel is required. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance"
           },
           "id": "startup-prerequisite",
           "inspection": {
@@ -515,7 +525,7 @@
             "requirement": "No fixed comparison",
             "state": "Reader not recognized"
           },
-          "label": "Unresolved: Native H8 accepted startup word remains unresolved: ReaderNotRecognized. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance",
+          "label": "Unresolved: Native H8 accepted startup word remains unresolved: stored Normal code has no recognized word 0x009F comparison with a loader-flag mismatch arm (getter unresolved: ReaderNotRecognized; immediate 0x009F getter reads [] with no recognized comparison; Kernel loader-flag 0x400A1A wrappers []). A read without a comparison, or no read, is not proof of absence: a joined startup-path proof through Normal and Kernel is required. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance",
           "role": "Operational",
           "state": "Unresolved",
           "summary": "Not established"

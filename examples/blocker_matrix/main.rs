@@ -33,6 +33,8 @@ struct Held {
     hardware: String,
     normal: Vec<u8>,
     kernel: Option<Vec<u8>>,
+    normal_envelope: pioneer_optical::envelope::Envelope,
+    kernel_envelope: Option<pioneer_optical::envelope::Envelope>,
 }
 impl Held {
     fn firmware(&self) -> Firmware<'_> {
@@ -113,6 +115,8 @@ fn main() {
             hardware: analysis.hardware.clone(),
             normal: decoded.normal.image.clone(),
             kernel: decoded.kernel.as_ref().map(|k| k.image.clone()),
+            normal_envelope: decoded.normal.clone(),
+            kernel_envelope: decoded.kernel.clone(),
         });
     });
     held.sort_by(|a, b| a.component.cmp(&b.component));
@@ -319,19 +323,33 @@ fn main() {
         .filter(|r| r.classes.iter().all(|c| passes(c)))
         .collect();
     let disagreements = Mutex::new(Vec::new());
+    let built = AtomicUsize::new(0);
     let next = AtomicUsize::new(0);
     std::thread::scope(|scope| {
         for _ in 0..threads {
             scope.spawn(|| loop {
                 let i = next.fetch_add(1, Ordering::Relaxed);
                 let Some(r) = clear.get(i) else { break };
-                if let Err(error) = compatibility::plan(held[r.a].firmware(), held[r.b].firmware())
-                {
-                    disagreements.lock().unwrap().push(json!({
+                // Admitted pairs must also produce a verified corrected file;
+                // a failure here would be a false allow.
+                let target = &held[r.b];
+                let outcome = compatibility::plan(held[r.a].firmware(), target.firmware())
+                    .map_err(|e| format!("plan: {e:?}"))
+                    .and_then(|plan| {
+                        plan.prepare_file(&target.normal_envelope, target.kernel_envelope.as_ref())
+                            .map_err(|e| format!("prepare: {e:?}"))
+                    });
+                match outcome {
+                    Ok(file) => {
+                        if file.is_some() {
+                            built.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    Err(error) => disagreements.lock().unwrap().push(json!({
                         "installed": held[r.a].component,
-                        "target": held[r.b].component,
-                        "product_error": format!("{error:?}"),
-                    }));
+                        "target": target.component,
+                        "product_error": error,
+                    })),
                 }
             });
         }
@@ -420,6 +438,7 @@ fn main() {
         "per_filter": per_filter,
         "blocker_sets": sets,
         "product_plan_disagreements": disagreements,
+        "admitted_pairs_with_built_correction": built.load(Ordering::Relaxed),
         "cache_sample_mismatches": ids.iter().zip(&mismatch).map(|(i, m)| (i.to_string(), json!(m))).collect::<serde_json::Map<_, _>>(),
     });
     std::fs::write(

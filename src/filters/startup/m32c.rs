@@ -193,6 +193,22 @@ fn bind(
     })
 }
 
+/// Whether any native word-ID getter form (range, old range or descriptor)
+/// occurs in `normal`, whatever its reader graph. The D9 startup word is read
+/// only through such a getter.
+pub(super) fn has_word_getter(normal: &[u8]) -> bool {
+    [
+        (RANGE_GETTER, &[(46, 3)][..]),
+        (OLD_RANGE_GETTER, &[(46, 3)][..]),
+        (DESCRIPTOR_GETTER, &[(23, 2), (47, 3), (72, 3), (81, 3)][..]),
+    ]
+    .into_iter()
+    .any(|(shape, operands)| {
+        (0..normal.len().saturating_sub(shape.len() - 1))
+            .any(|at| normal[at] == 0xec && matches(normal, at, shape, operands))
+    })
+}
+
 /// Bind the full native D9/FFFF startup gate, failing closed on missing evidence.
 pub(super) fn discover(normal: &[u8]) -> Observation<Evidence> {
     let mut found = None;

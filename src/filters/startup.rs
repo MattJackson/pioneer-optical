@@ -9,6 +9,7 @@ use alloc::{boxed::Box, format, vec};
 mod correction;
 pub(crate) mod h8_conditional;
 mod m32c;
+mod m32c_absent;
 mod scsi;
 mod v850;
 
@@ -37,7 +38,7 @@ pub static FILTER: Startup = Startup;
 
 /// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
 static RULES: super::Rules = super::Rules {
-    description: "Compares a bound startup gate or a separately proved preservation contract: unchanged H8 word 0x009F comparisons, ATA word 0x00D9, V850 Kernel identity, or SCSI checksum/header. Fixed and conditional predicates differ. No recognised comparison does not mean no requirement; reader, caller, cache, startup-path and automatic OEM writer-lifecycle evidence remain separate. Only the bounded H8 startup-gate-absent proof establishes that a target has no fixed 0x009F gate.",
+    description: "Compares a bound startup gate or a separately proved preservation contract: unchanged H8 word 0x009F comparisons, ATA word 0x00D9, V850 Kernel identity, or SCSI checksum/header. Fixed and conditional predicates differ. No recognised comparison does not mean no requirement; reader, caller, cache, startup-path and automatic OEM writer-lifecycle evidence remain separate. Only the bounded H8 and M32C startup-gate-absent proofs establish that a target has no fixed 0x009F or native 0x00D9 gate.",
     role: super::Role::Operational,
     correctability: super::Correctability::Operational,
     correction: "H8 startup comparison operands remain unchanged, with a read-only live-word prerequisite for equal known comparisons or a supported unresolved-source target-word fallback. Differing primary comparisons refuse because no complete OEM writer-lifecycle proof is bound. Separately bound non-comparison preservation and other platforms retain their independent native prerequisites.",
@@ -57,6 +58,10 @@ static RULES: super::Rules = super::Rules {
         super::Policy {
             domains: &[super::identity::Domain::Ata],
             text: "An equal 0x00D9 predicate needs no change; a different one has no approved write recipe and refuses. V850: the paired Kernel must carry the expected Kernel identity.",
+        },
+        super::Policy {
+            domains: &[super::identity::Domain::Ata],
+            text: "M32C startup gate absent (Not applicable, proof 1): the exact 16 KiB Kernel must be held with reset vector 0xFFC000 and one acceptance gate (reset-cleared RAM flag 0x3000, word sum of 0x1000..0x2000 and 0xF80010..0xFFC000, 16-byte header) whose transfer is the Normal entry; the entry prefix may hold only memory initialization before its JSR.A to main; main must reach its OS task-install anchor through data writes and direct calls only, with a direct JSR.A in the gate slot; and neither Normal nor Kernel may hold an immediate 0x00D9 index load or a native word-ID getter. Callees are not executed. A gate-absent target needs no word and no edit, whatever the installed side; a gate-absent installed side with a 0x00D9 target takes the unresolved path. Two gate-absent images match. A missing Kernel or any other shape stays unresolved.",
         },
         super::Policy {
             domains: &[super::identity::Domain::Scsi],
@@ -102,6 +107,11 @@ fn h8_absence(absence: &crate::startup::unbound::Absence) -> alloc::string::Stri
         .collect::<alloc::vec::Vec<_>>()
         .join(", ");
     format!("startup-gate-absent: no fixed word 0x009F startup comparison in Normal or the held Kernel. {basis}; bound {component:?} getter {getter:#x} (R{register} index); held-Kernel 0x009F loads [{stores}] are each the audited buffer byte store at offset 0x9F. The target never checks the word; installed persistent data is not changed")
+}
+
+/// Anchored M32C proof that the target has no native 0x00D9 startup gate.
+fn m32c_absence(a: &m32c_absent::Absence) -> alloc::string::String {
+    format!("startup-gate-absent: no native M32C word 0x00D9 startup comparison in Normal or the held Kernel. Held Kernel reset vector 0xffc000 and its unique acceptance gate at {:#x} (reset-cleared RAM flag 0x3000, word sum of 0x1000..0x2000 and 0xf80010..0xffc000, 16-byte header against {:#x}) transfer to Normal entry {:#x}; the entry prefix holds only memory initialization before JSR.A main {:#x}; main reaches its OS task-install anchor at {:#x} (task {:#x}, Kernel service {:#x}) through data writes and direct calls only, and its gate slot at {:#x} is JSR.A {:#x}, not a D9 gate; neither Normal nor the held Kernel holds an immediate 0x00D9 index load or a native word-ID getter. The target never checks the word; Kernel checksum/header acceptance is boot integrity, a separate obligation", a.kernel_gate, a.header, a.entry, a.main, a.anchor, a.task, a.create, a.slot, a.slot_target)
 }
 
 fn h8_miss(miss: &crate::startup::unbound::Miss, kernel: bool) -> alloc::string::String {
@@ -197,8 +207,24 @@ pub fn inspect(context: &Context<'_>) -> Assessment {
             (_,Observation::Known(value)) => Assessment::known(ID,Role::Operational,
                 Value::Variant(11,vec![Value::U32(value.kernel_offset as u32),Value::Bytes(value.expected.to_vec())]),
                 format!("Complete native V850 entry/comparison/rejection contract; expected Kernel bytes at +{:#x}. Paired Kernel match {:?}; entry {:?}, body {:?}, compare {:?}, literal {:?}, reject {:?}, transfer {:#x}. Missing Kernel stays a verification obligation", value.kernel_offset,value.paired_kernel_matches,value.entry,value.body,value.comparison,value.literal,value.reject,value.reject_transfer)),
-            _ => Assessment::unresolved(ID,Role::Operational,
-                "Architecture-specific startup prerequisite is unresolved. Bounded no-check entry prefixes, unrooted D9 comparisons, descriptor-dependent 009F APIs and unavailable resident startup code do not supply a numeric requirement"),
+            _ => {
+                if let Some(absence) = m32c_absent::absent(context.firmware.normal, context.firmware.kernel) {
+                    let evidence = m32c_absence(&absence);
+                    return Assessment {
+                        id: ID,
+                        role: Role::Operational,
+                        finding: Finding::NotApplicable { proof: crate::startup::unbound::GATE_ABSENT, evidence: evidence.clone() },
+                        evidence,
+                    };
+                }
+                let held = if context.firmware.kernel.is_some() {
+                    ""
+                } else {
+                    " The paired Kernel is not held, so a Kernel-dependent startup comparison or its absence cannot be established."
+                };
+                Assessment::unresolved(ID,Role::Operational,
+                    format!("Architecture-specific startup prerequisite is unresolved. Bounded no-check entry prefixes, unrooted D9 comparisons, descriptor-dependent 009F APIs and unavailable resident startup code do not supply a numeric requirement.{held}"))
+            }
         };
     }
     if context.firmware.hardware.starts_with("SCSI") {
@@ -307,25 +333,34 @@ impl Filter for Startup {
         if inspect(transition.installed) != *installed || inspect(transition.target) != *target {
             return Err(Error::ComponentMismatch);
         }
-        if transition.target.sat.is_some() {
-            // A proven-absent target gate never checks the word, whatever the
-            // installed side holds. Independent preservation certificates
-            // still bind; an installed-only absence takes the unresolved path.
-            if matches!(
-                target.finding,
+        // A proven-absent target gate never checks the word, whatever the
+        // installed side holds. Independent preservation certificates still
+        // bind; an installed-only absence takes the unresolved path.
+        let absent = |assessment: &Assessment| {
+            matches!(
+                assessment.finding,
                 Finding::NotApplicable {
                     proof: crate::startup::unbound::GATE_ABSENT,
                     ..
                 }
-            ) {
+            )
+        };
+        if transition.target.sat.is_some() {
+            if absent(target) {
                 return correction::plan_absent(transition);
             }
             return correction::plan(transition);
+        }
+        if absent(target) {
+            return Ok(None);
         }
         match &target.finding {
             Finding::Known(Value::Variant(10, _)) => {
                 // Same native D9 predicate requires no file transformation.
                 // A different predicate has no approved ATA write recipe.
+                if absent(installed) {
+                    return Err(Error::UnresolvedIdentity);
+                }
                 match self.compare(installed, target) {
                     super::Comparison::Match => Ok(None),
                     super::Comparison::Different => Err(Error::Unsupported),
@@ -636,6 +671,45 @@ mod tests {
             plan_between(&unresolved, &target),
             Err(Error::UnresolvedIdentity)
         ));
+    }
+
+    #[test]
+    fn m32c_gate_absent_target_needs_no_word_and_a_missing_kernel_stays_unresolved() {
+        let (normal, kernel) = (m32c_absent::tests::normal(), m32c_absent::tests::kernel());
+        let context = |kernel| {
+            Context::new(Firmware {
+                hardware: "ATA 0004",
+                normal: &normal,
+                kernel,
+            })
+        };
+        let target = context(Some(&kernel));
+        assert!(matches!(
+            inspect(&target).finding,
+            Finding::NotApplicable { proof: crate::startup::unbound::GATE_ABSENT, ref evidence }
+                if evidence.contains("gate slot at 0xf81388 is JSR.A 0xfbe77a")
+        ));
+        let m32c = m32c::tests::fixture(false, false, 0, 0xf40000);
+        let gated = ata(&m32c, None);
+        let unresolved = ata(&[], None);
+        for installed in [&target, &gated, &unresolved] {
+            assert!(matches!(plan_between(installed, &target), Ok(None)));
+        }
+        assert_eq!(
+            FILTER.compare(&inspect(&target), &inspect(&target)),
+            super::super::Comparison::Match
+        );
+        // A gate-absent installed side with a D9 target takes the unresolved path.
+        assert!(matches!(
+            plan_between(&target, &gated),
+            Err(Error::UnresolvedIdentity)
+        ));
+        let missing = inspect(&context(None));
+        assert!(matches!(
+            &missing.finding,
+            Finding::Unresolved(reason) if reason.contains("The paired Kernel is not held")
+        ));
+        assert!(selection(&target).unwrap().is_none());
     }
 
     #[test]

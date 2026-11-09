@@ -165,7 +165,14 @@ pub(super) fn plan_absent(
     Ok(PreservationOperation::bind(transition)?.map(|op| Box::new(op) as Box<dyn Operation>))
 }
 
-pub(super) fn plan(transition: &Transition<'_, '_>) -> Result<Option<Box<dyn Operation>>, Error> {
+/// `installed_absent` is the installed side's bounded gate-absent proof. With
+/// it, a failed read-only target-word fallback is a definite refusal: B checks
+/// a word A's firmware never maintains, it cannot be verified through a
+/// differing or non-Normal reader, and writing it is a retained-data write.
+pub(super) fn plan(
+    transition: &Transition<'_, '_>,
+    installed_absent: bool,
+) -> Result<Option<Box<dyn Operation>>, Error> {
     let installed = transition.installed.firmware;
     let target = transition.target.firmware;
     if transition.installed.sat.is_none() {
@@ -198,12 +205,19 @@ pub(super) fn plan(transition: &Transition<'_, '_>) -> Result<Option<Box<dyn Ope
             // A live read can establish the target's accepted branch without
             // guessing what the installed image requires. Keep the entire
             // target gate unchanged and require its already-stored value.
+            // Missing installed evidence stays unresolved; a proven-absent
+            // installed gate makes the same miss a definite refusal.
+            let refusal = if installed_absent {
+                Error::Incompatible
+            } else {
+                Error::UnresolvedIdentity
+            };
             let Observation::Known(reader) = layout::discover_h8_reader(installed.normal, None)
             else {
-                return Err(Error::UnresolvedIdentity);
+                return Err(refusal);
             };
             if reader.component != H8ReaderComponent::Normal || reader.layout != gate.bound.layout {
-                return Err(Error::UnresolvedIdentity);
+                return Err(refusal);
             }
             gate.bound.requirement.required
         }

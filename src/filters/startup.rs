@@ -41,15 +41,15 @@ static RULES: super::Rules = super::Rules {
     description: "Compares a bound startup gate or a separately proved preservation contract: unchanged H8 word 0x009F comparisons, ATA word 0x00D9, V850 Kernel identity, or SCSI checksum/header. Fixed and conditional predicates differ. No recognised comparison does not mean no requirement; reader, caller, cache, startup-path and automatic OEM writer-lifecycle evidence remain separate. Only the bounded H8 and M32C startup-gate-absent proofs establish that a target has no fixed 0x009F or native 0x00D9 gate.",
     role: super::Role::Operational,
     correctability: super::Correctability::Operational,
-    correction: "H8 startup comparison operands remain unchanged, with a read-only live-word prerequisite for equal known comparisons or a supported unresolved-source target-word fallback. Differing primary comparisons refuse because no complete OEM writer-lifecycle proof is bound. Separately bound non-comparison preservation and other platforms retain their independent native prerequisites.",
+    correction: "H8 startup comparison operands remain unchanged, with a read-only live-word prerequisite for equal known comparisons or a supported unresolved-source target-word fallback. Differing primary comparisons refuse because no complete OEM writer-lifecycle proof is bound. Separately bound non-comparison preservation and other platforms retain their independent native prerequisites. Only an unresolved or conflicting assessment, or a missing paired Kernel, leaves a pair unresolved; every other refusal is final and its reason is stated below.",
     policies: &[
         super::Policy {
             domains: &[super::identity::Domain::Sat1, super::identity::Domain::H8Sat],
-            text: "A bound native H8 comparison retains its exact operand and requires a read-only live word. Equal known source and target comparisons retain this prerequisite; differing primary comparisons refuse without a complete automatic OEM writer-lifecycle witness. An unresolved installed comparison can admit an unchanged bound target only with equal Normal-owned reader layouts and a read-only target-word prerequisite. Missing evidence never selects FFFF. Bound native loader-flag inventories establish scoped target-local predicate preservation through the shared verifier; bank selection and the automatic OEM parameter-writer lifecycle are not inferred. Host command, image checksum, generation marker, persistent-bank predicates and independent hardware checks retain their owners. Unknown startup code is preserved only when both Normal and Kernel are unchanged. Recognized native integrity failures and other unresolved transitions refuse. A missing Kernel-resident getter remains unresolved and cannot use the read-only fallback.",
+            text: "A bound native H8 comparison retains its exact operand and requires a read-only live word. Equal known source and target comparisons retain this prerequisite. Differing accepted values refuse as unsupported: changing B's comparison is not admitted because B's own automatic OEM writer lifecycle may later rewrite the word, and writing the stored word would be a retained-data write. A known installed comparison bound to a different reader layout refuses as incompatible, because the live word cannot be verified read-only through B's differing reader layout. An unresolved installed comparison can admit an unchanged bound target only with equal Normal-owned reader layouts and a read-only target-word prerequisite. Missing evidence never selects FFFF. Bound native loader-flag inventories establish scoped target-local predicate preservation through the shared verifier; bank selection and the automatic OEM parameter-writer lifecycle are not inferred. Host command, image checksum, generation marker, persistent-bank predicates and independent hardware checks retain their owners. Unknown startup code is preserved only when both Normal and Kernel are unchanged. Recognized native integrity failures and other unresolved transitions refuse. A missing Kernel-resident getter remains unresolved and cannot use the read-only fallback.",
         },
         super::Policy {
             domains: &[super::identity::Domain::Sat1, super::identity::Domain::H8Sat],
-            text: "Startup gate absent (Not applicable, proof 1): the exact Kernel must be held; every Kernel 0x009F load must be the audited buffer byte store; the Normal getter must be bound with no recognized 0x009F comparison; and either the audited startup function is bound by its unique handler-install anchor with a gate slot that holds no 0x009F read, or only one getter read whose R0 result the next callee overwrites, or, for SAT1 only, stored Normal neither calls nor wraps loader-flag service 0x400A1A and passes 0x009F to no getter call. A gate-absent target never checks the word, so it needs no live-word prerequisite and no edit, whatever the installed side; independent preservation certificates still bind. A gate-absent installed side with a gated target takes exactly the unresolved-installed path. Two gate-absent images match. A missing Kernel or any other shape stays unresolved.",
+            text: "Startup gate absent (Not applicable, proof 1): the exact Kernel must be held; every Kernel 0x009F load must be the audited buffer byte store; the Normal getter must be bound with no recognized 0x009F comparison; and either the audited startup function is bound by its unique handler-install anchor with a gate slot that holds no 0x009F read, or only one getter read whose R0 result the next callee overwrites, or, for SAT1 only, stored Normal neither calls nor wraps loader-flag service 0x400A1A and passes 0x009F to no getter call. A gate-absent target never checks the word, so it needs no live-word prerequisite and no edit, whatever the installed side; independent preservation certificates still bind. A gate-absent installed side with a gated target takes exactly the unresolved-installed fallback; where that fallback does not apply (no Normal-owned installed reader, or reader layouts differ) it refuses as incompatible: B checks a word that A's firmware never maintains, the word cannot be verified through a differing reader layout, and writing it would be a retained-data write. Two gate-absent images match. A missing Kernel or any other shape stays unresolved.",
         },
         super::Policy {
             domains: &[super::identity::Domain::Sat1, super::identity::Domain::H8Sat],
@@ -57,15 +57,15 @@ static RULES: super::Rules = super::Rules {
         },
         super::Policy {
             domains: &[super::identity::Domain::Ata],
-            text: "An equal 0x00D9 predicate needs no change; a different one has no approved write recipe and refuses. V850: the paired Kernel must carry the expected Kernel identity.",
+            text: "An equal 0x00D9 predicate needs no change. A different known predicate, including a V850 Kernel-identity installed side with an M32C 0x00D9 target, refuses as unsupported: no approved write recipe sets the word, and writing it would be a retained-data write. V850: the paired Kernel must carry the expected Kernel identity; a supplied Kernel without it refuses as incompatible, and a paired Kernel that is not held stays unresolved.",
         },
         super::Policy {
             domains: &[super::identity::Domain::Ata],
-            text: "M32C startup gate absent (Not applicable, proof 1): the exact 16 KiB Kernel must be held with reset vector 0xFFC000 and one acceptance gate (reset-cleared RAM flag 0x3000, word sum of 0x1000..0x2000 and 0xF80010..0xFFC000, 16-byte header) whose transfer is the Normal entry; the entry prefix may hold only memory initialization before its JSR.A to main; main must reach its OS task-install anchor through data writes and direct calls only, with a direct JSR.A in the gate slot; and neither Normal nor Kernel may hold an immediate 0x00D9 index load or a native word-ID getter. Callees are not executed. A gate-absent target needs no word and no edit, whatever the installed side; a gate-absent installed side with a 0x00D9 target takes the unresolved path. Two gate-absent images match. A missing Kernel or any other shape stays unresolved.",
+            text: "M32C startup gate absent (Not applicable, proof 1): the exact 16 KiB Kernel must be held with reset vector 0xFFC000 and one acceptance gate (reset-cleared RAM flag 0x3000, word sum of 0x1000..0x2000 and 0xF80010..0xFFC000, 16-byte header) whose transfer is the Normal entry; the entry prefix may hold only memory initialization before its JSR.A to main; main must reach its OS task-install anchor through data writes and direct calls only, with a direct JSR.A in the gate slot; and neither Normal nor Kernel may hold an immediate 0x00D9 index load or a native word-ID getter. Callees are not executed. A gate-absent target needs no word and no edit, whatever the installed side. A gate-absent installed side with a 0x00D9 target refuses as incompatible: B checks a word that A's firmware never maintains, ATA has no read-only live-word prerequisite to verify it, and writing it would be a retained-data write. Two gate-absent images match. A missing Kernel or any other shape stays unresolved.",
         },
         super::Policy {
             domains: &[super::identity::Domain::Scsi],
-            text: "The resident checksum and the matching 16-byte image-pair header must hold; otherwise the update refuses.",
+            text: "The resident checksum and the matching 16-byte image-pair header must hold; a bound gate that the target pair does not satisfy refuses as incompatible, because the resident code would reject the image.",
         },
     ],
 };
@@ -335,7 +335,8 @@ impl Filter for Startup {
         }
         // A proven-absent target gate never checks the word, whatever the
         // installed side holds. Independent preservation certificates still
-        // bind; an installed-only absence takes the unresolved path.
+        // bind. An installed-only absence takes the unresolved-installed
+        // fallback; where that fallback does not apply it refuses definitely.
         let absent = |assessment: &Assessment| {
             matches!(
                 assessment.finding,
@@ -349,7 +350,7 @@ impl Filter for Startup {
             if absent(target) {
                 return correction::plan_absent(transition);
             }
-            return correction::plan(transition);
+            return correction::plan(transition, absent(installed));
         }
         if absent(target) {
             return Ok(None);
@@ -358,8 +359,11 @@ impl Filter for Startup {
             Finding::Known(Value::Variant(10, _)) => {
                 // Same native D9 predicate requires no file transformation.
                 // A different predicate has no approved ATA write recipe.
+                // A proven gate-absent installed side never maintains 0x00D9;
+                // ATA has no read-only live-word prerequisite and writing the
+                // word is a retained-data write, so this is a definite refusal.
                 if absent(installed) {
-                    return Err(Error::UnresolvedIdentity);
+                    return Err(Error::Incompatible);
                 }
                 match self.compare(installed, target) {
                     super::Comparison::Match => Ok(None),
@@ -577,6 +581,59 @@ mod tests {
         assert!(words(&sat(&unreadable, Some(&kernel))).is_err());
     }
 
+    /// `gated()` on another Normal-owned reader layout variant.
+    fn gated_on_layout(variant: usize) -> alloc::vec::Vec<u8> {
+        let mut normal = alloc::vec![0xff; 0x8000];
+        crate::image::layout::install_test_layout_variant(&mut normal, 0x1000, variant);
+        normal[0x80..0x94].copy_from_slice(&[
+            0x79, 0, 0, 0x9f, 0x5e, 0x41, 0x10, 0, 0x79, 0x20, 0xfe, 0x24, 0x47, 6, 0xf8, 1, 0x5e,
+            0x41, 0x60, 0,
+        ]);
+        normal[0x6000..0x6006].copy_from_slice(&[0x5e, 0x40, 0x0a, 0x1a, 0x54, 0x70]);
+        normal
+    }
+
+    #[test]
+    fn gate_absent_installed_refuses_definitely_when_the_target_word_fallback_does_not_apply() {
+        use crate::startup::unbound::{tests, GATE_ABSENT};
+        let absent = tests::empty_slot_normal();
+        let kernel = tests::kernel();
+        let target = gated_on_layout(5);
+        let target = sat(&target, Some(&kernel));
+        assert!(matches!(
+            inspect(&target).finding,
+            Finding::Known(Value::Variant(1, _))
+        ));
+        let installed = sat(&absent, Some(&kernel));
+        assert!(matches!(
+            inspect(&installed).finding,
+            Finding::NotApplicable { proof: GATE_ABSENT, .. }
+        ));
+        // Both sides are known: B checks a word A never maintains, through a
+        // differing reader layout, so the refusal is final.
+        assert!(matches!(
+            plan_between(&installed, &target),
+            Err(Error::Incompatible)
+        ));
+        // The same Normal without its Kernel is genuinely unresolved.
+        let unresolved = sat(&absent, None);
+        assert!(matches!(inspect(&unresolved).finding, Finding::Unresolved(_)));
+        assert!(matches!(
+            plan_between(&unresolved, &target),
+            Err(Error::UnresolvedIdentity)
+        ));
+        // A known installed comparison on the other layout refuses the same way.
+        let known = gated();
+        assert!(matches!(
+            plan_between(&sat(&known, Some(&kernel)), &target),
+            Err(Error::Incompatible)
+        ));
+        // Equal layouts keep the read-only target-word fallback unchanged.
+        let same = gated_on_layout(0);
+        let same = sat(&same, Some(&kernel));
+        assert!(matches!(plan_between(&installed, &same), Ok(Some(op)) if !op.required_words().is_empty()));
+    }
+
     fn ata<'a>(normal: &'a [u8], kernel: Option<&'a [u8]>) -> Context<'a> {
         Context::new(Firmware {
             hardware: "ATA 0007",
@@ -699,9 +756,15 @@ mod tests {
             FILTER.compare(&inspect(&target), &inspect(&target)),
             super::super::Comparison::Match
         );
-        // A gate-absent installed side with a D9 target takes the unresolved path.
+        // A gate-absent installed side with a D9 target is a definite refusal:
+        // ATA has no read-only live-word prerequisite. Missing evidence on the
+        // installed side stays unresolved.
         assert!(matches!(
             plan_between(&target, &gated),
+            Err(Error::Incompatible)
+        ));
+        assert!(matches!(
+            plan_between(&context(None), &gated),
             Err(Error::UnresolvedIdentity)
         ));
         let missing = inspect(&context(None));

@@ -269,7 +269,7 @@
     },
     {
       "correctability": "Operational",
-      "correction": "H8 startup comparison operands remain unchanged, with a read-only live-word prerequisite for equal known comparisons or a supported unresolved-source target-word fallback. Differing primary comparisons refuse because no complete OEM writer-lifecycle proof is bound. Separately bound non-comparison preservation and other platforms retain their independent native prerequisites.",
+      "correction": "H8 startup comparison operands remain unchanged, with a read-only live-word prerequisite for equal known comparisons or a supported unresolved-source target-word fallback. Differing primary comparisons refuse because no complete OEM writer-lifecycle proof is bound. Separately bound non-comparison preservation and other platforms retain their independent native prerequisites. Only an unresolved or conflicting assessment, or a missing paired Kernel, leaves a pair unresolved; every other refusal is final and its reason is stated below.",
       "description": "Compares a bound startup gate or a separately proved preservation contract: unchanged H8 word 0x009F comparisons, ATA word 0x00D9, V850 Kernel identity, or SCSI checksum/header. Fixed and conditional predicates differ. No recognised comparison does not mean no requirement; reader, caller, cache, startup-path and automatic OEM writer-lifecycle evidence remain separate. Only the bounded H8 and M32C startup-gate-absent proofs establish that a target has no fixed 0x009F or native 0x00D9 gate.",
       "id": "startup-prerequisite",
       "name": "Startup",
@@ -279,14 +279,14 @@
             "SAT 1xxx",
             "SAT 8xxx/9xxx"
           ],
-          "text": "A bound native H8 comparison retains its exact operand and requires a read-only live word. Equal known source and target comparisons retain this prerequisite; differing primary comparisons refuse without a complete automatic OEM writer-lifecycle witness. An unresolved installed comparison can admit an unchanged bound target only with equal Normal-owned reader layouts and a read-only target-word prerequisite. Missing evidence never selects FFFF. Bound native loader-flag inventories establish scoped target-local predicate preservation through the shared verifier; bank selection and the automatic OEM parameter-writer lifecycle are not inferred. Host command, image checksum, generation marker, persistent-bank predicates and independent hardware checks retain their owners. Unknown startup code is preserved only when both Normal and Kernel are unchanged. Recognized native integrity failures and other unresolved transitions refuse. A missing Kernel-resident getter remains unresolved and cannot use the read-only fallback."
+          "text": "A bound native H8 comparison retains its exact operand and requires a read-only live word. Equal known source and target comparisons retain this prerequisite. Differing accepted values refuse as unsupported: changing B's comparison is not admitted because B's own automatic OEM writer lifecycle may later rewrite the word, and writing the stored word would be a retained-data write. A known installed comparison bound to a different reader layout refuses as incompatible, because the live word cannot be verified read-only through B's differing reader layout. An unresolved installed comparison can admit an unchanged bound target only with equal Normal-owned reader layouts and a read-only target-word prerequisite. Missing evidence never selects FFFF. Bound native loader-flag inventories establish scoped target-local predicate preservation through the shared verifier; bank selection and the automatic OEM parameter-writer lifecycle are not inferred. Host command, image checksum, generation marker, persistent-bank predicates and independent hardware checks retain their owners. Unknown startup code is preserved only when both Normal and Kernel are unchanged. Recognized native integrity failures and other unresolved transitions refuse. A missing Kernel-resident getter remains unresolved and cannot use the read-only fallback."
         },
         {
           "platforms": [
             "SAT 1xxx",
             "SAT 8xxx/9xxx"
           ],
-          "text": "Startup gate absent (Not applicable, proof 1): the exact Kernel must be held; every Kernel 0x009F load must be the audited buffer byte store; the Normal getter must be bound with no recognized 0x009F comparison; and either the audited startup function is bound by its unique handler-install anchor with a gate slot that holds no 0x009F read, or only one getter read whose R0 result the next callee overwrites, or, for SAT1 only, stored Normal neither calls nor wraps loader-flag service 0x400A1A and passes 0x009F to no getter call. A gate-absent target never checks the word, so it needs no live-word prerequisite and no edit, whatever the installed side; independent preservation certificates still bind. A gate-absent installed side with a gated target takes exactly the unresolved-installed path. Two gate-absent images match. A missing Kernel or any other shape stays unresolved."
+          "text": "Startup gate absent (Not applicable, proof 1): the exact Kernel must be held; every Kernel 0x009F load must be the audited buffer byte store; the Normal getter must be bound with no recognized 0x009F comparison; and either the audited startup function is bound by its unique handler-install anchor with a gate slot that holds no 0x009F read, or only one getter read whose R0 result the next callee overwrites, or, for SAT1 only, stored Normal neither calls nor wraps loader-flag service 0x400A1A and passes 0x009F to no getter call. A gate-absent target never checks the word, so it needs no live-word prerequisite and no edit, whatever the installed side; independent preservation certificates still bind. A gate-absent installed side with a gated target takes exactly the unresolved-installed fallback; where that fallback does not apply (no Normal-owned installed reader, or reader layouts differ) it refuses as incompatible: B checks a word that A's firmware never maintains, the word cannot be verified through a differing reader layout, and writing it would be a retained-data write. Two gate-absent images match. A missing Kernel or any other shape stays unresolved."
         },
         {
           "platforms": [
@@ -299,19 +299,19 @@
           "platforms": [
             "ATA"
           ],
-          "text": "An equal 0x00D9 predicate needs no change; a different one has no approved write recipe and refuses. V850: the paired Kernel must carry the expected Kernel identity."
+          "text": "An equal 0x00D9 predicate needs no change. A different known predicate, including a V850 Kernel-identity installed side with an M32C 0x00D9 target, refuses as unsupported: no approved write recipe sets the word, and writing it would be a retained-data write. V850: the paired Kernel must carry the expected Kernel identity; a supplied Kernel without it refuses as incompatible, and a paired Kernel that is not held stays unresolved."
         },
         {
           "platforms": [
             "ATA"
           ],
-          "text": "M32C startup gate absent (Not applicable, proof 1): the exact 16 KiB Kernel must be held with reset vector 0xFFC000 and one acceptance gate (reset-cleared RAM flag 0x3000, word sum of 0x1000..0x2000 and 0xF80010..0xFFC000, 16-byte header) whose transfer is the Normal entry; the entry prefix may hold only memory initialization before its JSR.A to main; main must reach its OS task-install anchor through data writes and direct calls only, with a direct JSR.A in the gate slot; and neither Normal nor Kernel may hold an immediate 0x00D9 index load or a native word-ID getter. Callees are not executed. A gate-absent target needs no word and no edit, whatever the installed side; a gate-absent installed side with a 0x00D9 target takes the unresolved path. Two gate-absent images match. A missing Kernel or any other shape stays unresolved."
+          "text": "M32C startup gate absent (Not applicable, proof 1): the exact 16 KiB Kernel must be held with reset vector 0xFFC000 and one acceptance gate (reset-cleared RAM flag 0x3000, word sum of 0x1000..0x2000 and 0xF80010..0xFFC000, 16-byte header) whose transfer is the Normal entry; the entry prefix may hold only memory initialization before its JSR.A to main; main must reach its OS task-install anchor through data writes and direct calls only, with a direct JSR.A in the gate slot; and neither Normal nor Kernel may hold an immediate 0x00D9 index load or a native word-ID getter. Callees are not executed. A gate-absent target needs no word and no edit, whatever the installed side. A gate-absent installed side with a 0x00D9 target refuses as incompatible: B checks a word that A's firmware never maintains, ATA has no read-only live-word prerequisite to verify it, and writing it would be a retained-data write. Two gate-absent images match. A missing Kernel or any other shape stays unresolved."
         },
         {
           "platforms": [
             "SCSI"
           ],
-          "text": "The resident checksum and the matching 16-byte image-pair header must hold; otherwise the update refuses."
+          "text": "The resident checksum and the matching 16-byte image-pair header must hold; a bound gate that the target pair does not satisfy refuses as incompatible, because the resident code would reject the image."
         }
       ],
       "role": "Operational"

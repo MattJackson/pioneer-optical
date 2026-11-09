@@ -101,6 +101,11 @@ path = "examples/hardware_matrix/main.rs"
 required-features = ["envelope"]
 
 [[example]]
+name = "blocker_matrix"
+path = "examples/blocker_matrix/main.rs"
+required-features = ["envelope"]
+
+[[example]]
 name = "hardware_probe"
 required-features = ["analysis"]
 

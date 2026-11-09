@@ -85,7 +85,9 @@ fn reason(installed: &Assessment, target: &Assessment) -> String {
 fn missing_kernel(assessment: &Assessment, image: &Held) -> bool {
     image.kernel.is_none()
         && matches!(&assessment.finding, Finding::Unresolved(reason)
-            if reason.contains("resident") || reason.contains("ResidentCodeRequired"))
+            if reason.contains("resident")
+                || reason.contains("ResidentCodeRequired")
+                || reason.contains("paired Kernel is not held"))
 }
 
 fn main() {

@@ -154,6 +154,17 @@ impl Gate {
     }
 }
 
+/// Target with a proven-absent fixed startup gate: no word prerequisite and no
+/// edit. An independently bound preservation certificate is still enforced.
+pub(super) fn plan_absent(
+    transition: &Transition<'_, '_>,
+) -> Result<Option<Box<dyn Operation>>, Error> {
+    if transition.installed.sat.is_none() {
+        return Err(Error::UnresolvedIdentity);
+    }
+    Ok(PreservationOperation::bind(transition)?.map(|op| Box::new(op) as Box<dyn Operation>))
+}
+
 pub(super) fn plan(transition: &Transition<'_, '_>) -> Result<Option<Box<dyn Operation>>, Error> {
     let installed = transition.installed.firmware;
     let target = transition.target.firmware;

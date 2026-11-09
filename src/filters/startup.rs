@@ -37,7 +37,7 @@ pub static FILTER: Startup = Startup;
 
 /// Rules declared beside this owner's enforcing code; rendered verbatim by reports.
 static RULES: super::Rules = super::Rules {
-    description: "Compares a bound startup gate or a separately proved preservation contract: unchanged H8 word 0x009F comparisons, ATA word 0x00D9, V850 Kernel identity, or SCSI checksum/header. Fixed and conditional predicates differ. No recognised comparison does not mean no requirement; reader, caller, cache, startup-path and automatic OEM writer-lifecycle evidence remain separate.",
+    description: "Compares a bound startup gate or a separately proved preservation contract: unchanged H8 word 0x009F comparisons, ATA word 0x00D9, V850 Kernel identity, or SCSI checksum/header. Fixed and conditional predicates differ. No recognised comparison does not mean no requirement; reader, caller, cache, startup-path and automatic OEM writer-lifecycle evidence remain separate. Only the bounded H8 startup-gate-absent proof establishes that a target has no fixed 0x009F gate.",
     role: super::Role::Operational,
     correctability: super::Correctability::Operational,
     correction: "H8 startup comparison operands remain unchanged, with a read-only live-word prerequisite for equal known comparisons or a supported unresolved-source target-word fallback. Differing primary comparisons refuse because no complete OEM writer-lifecycle proof is bound. Separately bound non-comparison preservation and other platforms retain their independent native prerequisites.",
@@ -45,6 +45,10 @@ static RULES: super::Rules = super::Rules {
         super::Policy {
             domains: &[super::identity::Domain::Sat1, super::identity::Domain::H8Sat],
             text: "A bound native H8 comparison retains its exact operand and requires a read-only live word. Equal known source and target comparisons retain this prerequisite; differing primary comparisons refuse without a complete automatic OEM writer-lifecycle witness. An unresolved installed comparison can admit an unchanged bound target only with equal Normal-owned reader layouts and a read-only target-word prerequisite. Missing evidence never selects FFFF. Bound native loader-flag inventories establish scoped target-local predicate preservation through the shared verifier; bank selection and the automatic OEM parameter-writer lifecycle are not inferred. Host command, image checksum, generation marker, persistent-bank predicates and independent hardware checks retain their owners. Unknown startup code is preserved only when both Normal and Kernel are unchanged. Recognized native integrity failures and other unresolved transitions refuse. A missing Kernel-resident getter remains unresolved and cannot use the read-only fallback.",
+        },
+        super::Policy {
+            domains: &[super::identity::Domain::Sat1, super::identity::Domain::H8Sat],
+            text: "Startup gate absent (Not applicable, proof 1): the exact Kernel must be held; every Kernel 0x009F load must be the audited buffer byte store; the Normal getter must be bound with no recognized 0x009F comparison; and either the audited startup function is bound by its unique handler-install anchor with a gate slot that holds no 0x009F read, or only one getter read whose R0 result the next callee overwrites, or, for SAT1 only, stored Normal neither calls nor wraps loader-flag service 0x400A1A and passes 0x009F to no getter call. A gate-absent target never checks the word, so it needs no live-word prerequisite and no edit, whatever the installed side; independent preservation certificates still bind. A gate-absent installed side with a gated target takes exactly the unresolved-installed path. Two gate-absent images match. A missing Kernel or any other shape stays unresolved.",
         },
         super::Policy {
             domains: &[super::identity::Domain::Sat1, super::identity::Domain::H8Sat],
@@ -77,7 +81,30 @@ fn h8_value(
 }
 /// Exact reason for a stored-code miss of the native 0x009F comparison. A
 /// bare read or no read is not an absence proof; the joined startup path stays open.
-fn h8_miss(miss: &crate::startup::unbound::Miss) -> alloc::string::String {
+fn h8_absence(absence: &crate::startup::unbound::Absence) -> alloc::string::String {
+    use crate::startup::unbound::Basis;
+    let (component, getter, register) = absence.getter;
+    let basis = match absence.basis {
+        Basis::EmptySlot => format!(
+            "audited startup function bound by its unique handler-install anchor at {:#x}; its gate slot holds no 0x009F read and no stored getter call passes 0x009F",
+            absence.anchor.unwrap_or_default()
+        ),
+        Basis::DeadRead { at, word } => format!(
+            "audited startup function bound by its unique handler-install anchor at {:#x}; its gate slot holds only a getter read of word {word:#06x} at {at:#x}, whose R0 result the next callee overwrites before use, with no comparison or loader-flag arm; no other stored getter call passes 0x009F",
+            absence.anchor.unwrap_or_default()
+        ),
+        Basis::NoLoaderFlagService => "stored Normal neither calls nor wraps Kernel loader-flag service 0x400A1A and no stored getter call passes 0x009F".into(),
+    };
+    let stores = absence
+        .kernel_stores
+        .iter()
+        .map(|a| format!("{a:#x}"))
+        .collect::<alloc::vec::Vec<_>>()
+        .join(", ");
+    format!("startup-gate-absent: no fixed word 0x009F startup comparison in Normal or the held Kernel. {basis}; bound {component:?} getter {getter:#x} (R{register} index); held-Kernel 0x009F loads [{stores}] are each the audited buffer byte store at offset 0x9F. The target never checks the word; installed persistent data is not changed")
+}
+
+fn h8_miss(miss: &crate::startup::unbound::Miss, kernel: bool) -> alloc::string::String {
     use crate::startup::unbound::Getter;
     let getter = match miss.getter {
         Getter::Bound(component, entry, register) => {
@@ -101,7 +128,12 @@ fn h8_miss(miss: &crate::startup::unbound::Miss) -> alloc::string::String {
             .collect::<alloc::vec::Vec<_>>()
             .join(", ")
     };
-    format!("Native H8 accepted startup word remains unresolved: stored Normal code has no recognized word 0x009F comparison with a loader-flag mismatch arm ({getter}; immediate 0x009F getter reads [{}] with no recognized comparison; Kernel loader-flag 0x400A1A wrappers [{}]{other}). A read without a comparison, or no read, is not proof of absence: a joined startup-path proof through Normal and Kernel is required. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance", list(&miss.reads), list(&miss.loader_flag_wrappers))
+    let held = if kernel {
+        ""
+    } else {
+        " The paired Kernel is not held, so absence in the Kernel startup path cannot be established."
+    };
+    format!("Native H8 accepted startup word remains unresolved: stored Normal code has no recognized word 0x009F comparison with a loader-flag mismatch arm ({getter}; immediate 0x009F getter reads [{}] with no recognized comparison; Kernel loader-flag 0x400A1A wrappers [{}]{other}). A read without a comparison, or no read, is not proof of absence: a joined startup-path proof through Normal and Kernel is required.{held} A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance", list(&miss.reads), list(&miss.loader_flag_wrappers))
 }
 
 fn scsi_value(value: &scsi::Evidence) -> Value {
@@ -135,11 +167,22 @@ pub fn inspect(context: &Context<'_>) -> Assessment {
                 Assessment::known(ID, Role::Operational, value, evidence)
             }
             Observation::Conflicting => Assessment::conflicting(ID, Role::Operational, "Native H8 startup comparisons conflict"),
-            Observation::Unresolved(reason) => Assessment::unresolved(ID, Role::Operational,
+            Observation::Unresolved(reason) => {
+                if let Some(absence) = crate::startup::unbound::absent(context.firmware.normal, context.firmware.kernel, super::identity::Domain::from_hardware(context.firmware.hardware) == Some(super::identity::Domain::Sat1)) {
+                    let evidence = h8_absence(&absence);
+                    return Assessment {
+                        id: ID,
+                        role: Role::Operational,
+                        finding: Finding::NotApplicable { proof: crate::startup::unbound::GATE_ABSENT, evidence: evidence.clone() },
+                        evidence,
+                    };
+                }
+                Assessment::unresolved(ID, Role::Operational,
                 match crate::startup::unbound::inspect(context.firmware.normal, context.firmware.kernel) {
-                    Some(miss) => h8_miss(&miss),
+                    Some(miss) => h8_miss(&miss, context.firmware.kernel.is_some()),
                     None => format!("Native H8 accepted startup word remains unresolved: {reason:?}. A scoped missing fixed comparison is not a native FFFF requirement; neutral startup selection has separate provenance"),
-                }),
+                })
+            }
         };
     }
     if context.firmware.hardware.starts_with("ATA ") {
@@ -265,6 +308,18 @@ impl Filter for Startup {
             return Err(Error::ComponentMismatch);
         }
         if transition.target.sat.is_some() {
+            // A proven-absent target gate never checks the word, whatever the
+            // installed side holds. Independent preservation certificates
+            // still bind; an installed-only absence takes the unresolved path.
+            if matches!(
+                target.finding,
+                Finding::NotApplicable {
+                    proof: crate::startup::unbound::GATE_ABSENT,
+                    ..
+                }
+            ) {
+                return correction::plan_absent(transition);
+            }
             return correction::plan(transition);
         }
         match &target.finding {
@@ -416,6 +471,77 @@ mod tests {
             &inspect(target),
         )
     }
+    fn sat<'a>(normal: &'a [u8], kernel: Option<&'a [u8]>) -> Context<'a> {
+        Context::new(Firmware {
+            hardware: "SAT 8000",
+            normal,
+            kernel,
+        })
+    }
+
+    fn gated() -> alloc::vec::Vec<u8> {
+        let mut normal = alloc::vec![0xff; 0x4000];
+        crate::image::layout::install_test_layout(&mut normal, 0x1000);
+        normal[0x80..0x94].copy_from_slice(&[
+            0x79, 0, 0, 0x9f, 0x5e, 0x41, 0x10, 0, 0x79, 0x20, 0xfe, 0x24, 0x47, 6, 0xf8, 1, 0x5e,
+            0x41, 0x18, 0,
+        ]);
+        normal[0x1800..0x1806].copy_from_slice(&[0x5e, 0x40, 0x0a, 0x1a, 0x54, 0x70]);
+        normal
+    }
+
+    #[test]
+    fn gate_absent_target_needs_no_word_whatever_the_installed_side() {
+        use crate::startup::unbound::{tests, GATE_ABSENT};
+        let absent = tests::empty_slot_normal();
+        let kernel = tests::kernel();
+        let target = sat(&absent, Some(&kernel));
+        assert!(matches!(
+            inspect(&target).finding,
+            Finding::NotApplicable { proof: GATE_ABSENT, .. }
+        ));
+        let gated = gated();
+        let unresolved = alloc::vec![0xffu8; 0x4000];
+        for installed in [&gated, &unresolved, &absent] {
+            let installed = sat(installed, Some(&kernel));
+            assert!(matches!(plan_between(&installed, &target), Ok(None)));
+        }
+        // Both gate-absent: equal proofs match.
+        assert_eq!(
+            FILTER.compare(&inspect(&target), &inspect(&target)),
+            super::super::Comparison::Match
+        );
+        // Without the held Kernel the same Normal stays unresolved.
+        assert!(matches!(
+            inspect(&sat(&absent, None)).finding,
+            Finding::Unresolved(_)
+        ));
+    }
+
+    #[test]
+    fn gate_absent_installed_routes_exactly_like_unresolved_installed() {
+        use crate::startup::unbound::tests;
+        let absent = tests::empty_slot_normal();
+        let kernel = tests::kernel();
+        let gated = gated();
+        let target = sat(&gated, Some(&kernel));
+        assert!(matches!(
+            inspect(&target).finding,
+            Finding::Known(Value::Variant(1, _))
+        ));
+        // Same Normal-owned layout, unresolved (no Kernel held) vs gate-absent.
+        let words = |installed: &Context<'_>| {
+            plan_between(installed, &target).map(|op| op.map(|op| op.required_words()))
+        };
+        let from_absent = words(&sat(&absent, Some(&kernel)));
+        let from_unresolved = words(&sat(&absent, None));
+        assert!(matches!(&from_absent, Ok(Some(w)) if !w.is_empty()));
+        assert_eq!(from_absent, from_unresolved);
+        // An installed side without a Normal reader refuses on both paths.
+        let unreadable = alloc::vec![0xffu8; 0x4000];
+        assert!(words(&sat(&unreadable, Some(&kernel))).is_err());
+    }
+
     fn ata<'a>(normal: &'a [u8], kernel: Option<&'a [u8]>) -> Context<'a> {
         Context::new(Firmware {
             hardware: "ATA 0007",

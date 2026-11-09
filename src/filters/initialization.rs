@@ -9,6 +9,7 @@ use alloc::{format, vec, vec::Vec};
 
 mod m32c;
 mod m7900;
+mod v850;
 
 /// Startup initialization filter. Correction is unsupported until the complete
 /// native initialization transformation and its consumers are established.
@@ -88,6 +89,23 @@ fn m32c_value(operations: &[m32c::Op]) -> Value {
         )],
     )
 }
+fn v850_term(pin: v850::Pin) -> Value {
+    // The native arrival and confirmation consumers wait for bit == 0.
+    Value::Variant(
+        1,
+        vec![Value::U32(pin.address), Value::U8(pin.bit), Value::Bool(false)],
+    )
+}
+fn v850_value(predicates: &v850::Predicates) -> Value {
+    // Ordered closed/open roles, each a conjunction of physical terms.
+    Value::Variant(
+        6,
+        vec![
+            Value::Sequence(vec![v850_term(predicates.closed.pin)]),
+            Value::Sequence(vec![v850_term(predicates.opened.pin)]),
+        ],
+    )
+}
 fn legacy_program(normal: &[u8], start: usize) -> Option<Vec<u8>> {
     use h8_asm::{isa::decode_insn, Mode, Target};
     let mut at = start;
@@ -159,16 +177,37 @@ pub fn inspect(context: &Context<'_>) -> Assessment {
             Observation::Unresolved(crate::image::layout::Unresolved::ReaderNotRecognized)
         };
         let m79 = m7900::discover(context.firmware.normal);
-        return match (m32, m79) {
-            (Observation::Known(_), Observation::Known(_)) | (Observation::Conflicting, _) | (_, Observation::Conflicting) => {
-                Assessment::conflicting(ID, Role::Hardware, "Independent architecture initialization contracts disagree")
-            }
-            (Observation::Known(program), _) => Assessment::known(ID, Role::Hardware, m32c_value(&program.operations),
+        let (v85, diagnostics) = if hardware.starts_with("ATA ") {
+            v850::bus(context.firmware.normal)
+        } else {
+            (Observation::Unresolved(crate::image::layout::Unresolved::ReaderNotRecognized), false)
+        };
+        let known = [
+            matches!(m32, Observation::Known(_)),
+            matches!(m79, Observation::Known(_)),
+            matches!(v85, Observation::Known(_)),
+        ];
+        let conflicting = [
+            matches!(m32, Observation::Conflicting),
+            matches!(m79, Observation::Conflicting),
+            matches!(v85, Observation::Conflicting),
+        ];
+        if known.iter().filter(|&&k| k).count() > 1 || conflicting.contains(&true) {
+            return Assessment::conflicting(ID, Role::Hardware, "Independent architecture initialization contracts disagree");
+        }
+        return match (m32, m79, v85) {
+            (Observation::Known(program), _, _) => Assessment::known(ID, Role::Hardware, m32c_value(&program.operations),
                 format!("Complete observed M32C native initialization block Normal+{:#x} ({} bytes); ordered register writes and update masks retained. Later reset/resident behavior is a separate obligation", program.offset, program.bytes)),
-            (_, Observation::Known(program)) => Assessment::known(ID, Role::Hardware,
+            (_, Observation::Known(program), _) => Assessment::known(ID, Role::Hardware,
                 Value::Variant(5, vec![Value::Sequence(program.writes.iter().map(|&(address,value)|
                     Value::Variant(1, vec![Value::U16(address),Value::U8(value)])).collect())]),
                 format!("Complete bounded M7900 CPU I/O initialization block {:?}; exact resident acceptance is a separate prerequisite", program.source_span)),
+            (_, _, Observation::Known(p)) => Assessment::known(ID, Role::Hardware, v850_value(&p),
+                format!("Complete V850 loading-arrival predicates bound by the native [LOADIN]/[LOADOUT] state machines (bus-decoded Normal): closed waits for {:#010x}.b{} == 0 (arrival test Normal+{:#x}, confirmation reread Normal+{:#x}); open waits for {:#010x}.b{} == 0 (arrival Normal+{:#x}, confirmation Normal+{:#x}). One physical input per role; code offsets, RAM slots and state numbers are evidence only. Settle timings, timeouts, motor outputs and the V850 initialization program are not part of this value",
+                    p.closed.pin.address, p.closed.pin.bit, p.closed.arrival, p.closed.confirmation,
+                    p.opened.pin.address, p.opened.pin.bit, p.opened.arrival, p.opened.confirmation)),
+            (_, _, Observation::Unresolved(reason)) if diagnostics => Assessment::unresolved(ID, Role::Hardware, format!(
+                "V850 [LOADIN]/[LOADOUT] state machines are present but carry no recognized motor-arrival test with a same-pin confirmation reread ({reason:?}). Their tray inputs are not a bound closed/open predicate pair; an architecture tag or the unexamined V850 initialization program is not a known value")),
             _ => Assessment::unresolved(ID, Role::Hardware,
                 "No complete supported native initialization block is bound. An architecture tag, an external initializer address or an unexamined V850 initialization program is not a known initialization value"),
         };
@@ -329,6 +368,43 @@ mod tests {
             inspect(&context("ATA 0005", &both)).finding,
             Finding::Conflicting(_)
         ));
+    }
+    #[test]
+    fn v850_loading_arrival_predicates_are_the_ata_value() {
+        use super::super::Finding;
+        let native = v850::tests::fixture();
+        let stored = crate::image::layout::encode_v850_bus(&native).unwrap();
+        let term = |address, bit| {
+            Value::Variant(
+                1,
+                vec![Value::U32(address), Value::U8(bit), Value::Bool(false)],
+            )
+        };
+        let expected = Value::Variant(
+            6,
+            vec![
+                Value::Sequence(vec![term(0xffff_f413, 6)]),
+                Value::Sequence(vec![term(0xffff_f412, 1)]),
+            ],
+        );
+        assert_eq!(
+            inspect(&context("ATA 0009", &stored)).finding,
+            Finding::Known(expected)
+        );
+        // Only the ATA interface carries the V850 contract.
+        assert!(matches!(
+            inspect(&context("SCSI0001", &stored)).finding,
+            Finding::Unresolved(_)
+        ));
+        // Diagnostics without a bound arrival/confirmation pair stay unresolved
+        // and name the gap.
+        let mut gap = native.clone();
+        gap[0x11b0] ^= 1;
+        let gap = crate::image::layout::encode_v850_bus(&gap).unwrap();
+        let Finding::Unresolved(reason) = inspect(&context("ATA 0064", &gap)).finding else {
+            panic!();
+        };
+        assert!(reason.contains("[LOADIN]/[LOADOUT]"));
     }
     #[test]
     fn physical_levels_encodings_and_roles_are_not_projected_away() {

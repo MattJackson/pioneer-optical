@@ -24,6 +24,7 @@ pub mod native_flow;
 pub mod preservation;
 mod sink_boundaries;
 mod sink_boundary_shapes;
+mod sink_declarations;
 #[cfg(all(test, feature = "envelope"))]
 pub(crate) mod sink_fixture;
 /// Native rejection sink ownership and independently owned predicates.

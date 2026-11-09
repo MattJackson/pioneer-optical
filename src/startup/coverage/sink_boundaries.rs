@@ -1,4 +1,4 @@
-//! Exact instruction ownership for the BDR-211M R1 false literal.
+//! Paired instruction ownership for the existing R1 and connected declarations.
 //!
 //! This only establishes byte boundaries in a complete native owner chain.
 //! Calls permit ownership continuation; no callee return, termination, computed
@@ -31,10 +31,10 @@ pub(crate) enum BoundaryFailure {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct OwnedBody {
-    instructions: Vec<Range<usize>>,
-    supporting_spans: Vec<Range<usize>>,
-    root_edges: Vec<(usize, usize)>,
+pub(super) struct OwnedBody {
+    pub(super) instructions: Vec<Range<usize>>,
+    pub(super) supporting_spans: Vec<Range<usize>>,
+    pub(super) root_edges: Vec<(usize, usize)>,
 }
 
 /// Fields are private: only the complete paired native binder grants exclusions.
@@ -42,6 +42,8 @@ struct OwnedBody {
 pub(crate) struct BoundaryCertificate {
     bodies: Vec<OwnedBody>,
     forbidden_instruction_entries: Vec<u32>,
+    crossings: Vec<usize>,
+    kernel_len: Option<usize>,
 }
 
 impl BoundaryCertificate {
@@ -55,18 +57,14 @@ impl BoundaryCertificate {
     /// Recheck the entire actual final Kernel with its own address base.
     pub(crate) fn accepts_kernel(&self, kernel: &[u8]) -> bool {
         !kernel.is_empty()
+            && self.kernel_len.map_or(true, |len| kernel.len() == len)
             && interior_entry(kernel, 0, KERNEL_BASE, &self.forbidden_instruction_entries).is_none()
     }
 
-    /// Only the supplied four-byte literal crosses these two proved MOV.Bs.
-    /// Full immediates, other operands and unowned data retain their references.
+    /// Only actual zero-prefixed four-byte crossings of complete instructions.
+    /// The legacy R1 declaration retains its original single-window scope.
     pub(crate) fn is_cross_instruction_literal(&self, at: usize, len: usize) -> bool {
-        at == 0xdc430
-            && len == 4
-            && self.bodies.iter().any(|body| {
-                body.instructions.contains(&(0xdc42e..0xdc432))
-                    && body.instructions.contains(&(0xdc432..0xdc436))
-            })
+        len == 4 && self.crossings.binary_search(&at).is_ok()
     }
 }
 
@@ -130,8 +128,21 @@ fn interior_entry(
     base: u32,
     forbidden: &[u32],
 ) -> Option<(usize, u32)> {
+    interior_entry_outside(bytes, start, base, forbidden, &[])
+}
+
+fn interior_entry_outside(
+    bytes: &[u8],
+    start: usize,
+    base: u32,
+    forbidden: &[u32],
+    owned: &[Range<usize>],
+) -> Option<(usize, u32)> {
     for local in (start & 1..bytes.len()).step_by(2) {
         let at = start + local;
+        if owned.iter().any(|span| span.contains(&at)) {
+            continue;
+        }
         let b = &bytes[local..];
         let next = |len: u32, delta: i32| {
             base.checked_add(u32::try_from(at).ok()?)?
@@ -158,7 +169,7 @@ fn interior_entry(
 /// Match the entire fixed native chain in stored Normal bytes and prove that
 /// neither Normal nor the supplied paired Kernel references body interiors.
 /// Authentication and association of these component bytes belong to the caller.
-pub(crate) fn bind(normal: &[u8], kernel: &[u8]) -> Result<BoundaryCertificate, BoundaryFailure> {
+fn bind_r1(normal: &[u8], kernel: &[u8]) -> Result<BoundaryCertificate, BoundaryFailure> {
     if kernel.is_empty() {
         return Err(BoundaryFailure::MissingKernel);
     }
@@ -249,9 +260,141 @@ pub(crate) fn bind(normal: &[u8], kernel: &[u8]) -> Result<BoundaryCertificate, 
             root_edges
         }],
         forbidden_instruction_entries,
+        crossings: alloc::vec![0xdc430],
+        kernel_len: None,
     })
+}
+
+/// A full immediate ends within its instruction and never passes this test.
+pub(super) fn crosses(instructions: &[Range<usize>], at: usize, len: usize) -> bool {
+    len == 4
+        && at.checked_add(len).is_some_and(|end| {
+            instructions.windows(2).any(|p| {
+                p[0].start < at
+                    && at < p[0].end
+                    && p[0].end < end
+                    && p[0].end == p[1].start
+                    && end <= p[1].end
+            })
+        })
+}
+
+fn declared_certificate(
+    normal: &[u8],
+    kernel: &[u8],
+    bodies: Vec<OwnedBody>,
+) -> Result<BoundaryCertificate, BoundaryFailure> {
+    let mut forbidden = Vec::new();
+    let mut crossings = Vec::new();
+    let mut owned = Vec::new();
+    for body in &bodies {
+        let first = body.instructions.first().ok_or(BoundaryFailure::Decode)?;
+        let end = body.instructions.last().ok_or(BoundaryFailure::Decode)?.end;
+        owned.push(first.start..end);
+        for at in (first.start..end).step_by(2) {
+            if !body.instructions.iter().any(|i| i.start == at) {
+                forbidden
+                    .push(NORMAL_BASE + u32::try_from(at).map_err(|_| BoundaryFailure::Decode)?);
+            }
+            if normal.get(at) == Some(&0) && crosses(&body.instructions, at, 4) {
+                crossings.push(at);
+            }
+        }
+    }
+    forbidden.sort_unstable();
+    forbidden.dedup();
+    crossings.sort_unstable();
+    crossings.dedup();
+    for body in &bodies {
+        for instruction in &body.instructions {
+            let d = decode_insn(
+                normal
+                    .get(instruction.clone())
+                    .ok_or(BoundaryFailure::Decode)?,
+                Target::H8S2000,
+                Mode::Advanced,
+            )
+            .map_err(|_| BoundaryFailure::Decode)?;
+            for operand in d.insn.operands {
+                let target = match operand {
+                    Operand::Immediate { value, bits: 32 }
+                    | Operand::Address(Ea::Absolute { value, .. }) => Some(value),
+                    Operand::Address(Ea::PcRelative { value, .. }) => NORMAL_BASE
+                        .checked_add(
+                            u32::try_from(instruction.end).map_err(|_| BoundaryFailure::Decode)?,
+                        )
+                        .and_then(|pc| pc.checked_add_signed(value)),
+                    _ => None,
+                };
+                if let Some(target) = target.filter(|t| forbidden.binary_search(t).is_ok()) {
+                    return Err(BoundaryFailure::InteriorEntry {
+                        kernel: false,
+                        at: instruction.start,
+                        target,
+                    });
+                }
+            }
+        }
+    }
+    let regions = crate::image::regions(normal).ok_or(BoundaryFailure::StoredRegions)?;
+    for bytes in regions.stored {
+        let start = bytes.as_ptr() as usize - normal.as_ptr() as usize;
+        if let Some((at, target)) =
+            interior_entry_outside(bytes, start, NORMAL_BASE, &forbidden, &owned)
+        {
+            return Err(BoundaryFailure::InteriorEntry {
+                kernel: false,
+                at,
+                target,
+            });
+        }
+    }
+    if let Some((at, target)) = interior_entry(kernel, 0, KERNEL_BASE, &forbidden) {
+        return Err(BoundaryFailure::InteriorEntry {
+            kernel: true,
+            at,
+            target,
+        });
+    }
+    Ok(BoundaryCertificate {
+        bodies,
+        forbidden_instruction_entries: forbidden,
+        crossings,
+        kernel_len: Some(kernel.len()),
+    })
+}
+
+/// Keep R1 first. Only an actual current ClosedEntries zero-literal diagnostic
+/// seeds the new declaration search; its result is still only byte ownership.
+pub(crate) fn bind(normal: &[u8], kernel: &[u8]) -> Result<BoundaryCertificate, BoundaryFailure> {
+    let failure = match bind_r1(normal, kernel) {
+        Ok(certificate) => return Ok(certificate),
+        Err(failure) => failure,
+    };
+    if kernel.is_empty() {
+        return Err(failure);
+    }
+    let Err(super::sinks::Failure::UnclassifiedAddressReference {
+        stage: super::sinks::Stage::ClosedEntries,
+        at,
+        ..
+    }) = super::sinks::diagnose(normal)
+    else {
+        return Err(failure);
+    };
+    if normal.get(at) != Some(&0) || normal.get(at..at.saturating_add(4)).is_none() {
+        return Err(failure);
+    }
+    let Some(bodies) = super::sink_declarations::bind(normal, kernel, at) else {
+        return Err(failure);
+    };
+    declared_certificate(normal, kernel, bodies)
 }
 
 #[cfg(test)]
 #[path = "sink_boundary_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "sink_declaration_tests.rs"]
+mod declaration_tests;

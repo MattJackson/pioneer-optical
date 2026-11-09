@@ -40,9 +40,9 @@
 //! must not be written, erased, migrated, reformatted, or temporarily replaced.
 //! Ordinary OEM persistence must retain its semantics; observing an initializer
 //! does not authorize invoking it as a conversion step or broadening its trigger.
-//! The current operation API emits Normal only, with Kernel as immutable input
-//! authority. A future Kernel edit requires component-aware preparation and
-//! verification; it cannot be returned through a Normal byte vector.
+//! Complete-pair preparation requires explicit component integrity and pair
+//! verification for Kernel effects. Legacy Normal-only entry points refuse
+//! Kernel changes; pair plumbing alone adds no native Kernel correction.
 //! See `Filter::plan` and the shared runner for the enforcing pair decisions.
 
 use crate::compatibility::{Error, Firmware};
@@ -347,7 +347,27 @@ pub struct Preparation<'a> {
     pub kernel: Option<&'a crate::envelope::Envelope>,
 }
 
-/// A native integrity contract shared by independent Normal effects.
+/// Optional decoded component effects against the original preparation.
+/// `None` preserves the original component; it never removes a Kernel.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ComponentOutputs {
+    /// Replacement decoded Normal bytes, if this operation emits an effect.
+    pub normal: Option<Vec<u8>>,
+    /// Replacement decoded Kernel bytes, if this operation emits an effect.
+    pub kernel: Option<Vec<u8>>,
+}
+
+/// Complete final decoded components after runner verification.
+/// These bytes are not authenticated envelopes or transfer authorization.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedComponents {
+    /// Complete final decoded Normal bytes.
+    pub normal: Vec<u8>,
+    /// Complete final decoded Kernel bytes, preserving original presence.
+    pub kernel: Option<Vec<u8>>,
+}
+
+/// A native integrity contract shared by independent effects of one component.
 /// The owner supplies the checksum coordinates and established repair routine;
 /// the coordinator combines non-checksum edits and calls repair once.
 #[derive(Clone, Debug)]
@@ -423,6 +443,13 @@ pub trait Operation: core::fmt::Debug + Send + Sync {
     fn filter_id(&self) -> &'static str;
     /// Prepare corrected decoded Normal bytes under exact component/codec guards.
     fn prepare(&self, context: &Preparation<'_>) -> Result<Option<Vec<u8>>, Error>;
+    /// Prepare decoded effects against the same immutable original pair.
+    fn prepare_components(&self, context: &Preparation<'_>) -> Result<ComponentOutputs, Error> {
+        Ok(ComponentOutputs {
+            normal: self.prepare(context)?,
+            kernel: None,
+        })
+    }
     /// Device words that must already have these values before any transfer.
     /// This is a read-only condition, never authorization to change a word.
     fn required_words(&self) -> Vec<prerequisites::Word> {
@@ -433,6 +460,13 @@ pub trait Operation: core::fmt::Debug + Send + Sync {
     fn integrity(&self) -> Option<Integrity> {
         None
     }
+    /// Native integrity for effects of the selected decoded component.
+    fn component_integrity(&self, component: crate::Role) -> Option<Integrity> {
+        match component {
+            crate::Role::Normal => self.integrity(),
+            crate::Role::Kernel => None,
+        }
+    }
     /// Compatibility metadata for existing callers. New owners can use the
     /// generic registered-filter description without adding a central variant.
     fn description(&self) -> Option<crate::compatibility::Correction> {
@@ -440,6 +474,19 @@ pub trait Operation: core::fmt::Debug + Send + Sync {
     }
     /// Verify the owner-specific postcondition after shared composition.
     fn verify(&self, context: &Preparation<'_>, normal: &[u8]) -> Result<(), Error>;
+    /// Verify the actual final pair. Legacy owners certify an unchanged Kernel.
+    fn verify_components(
+        &self,
+        context: &Preparation<'_>,
+        final_pair: Firmware<'_>,
+    ) -> Result<(), Error> {
+        if final_pair.hardware != context.target.hardware
+            || final_pair.kernel != context.target.kernel
+        {
+            return Err(Error::VerificationFailed);
+        }
+        self.verify(context, final_pair.normal)
+    }
 }
 
 /// Recognition and matching owner. Adding a filter requires its implementation
@@ -528,6 +575,8 @@ register_filters!(
     phase,
     startup
 );
+
+mod composition;
 
 /// Canonical identity derived automatically from the complete registry.
 pub mod identity;

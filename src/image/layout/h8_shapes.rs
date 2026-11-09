@@ -1,5 +1,5 @@
 // Generated from audited native instruction shapes; no model names or image hashes.
-use super::h8::{Edge, Graph, Shape};
+use super::h8::{Edge, Graph, RecordRole, Shape};
 pub(super) const SHAPES: &[Shape] = &[
     Shape {
         bytes: &[
@@ -862,9 +862,58 @@ pub(super) const SHAPES: &[Shape] = &[
         masks: &[(30, 4, 2), (74, 4, 1), (89, 3, 0)],
     },
 ];
+// Semantic record roles of the five complete modern selected-bank grammars.
+// Their existing resolver/RecordBytes/RegionBytes shapes bind all domain,
+// payload and allocation literals; coordinates are read from the bound body.
+const MODERN_RECORD_ROLES: &[RecordRole] = &[
+    RecordRole {
+        first: 0,
+        last: 159,
+        coordinate_operand: 2,
+        record_bytes: 320,
+        allocation_bytes: 6440,
+    },
+    RecordRole {
+        first: 160,
+        last: 175,
+        coordinate_operand: 42,
+        record_bytes: 32,
+        allocation_bytes: 850,
+    },
+    RecordRole {
+        first: 176,
+        last: 399,
+        coordinate_operand: 26,
+        record_bytes: 448,
+        allocation_bytes: 9000,
+    },
+    RecordRole {
+        first: 400,
+        last: 415,
+        coordinate_operand: 18,
+        record_bytes: 32,
+        allocation_bytes: 510,
+    },
+    RecordRole {
+        first: 416,
+        last: 416,
+        coordinate_operand: 50,
+        record_bytes: 2,
+        allocation_bytes: 50,
+    },
+    RecordRole {
+        first: 528,
+        last: 655,
+        coordinate_operand: 64,
+        record_bytes: 256,
+        allocation_bytes: 5160,
+    },
+];
+
 pub(super) const GRAPHS: &[Graph] = &[
     Graph {
         nodes: &[0, 1, 2, 3, 4, 5, 6],
+        record_roles: None,
         primary: &[(1, 642), (3, 8), (4, 8)],
         edges: &[
             Edge {
@@ -1020,6 +1069,7 @@ pub(super) const GRAPHS: &[Graph] = &[
     },
     Graph {
         nodes: &[7, 8, 9, 10, 11, 5, 6],
+        record_roles: None,
         primary: &[(1, 640), (3, 8), (4, 8)],
         edges: &[
             Edge {
@@ -1161,6 +1211,7 @@ pub(super) const GRAPHS: &[Graph] = &[
     },
     Graph {
         nodes: &[0, 8, 2, 10, 11, 5, 6],
+        record_roles: None,
         primary: &[(1, 640), (3, 8), (4, 8)],
         edges: &[
             Edge {
@@ -1302,6 +1353,7 @@ pub(super) const GRAPHS: &[Graph] = &[
     },
     Graph {
         nodes: &[12, 13, 14, 15, 16, 5, 17, 18, 19],
+        record_roles: Some(MODERN_RECORD_ROLES),
         primary: &[(1, 90), (3, 2), (4, 2)],
         edges: &[
             Edge {
@@ -1387,6 +1439,7 @@ pub(super) const GRAPHS: &[Graph] = &[
     },
     Graph {
         nodes: &[12, 13, 14, 15, 20, 5, 17, 18, 19],
+        record_roles: Some(MODERN_RECORD_ROLES),
         primary: &[(1, 90), (3, 2), (4, 2)],
         edges: &[
             Edge {
@@ -1472,6 +1525,7 @@ pub(super) const GRAPHS: &[Graph] = &[
     },
     Graph {
         nodes: &[12, 21, 14, 22, 23, 5, 17, 18, 24],
+        record_roles: Some(MODERN_RECORD_ROLES),
         primary: &[(1, 90), (3, 2), (4, 2)],
         edges: &[
             Edge {
@@ -1557,6 +1611,7 @@ pub(super) const GRAPHS: &[Graph] = &[
     },
     Graph {
         nodes: &[12, 21, 14, 22, 25, 5, 17, 18, 24],
+        record_roles: Some(MODERN_RECORD_ROLES),
         primary: &[(1, 90), (3, 2), (4, 2)],
         edges: &[
             Edge {
@@ -1642,6 +1697,7 @@ pub(super) const GRAPHS: &[Graph] = &[
     },
     Graph {
         nodes: &[7, 26, 9, 27, 28, 5, 6],
+        record_roles: None,
         primary: &[(1, 648), (3, 8), (4, 8)],
         edges: &[
             Edge {
@@ -1783,6 +1839,7 @@ pub(super) const GRAPHS: &[Graph] = &[
     },
     Graph {
         nodes: &[12, 29, 14, 22, 30, 5, 17, 18, 24],
+        record_roles: Some(MODERN_RECORD_ROLES),
         primary: &[(1, 92), (3, 2), (4, 2)],
         edges: &[
             Edge {
@@ -1882,6 +1939,7 @@ pub(super) const GRAPHS: &[Graph] = &[
     },
     Graph {
         nodes: &[31, 32, 33, 34, 35, 36, 37, 18, 38],
+        record_roles: None,
         primary: &[(1, 144), (3, 2), (4, 2)],
         edges: &[
             Edge {

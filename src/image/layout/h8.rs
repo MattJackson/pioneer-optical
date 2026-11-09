@@ -49,6 +49,15 @@ pub(super) struct Edge {
     pub kind: u8,
 }
 
+/// Record semantics supplied only by explicitly qualified complete grammars.
+pub(super) struct RecordRole {
+    pub first: u16,
+    pub last: u16,
+    pub coordinate_operand: usize,
+    pub record_bytes: u32,
+    pub allocation_bytes: u32,
+}
+
 pub(super) struct Graph {
     pub nodes: &'static [usize],
     pub edges: &'static [Edge],
@@ -57,6 +66,7 @@ pub(super) struct Graph {
     pub primary: &'static [(usize, usize)],
     pub address: u32,
     pub count: u16,
+    pub record_roles: Option<&'static [RecordRole]>,
 }
 
 fn destination(body: &[u8], at: usize, edge: &Edge, base: u32) -> Option<usize> {
@@ -187,6 +197,65 @@ fn binding_locations(graph: &Graph, body: &[u8], root: usize, base: u32) -> Opti
     })
 }
 
+fn bound_layout(graph: &Graph, binding: &Binding, body: &[u8]) -> Option<ParameterLayout> {
+    if let Some(roles) = graph.record_roles {
+        // These grammars bind RecordBytes as their fourth complete function.
+        let record_bytes = *binding.locations.get(3)?;
+        let mut regions = Vec::with_capacity(roles.len());
+        let mut domains = Vec::with_capacity(roles.len());
+        for role in roles {
+            let at = record_bytes.checked_add(role.coordinate_operand)?;
+            let address = u32::from_be_bytes(body.get(at..at.checked_add(4)?)?.try_into().ok()?);
+            let count = role
+                .allocation_bytes
+                .checked_div(role.record_bytes.checked_add(2)?)?;
+            let record_count = u16::try_from(count).ok()?;
+            let header_bytes = record_count.checked_mul(2)?;
+            let region = regions.len();
+            regions.push(RecordRegion {
+                address,
+                basis: AddressBasis::SelectedBank,
+                allocation_bytes: Some(role.allocation_bytes),
+                record_bytes: role.record_bytes,
+                record_count,
+                header_bytes,
+                header_test: HeaderTest::ByteFf,
+            });
+            domains.push(LogicalDomain {
+                first: role.first,
+                last: role.last,
+                region,
+            });
+        }
+        return Some(ParameterLayout::FlashRecords {
+            regions,
+            encoding: WordEncoding::LittleEndian,
+            domains,
+        });
+    }
+    Some(ParameterLayout::FlashRecords {
+        regions: vec![RecordRegion {
+            address: binding.primary_address,
+            basis: if graph.address < 0x10000 {
+                AddressBasis::SelectedBank
+            } else {
+                AddressBasis::Absolute
+            },
+            allocation_bytes: None,
+            record_bytes: 320,
+            record_count: graph.count,
+            header_bytes: 2 * graph.count,
+            header_test: HeaderTest::ByteFf,
+        }],
+        encoding: WordEncoding::LittleEndian,
+        domains: vec![LogicalDomain {
+            first: 0,
+            last: 159,
+            region: 0,
+        }],
+    })
+}
+
 #[cfg(test)]
 fn bind(graph: &Graph, body: &[u8], root: usize, base: u32) -> bool {
     binding_locations(graph, body, root, base).is_some()
@@ -235,26 +304,8 @@ fn reader(body: &[u8], cpu_base: u32) -> Observation<(u32, ParameterLayout)> {
             let Some(binding) = binding_locations(graph, body, at, cpu_base) else {
                 continue;
             };
-            let layout = ParameterLayout::FlashRecords {
-                regions: vec![RecordRegion {
-                    address: binding.primary_address,
-                    basis: if graph.address < 0x10000 {
-                        AddressBasis::SelectedBank
-                    } else {
-                        AddressBasis::Absolute
-                    },
-                    allocation_bytes: None,
-                    record_bytes: 320,
-                    record_count: graph.count,
-                    header_bytes: 2 * graph.count,
-                    header_test: HeaderTest::ByteFf,
-                }],
-                encoding: WordEncoding::LittleEndian,
-                domains: vec![LogicalDomain {
-                    first: 0,
-                    last: 159,
-                    region: 0,
-                }],
+            let Some(layout) = bound_layout(graph, &binding, body) else {
+                return Observation::Unresolved(Unresolved::TruncatedEvidence);
             };
             if matched.as_ref().is_some_and(|old| old != &layout) {
                 return Observation::Conflicting;
@@ -693,6 +744,245 @@ pub(crate) mod tests {
                     );
                 }
             }
+        }
+    }
+    fn modern_graphs() -> [&'static Graph; 5] {
+        [&GRAPHS[3], &GRAPHS[4], &GRAPHS[5], &GRAPHS[6], &GRAPHS[8]]
+    }
+
+    fn modern_layout(graph: &Graph) -> ParameterLayout {
+        let addresses = if graph.address == 0x5984 {
+            [0x5984, 0x4000, 0x820c, 0xa534, 0x4352, 0xa932]
+        } else {
+            [0x9984, 0x8000, 0xc20c, 0xe534, 0x8352, 0xe932]
+        };
+        let rows = [
+            (0x000, 0x09f, 320, 6440, 20, 40),
+            (0x0a0, 0x0af, 32, 850, 25, 50),
+            (0x0b0, 0x18f, 448, 9000, 20, 40),
+            (0x190, 0x19f, 32, 510, 15, 30),
+            (0x1a0, 0x1a0, 2, 50, 12, 24),
+            (0x210, 0x28f, 256, 5160, 20, 40),
+        ];
+        let regions = rows
+            .iter()
+            .zip(addresses)
+            .map(
+                |(&(_, _, record_bytes, allocation, record_count, header_bytes), address)| {
+                    RecordRegion {
+                        address,
+                        basis: AddressBasis::SelectedBank,
+                        allocation_bytes: Some(allocation),
+                        record_bytes,
+                        record_count,
+                        header_bytes,
+                        header_test: HeaderTest::ByteFf,
+                    }
+                },
+            )
+            .collect();
+        let domains = rows
+            .iter()
+            .enumerate()
+            .map(|(region, &(first, last, _, _, _, _))| LogicalDomain {
+                first,
+                last,
+                region,
+            })
+            .collect();
+        ParameterLayout::FlashRecords {
+            regions,
+            domains,
+            encoding: WordEncoding::LittleEndian,
+        }
+    }
+
+    #[test]
+    fn complete_modern_readers_expose_six_regions_and_545_words() {
+        for graph in modern_graphs() {
+            let (body, _) = fixture(graph);
+            let Observation::Known(layout) = discover_h8_component(&body, BASE) else {
+                panic!("complete modern reader was not recognized")
+            };
+            assert_eq!(layout, modern_layout(graph));
+            let ParameterLayout::FlashRecords {
+                regions, domains, ..
+            } = &layout
+            else {
+                unreachable!()
+            };
+            assert_eq!(regions.len(), 6);
+            assert_eq!(
+                domains
+                    .iter()
+                    .map(|domain| usize::from(domain.last - domain.first + 1))
+                    .sum::<usize>(),
+                545
+            );
+            assert_eq!(
+                regions
+                    .iter()
+                    .map(|region| region.record_bytes)
+                    .sum::<u32>(),
+                1090
+            );
+            assert!(
+                matches!(discover_h8(&body, None), Observation::Known(actual) if actual == layout)
+            );
+            let Observation::Known(evidence) = discover_h8_reader(&body, None) else {
+                panic!("complete evidence missing")
+            };
+            assert_eq!(evidence.layout, layout);
+            assert_eq!(evidence.functions.len(), 9);
+            for (function, &shape) in evidence.functions.iter().zip(graph.nodes) {
+                assert_eq!(function.bytes, SHAPES[shape].bytes.len());
+            }
+        }
+    }
+
+    #[test]
+    fn modern_schema_survives_code_and_mapper_slot_relocation() {
+        for graph in modern_graphs() {
+            for (start, stride) in [(0x100, 0x1000), (0x800, 0x200)] {
+                let (mut body, locations) = fixture_at(graph, start, stride);
+                for (index, &(offset, _, _)) in SHAPES[graph.nodes[8]]
+                    .masks
+                    .iter()
+                    .filter(|(_, _, kind)| *kind == 2)
+                    .enumerate()
+                {
+                    let at = locations[8] + offset;
+                    body[at..at + 4].copy_from_slice(&(0x4300u32 + 4 * index as u32).to_be_bytes());
+                }
+                assert!(
+                    matches!(discover_h8_component(&body, BASE), Observation::Known(actual) if actual == modern_layout(graph))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn agreed_primary_operands_relocate_only_region_zero() {
+        for graph in modern_graphs() {
+            let (mut body, locations) = fixture(graph);
+            let address = if graph.address == 0x5984 {
+                0x9984u32
+            } else {
+                0x5984u32
+            };
+            let mut expected = modern_layout(graph);
+            let ParameterLayout::FlashRecords { regions, .. } = &mut expected else {
+                unreachable!()
+            };
+            regions[0].address = address;
+            for &(node, offset) in graph.primary {
+                let at = locations[node] + offset;
+                body[at..at + 4].copy_from_slice(&address.to_be_bytes());
+            }
+            assert!(
+                matches!(discover_h8_component(&body, BASE), Observation::Known(actual) if actual == expected)
+            );
+            let (mut disagree, locations) = fixture(graph);
+            let (node, offset) = graph.primary[0];
+            let at = locations[node] + offset;
+            disagree[at..at + 4].copy_from_slice(&address.to_be_bytes());
+            assert!(!matches!(
+                discover_h8_component(&disagree, BASE),
+                Observation::Known(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn modern_domain_coordinate_geometry_header_and_graph_mutations_refuse() {
+        for graph in modern_graphs() {
+            let (body, locations) = fixture(graph);
+            let domain = SHAPES[graph.nodes[1]]
+                .bytes
+                .windows(4)
+                .position(|w| w == [0x79, 0x25, 0, 0xa0])
+                .unwrap()
+                + 3;
+            let edge = graph
+                .edges
+                .iter()
+                .find(|edge| edge.from == 0 && edge.to == 1)
+                .unwrap();
+            for (node, offset) in [(1, domain), (3, 21), (3, 13), (4, 13), (5, 0)] {
+                let mut changed = body.clone();
+                changed[locations[node] + offset] ^= 1;
+                assert!(
+                    !matches!(discover_h8_component(&changed, BASE), Observation::Known(_)),
+                    "accepted role {node} byte {offset}"
+                );
+            }
+            let mut changed = body.clone();
+            let at = locations[edge.from] + edge.offset + 1;
+            changed[at..at + 3].copy_from_slice(&[0x40, 0, 0]);
+            assert!(!matches!(
+                discover_h8_component(&changed, BASE),
+                Observation::Known(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn every_modern_region_selects_native_records_within_its_allocation() {
+        for graph in modern_graphs() {
+            let (body, _) = fixture(graph);
+            let Observation::Known(ParameterLayout::FlashRecords { regions, .. }) =
+                discover_h8_component(&body, BASE)
+            else {
+                panic!("reader missing")
+            };
+            for region in &regions {
+                assert_eq!(region.selected_record(&[]), None);
+                for empty in 0..=region.record_count {
+                    let mut header = vec![0; usize::from(region.header_bytes)];
+                    if empty < region.record_count {
+                        header[usize::from(empty) * 2] = 0xff;
+                    }
+                    let selected = region.selected_record(&header).unwrap();
+                    assert_eq!(selected, empty.saturating_sub(1));
+                    let end = u32::from(region.header_bytes)
+                        + u32::from(selected + 1) * region.record_bytes;
+                    assert!(end <= region.allocation_bytes.unwrap());
+                    assert_eq!(region.selected_record(&header[..header.len() - 1]), None);
+                }
+            }
+            let scalar = &regions[4];
+            assert_eq!(
+                scalar.allocation_bytes.unwrap()
+                    - (scalar.record_bytes * u32::from(scalar.record_count)
+                        + u32::from(scalar.header_bytes)),
+                2
+            );
+        }
+    }
+
+    #[test]
+    fn nonmodern_grammars_keep_primary_only_representation() {
+        for graph in [&GRAPHS[0], &GRAPHS[1], &GRAPHS[2], &GRAPHS[7], &GRAPHS[9]] {
+            let (body, _) = fixture(graph);
+            let Observation::Known(ParameterLayout::FlashRecords {
+                regions, domains, ..
+            }) = discover_h8_component(&body, BASE)
+            else {
+                panic!("nonmodern reader missing")
+            };
+            assert_eq!(regions.len(), 1);
+            assert_eq!(regions[0].address, graph.address);
+            assert_eq!(regions[0].allocation_bytes, None);
+            assert_eq!(regions[0].record_bytes, 320);
+            assert_eq!(regions[0].record_count, graph.count);
+            assert_eq!(
+                domains,
+                vec![LogicalDomain {
+                    first: 0,
+                    last: 159,
+                    region: 0
+                }]
+            );
         }
     }
 }

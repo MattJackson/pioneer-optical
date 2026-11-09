@@ -1,18 +1,18 @@
-//! Generic owner decisions and atomic composition of verified Normal effects.
+//! Generic owner decisions and atomic composition of verified decoded pairs.
 use super::{
-    Assessment, Comparison, Context, Filter, Finding, Integrity, Operation, Preparation, Role,
-    Transition,
+    Assessment, Comparison, Context, Filter, Finding, Integrity, Operation, Preparation,
+    PreparedComponents, Role, Transition,
 };
 use crate::compatibility::{Error, Firmware};
-use alloc::{boxed::Box, collections::BTreeSet, vec, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeSet, vec::Vec};
 
 /// Admission policy for the independent hardware-family gate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Policy {
     /// Every required owner must establish a compatible native transition.
     Strict,
-    /// Record explicit hardware-family overrides while retaining operational
-    /// requirements and every selected correction's application/verification.
+    /// Bypass only the broad domain gate. Every native owner decision,
+    /// prerequisite and selected correction proof remains mandatory.
     FamilyOverride,
 }
 
@@ -27,7 +27,8 @@ pub struct Decision {
     pub target: Assessment,
     /// Actual native comparison; an override never converts this into Match.
     pub comparison: Comparison,
-    /// Explicit family waiver, independent of correction capability.
+    /// Retained for compatibility. Evaluation never waives an owner failure
+    /// and always sets this field to `false`.
     pub waived: bool,
     operation: Option<Box<dyn Operation>>,
     blocked: Option<Error>,
@@ -78,7 +79,7 @@ impl Plan<'_> {
         super::prerequisites::collect(self.operations())
     }
 
-    /// Refuse any unwaived owner failure before preparing files or device I/O.
+    /// Refuse every owner failure before preparing files or device I/O.
     pub fn admit(&self) -> Result<(), Error> {
         if self.policy == Policy::Strict {
             match self.domain_comparison {
@@ -124,44 +125,95 @@ impl Plan<'_> {
         true
     }
 
-    /// Apply operations against their immutable original input, merge disjoint
-    /// native edits, repair their common integrity contract once and verify all
-    /// owners. Unknown integrity or overlapping effects refuse composition.
+    /// Prepare Normal bytes through complete-pair verification.
+    /// A Kernel effect cannot be represented by this legacy return type.
     pub fn prepare(&self, context: &Preparation<'_>) -> Result<Option<Vec<u8>>, Error> {
         self.prepare_with(context, super::filters())
     }
 
-    /// The same atomic path for an explicitly supplied registry.
+    /// The checked Normal-only path for an explicitly supplied registry.
     pub fn prepare_with(
         &self,
         context: &Preparation<'_>,
         registry: &[&dyn Filter],
     ) -> Result<Option<Vec<u8>>, Error> {
+        match self.prepare_components_with(context, registry)? {
+            Some(pair) if pair.kernel.as_deref() != self.target.kernel => Err(Error::Unsupported),
+            Some(pair) => Ok(Some(pair.normal)),
+            None => Ok(None),
+        }
+    }
+
+    /// Compose same-length effects and verify the complete final decoded pair.
+    /// This does not authenticate envelopes or authorize device transfer.
+    pub fn prepare_components(
+        &self,
+        context: &Preparation<'_>,
+    ) -> Result<Option<PreparedComponents>, Error> {
+        self.prepare_components_with(context, super::filters())
+    }
+
+    /// Complete-pair preparation for an explicitly supplied owner registry.
+    pub fn prepare_components_with(
+        &self,
+        context: &Preparation<'_>,
+        registry: &[&dyn Filter],
+    ) -> Result<Option<PreparedComponents>, Error> {
         self.admit()?;
         if !self.matches_components(context) {
             return Err(Error::ComponentMismatch);
         }
         self.check_registry(registry)?;
-        let mut outputs = Vec::new();
+        let mut normal_outputs = Vec::new();
+        let mut kernel_outputs = Vec::new();
         for operation in self.operations() {
-            if let Some(image) = operation.prepare(context)? {
+            let outputs = operation.prepare_components(context)?;
+            if let Some(image) = outputs.normal {
                 if image.len() != self.target.normal.len() {
                     return Err(Error::Representation);
                 }
-                outputs.push((image, operation.integrity()));
+                normal_outputs.push((image, operation.component_integrity(crate::Role::Normal)));
+            }
+            if let Some(image) = outputs.kernel {
+                let original = self.target.kernel.ok_or(Error::ComponentMismatch)?;
+                if image.len() != original.len() {
+                    return Err(Error::Representation);
+                }
+                kernel_outputs.push((image, operation.component_integrity(crate::Role::Kernel)));
             }
         }
-        let prepared = match outputs.len() {
-            0 => None,
-            1 if outputs[0].1.is_none() => Some(outputs.pop().expect("one output").0),
-            _ => Some(compose(context, outputs)?),
+        let normal = match normal_outputs.len() {
+            0 => self.target.normal.to_vec(),
+            1 if normal_outputs[0].1.is_none() => normal_outputs.pop().expect("one output").0,
+            _ => compose(
+                context,
+                crate::Role::Normal,
+                self.target.normal,
+                normal_outputs,
+            )?,
         };
-        self.verify_with(
+        let kernel = match self.target.kernel {
+            Some(original) if !kernel_outputs.is_empty() => Some(compose(
+                context,
+                crate::Role::Kernel,
+                original,
+                kernel_outputs,
+            )?),
+            original => original.map(<[u8]>::to_vec),
+        };
+        let prepared = PreparedComponents { normal, kernel };
+        self.verify_components_with(
             context,
-            prepared.as_deref().unwrap_or(self.target.normal),
+            Firmware {
+                hardware: self.target.hardware,
+                normal: &prepared.normal,
+                kernel: prepared.kernel.as_deref(),
+            },
             registry,
         )?;
-        Ok(prepared.filter(|image| image != self.target.normal))
+        Ok((prepared.normal != self.target.normal
+            || prepared.kernel.as_deref() != self.target.kernel)
+            .then_some(prepared))
     }
 
     /// Verify every selected postcondition and every untouched native contract.
@@ -177,16 +229,43 @@ impl Plan<'_> {
         normal: &[u8],
         registry: &[&dyn Filter],
     ) -> Result<(), Error> {
+        self.verify_components_with(
+            context,
+            Firmware {
+                hardware: self.target.hardware,
+                normal,
+                kernel: self.target.kernel,
+            },
+            registry,
+        )
+    }
+
+    /// Verify selected and untouched owners against the actual final pair.
+    pub fn verify_components(
+        &self,
+        context: &Preparation<'_>,
+        final_pair: Firmware<'_>,
+    ) -> Result<(), Error> {
+        self.verify_components_with(context, final_pair, super::filters())
+    }
+
+    /// Complete-pair verification against the same supplied owner inventory.
+    pub fn verify_components_with(
+        &self,
+        context: &Preparation<'_>,
+        final_pair: Firmware<'_>,
+        registry: &[&dyn Filter],
+    ) -> Result<(), Error> {
         self.admit()?;
-        if !self.matches_components(context) || normal.len() != self.target.normal.len() {
+        if !self.matches_components(context)
+            || final_pair.hardware != self.target.hardware
+            || final_pair.normal.len() != self.target.normal.len()
+            || final_pair.kernel.map(<[u8]>::len) != self.target.kernel.map(<[u8]>::len)
+        {
             return Err(Error::ComponentMismatch);
         }
         self.check_registry(registry)?;
-        let after_context = Context::new(Firmware {
-            hardware: self.target.hardware,
-            normal,
-            kernel: self.target.kernel,
-        });
+        let after_context = Context::new(final_pair);
         for decision in &self.decisions {
             let owner = registry
                 .iter()
@@ -197,7 +276,7 @@ impl Plan<'_> {
                 return Err(Error::VerificationFailed);
             }
             if let Some(operation) = &decision.operation {
-                operation.verify(context, normal)?;
+                operation.verify_components(context, final_pair)?;
             } else if matches!(
                 decision.target.finding,
                 Finding::Known(_) | Finding::NotApplicable { .. }
@@ -261,7 +340,6 @@ pub fn evaluate_with<'a>(
         let comparison = owner.compare(&installed, &target);
         let mut operation = None;
         let mut blocked = None;
-        let mut waived = false;
         match owner.plan(&transition, &installed, &target) {
             Ok(selected) => {
                 if selected
@@ -272,13 +350,6 @@ pub fn evaluate_with<'a>(
                 }
                 operation = selected;
             }
-            Err(error)
-                if policy == Policy::FamilyOverride
-                    && target.role == Role::Hardware
-                    && matches!(error, Error::Incompatible | Error::UnresolvedIdentity) =>
-            {
-                waived = true;
-            }
             Err(error) => blocked = Some(error),
         }
         decisions.push(Decision {
@@ -286,7 +357,7 @@ pub fn evaluate_with<'a>(
             installed,
             target,
             comparison,
-            waived,
+            waived: false,
             operation,
             blocked,
         });
@@ -332,6 +403,8 @@ pub fn plan_with<'a>(
 
 fn compose(
     context: &Preparation<'_>,
+    component: crate::Role,
+    original: &[u8],
     outputs: Vec<(Vec<u8>, Option<Integrity>)>,
 ) -> Result<Vec<u8>, Error> {
     let integrity = outputs[0].1.as_ref().ok_or(Error::Unsupported)?;
@@ -344,48 +417,28 @@ fn compose(
     {
         return Err(Error::Unsupported);
     }
-    let original = context.target.normal;
-    let mut checksum = vec![false; original.len()];
-    for field in &integrity.fields {
-        let bytes = checksum
-            .get_mut(field.clone())
-            .ok_or(Error::Representation)?;
-        if bytes.is_empty() || bytes.iter().any(|&used| used) {
-            return Err(Error::Representation);
-        }
-        bytes.fill(true);
-    }
-    let mut claimed = vec![false; original.len()];
-    let mut prepared = original.to_vec();
-    for (image, _) in &outputs {
-        for (at, (&before, &after)) in original.iter().zip(image).enumerate() {
-            if before == after || checksum[at] {
-                continue;
-            }
-            if claimed[at] {
-                return Err(Error::Unsupported);
-            }
-            claimed[at] = true;
-            prepared[at] = after;
-        }
-    }
-    let repaired = (integrity.repair)(context, &prepared)?;
-    if repaired.len() != original.len()
-        || repaired
-            .iter()
-            .zip(&prepared)
-            .enumerate()
-            .any(|(at, (a, b))| !checksum[at] && a != b)
-    {
-        return Err(Error::VerificationFailed);
-    }
-    Ok(repaired)
+    let effects: Vec<_> = outputs
+        .iter()
+        .map(|(image, _)| super::composition::ComponentEffect {
+            component,
+            basis: original,
+            image,
+        })
+        .collect();
+    super::composition::compose_component(
+        component,
+        original,
+        &effects,
+        &integrity.fields,
+        |image| (integrity.repair)(context, image),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::filters::{be32_normal_integrity, Value};
+    use alloc::vec;
 
     #[test]
     fn family_override_cannot_waive_conflicting_owner_read_conditions() {
@@ -695,6 +748,8 @@ mod tests {
         }
         for (contract, expected) in [
             (Contract::InvalidFields, Error::Representation),
+            (Contract::OverlappingFields, Error::Representation),
+            (Contract::EmptyFields, Error::Representation),
             (Contract::BadRepair, Error::VerificationFailed),
         ] {
             let mut first = Owner::field("first", 24);
@@ -755,7 +810,7 @@ mod tests {
     }
 
     #[test]
-    fn force_records_family_waiver_but_unrelated_requested_field_cannot_change() {
+    fn family_override_refuses_uncorrectable_owner_and_preserves_postconditions() {
         let target = image();
         let mut source = target.clone();
         source[24] = 2;
@@ -766,13 +821,31 @@ mod tests {
         let mut other = Owner::field("other", 26);
         other.correctable = false;
         let registry: &[&dyn Filter] = &[&phase, &other];
-        assert!(matches!(
-            plan_with(&a, &b, Policy::Strict, registry),
-            Err(Error::Incompatible)
-        ));
+        for policy in [Policy::Strict, Policy::FamilyOverride] {
+            let evaluated = evaluate_with(&a, &b, policy, registry).unwrap();
+            let decision = &evaluated.decisions()[1];
+            assert_eq!(decision.comparison, Comparison::Different);
+            assert_eq!(decision.blocked(), Some(Error::Incompatible));
+            assert!(!decision.waived);
+            assert!(decision.operation().is_none());
+            assert_eq!(evaluated.admit(), Err(Error::Incompatible));
+            assert_eq!(
+                evaluated.prepare_with(&preparation(&b), registry),
+                Err(Error::Incompatible)
+            );
+            assert!(matches!(
+                plan_with(&a, &b, policy, registry),
+                Err(Error::Incompatible)
+            ));
+        }
+
+        // Admit the supported correction with an actually matching untouched
+        // owner, then retain the independent extra-write/postcondition guard.
+        source[26] = target[26];
+        checksum(&mut source);
+        let a = context(&source);
         let plan = plan_with(&a, &b, Policy::FamilyOverride, registry).unwrap();
-        assert!(plan.decisions()[1].waived);
-        assert_eq!(plan.decisions()[1].comparison, Comparison::Different);
+        assert!(plan.decisions().iter().all(|decision| !decision.waived));
         let output = plan
             .prepare_with(&preparation(&b), registry)
             .unwrap()
@@ -810,16 +883,19 @@ mod tests {
         ));
         owner.error = None;
         owner.finding = Some(Finding::Unresolved("no native reader".into()));
-        let evaluated = evaluate_with(&a, &b, Policy::Strict, &[&owner]).unwrap();
-        assert_eq!(evaluated.decisions()[0].comparison, Comparison::Unresolved);
-        assert_eq!(
-            evaluated.decisions()[0].blocked(),
-            Some(Error::UnresolvedIdentity)
-        );
-        assert_eq!(evaluated.admit(), Err(Error::UnresolvedIdentity));
-        let waived = plan_with(&a, &b, Policy::FamilyOverride, &[&owner]).unwrap();
-        assert!(waived.decisions()[0].waived);
-        assert_eq!(waived.decisions()[0].comparison, Comparison::Unresolved);
+        for policy in [Policy::Strict, Policy::FamilyOverride] {
+            let evaluated = evaluate_with(&a, &b, policy, &[&owner]).unwrap();
+            let decision = &evaluated.decisions()[0];
+            assert_eq!(decision.comparison, Comparison::Unresolved);
+            assert_eq!(decision.blocked(), Some(Error::UnresolvedIdentity));
+            assert!(!decision.waived);
+            assert!(decision.operation().is_none());
+            assert_eq!(evaluated.admit(), Err(Error::UnresolvedIdentity));
+            assert_eq!(
+                evaluated.prepare_with(&preparation(&b), &[&owner]),
+                Err(Error::UnresolvedIdentity)
+            );
+        }
     }
 
     #[test]
@@ -861,6 +937,57 @@ mod tests {
     }
 
     #[test]
+    fn no_operation_plan_binds_original_pair_before_noop_return() {
+        let normal = image();
+        let kernel = [1, 2, 3, 4];
+        let target = Context::new(Firmware {
+            hardware: "SAT 8600",
+            normal: &normal,
+            kernel: Some(&kernel),
+        });
+        let owner = Owner::field("unchanged", 24);
+        let registry: &[&dyn Filter] = &[&owner];
+        let mut changed_normal = normal.clone();
+        changed_normal[27] ^= 1;
+        for policy in [Policy::Strict, Policy::FamilyOverride] {
+            let plan = plan_with(&target, &target, policy, registry).unwrap();
+            assert_eq!(plan.operations().count(), 0);
+            assert_eq!(
+                plan.prepare_components_with(&preparation(&target), registry),
+                Ok(None)
+            );
+            for substitute in [
+                Firmware {
+                    normal: &changed_normal,
+                    ..target.firmware
+                },
+                Firmware {
+                    kernel: Some(&[9, 2, 3, 4]),
+                    ..target.firmware
+                },
+                Firmware {
+                    kernel: None,
+                    ..target.firmware
+                },
+                Firmware {
+                    hardware: "SAT 9000",
+                    ..target.firmware
+                },
+            ] {
+                let substituted = Context::new(substitute);
+                assert_eq!(
+                    plan.prepare_components_with(&preparation(&substituted), registry),
+                    Err(Error::ComponentMismatch)
+                );
+                assert_eq!(
+                    plan.prepare_with(&preparation(&substituted), registry),
+                    Err(Error::ComponentMismatch)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn h8_sat_platforms_share_a_partition_and_others_stay_separate() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<Plan<'static>>();
@@ -890,7 +1017,11 @@ mod tests {
                 ),
                 "{hardware} must stay on its own platform"
             );
-            assert!(plan_with(&a, &other, Policy::FamilyOverride, &[&owner]).is_ok());
+            let plan = plan_with(&a, &other, Policy::FamilyOverride, &[&owner]).unwrap();
+            assert_eq!(plan.decisions()[0].comparison, Comparison::Match);
+            assert_eq!(plan.decisions()[0].blocked(), None);
+            assert!(!plan.decisions()[0].waived);
+            assert_eq!(plan.prepare_with(&preparation(&other), &[&owner]), Ok(None));
         }
     }
 
@@ -984,3 +1115,7 @@ mod tests {
         assert_eq!(after.admit(), Err(Error::Incompatible));
     }
 }
+
+#[cfg(test)]
+#[path = "runner_pair_tests.rs"]
+mod pair_tests;

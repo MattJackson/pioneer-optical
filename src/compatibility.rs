@@ -221,14 +221,42 @@ impl CorrectionPlan<'_> {
         Ok(Some(bytes))
     }
 
-    /// Prepare exact decoded components with native codec authority. Each owner
-    /// supplies its effect and verifier; the coordinator composes disjoint edits.
+    /// Prepare decoded Normal bytes, refusing any changed Kernel component.
+    /// Authentication and live prerequisites remain independent receiver gates.
     #[cfg(feature = "envelope")]
     pub fn prepare_image(
         &self,
         normal: &crate::envelope::Envelope,
         kernel: Option<&crate::envelope::Envelope>,
     ) -> Result<Option<Vec<u8>>, Error> {
+        self.normal_only(self.prepare_components(normal, kernel)?)
+    }
+
+    /// Prepare the complete decoded pair with original envelope authority.
+    /// This does not authenticate rebuilt files or authorize an executable update.
+    #[cfg(feature = "envelope")]
+    pub fn prepare_components(
+        &self,
+        normal: &crate::envelope::Envelope,
+        kernel: Option<&crate::envelope::Envelope>,
+    ) -> Result<Option<crate::filters::PreparedComponents>, Error> {
+        self.prepare_components_using(normal, kernel, |context| {
+            self.runner.prepare_components(context)
+        })
+    }
+
+    #[cfg(feature = "envelope")]
+    fn prepare_components_using<F>(
+        &self,
+        normal: &crate::envelope::Envelope,
+        kernel: Option<&crate::envelope::Envelope>,
+        prepare: F,
+    ) -> Result<Option<crate::filters::PreparedComponents>, Error>
+    where
+        F: FnOnce(
+            &crate::filters::Preparation<'_>,
+        ) -> Result<Option<crate::filters::PreparedComponents>, Error>,
+    {
         if !representation::matching_components(normal, kernel)
             || normal.image != self.target.normal
             || self.target.kernel != kernel.map(|k| k.image.as_slice())
@@ -241,14 +269,32 @@ impl CorrectionPlan<'_> {
             normal: Some(normal),
             kernel,
         };
-        let result = self.runner.prepare(&context)?;
-        self.verify_image(result.as_deref().unwrap_or(self.target.normal))?;
-        Ok(result)
+        self.prepare_pair_using(&context, prepare)
     }
 
-    /// Apply supported decoded-image effects without inventing codec authority.
-    /// A filter that needs a file or exact Kernel refuses this raw path.
+    /// Apply decoded Normal effects without inventing codec authority.
+    /// A changed Kernel cannot be represented by this legacy return type.
     pub fn prepare_normal(&self) -> Result<Option<Vec<u8>>, Error> {
+        self.normal_only(self.prepare_decoded_components()?)
+    }
+
+    /// Prepare the complete decoded pair without inventing codec authority.
+    /// Owners requiring original envelopes still refuse this raw path.
+    pub fn prepare_decoded_components(
+        &self,
+    ) -> Result<Option<crate::filters::PreparedComponents>, Error> {
+        self.prepare_decoded_components_using(|context| self.runner.prepare_components(context))
+    }
+
+    fn prepare_decoded_components_using<F>(
+        &self,
+        prepare: F,
+    ) -> Result<Option<crate::filters::PreparedComponents>, Error>
+    where
+        F: FnOnce(
+            &crate::filters::Preparation<'_>,
+        ) -> Result<Option<crate::filters::PreparedComponents>, Error>,
+    {
         let context = crate::filters::Preparation {
             target: self.target,
             #[cfg(feature = "envelope")]
@@ -256,14 +302,54 @@ impl CorrectionPlan<'_> {
             #[cfg(feature = "envelope")]
             kernel: None,
         };
-        let result = self.runner.prepare(&context)?;
-        self.verify_image(result.as_deref().unwrap_or(self.target.normal))?;
+        self.prepare_pair_using(&context, prepare)
+    }
+
+    fn prepare_pair_using<F>(
+        &self,
+        context: &crate::filters::Preparation<'_>,
+        prepare: F,
+    ) -> Result<Option<crate::filters::PreparedComponents>, Error>
+    where
+        F: FnOnce(
+            &crate::filters::Preparation<'_>,
+        ) -> Result<Option<crate::filters::PreparedComponents>, Error>,
+    {
+        let result = prepare(context)?;
+        let final_pair = match &result {
+            Some(pair) => Firmware {
+                hardware: self.target.hardware,
+                normal: &pair.normal,
+                kernel: pair.kernel.as_deref(),
+            },
+            None => self.target,
+        };
+        self.verify_pair(final_pair)?;
         Ok(result)
     }
 
+    fn normal_only(
+        &self,
+        result: Option<crate::filters::PreparedComponents>,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        match result {
+            Some(pair) if pair.kernel.as_deref() != self.target.kernel => Err(Error::Unsupported),
+            Some(pair) => Ok(Some(pair.normal)),
+            None => Ok(None),
+        }
+    }
+
+    #[cfg(test)]
     fn verify_image(&self, image: &[u8]) -> Result<(), Error> {
+        self.verify_pair(Firmware {
+            normal: image,
+            ..self.target
+        })
+    }
+
+    fn verify_pair(&self, final_pair: Firmware<'_>) -> Result<(), Error> {
         if let Some(expected) = &self.expected {
-            let after = discover(self.target.hardware, image, self.target.kernel)
+            let after = discover(final_pair.hardware, final_pair.normal, final_pair.kernel)
                 .ok_or(Error::VerificationFailed)?;
             if &after.as_is != expected {
                 return Err(Error::VerificationFailed);
@@ -404,7 +490,7 @@ struct NonExhaustiveEnums;
 mod tests {
     use super::*;
 
-    fn normal(variant: u8) -> Vec<u8> {
+    pub(super) fn normal(variant: u8) -> Vec<u8> {
         let mut bytes = alloc::vec![0xff; 0x2000];
         crate::image::matrix::install_test_contract(&mut bytes, variant);
         bytes[0x680..0x694].copy_from_slice(&[
@@ -510,3 +596,7 @@ mod tests {
         assert_eq!(planned.verify_image(&direct), Ok(()));
     }
 }
+
+#[cfg(test)]
+#[path = "compatibility_pair_tests.rs"]
+mod pair_tests;

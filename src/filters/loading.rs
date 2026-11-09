@@ -23,6 +23,10 @@ static RULES: super::Rules = super::Rules {
             domains: &[],
             text: "Additional recognizer misses are not proof of absence and are never hashed as negative facts.",
         },
+        super::Policy {
+            domains: &[],
+            text: "FFC5 write 0x20 versus clear bit 5 is not correctable because the clear belongs to a peripheral driver that the 0x20 firmware entirely lacks: it unmasks interrupt-controller source 0x200040 and ASIC line FFFDFF29 bit 7 for a serial-attached device's fault-report interrupt, initialized over F904/F950-F953. Matching FFC5 would mean adding or removing that driver, and held bytes do not show whether the other board carries or can do without that device. Neither FFC5 operation is a loading input; both families poll their tray switch elsewhere.",
+        },
     ],
 };
 const ID: &str = "loading-input-interrupt-setup";
@@ -290,7 +294,9 @@ mod tests {
         }
         let conflicting = candidate(Observation::Conflicting);
         assert!(matches!(
-            FILTER.inspect(&context(vec![a.clone(), conflicting])).finding,
+            FILTER
+                .inspect(&context(vec![a.clone(), conflicting]))
+                .finding,
             Finding::Conflicting(_)
         ));
         assert!(matches!(

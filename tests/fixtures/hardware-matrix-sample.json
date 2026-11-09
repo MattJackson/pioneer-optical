@@ -165,6 +165,12 @@
           "text": "SAT1 has no recognized tray input reader and keeps its native E46B register value (bits 4 and 0) or its older initialization program."
         },
         {
+          "platforms": [
+            "ATA"
+          ],
+          "text": "V850 slim drives: the value is the loading program's fixed direct I/O, plus the fixed outputs of directly called helpers followed exactly one level when the direct set lacks an output. Deeper, indirect or byte-wide helper paths are not bound (they are named as evidence), and equality means the same bound I/O set."
+        },
+        {
           "platforms": [],
           "text": "An architecture tag, an external initializer address or an unexamined program is not a known value. Such images stay Unresolved and receive no family ID."
         }

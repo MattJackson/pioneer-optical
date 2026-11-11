@@ -24,9 +24,23 @@ pub struct OwnedWord {
 pub(crate) fn collect<'a>(
     operations: impl Iterator<Item = &'a dyn Operation>,
 ) -> Result<Vec<OwnedWord>, Error> {
+    collect_with(operations, |operation| operation.required_words())
+}
+
+/// Words the selected operations set; conflicting values refuse.
+pub(crate) fn collect_writes<'a>(
+    operations: impl Iterator<Item = &'a dyn Operation>,
+) -> Result<Vec<OwnedWord>, Error> {
+    collect_with(operations, |operation| operation.word_writes())
+}
+
+fn collect_with<'a>(
+    operations: impl Iterator<Item = &'a dyn Operation>,
+    words: impl Fn(&dyn Operation) -> Vec<Word>,
+) -> Result<Vec<OwnedWord>, Error> {
     let mut result: Vec<OwnedWord> = Vec::new();
     for operation in operations {
-        for word in operation.required_words() {
+        for word in words(operation) {
             if operation.filter_id().is_empty()
                 || word.parameter >= 0x400
                 || result

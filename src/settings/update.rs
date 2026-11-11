@@ -171,7 +171,27 @@ impl Plan {
         correction: Option<crate::compatibility::PreparedCorrection>,
     ) -> Self {
         self.correction = correction.map(Into::into);
+        let writes = self
+            .correction
+            .as_ref()
+            .map_or(&[][..], |c| c.word_writes.as_slice());
+        for write in writes {
+            self.entries.push(Setting {
+                key: Key::StartupWord,
+                effect: Effect::ParameterWord {
+                    parameter: write.word.parameter,
+                    value: write.word.value,
+                    explicit: true,
+                },
+            });
+        }
         self
+    }
+    /// Words the native correction sets before transfer.
+    pub fn word_writes(&self) -> &[crate::filters::prerequisites::OwnedWord] {
+        self.correction
+            .as_ref()
+            .map_or(&[], |c| c.word_writes.as_slice())
     }
     /// Native correction selected by the planner.
     pub fn correction_id(&self) -> Option<&str> {

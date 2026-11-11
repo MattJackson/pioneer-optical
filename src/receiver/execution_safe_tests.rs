@@ -1501,6 +1501,7 @@ fn final_filter_requirement_is_checked_before_any_bridge_write() {
                         value: 1,
                     },
                 }],
+                Vec::new(),
             ),
         ));
         state.borrow_mut().parameter = actual;
@@ -1554,6 +1555,7 @@ fn read_only_requirement_cannot_be_overwritten_by_settings() {
                     value: 1,
                 },
             }],
+            Vec::new(),
         ),
     ));
     let error = execute_stages(
@@ -1588,6 +1590,7 @@ fn conflicting_stage_requirements_refuse_before_device_io() {
                         value: index as u16,
                     },
                 }],
+                Vec::new(),
             ),
         ));
     }
@@ -1624,6 +1627,7 @@ fn recovery_loader_does_not_bypass_read_only_filter_requirements() {
                     value: 1,
                 },
             }],
+            Vec::new(),
         ),
     ));
     state.borrow_mut().loader = true;
@@ -1640,4 +1644,73 @@ fn recovery_loader_does_not_bypass_read_only_filter_requirements() {
     assert!(!error.write_started());
     assert_eq!(state.borrow().writes, 0);
     assert_eq!(state.borrow().prerequisite_reads, 0);
+}
+
+fn with_word_write(stage: &mut PreparedStage, value: u16) {
+    use crate::filters::prerequisites::{OwnedWord, Word};
+    stage.settings = stage.settings.clone().with_correction(Some(
+        crate::compatibility::PreparedCorrection::native(
+            stage.normal.image.clone(),
+            &[],
+            Vec::new(),
+            vec![OwnedWord {
+                filter: "startup-prerequisite",
+                word: Word {
+                    parameter: 0x9f,
+                    value,
+                },
+            }],
+        ),
+    ));
+}
+
+fn execute_with(
+    stages: &[PreparedStage],
+    state: &Rc<RefCell<State>>,
+    mode: ExecutionMode,
+) -> Result<FlashOutcome, ExecutionError<&'static str>> {
+    execute_stages(
+        stages,
+        FlashTransport {
+            reads: &mut Port(state.clone()),
+            writes: &mut Port(state.clone()),
+        },
+        &mut Clock::default(),
+        mode,
+    )
+}
+
+#[test]
+fn a_correction_word_write_runs_in_the_first_stage_settings_transaction() {
+    let (plan, state) = setup(false);
+    let mut stages = plan.stages().to_vec();
+    assert_eq!(stages.len(), 1);
+    with_word_write(&mut stages[0], 0xfe34);
+    execute_with(&stages, &state, ExecutionMode::Flash).unwrap();
+    assert_eq!(state.borrow().parameter_writes, [0xfe34]);
+    assert_eq!(state.borrow().parameter, 0xfe34);
+}
+
+#[test]
+fn a_correction_word_write_refuses_in_the_loader_before_any_write() {
+    let (plan, state) = setup(false);
+    let mut stages = plan.stages().to_vec();
+    with_word_write(&mut stages[0], 0xfe34);
+    state.borrow_mut().loader = true;
+    let error = execute_with(&stages, &state, ExecutionMode::Recovery).unwrap_err();
+    assert!(!error.write_started());
+    assert_eq!(state.borrow().writes, 0);
+    assert!(state.borrow().parameter_writes.is_empty());
+}
+
+#[test]
+fn a_correction_word_write_after_the_first_stage_refuses_before_any_write() {
+    let (plan, state) = setup_handoff_bridge(false);
+    let mut stages = plan.stages().to_vec();
+    assert!(stages.len() > 1);
+    with_word_write(stages.last_mut().unwrap(), 0xfe34);
+    let error = execute_with(&stages, &state, ExecutionMode::Flash).unwrap_err();
+    assert!(!error.write_started());
+    assert_eq!(state.borrow().writes, 0);
+    assert!(state.borrow().parameter_writes.is_empty());
 }

@@ -139,17 +139,24 @@ impl Receiver {
         let required_words = plan
             .required_words()
             .map_err(PreparationError::PhaseCorrection)?;
+        let word_writes = plan
+            .word_writes()
+            .map_err(PreparationError::PhaseCorrection)?;
         let image = plan
             .prepare_image(normal, Some(kernel))
             .map_err(PreparationError::PhaseCorrection)?;
-        // A read-only obligation still needs a receiver handoff even if no bytes change.
+        // A live-word obligation still needs a receiver handoff even if no bytes change.
         Ok(image
-            .or_else(|| (!required_words.is_empty()).then(|| normal.image.clone()))
+            .or_else(|| {
+                (!required_words.is_empty() || !word_writes.is_empty())
+                    .then(|| normal.image.clone())
+            })
             .map(|image| {
                 crate::compatibility::PreparedCorrection::native(
                     image,
                     plan.corrections(),
                     required_words,
+                    word_writes,
                 )
             }))
     }
@@ -244,8 +251,8 @@ impl Receiver {
         });
         let actions = crate::filters::parameter_actions(&context)
             .map_err(PreparationError::PhaseCorrection)?;
-        // Startup adaptation belongs to the verified image operation. Never
-        // turn a target observation into a separate persistent-word write.
+        // Startup adaptation belongs to the verified correction plan, which
+        // compares both images; a target observation alone never writes a word.
         if !actions.is_empty() {
             return Err(PreparationError::PhaseCorrection(
                 crate::compatibility::Error::Unsupported,

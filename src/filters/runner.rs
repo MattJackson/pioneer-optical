@@ -79,6 +79,20 @@ impl Plan<'_> {
         super::prerequisites::collect(self.operations())
     }
 
+    /// Words the selected operations set before transfer. A word cannot be
+    /// both a read-only condition and a write.
+    pub fn word_writes(&self) -> Result<Vec<super::prerequisites::OwnedWord>, Error> {
+        let reads = self.required_words()?;
+        let writes = super::prerequisites::collect_writes(self.operations())?;
+        if writes
+            .iter()
+            .any(|w| reads.iter().any(|r| r.word.parameter == w.word.parameter))
+        {
+            return Err(Error::VerificationFailed);
+        }
+        Ok(writes)
+    }
+
     /// Refuse every owner failure before preparing files or device I/O.
     pub fn admit(&self) -> Result<(), Error> {
         if self.policy == Policy::Strict {

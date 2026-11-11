@@ -222,12 +222,16 @@ pub(super) fn plan(
             gate.bound.requirement.required
         }
     };
-    // Equal reader layouts and a live word do not establish the automatic OEM
-    // writer's later value or behavior. No changed-comparison domain has a
-    // complete writer-lifecycle witness, so preserve the target operand.
-    if required != gate.bound.requirement.required {
+    // A differing installed comparison is corrected on the drive, not in the
+    // image: the target gate stays unchanged and the startup word is set to the
+    // target's own value, the state of a unit that shipped with the target
+    // firmware, whose own writer keeps that value. A conditional target gate
+    // accepts more than one word, so it keeps the refusal.
+    let sets_word = required != gate.bound.requirement.required;
+    if sets_word && gate.conditional.is_some() {
         return Err(Error::Unsupported);
     }
+    let required = gate.bound.requirement.required;
     let changed = gate.emit(target.normal, required)?;
     let corrected = Gate::bind(&changed)?;
     if corrected.bound.requirement.required != required || corrected.conditional != gate.conditional
@@ -240,6 +244,7 @@ pub(super) fn plan(
         kernel: target.kernel.map(<[u8]>::to_vec),
         gate,
         required,
+        sets_word,
     })))
 }
 
@@ -351,6 +356,8 @@ struct StartupOperation {
     kernel: Option<Vec<u8>>,
     gate: Gate,
     required: u16,
+    /// The drive's word differs and is set to `required` before transfer.
+    sets_word: bool,
 }
 impl core::fmt::Debug for StartupOperation {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -358,10 +365,17 @@ impl core::fmt::Debug for StartupOperation {
             .field("hardware", &self.hardware)
             .field("comparison", &self.gate.comparison)
             .field("required", &self.required)
+            .field("sets_word", &self.sets_word)
             .finish()
     }
 }
 impl StartupOperation {
+    fn word(&self) -> Word {
+        Word {
+            parameter: self.gate.bound.requirement.parameter,
+            value: self.required,
+        }
+    }
     fn bound(&self, context: &Preparation<'_>) -> Result<(), Error> {
         // Enforce the planning restriction again at prepare/final verification;
         // a stale or constructed operation cannot authorize a CMP rewrite.
@@ -425,10 +439,17 @@ impl Operation for StartupOperation {
         ID
     }
     fn required_words(&self) -> Vec<Word> {
-        vec![Word {
-            parameter: self.gate.bound.requirement.parameter,
-            value: self.required,
-        }]
+        if self.sets_word {
+            return Vec::new();
+        }
+        vec![self.word()]
+    }
+    fn word_writes(&self) -> Vec<Word> {
+        if self.sets_word {
+            vec![self.word()]
+        } else {
+            Vec::new()
+        }
     }
     fn integrity(&self) -> Option<Integrity> {
         Some(crate::filters::be32_normal_integrity())
@@ -565,13 +586,28 @@ mod tests {
     }
 
     #[test]
-    fn differing_primary_comparisons_refuse_without_writer_lifecycle_proof() {
+    fn differing_fixed_comparisons_set_the_target_word_without_changing_the_image() {
         for (source, target) in [(0xfe25, 0xfe24), (0xfe24, 0xfe25)] {
-            assert!(matches!(
-                operation(&fixture(source, 0), &fixture(target, 0)),
-                Err(Error::Unsupported)
-            ));
+            let target = fixture(target, 0);
+            let operation = operation(&fixture(source, 0), &target).unwrap().unwrap();
+            let word = Word {
+                parameter: 0x9f,
+                value: u16::from_be_bytes([target[0x8a], target[0x8b]]),
+            };
+            assert!(operation.required_words().is_empty());
+            assert_eq!(operation.word_writes(), [word]);
+            let preparation = preparation(&target);
+            assert!(operation.prepare(&preparation).unwrap().is_none());
+            operation.verify(&preparation, &target).unwrap();
+            // The target comparison itself is never rewritten.
+            let mut rewritten = target.clone();
+            rewritten[0x8b] ^= 1;
+            assert!(operation.verify(&preparation, &rewritten).is_err());
         }
+        // Equal comparisons stay a read-only prerequisite with no write.
+        let normal = fixture(0xfe24, 0);
+        let equal = operation(&normal, &normal).unwrap().unwrap();
+        assert!(equal.word_writes().is_empty());
     }
 
     #[test]
@@ -593,6 +629,7 @@ mod tests {
             kernel: None,
             gate: Gate::bind(&target).unwrap(),
             required: 0xfe25,
+            sets_word: false,
         };
         assert!(matches!(forged.prepare(&prepared), Err(Error::Unsupported)));
         assert!(matches!(
@@ -798,9 +835,15 @@ mod tests {
         let op = operation(&donor, &target).unwrap().unwrap();
         assert!(op.prepare(&preparation(&target)).unwrap().is_none());
         op.verify(&preparation(&target), &target).unwrap();
-        assert!(matches!(
-            operation(&fixture(0xfe24, 0), &target),
-            Err(Error::Unsupported)
-        ));
+        // A differing fixed donor keeps this image and sets the target's word.
+        let set = operation(&fixture(0xfe24, 0), &target).unwrap().unwrap();
+        assert!(set.prepare(&preparation(&target)).unwrap().is_none());
+        assert_eq!(
+            set.word_writes(),
+            [Word {
+                parameter: 0x9f,
+                value: 0xfe13
+            }]
+        );
     }
 }

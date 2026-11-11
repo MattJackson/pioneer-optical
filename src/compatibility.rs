@@ -27,6 +27,7 @@ pub(crate) struct PreparedCorrection {
     pub image: Vec<u8>,
     pub corrections: Vec<Correction>,
     pub required_words: Vec<crate::filters::prerequisites::OwnedWord>,
+    pub word_writes: Vec<crate::filters::prerequisites::OwnedWord>,
 }
 
 #[cfg(feature = "envelope")]
@@ -35,6 +36,7 @@ pub(crate) struct CorrectionRequirements {
     pub id: String,
     pub corrections: Vec<Correction>,
     pub required_words: Vec<crate::filters::prerequisites::OwnedWord>,
+    pub word_writes: Vec<crate::filters::prerequisites::OwnedWord>,
 }
 
 #[cfg(feature = "envelope")]
@@ -44,6 +46,7 @@ impl From<PreparedCorrection> for CorrectionRequirements {
             id: a.id,
             corrections: a.corrections,
             required_words: a.required_words,
+            word_writes: a.word_writes,
         }
     }
 }
@@ -54,12 +57,14 @@ impl PreparedCorrection {
         image: Vec<u8>,
         corrections: &[Correction],
         required_words: Vec<crate::filters::prerequisites::OwnedWord>,
+        word_writes: Vec<crate::filters::prerequisites::OwnedWord>,
     ) -> Self {
         Self {
             id: "pioneer.native-correction.v1".into(),
             image,
             corrections: corrections.to_vec(),
             required_words,
+            word_writes,
         }
     }
 }
@@ -198,6 +203,11 @@ impl CorrectionPlan<'_> {
     /// The receiver must verify these before transferring any firmware stage.
     pub fn required_words(&self) -> Result<Vec<crate::filters::prerequisites::OwnedWord>, Error> {
         self.runner.required_words()
+    }
+
+    /// Device words the selected corrections set before transfer.
+    pub fn word_writes(&self) -> Result<Vec<crate::filters::prerequisites::OwnedWord>, Error> {
+        self.runner.word_writes()
     }
 
     /// Every registered owner result, including operational requirements and

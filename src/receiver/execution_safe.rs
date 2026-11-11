@@ -704,6 +704,35 @@ fn preflight_requirements<T: Transport, H: ExecutionRuntime<T::Error>>(
     .map_err(ExecutionError::Prerequisite)
 }
 
+/// A correction's startup-word write runs inside the first stage's settings
+/// transaction, which needs the installed firmware running in normal mode.
+fn preflight_word_writes<T: Transport, H: ExecutionRuntime<T::Error>>(
+    stages: &[PreparedStage],
+    reads: &mut T,
+    runtime: &mut H,
+    mode: ExecutionMode,
+) -> Result<(), ExecutionError<T::Error>> {
+    let writing: Vec<usize> = stages
+        .iter()
+        .enumerate()
+        .filter(|(_, stage)| !stage.settings.word_writes().is_empty())
+        .map(|(index, _)| index)
+        .collect();
+    if writing.is_empty() {
+        return Ok(());
+    }
+    if writing != [0] {
+        return Err(ExecutionError::Plan(
+            "a startup word write must precede the first transfer",
+        ));
+    }
+    let (updating, _) = stages[0].bind_stage(reads, runtime, mode, FlashStage::at(0), None)?;
+    if updating {
+        return Err(ExecutionError::Plan("loader cannot set the startup word"));
+    }
+    Ok(())
+}
+
 fn execute_stages<R, W, H>(
     stages: &[PreparedStage],
     io: FlashTransport<'_, R, W>,
@@ -720,6 +749,8 @@ where
     }
     preflight_stages(stages)?;
     preflight_requirements(stages, io.reads, runtime, mode)
+        .map_err(|source| ExecutionError::BeforeWrite(Box::new(source)))?;
+    preflight_word_writes(stages, io.reads, runtime, mode)
         .map_err(|source| ExecutionError::BeforeWrite(Box::new(source)))?;
     let mut result: Option<FlashOutcome> = None;
     for (index, stage) in stages.iter().enumerate() {

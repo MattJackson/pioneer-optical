@@ -10,8 +10,8 @@ use pioneer_optical::{
 mod page;
 
 #[test]
-#[ignore = "requires PIONEER_HOARD; native unchanged-comparison lifecycle boundary"]
-fn held_native_startup_gates_refuse_changed_comparisons_without_writer_lifecycle_proof() {
+#[ignore = "requires PIONEER_HOARD; changed fixed comparisons set the target word"]
+fn held_native_startup_gates_set_the_target_word_for_changed_fixed_comparisons() {
     let root = std::path::PathBuf::from(std::env::var("PIONEER_HOARD").unwrap());
     let (packages, _) = page::hoard_packages(&root).unwrap();
     let mut seen = std::collections::BTreeSet::new();
@@ -45,25 +45,41 @@ fn held_native_startup_gates_refuse_changed_comparisons_without_writer_lifecycle
             normal: &target.normal.image,
             kernel: target.kernel.as_ref().map(|k| k.image.as_slice()),
         });
-        assert!(
-            matches!(
-                owner.plan(
-                    &Transition {
-                        installed: &installed,
-                        target: &requested
-                    },
-                    &owner.inspect(&installed),
-                    &owner.inspect(&requested),
-                ),
-                Err(pioneer_optical::compatibility::Error::Unsupported)
-            ),
-            "{}: changed CMP has no writer-lifecycle proof",
-            package.component
+        let planned = owner.plan(
+            &Transition {
+                installed: &installed,
+                target: &requested,
+            },
+            &owner.inspect(&installed),
+            &owner.inspect(&requested),
         );
+        match planned {
+            // A fixed target gate keeps its image and sets the target's word.
+            Ok(Some(operation)) => {
+                assert!(
+                    operation.required_words().is_empty(),
+                    "{}",
+                    package.component
+                );
+                assert_eq!(
+                    operation
+                        .word_writes()
+                        .iter()
+                        .map(|w| w.value)
+                        .collect::<Vec<_>>(),
+                    [bound.requirement.required],
+                    "{}",
+                    package.component
+                );
+            }
+            // A conditional target gate keeps the refusal.
+            Err(pioneer_optical::compatibility::Error::Unsupported) => {}
+            other => panic!("{}: {other:?}", package.component),
+        }
         refused += 1;
     }
     assert!(refused > 0);
-    eprintln!("startup changed-comparison lifecycle refusals={refused}");
+    eprintln!("startup changed-comparison directions={refused}");
 }
 
 #[test]

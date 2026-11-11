@@ -452,6 +452,12 @@ pub trait Operation: core::fmt::Debug + Send + Sync {
     fn required_words(&self) -> Vec<prerequisites::Word> {
         Vec::new()
     }
+    /// Device words this correction sets before the first transfer, through the
+    /// receiver's startup settings transaction (read, write, verify, restore on
+    /// a failure before firmware is written).
+    fn word_writes(&self) -> Vec<prerequisites::Word> {
+        Vec::new()
+    }
     /// Native checksum contract for atomic composition with another owner.
     /// Absence never authorizes guessing a checksum field or algorithm.
     fn integrity(&self) -> Option<Integrity> {

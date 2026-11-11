@@ -116,19 +116,25 @@ pub(crate) struct Relocation {
 /// refuse (`Conflicting`); an unrecognized initializer or helper refuses
 /// (`Unresolved`). The returned source bytes are a verbatim copy of what runs
 /// at the RAM destination, so a caller may analyze the relocated routine there.
-pub(crate) fn relocated(normal: &[u8], entry: u32, extent: u32) -> Observation<Relocation> {
-    let unknown = || Observation::Unresolved(Unresolved::ReaderNotRecognized);
+/// The positively bound C initializer and its two helper entries.
+struct Initializer {
+    boot: Range<usize>,
+    copy_helper: u32,
+    clear_helper: u32,
+    clear: Range<usize>,
+    fill: Range<usize>,
+}
+
+fn stored(normal: &[u8], regions: &crate::image::Regions<'_>, span: &Range<usize>) -> bool {
+    regions.stored.iter().any(|r| {
+        let at = r.as_ptr() as usize - normal.as_ptr() as usize;
+        span.start >= at && span.end <= at + r.len()
+    })
+}
+
+fn initializer(normal: &[u8], regions: &crate::image::Regions<'_>) -> Option<Initializer> {
     let Observation::Known(boot) = super::boot::c_startup(normal) else {
-        return unknown();
-    };
-    let Some(regions) = crate::image::regions(normal) else {
-        return unknown();
-    };
-    let stored = |span: &Range<usize>| {
-        regions.stored.iter().any(|r| {
-            let at = r.as_ptr() as usize - normal.as_ptr() as usize;
-            span.start >= at && span.end <= at + r.len()
-        })
+        return None;
     };
     // Both complete C-startup shapes load the two saved helper registers at
     // these decoded MOV.L instructions. Their register numbers may swap.
@@ -136,23 +142,119 @@ pub(crate) fn relocated(normal: &[u8], entry: u32, extent: u32) -> Observation<R
         u32::from_be_bytes(normal[boot.start + 34..boot.start + 38].try_into().unwrap());
     let clear_helper =
         u32::from_be_bytes(normal[boot.start + 56..boot.start + 60].try_into().unwrap());
-    let Some(clear_start) = clear_helper.checked_sub(BASE).map(|v| v as usize) else {
+    let clear_start = clear_helper.checked_sub(BASE)? as usize;
+    let clear = clear_start..clear_start + CLEAR.len();
+    if !stored(normal, regions, &clear) || !matches(&normal[clear.clone()], CLEAR, 11..14) {
+        return None;
+    }
+    let fill_start = addr(&normal[clear_start + 11..clear_start + 14]).checked_sub(BASE)? as usize;
+    let fill = fill_start..fill_start + FILL.len();
+    if !stored(normal, regions, &fill) || normal.get(fill.clone()) != Some(FILL) {
+        return None;
+    }
+    Some(Initializer {
+        boot: boot.start..boot.end,
+        copy_helper,
+        clear_helper,
+        clear,
+        fill,
+    })
+}
+
+/// One C-startup helper call with its tracked `(ER0, ER1, ER2)` arguments.
+struct Call {
+    helper: u32,
+    begin: u32,
+    end: u32,
+    value: u32,
+}
+
+/// Track one initializer instruction. `Err` when a helper call's arguments
+/// are not all tracked immediates or describe an inverted range.
+fn step(d: &h8_asm::isa::Decoded, registers: &mut [Option<u32>; 8]) -> Result<Option<Call>, ()> {
+    match (d.insn.mnemonic, d.insn.operands[0], d.insn.operands[1]) {
+        ("MOV", Operand::Immediate { value, bits: 32 }, Operand::Register(Reg::Long(reg))) => {
+            registers[reg as usize] = Some(value)
+        }
+        ("JSR", Operand::Address(h8_asm::isa::Ea::Indirect(Reg::Long(reg))), _) => {
+            let (Some(begin), Some(end), Some(value), Some(helper)) = (
+                registers[0],
+                registers[1],
+                registers[2],
+                registers[reg as usize],
+            ) else {
+                return Err(());
+            };
+            if end < begin {
+                return Err(());
+            }
+            // Bound C startup saves ER3/ER4 for its helper pointers; they
+            // are revalidated against complete save/restore helper bodies.
+            registers[..3].fill(None);
+            return Ok(Some(Call {
+                helper,
+                begin,
+                end,
+                value,
+            }));
+        }
+        ("SUB", Operand::Register(Reg::Word(2)), Operand::Register(Reg::Word(2))) => {
+            // The native clear wrapper consumes only R2, not ER2.
+            registers[2] = Some(0);
+        }
+        ("JSR" | "BSR", _, _) => registers[..3].fill(None),
+        _ => {
+            // The complete C-startup shape leaves ER3/ER4 untouched except
+            // for the explicit immediate loads and saved-register epilogue.
+            // Any other destination destroys a tracked argument value.
+            if let Operand::Register(Reg::Long(reg)) = d.insn.operands[1] {
+                registers[reg as usize] = None;
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Every RAM range the bound C initializer copies or clears: the firmware's
+/// own initialized and zeroed data. `None` unless every helper call is bound.
+pub(crate) fn data_sections(normal: &[u8]) -> Option<Vec<Range<u32>>> {
+    let regions = crate::image::regions(normal)?;
+    let init = initializer(normal, &regions)?;
+    let mut registers = [None; 8];
+    let mut sections = Vec::new();
+    let mut at = init.boot.start;
+    while at < init.boot.end {
+        let d = decode_insn(&normal[at..init.boot.end], Target::H8S2000, Mode::Advanced).ok()?;
+        if let Some(call) = step(&d, &mut registers).ok()? {
+            if call.helper == init.copy_helper {
+                sections.push(call.value..call.value.checked_add(call.end - call.begin)?);
+            } else if call.helper == init.clear_helper && call.value == 0 {
+                sections.push(call.begin..call.end);
+            } else {
+                return None;
+            }
+        }
+        at += d.len;
+    }
+    Some(sections)
+}
+
+pub(crate) fn relocated(normal: &[u8], entry: u32, extent: u32) -> Observation<Relocation> {
+    let unknown = || Observation::Unresolved(Unresolved::ReaderNotRecognized);
+    let Some(regions) = crate::image::regions(normal) else {
         return unknown();
     };
-    let clear = clear_start..clear_start + CLEAR.len();
-    if !stored(&clear) || !matches(&normal[clear.clone()], CLEAR, 11..14) {
-        return unknown();
-    }
-    let Some(fill_start) = addr(&normal[clear_start + 11..clear_start + 14])
-        .checked_sub(BASE)
-        .map(|v| v as usize)
+    let Some(Initializer {
+        boot,
+        copy_helper,
+        clear_helper,
+        clear,
+        fill,
+    }) = initializer(normal, &regions)
     else {
         return unknown();
     };
-    let fill = fill_start..fill_start + FILL.len();
-    if !stored(&fill) || normal.get(fill.clone()) != Some(FILL) {
-        return unknown();
-    }
+    let stored = |span: &Range<usize>| stored(normal, &regions, span);
     let Some(last) = entry.checked_add(extent) else {
         return unknown();
     };
@@ -164,58 +266,34 @@ pub(crate) fn relocated(normal: &[u8], entry: u32, extent: u32) -> Observation<R
         let Ok(d) = decode_insn(&normal[at..boot.end], Target::H8S2000, Mode::Advanced) else {
             return unknown();
         };
-        match (d.insn.mnemonic, d.insn.operands[0], d.insn.operands[1]) {
-            ("MOV", Operand::Immediate { value, bits: 32 }, Operand::Register(Reg::Long(reg))) => {
-                registers[reg as usize] = Some(value)
-            }
-            ("JSR", Operand::Address(h8_asm::isa::Ea::Indirect(Reg::Long(reg))), _) => {
-                if let (Some(begin), Some(end), Some(value), Some(helper)) = (
-                    registers[0],
-                    registers[1],
-                    registers[2],
-                    registers[reg as usize],
-                ) {
-                    if end < begin {
-                        return unknown();
-                    }
-                    if helper == copy_helper {
-                        let Some(write_end) = value.checked_add(end - begin) else {
-                            return unknown();
-                        };
-                        if overlaps(value, write_end) {
-                            // Partial writes and repeated copies cannot establish one
-                            // unambiguous whole routine at the called RAM entry.
-                            if value > entry || write_end < last {
-                                return Observation::Conflicting;
-                            }
-                            copies.push((begin, end, value, helper, at - 18..at + d.len));
-                        }
-                    } else if helper == clear_helper {
-                        if value != 0 || overlaps(begin, end) {
-                            return Observation::Conflicting;
-                        }
-                    } else {
-                        return unknown();
-                    }
-                } else {
+        let Ok(call) = step(&d, &mut registers) else {
+            return unknown();
+        };
+        if let Some(Call {
+            helper,
+            begin,
+            end,
+            value,
+        }) = call
+        {
+            if helper == copy_helper {
+                let Some(write_end) = value.checked_add(end - begin) else {
                     return unknown();
+                };
+                if overlaps(value, write_end) {
+                    // Partial writes and repeated copies cannot establish one
+                    // unambiguous whole routine at the called RAM entry.
+                    if value > entry || write_end < last {
+                        return Observation::Conflicting;
+                    }
+                    copies.push((begin, end, value, helper, at - 18..at + d.len));
                 }
-                // Bound C startup saves ER3/ER4 for its helper pointers; they
-                // are revalidated against complete save/restore helper bodies.
-                registers[..3].fill(None);
-            }
-            ("SUB", Operand::Register(Reg::Word(2)), Operand::Register(Reg::Word(2))) => {
-                // The native clear wrapper consumes only R2, not ER2.
-                registers[2] = Some(0);
-            }
-            ("JSR" | "BSR", _, _) => registers[..3].fill(None),
-            _ => {
-                // The complete C-startup shape leaves ER3/ER4 untouched except
-                // for the explicit immediate loads and saved-register epilogue.
-                // Any other destination destroys a tracked argument value.
-                if let Operand::Register(Reg::Long(reg)) = d.insn.operands[1] {
-                    registers[reg as usize] = None;
+            } else if helper == clear_helper {
+                if value != 0 || overlaps(begin, end) {
+                    return Observation::Conflicting;
                 }
+            } else {
+                return unknown();
             }
         }
         at += d.len;

@@ -17,7 +17,7 @@ pub mod bank;
 
 // Pairing evidence for a capacity-dependent bank address. Kept separate from
 // the descriptive public bank contract.
-mod capacity;
+pub(crate) mod capacity;
 
 /// Receiver-owned startup requirements and their shared transition planner.
 pub mod checks;

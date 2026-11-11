@@ -147,6 +147,20 @@
     },
     {
       "correctability": "Fixed",
+      "correction": "Never corrected. The discriminator relation must be proved, or the directed pair refuses with code pioneer.startup.capacity_relation_unproved.",
+      "description": "Compares the capacity discriminator that selects persistent-bank addresses on a capacity-dependent contract. Matching the two address cases does not prove the two firmwares' discriminator programs choose the same bank. Not corrected: there is no bank migration.",
+      "id": "capacity-discriminator",
+      "name": "Capacity discriminator",
+      "policies": [
+        {
+          "platforms": [],
+          "text": "A capacity-dependent contract relates only with an unchanged complete pair, an address expression independent of the discriminator, or the same discriminator over identical address cases: its query and its decision match exactly, and only link layout and side calls that cannot touch the query's hardware may differ. The proof is derived from the two images with h8-asm (no live query), so the offline and online compares are equal and the proof can only under-admit. Fixed, collapsed, or non-capacity contracts need no discriminator proof here and defer to the bank/geometry owner."
+        }
+      ],
+      "role": "Operational"
+    },
+    {
+      "correctability": "Fixed",
       "correction": "Never corrected. Values must match.",
       "description": "Compares role-bound native closed/open input predicates (address, encoding, bit and active level), or a supported architecture-specific initialization program. Predicates do not prove a sensor count or cover every output, configuration or feedback role. Shared sub-roles can overlap Loading observations without establishing equivalent wiring or mechanical states. Correction would need those residual roles and all affected movement/error paths bound.",
       "id": "startup-inputs-initialization",
@@ -345,6 +359,21 @@
           "summary": "Not established"
         },
         {
+          "evidence": "No capacity discriminator selects the persistent-bank addresses",
+          "finding": {
+            "NotApplicable": {
+              "evidence": "No capacity-dependent bank selection: the bank address cases are fixed or collapsed, or no versioned capacity contract is present",
+              "proof": 51712
+            }
+          },
+          "id": "capacity-discriminator",
+          "inspection": null,
+          "label": "Not applicable · native proof 51712",
+          "role": "Operational",
+          "state": "NotApplicable",
+          "summary": "Not applicable"
+        },
+        {
           "evidence": "Native startup input predicates unresolved: ReaderNotRecognized",
           "finding": {
             "Unresolved": "Native startup input predicates unresolved: ReaderNotRecognized"
@@ -460,6 +489,21 @@
           "role": "Hardware",
           "state": "Unresolved",
           "summary": "Not established"
+        },
+        {
+          "evidence": "No capacity discriminator selects the persistent-bank addresses",
+          "finding": {
+            "NotApplicable": {
+              "evidence": "No capacity-dependent bank selection: the bank address cases are fixed or collapsed, or no versioned capacity contract is present",
+              "proof": 51712
+            }
+          },
+          "id": "capacity-discriminator",
+          "inspection": null,
+          "label": "Not applicable · native proof 51712",
+          "role": "Operational",
+          "state": "NotApplicable",
+          "summary": "Not applicable"
         },
         {
           "evidence": "Native startup initialization unresolved: ReaderNotRecognized",
@@ -579,6 +623,21 @@
           "summary": "Not established"
         },
         {
+          "evidence": "No capacity discriminator selects the persistent-bank addresses",
+          "finding": {
+            "NotApplicable": {
+              "evidence": "No capacity-dependent bank selection: the bank address cases are fixed or collapsed, or no versioned capacity contract is present",
+              "proof": 51712
+            }
+          },
+          "id": "capacity-discriminator",
+          "inspection": null,
+          "label": "Not applicable · native proof 51712",
+          "role": "Operational",
+          "state": "NotApplicable",
+          "summary": "Not applicable"
+        },
+        {
           "evidence": "No complete supported native initialization block is bound. An architecture tag, an external initializer address or an unexamined V850 initialization program is not a known initialization value",
           "finding": {
             "Unresolved": "No complete supported native initialization block is bound. An architecture tag, an external initializer address or an unexamined V850 initialization program is not a known initialization value"
@@ -680,6 +739,21 @@
           "summary": "Not established"
         },
         {
+          "evidence": "No capacity discriminator selects the persistent-bank addresses",
+          "finding": {
+            "NotApplicable": {
+              "evidence": "No capacity-dependent bank selection: the bank address cases are fixed or collapsed, or no versioned capacity contract is present",
+              "proof": 51712
+            }
+          },
+          "id": "capacity-discriminator",
+          "inspection": null,
+          "label": "Not applicable · native proof 51712",
+          "role": "Operational",
+          "state": "NotApplicable",
+          "summary": "Not applicable"
+        },
+        {
           "evidence": "No complete supported native initialization block is bound. An architecture tag, an external initializer address or an unexamined V850 initialization program is not a known initialization value",
           "finding": {
             "Unresolved": "No complete supported native initialization block is bound. An architecture tag, an external initializer address or an unexamined V850 initialization program is not a known initialization value"
@@ -779,6 +853,21 @@
           "role": "Hardware",
           "state": "Unresolved",
           "summary": "Not established"
+        },
+        {
+          "evidence": "No capacity discriminator selects the persistent-bank addresses",
+          "finding": {
+            "NotApplicable": {
+              "evidence": "No capacity-dependent bank selection: the bank address cases are fixed or collapsed, or no versioned capacity contract is present",
+              "proof": 51712
+            }
+          },
+          "id": "capacity-discriminator",
+          "inspection": null,
+          "label": "Not applicable · native proof 51712",
+          "role": "Operational",
+          "state": "NotApplicable",
+          "summary": "Not applicable"
         },
         {
           "evidence": "Native initialization architecture and complete program are unresolved",
@@ -892,6 +981,30 @@
           "role": "Hardware",
           "state": "Known",
           "summary": "Marker 0xFEDC4321; bank spacing 0x10000 bytes"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U16": 159
+                  },
+                  {
+                    "U16": 65535
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "capacity-discriminator",
+          "inspection": null,
+          "label": "Known native contract · variant 1",
+          "role": "Operational",
+          "state": "Known",
+          "summary": "Known native contract · variant 1"
         },
         {
           "evidence": "synthetic native evidence",
@@ -1146,6 +1259,30 @@
                 1,
                 [
                   {
+                    "U16": 159
+                  },
+                  {
+                    "U16": 65535
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "capacity-discriminator",
+          "inspection": null,
+          "label": "Known native contract · variant 1",
+          "role": "Operational",
+          "state": "Known",
+          "summary": "Known native contract · variant 1"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
                     "U16": 58475
                   },
                   {
@@ -1382,6 +1519,30 @@
           "role": "Hardware",
           "state": "Known",
           "summary": "Marker 0xFEDC4321; bank spacing 0x10000 bytes"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U16": 159
+                  },
+                  {
+                    "U16": 65535
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "capacity-discriminator",
+          "inspection": null,
+          "label": "Known native contract · variant 1",
+          "role": "Operational",
+          "state": "Known",
+          "summary": "Known native contract · variant 1"
         },
         {
           "evidence": "synthetic native evidence",
@@ -1639,6 +1800,33 @@
           "role": "Hardware",
           "state": "Conflicting",
           "summary": "Conflicting"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U16": 58475
+                  },
+                  {
+                    "U8": 17
+                  },
+                  {
+                    "U8": 1
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "startup-inputs-initialization",
+          "inspection": null,
+          "label": "0xE46B & 0x11 = 0x01",
+          "role": "Hardware",
+          "state": "Known",
+          "summary": "0xE46B & 0x11 = 0x01"
         },
         {
           "evidence": "synthetic native evidence",

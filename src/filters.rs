@@ -565,6 +565,7 @@ macro_rules! register_filters {
 }
 register_filters!(
     geometry,
+    capacity,
     initialization,
     host,
     loading,

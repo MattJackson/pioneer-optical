@@ -104,11 +104,27 @@ fn bdr211m_pair_profile_composes_without_editing_firmware_or_parameters() {
                 ),
                 Err(StartupError::CapacityRelationUnproved)
             );
+            // Resident services are an external OEM interface: the relation
+            // keeps the discriminator's call target, not the Kernel's bytes.
             let mut changed_kernel = target.kernel().image.clone();
             changed_kernel[0xb6f4] ^= 1;
+            assert!(installed
+                .plan_to_with_policy(
+                    Checks::discover(&target.normal().image, Some(&changed_kernel)),
+                    policy,
+                )
+                .is_ok());
+            let start = query - 0x410000;
+            let resident = start
+                + target.normal().image[start..start + 0x80]
+                    .windows(4)
+                    .position(|w| w == [0x5e, 0x10, 0x7c, 0x72])
+                    .unwrap();
+            let mut retargeted = target.normal().image.clone();
+            retargeted[resident + 3] ^= 0x02;
             assert_eq!(
                 installed.plan_to_with_policy(
-                    Checks::discover(&target.normal().image, Some(&changed_kernel)),
+                    Checks::discover(&retargeted, Some(&target.kernel().image)),
                     policy,
                 ),
                 Err(StartupError::CapacityRelationUnproved)

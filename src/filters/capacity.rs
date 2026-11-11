@@ -2,7 +2,7 @@
 //! so every filter-driven surface (the hardware-matrix site, `blocker_matrix`
 //! and `compatibility::plan`) refuses exactly what the receiver's startup gate
 //! refuses. The relation itself is owned once by
-//! [`crate::startup::capacity::Evidence::relates`]; this filter only carries the
+//! `startup::capacity::Evidence::relates`; this filter only carries the
 //! per-image evidence and consults that one relation when comparing a pair.
 //!
 //! Two firmwares with matching capacity-bank address cases may still select

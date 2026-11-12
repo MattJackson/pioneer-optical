@@ -184,9 +184,9 @@ fn held_oem_encoders_have_exact_distinct_control_bit_semantics() {
         );
         let program = Program::new(&n, &[]);
         for v in 0..=u16::MAX {
-            for channel in 0..2 {
+            for (channel, &function) in b.pair.functions.iter().enumerate() {
                 let w = if channel == 0 { v } else { !v };
-                let trace = program.run(b.pair.functions[channel], v);
+                let trace = program.run(function, v);
                 assert_eq!(trace.len(), 2);
                 assert_eq!(trace[0].1, if index < 2 { 0 } else { ((w >> 6) & 3) as u8 });
                 assert_eq!(trace[1].1, (w >> 8) as u8);

@@ -219,6 +219,17 @@ fn a_decision_that_reads_a_register_set_before_it_refuses() {
 }
 
 #[test]
+fn a_decision_that_reads_firmware_owned_memory_refuses() {
+    // The decision bases its load on the flash-ID register page (FF3F0000).
+    // Rebasing it onto owned Normal ROM makes the result depend on unfingerprinted
+    // bytes, so it must refuse (two builds could then decide differently).
+    let code = replace(&A.entry_code(), &be(0xff3f_0000), &be(NORMAL_BASE));
+    assert_eq!(A.digest_of(&code, &A.logger_code()), None);
+    // The unmodified hardware read still fingerprints.
+    assert!(A.digest().is_some());
+}
+
+#[test]
 fn an_entry_outside_the_block_refuses() {
     let (ram, normal) = A.images(&A.entry_code(), &A.logger_code());
     let space = Space {

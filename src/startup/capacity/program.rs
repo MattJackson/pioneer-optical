@@ -189,6 +189,22 @@ impl Space<'_> {
                         self.verify_side(target, &fixed)?;
                     }
                 }
+                // The query and the decision are kept exactly, but their operands
+                // are hashed by value only, never the bytes they point at. A read
+                // of firmware-owned memory (Normal ROM or a copied data section)
+                // would make the result depend on content the fingerprint does not
+                // cover: two builds with identical code but differing owned bytes
+                // could select different banks on one drive. Refuse when a
+                // non-side instruction names an owned address as data. A direct
+                // call target is the routine graph (handled above), so exclude it.
+                if !renamed
+                    && fixed_constants(insn)
+                        .into_iter()
+                        .filter(|&v| Some(v) != call)
+                        .any(|v| self.owned(v))
+                {
+                    return None;
+                }
                 put_insn(&mut hash, insn, |operand_index, value, kind| {
                     if call.is_some() && operand_index == 0 {
                         return match self.place(value) {

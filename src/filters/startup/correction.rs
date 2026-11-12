@@ -224,13 +224,12 @@ pub(super) fn plan(
     };
     // A differing installed comparison is corrected on the drive, not in the
     // image: the target gate stays unchanged and the startup word is set to the
-    // target's own value, the state of a unit that shipped with the target
-    // firmware, whose own writer keeps that value. A conditional target gate
-    // accepts more than one word, so it keeps the refusal.
+    // target's own primary value, the state of a unit that shipped with the
+    // target firmware, whose own writer keeps that value. This holds for a
+    // conditional gate too: its primary word is accepted unconditionally (the
+    // predicate only gates the alternative), and the CMP operand is never
+    // rewritten here, so the conditional predicate is preserved intact.
     let sets_word = required != gate.bound.requirement.required;
-    if sets_word && gate.conditional.is_some() {
-        return Err(Error::Unsupported);
-    }
     let required = gate.bound.requirement.required;
     let changed = gate.emit(target.normal, required)?;
     let corrected = Gate::bind(&changed)?;
@@ -670,16 +669,31 @@ mod tests {
         let gate = Gate::bind(&target).unwrap();
         assert_eq!(gate.bound.requirement.required, 0xfe23);
         assert_eq!(gate.conditional, Gate::bind(&target).unwrap().conditional);
-        assert!(self::operation(&fixture(0xfe09, 5), &target).is_err());
         for offset in [0x90, 0x94, 0x4000 + 253, 0x4000 + 279, 0x5000 + 10] {
             let mut bad = target.clone();
             bad[offset] ^= 1;
             assert!(operation.verify(&prepared, &bad).is_err(), "{offset:#x}");
         }
-        assert!(matches!(
-            self::operation(&fixture(0xfe24, 5), &target),
-            Err(Error::Unsupported)
-        ));
+        // A differing fixed donor (whether the primary alternative FE09 or an
+        // unrelated FE24) now sets the conditional target's primary word on the
+        // drive and leaves the image and predicate unchanged: the primary is
+        // accepted unconditionally, so this is as safe as the fixed-gate case.
+        for donor in [0xfe09u16, 0xfe24] {
+            let set = self::operation(&fixture(donor, 5), &target)
+                .unwrap()
+                .unwrap();
+            assert!(set.prepare(&prepared).unwrap().is_none());
+            assert!(set.required_words().is_empty());
+            assert_eq!(
+                set.word_writes(),
+                [Word {
+                    parameter: 0x9f,
+                    value: 0xfe23
+                }],
+                "donor {donor:#06x}"
+            );
+            set.verify(&prepared, &target).unwrap();
+        }
         // A conditional shape without its complete predicate cannot be admitted.
         let mut incomplete = target.clone();
         incomplete[0x4000 + 253] ^= 1;

@@ -45,11 +45,13 @@ impl Evidence {
         discriminator: None,
     };
 
-    pub(crate) fn discover(normal: &[u8], kernel: Option<&[u8]>) -> Self {
-        // Re-run native bank discovery here: a caller-created descriptive enum
+    /// Discover the evidence, also returning the bank evidence from the same
+    /// native scan so a caller need not repeat it.
+    pub(crate) fn discover(normal: &[u8], kernel: Option<&[u8]>) -> (Self, super::bank::Banks) {
+        // Run native bank discovery here: a caller-created descriptive enum
         // must never manufacture an address-independent execution witness.
-        let storage = super::bank::analyze_pair(normal, kernel);
-        let (independent, cases) = match storage {
+        let banks = super::bank::analyze_banks(normal, kernel);
+        let (independent, cases) = match banks.storage {
             Some(Storage::Versioned(contract)) => match contract.addresses {
                 Addresses::Fixed(_) => (true, None),
                 Addresses::Capacity {
@@ -60,15 +62,14 @@ impl Evidence {
             Some(Storage::StateHeaders { .. } | Storage::KernelSequences { .. }) => (true, None),
             None => (false, None),
         };
-        let kernel = kernel.filter(|bytes| bytes.len() == 0x10000);
+        let kernel = kernel.filter(|bytes| bytes.len() == crate::image::KERNEL_LEN);
         // A capacity-selected contract needs its discriminator program proved;
         // an independent or non-capacity contract does not.
         let discriminator = if independent {
             None
         } else {
             cases.and_then(|(when_one, otherwise)| {
-                let entry = super::bank::discriminator_entry(normal)?;
-                let program = program::digest(normal, entry)?;
+                let program = program::digest(normal, banks.capacity_query?)?;
                 Some(Discriminator {
                     program,
                     when_one,
@@ -76,14 +77,15 @@ impl Evidence {
                 })
             })
         };
-        Self {
+        let evidence = Self {
             independent,
             identity: kernel.map(|kernel| PairIdentity {
                 normal: Sha256::digest(normal).into(),
                 kernel: Sha256::digest(kernel).into(),
             }),
             discriminator,
-        }
+        };
+        (evidence, banks)
     }
 
     /// Self-contained: proves the relation from the two images' own evidence,

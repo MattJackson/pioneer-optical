@@ -124,14 +124,17 @@ fn bind(normal: &[u8], stored: &[&[u8]], at: usize, accessor: u32) -> Option<Gra
         other_references: Vec::new(),
     })
 }
-/// R1L immediate loaded directly before the aligned call at `local`
-/// (`MOV.W #imm,R1` or `MOV.B #imm,R1L`). The load is not proven to be an
-/// instruction boundary: an operand byte F9 or 79 01 can be mistaken for it
-/// (open audit item correctness-P7#1; needs a decoder-anchored entry inventory).
-fn caller_index(region: &[u8], local: usize) -> Option<u8> {
-    ((local >= 4 && region[local - 4..local - 2] == [0x79, 1])
-        || (local >= 2 && region[local - 2] == 0xf9))
-        .then(|| region[local - 1])
+/// R1L immediate loaded by the instruction directly before the aligned call at
+/// `local` (`MOV.W #imm,R1` or `MOV.B #imm,R1L`). The load must be the decoded
+/// instruction ending at the call on the region's boundary chain
+/// ([`super::Anchors`]); operand bytes F9 or 79 01 of a longer instruction or
+/// a call off that chain leave the index unknown.
+fn caller_index(anchors: &mut super::Anchors<'_>, region: &[u8], local: usize) -> Option<u8> {
+    match anchors.previous(local)? {
+        load if load + 4 == local && region[load..load + 2] == [0x79, 1] => Some(region[load + 3]),
+        load if load + 2 == local && region[load] == 0xf9 => Some(region[load + 1]),
+        _ => None,
+    }
 }
 /// Bind complete pair/initializer/constructor/fill code and all native incoming
 /// call observations. This is a normal-return register contract, not global
@@ -143,27 +146,35 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Graph>> {
         Observation::Conflicting => return Observation::Conflicting,
     };
     let regions = crate::image::regions(normal).expect("bound cache regions");
-    let mut graphs = Vec::new();
-    for cache in caches {
-        for accessor in cache.accessors.iter().filter(|a| a.argument_register == 1) {
-            for region in &regions.stored {
-                let base = region.as_ptr() as usize - normal.as_ptr() as usize;
-                for local in (base & 1..region.len()).step_by(2) {
-                    if local + super::r1_pair_shapes::PAIR.bytes.len() > region.len() {
-                        continue;
-                    }
-                    if let Some(graph) = bind(
-                        normal,
-                        &regions.stored,
-                        base + local,
-                        0x410000 + accessor.offset as u32,
-                    ) {
-                        graphs.push(graph);
+    use super::r1_pair_shapes::PAIR;
+    let accessors: Vec<u32> = caches
+        .iter()
+        .flat_map(|cache| cache.accessors.iter())
+        .filter(|a| a.argument_register == 1)
+        .map(|a| 0x410000 + a.offset as u32)
+        .collect();
+    // One PAIR scan for every accessor; graphs stay in accessor-major order.
+    let mut found: Vec<Vec<Graph>> = accessors.iter().map(|_| Vec::new()).collect();
+    if !accessors.is_empty() {
+        for region in &regions.stored {
+            let base = region.as_ptr() as usize - normal.as_ptr() as usize;
+            for local in (base & 1..region.len()).step_by(2) {
+                let Some(b) = region.get(local..local + PAIR.bytes.len()) else {
+                    continue;
+                };
+                if !PAIR.matches(b) {
+                    continue;
+                }
+                let accessor = value(b, 21, 3);
+                for (k, _) in accessors.iter().enumerate().filter(|(_, &a)| a == accessor) {
+                    if let Some(graph) = bind(normal, &regions.stored, base + local, accessor) {
+                        found[k].push(graph);
                     }
                 }
             }
         }
     }
+    let mut graphs: Vec<Graph> = found.into_iter().flatten().collect();
     // One scan for every graph: each call, jump and literal target is looked
     // up, so many wrappers cost O(image log graphs), in the same order.
     let mut targets: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
@@ -181,6 +192,7 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Graph>> {
         #[cfg(test)]
         tests::REGION_SCANS.with(|c| c.set(c.get() + 1));
         let base = region.as_ptr() as usize - normal.as_ptr() as usize;
+        let mut anchors = super::Anchors::new(region, base);
         for local in (base & 1..region.len()).step_by(2) {
             let b = &region[local..];
             let at = base + local;
@@ -202,7 +214,7 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Graph>> {
             if let Some((kind, target)) = call {
                 let found = lookup(target);
                 if !found.is_empty() {
-                    let index = caller_index(region, local);
+                    let index = caller_index(&mut anchors, region, local);
                     for &i in found {
                         graphs[i].callers.push(Caller {
                             offset: at,
@@ -214,6 +226,14 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Graph>> {
             }
             if b.len() >= 4 && b[0] == 0x5a {
                 for &i in lookup(i64::from(value(b, 1, 3))) {
+                    graphs[i].other_references.push(Reference::Stored(at));
+                }
+            }
+            // Branch tail transfers enter with an unrecorded caller input.
+            if let Some(target) = super::branch_target(b, at)
+                .filter(|&t| !lookup(t).is_empty() && !anchors.call_operand(local))
+            {
+                for &i in lookup(target) {
                     graphs[i].other_references.push(Reference::Stored(at));
                 }
             }
@@ -355,6 +375,9 @@ mod tests {
         }
         raw
     }
+    fn index(region: &[u8], local: usize) -> Option<u8> {
+        caller_index(&mut super::super::Anchors::new(region, 0), region, local)
+    }
     fn graphs(raw: &[u8]) -> Vec<Graph> {
         let Observation::Known(found) = discover(raw) else {
             panic!("fixture")
@@ -376,34 +399,77 @@ mod tests {
         assert_eq!(work(20), work(1));
     }
     #[test]
+    fn branch_transfers_to_a_pair_entry_stay_visible() {
+        for (at, branch) in [
+            (0x5f80, &[0x40, 0x7e][..]),
+            (0x5f80, &[0x47, 0x7e]),
+            (0x5f00, &[0x58, 0x60, 0, 0xfc]),
+        ] {
+            let mut raw = graphs_fixture(1);
+            raw[at..at + branch.len()].copy_from_slice(branch);
+            let found = graphs(&raw);
+            assert_eq!(
+                found[0].other_references,
+                alloc::vec![Reference::Stored(at)],
+                "branch {branch:02x?}"
+            );
+        }
+        // A JSR whose address word is branch-shaped is a call, not a branch:
+        // 40 7e at 0x5f80 would be BRA to the PAIR entry at 0x416000.
+        let mut raw = graphs_fixture(1);
+        raw[0x5f7e..0x5f82].copy_from_slice(&[0x5e, 0x41, 0x40, 0x7e]);
+        assert!(graphs(&raw)[0].other_references.is_empty());
+    }
+    #[test]
     fn caller_index_accepts_loads_after_operand_tails_of_earlier_instructions() {
         let call = [0x5e, 0x41, 0x60, 0];
-        let with = |prefix: &[u8]| [prefix, &call[..]].concat();
+        // The decode runs forward from the region start (here an RTS).
+        let with = |prefix: &[u8]| [&[0x54, 0x70][..], prefix, &call[..]].concat();
         // JSR @0x416e12; MOV.B #5,R1L.
-        assert_eq!(
-            caller_index(&with(&[0x5e, 0x41, 0x6e, 0x12, 0xf9, 5]), 6),
-            Some(5)
-        );
+        assert_eq!(index(&with(&[0x5e, 0x41, 0x6e, 0x12, 0xf9, 5]), 8), Some(5));
         // JSR @0x417912; MOV.B #5,R1L.
-        assert_eq!(
-            caller_index(&with(&[0x5e, 0x41, 0x79, 0x12, 0xf9, 5]), 6),
-            Some(5)
-        );
+        assert_eq!(index(&with(&[0x5e, 0x41, 0x79, 0x12, 0xf9, 5]), 8), Some(5));
         // MOV.L #0xa06b00,ER0; MOV.W #0x40,R1.
         let long = with(&[0x7a, 0, 0, 0xa0, 0x6b, 0, 0x79, 1, 0, 0x40]);
-        assert_eq!(caller_index(&long, 10), Some(0x40));
-        assert_eq!(caller_index(&with(&[0xf9, 0x40]), 2), Some(0x40));
-        assert_eq!(caller_index(&with(&[0x79, 1, 0, 0xff]), 4), Some(0xff));
-        assert_eq!(caller_index(&with(&[0, 0, 0, 0]), 4), None);
+        assert_eq!(index(&long, 12), Some(0x40));
+        assert_eq!(index(&with(&[0xf9, 0x40]), 4), Some(0x40));
+        assert_eq!(index(&with(&[0x79, 1, 0, 0xff]), 6), Some(0xff));
+        assert_eq!(index(&with(&[0, 0, 0, 0]), 6), None);
+        // The region's first byte starts the decode.
+        assert_eq!(index(&[0xf9, 0x40, 0x5e, 0x41, 0x60, 0], 2), Some(0x40));
+        // An RTS-shaped operand word never restarts the decode:
+        // MOV.W @0x5470F905:32,R0 ends in F9 05 directly before the call.
+        assert_eq!(
+            index(
+                &[0x6b, 0x20, 0x54, 0x70, 0xf9, 0x05, 0x5e, 0x41, 0x60, 0],
+                6
+            ),
+            None
+        );
+    }
+    #[test]
+    fn caller_index_rejects_r1_immediates_inside_longer_instructions() {
+        let call = [0x5e, 0x41, 0x60, 0];
+        let with = |prefix: &[u8]| [&[0x54, 0x70][..], prefix, &call[..]].concat();
+        // MOV.B @0xF940:16,R1H: F9 40 is its address operand.
+        assert_eq!(index(&with(&[0x6a, 0x09, 0xf9, 0x40]), 6), None);
+        // ADD.W #0xF905,R1.
+        assert_eq!(index(&with(&[0x79, 0x11, 0xf9, 0x05]), 6), None);
+        // MOV.L #0x790100FF,ER0: 79 01 00 FF are its immediate bytes.
+        assert_eq!(index(&with(&[0x7a, 0, 0x79, 1, 0, 0xff]), 8), None);
     }
     #[test]
     fn caller_indices_references_and_external_calls_are_bound() {
         let mut raw = graphs_fixture(2);
         raw[0x5ff0..0x5ff2].copy_from_slice(&[0x55, 0x0e]);
+        // An RTS ending the preceding function; the decode runs forward from
+        // the region start and needs no anchor here.
+        raw[0x6ffe..0x7000].copy_from_slice(&[0x54, 0x70]);
         raw[0x7000..0x7006].copy_from_slice(&[0xf9, 0xff, 0x5e, 0x41, 0x60, 0]);
         raw[0x7010..0x7018].copy_from_slice(&[0x79, 1, 0, 0x40, 0x5e, 0x41, 0x60, 0]);
-        // R1L immediates that are operand bytes of a longer instruction are
-        // still taken as indices (open item correctness-P7#1).
+        // R1L immediates that are operand bytes of a longer instruction
+        // (MOV.B @aa:16,R1H; ADD.W #imm,R1) are not index loads.
+        raw[0x703e..0x7040].copy_from_slice(&[0x54, 0x70]);
         raw[0x7040..0x7048].copy_from_slice(&[0x6a, 0x09, 0xf9, 0x40, 0x5e, 0x41, 0x60, 0]);
         raw[0x7050..0x7058].copy_from_slice(&[0x79, 0x11, 0xf9, 0x05, 0x5e, 0x41, 0x60, 0]);
         raw[0x7021..0x7025].copy_from_slice(&0x416000u32.to_be_bytes());
@@ -430,8 +496,8 @@ mod tests {
                 caller(0x5ff0, CallKind::Relative8, None),
                 caller(0x7002, CallKind::Absolute, Some([0xff, 0x00])),
                 caller(0x7014, CallKind::Absolute, Some([0x40, 0x41])),
-                caller(0x7044, CallKind::Absolute, Some([0x40, 0x41])),
-                caller(0x7054, CallKind::Absolute, Some([5, 6])),
+                caller(0x7044, CallKind::Absolute, None),
+                caller(0x7054, CallKind::Absolute, None),
             ]
         );
         assert_eq!(

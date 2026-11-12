@@ -1,7 +1,7 @@
 # Self-contained manifest (no workspace inheritance) so it packages for crates.io as-is.
 [package]
 name = "pioneer-optical"
-version = "1.6.0"
+version = "2.0.0"
 edition = "2021"
 autoexamples = false
 rust-version = "1.75"
@@ -26,6 +26,7 @@ include = [
     "/examples/image_scan.rs",
     "/examples/hardware_report.rs",
     "/examples/hardware_matrix/**",
+    "/examples/blocker_matrix/**",
     "/examples/hardware_probe.rs",
     "/examples/logging_scan.rs",
     "/examples/startup_corpus.rs",

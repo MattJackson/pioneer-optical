@@ -160,19 +160,19 @@ fn route(n: &Native<'_>, at: usize) -> Option<Value> {
     let table = n.get(n.target(start)?, 0xa8)?;
     let close = n.target(long(table, 0x54)?)?;
     let empty = n.target(long(table, 0x5c)?)?;
-    let a = n.get(close, 12)?;
-    let b = n.get(empty, 8)?;
-    if a[0] != 0x5e
-        || a[4] != 0x5e
-        || a[8] != 0x5a
-        || b[0] != 0x5e
-        || b[4] != 0x5a
-        || a[..4] != b[..4]
-        || a[8..12] != b[4..8]
+    let close = n.get(close, 12)?;
+    let empty = n.get(empty, 8)?;
+    if close[0] != 0x5e
+        || close[4] != 0x5e
+        || close[8] != 0x5a
+        || empty[0] != 0x5e
+        || empty[4] != 0x5a
+        || close[..4] != empty[..4]
+        || close[8..12] != empty[4..8]
     {
         return None;
     }
-    let callback = n.target(number(&a[5..8]))?;
+    let callback = n.target(number(&close[5..8]))?;
     templates::TEMPLATES
         .iter()
         .any(|t| t.role == Role::Callback && valid(n, callback, t))
@@ -432,5 +432,31 @@ mod tests {
             assert_eq!(route(&Native::new(&raw).unwrap(), 0x100), None, "{p:x}");
             raw[p] ^= 1;
         }
+        // Every opcode: the three register loads, the register-3/4 load and
+        // its epilogue, and the handlers' call/jump instructions. The handler
+        // pairs flip together so their equality checks still hold.
+        for p in [
+            &[0x100][..],
+            &[0x106],
+            &[0x10c],
+            &[0x112],
+            &[0x113],
+            &[0x118],
+            &[0x404],
+            &[0x400, 0x500],
+            &[0x408, 0x504],
+        ] {
+            for &q in p {
+                raw[q] ^= 1;
+            }
+            assert_eq!(route(&Native::new(&raw).unwrap(), 0x100), None, "{p:x?}");
+            for &q in p {
+                raw[q] ^= 1;
+            }
+        }
+        assert_eq!(
+            route(&Native::new(&raw).unwrap(), 0x100),
+            Some(Value::TrayCloseRoute)
+        );
     }
 }

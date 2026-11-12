@@ -99,6 +99,11 @@ Normal region produces limited verification (`normal_verified == false`);
 a readable mismatch fails. A successful return never substitutes readiness for
 matching target identity. Callers must report limited verification explicitly.
 `execute(..., ExecutionMode::Recovery)` is the explicit degraded-receiver path.
+Before backup, consent or any device I/O, call `PreparedUpdate::check_plan(mode)`
+or, for a Normal-only update, `PreparedNormal::check_plan(ExecutionMode::Flash)`:
+the I/O-free plan-level preflight that `execute` runs first (a `PlanError`
+with code `pioneer.execute.plan` refuses the mode); live receiver binding and
+read-only requirement reads still happen during execution.
 
 [examples/flash.rs](../examples/flash.rs) is a compiled generic host integration
 example using `Transport`, `ExecutionRuntime` and `FlashTransport`. Its `main`

@@ -16,6 +16,7 @@ pub enum Convention {
 }
 /// Why the native reader rewrite could not be proved.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     /// No unique complete reader and getter relationship was found.
     Unresolved,
@@ -37,6 +38,11 @@ const PACKED: &[u8] = &[
     0x40, 0x0e, 0x79, 0, 1, 0x12, 0x5e, 0, 0, 0, 0x40, 0x0c, 0x79, 0, 1, 0x12, 0x5e, 0, 0, 0, 0x0c,
     8, 0x18, 0, 0x66, 0x30, 0x6d, 0x73, 0x54, 0x70,
 ];
+/// Getter-call operand offsets in `WHOLE` and `PACKED`.
+const WHOLE_CALLS: &[usize] = &[31];
+const PACKED_CALLS: &[usize] = &[43, 53];
+/// The packed reader's high-to-low byte copy (`MOV.B R0H,R0L`, or NOPs).
+const SELECT: Range<usize> = 56..58;
 #[derive(Debug)]
 struct Reader {
     at: usize,
@@ -48,16 +54,13 @@ struct Reader {
 fn bind(normal: &[u8]) -> Result<Reader, Error> {
     let regions = crate::image::regions(normal).ok_or(Error::Unresolved)?;
     let mut found = None;
-    for (packed, template, holes) in [
-        (false, WHOLE, &[31usize][..]),
-        (true, PACKED, &[43usize, 53][..]),
-    ] {
+    for (packed, template, holes) in [(false, WHOLE, WHOLE_CALLS), (true, PACKED, PACKED_CALLS)] {
         let pattern: Vec<Option<u8>> = template
             .iter()
             .enumerate()
             .map(|(i, byte)| {
                 if holes.iter().any(|h| (*h..*h + 3).contains(&i))
-                    || (packed && (56..58).contains(&i))
+                    || (packed && SELECT.contains(&i))
                 {
                     None
                 } else {
@@ -71,7 +74,7 @@ fn bind(normal: &[u8]) -> Result<Reader, Error> {
             };
             let bytes = &body.bytes;
             let convention = if packed {
-                match &bytes[56..58] {
+                match &bytes[SELECT] {
                     [0x0c, 8] => Convention::PackedBytes,
                     [0, 0] => Convention::WholeWord,
                     _ => continue,
@@ -106,7 +109,7 @@ fn bind(normal: &[u8]) -> Result<Reader, Error> {
 /// four-mode consumer may select packed bytes from a whole-word reader.
 pub fn observe(normal: &[u8]) -> Result<Convention, Error> {
     let reader = bind(normal)?;
-    if callers::observe_optional(normal)?.is_some_and(|caller| caller.high_byte_modes) {
+    if callers::observe_bound(normal, &reader)?.is_some_and(|caller| caller.high_byte_modes) {
         Ok(Convention::PackedBytes)
     } else {
         Ok(reader.convention)
@@ -115,79 +118,55 @@ pub fn observe(normal: &[u8]) -> Result<Convention, Error> {
 
 /// Preserve the installed storage interpretation at byte-consuming calibration
 /// callers by rewriting a copy of target's reader.
-/// The original target getter is retained. A native packed reader can preserve
-/// whole-word calibration values by removing its high-to-low byte copy. Growing a whole-word
-/// reader requires an explicit reservation and a JMP at its original entry.
+/// Both interpretations are the effective ones of [`observe`], including a bound
+/// four-mode caller's byte selection. The original target getter, callers and
+/// reader entry are retained. A native packed reader can preserve whole-word
+/// calibration values by removing its high-to-low byte copy; other readers are
+/// replaced through [`transplant`], so growing a whole-word reader requires an
+/// explicit reservation for the branch-closed suffix reached by a JMP. A
+/// difference expressed only by the installed caller's byte selection is
+/// refused, because the installed reader then holds no OEM selection
+/// instruction to copy; see [`transplant_effective`].
 pub fn rewrite(
     target: &[u8],
     installed: &[u8],
     reservation: Option<Range<usize>>,
 ) -> Result<Vec<u8>, Error> {
-    let donor = bind(installed)?;
-    let required = donor.convention;
+    let required = observe(installed)?;
+    if observe(target)? == required {
+        return Ok(target.to_vec());
+    }
     let before = bind(target)?;
-    let mut changed = target.to_vec();
-    if before.convention == required {
-        return Ok(changed);
-    }
-    if before.body.spans.len() != 1 {
-        return transplant(target, installed, reservation);
-    }
-    if before.packed_shape {
-        let slot = &mut changed[before.at + 56..before.at + 58];
+    let changed = if before.packed_shape && before.body.spans.len() == 1 {
+        let donor = bind(installed)?;
+        let mut changed = target.to_vec();
+        let slot = &mut changed[before.at + SELECT.start..before.at + SELECT.end];
         if required == Convention::WholeWord {
             super::encoding::nops(slot).ok_or(Error::Unresolved)?;
-        } else {
+        } else if donor.packed_shape {
             // Copy the actual bound OEM high-byte selection instruction.
-            slot.copy_from_slice(&donor.body.bytes[56..58]);
+            slot.copy_from_slice(&donor.body.bytes[SELECT]);
+        } else {
+            // The installed caller, not its reader, selects the packed bytes.
+            return Err(Error::Unresolved);
         }
+        changed
     } else {
-        let space = reservation.ok_or(Error::SpaceRequired)?;
-        let regions = crate::image::regions(target).ok_or(Error::Unresolved)?;
-        let stored = regions.stored.iter().any(|r| {
-            let at = r.as_ptr() as usize - target.as_ptr() as usize;
-            space.start >= at && space.end <= at + r.len()
-        });
-        if space.start & 1 != 0
-            || space.end & 1 != 0
-            || space.start > space.end
-            || space.len() < PACKED.len()
-            || !stored
-            || (space.start < before.at + WHOLE.len() && before.at < space.end)
-            || !target
-                .get(space.clone())
-                .is_some_and(|b| b.iter().all(|b| *b == 0xff))
-        {
-            return Err(Error::InvalidSpace);
-        }
-        let mut program = donor.body.bytes.clone();
-        for at in [43, 53] {
-            super::encoding::retarget_call(
-                &mut program,
-                at - 1,
-                u32::from_be_bytes([0, before.getter[0], before.getter[1], before.getter[2]]),
-            )
-            .ok_or(Error::Unresolved)?;
-        }
-        let address = 0x410000usize
-            .checked_add(space.start)
-            .filter(|a| *a <= 0xffffff)
-            .ok_or(Error::InvalidSpace)? as u32;
-        crate::filters::phase::native::encoding::nops(&mut changed[space.clone()])
-            .ok_or(Error::InvalidSpace)?;
-        changed[space.start..space.start + program.len()].copy_from_slice(&program);
-        changed[before.at..before.at + 4].copy_from_slice(
-            &crate::filters::phase::native::encoding::jump(address).ok_or(Error::InvalidSpace)?,
-        );
-    }
+        transplant(target, installed, reservation)?
+    };
     if observe(&changed)? != required {
         return Err(Error::VerificationFailed);
     }
     Ok(changed)
 }
 
-/// Copy the donor's complete native calibration reader into the target, changing
-/// only getter call addresses. Stored words are neither copied nor written.
+/// Copy the donor's complete native calibration reader into the target. The
+/// copied instructions differ from the donor's only in getter call addresses;
+/// stored words are neither copied nor written. A reader that fits replaces the
+/// target's reader in place, NOP-filling the rest of its span and retiring any
+/// previous spill. A longer reader keeps the original entry: a branch-closed
+/// prefix ends in a JMP to the remaining suffix, placed in the reservation (or
+/// the target's previous spill), and other reservation bytes are NOP-filled.
 /// The caller must establish ownership of any reservation used for growth and
 /// prove the getter/caller ABI, including which returned bytes are consumed.
 pub fn transplant(
@@ -198,10 +177,10 @@ pub fn transplant(
     let before = bind(target)?;
     let source = bind(donor)?;
     let mut code = source.body.bytes.clone();
-    let fields: &[usize] = if source.packed_shape {
-        &[43, 53]
+    let fields = if source.packed_shape {
+        PACKED_CALLS
     } else {
-        &[31]
+        WHOLE_CALLS
     };
     for field in fields {
         super::encoding::retarget_call(
@@ -283,18 +262,24 @@ pub fn transplant(
 
 /// Preserve the installed byte interpretation at the positively bound four-mode
 /// caller. A whole-word target already returns both packed bytes, so selecting
-/// its existing high-byte results avoids reader growth entirely.
+/// its existing high-byte results avoids reader growth entirely. The result must
+/// reproduce the donor's effective [`observe`] interpretation.
 pub fn transplant_effective(target: &[u8], donor: &[u8]) -> Result<Vec<u8>, Error> {
-    if observe(target)? == observe(donor)? {
+    let required = observe(donor)?;
+    if observe(target)? == required {
         return Ok(target.to_vec());
     }
     let before = bind(target)?;
-    let required = observe(donor)?;
-    if before.convention == Convention::WholeWord && !before.packed_shape {
-        callers::select_bytes(target, donor, required == Convention::PackedBytes)
+    let changed = if before.convention == Convention::WholeWord && !before.packed_shape {
+        callers::select_bytes(target, donor, required == Convention::PackedBytes)?
     } else {
-        transplant(target, donor, None)
+        transplant(target, donor, None)?
+    };
+    // A copied reader alone cannot reproduce bytes selected by the donor's caller.
+    if observe(&changed)? != required {
+        return Err(Error::VerificationFailed);
     }
+    Ok(changed)
 }
 
 #[cfg(test)]

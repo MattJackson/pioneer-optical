@@ -366,7 +366,18 @@ fn declared_certificate(
 
 /// Keep R1 first. Only an actual current ClosedEntries zero-literal diagnostic
 /// seeds the new declaration search; its result is still only byte ownership.
+#[cfg(test)]
 pub(crate) fn bind(normal: &[u8], kernel: &[u8]) -> Result<BoundaryCertificate, BoundaryFailure> {
+    bind_seeded(normal, kernel, || super::sinks::diagnose(normal).err())
+}
+
+/// [`bind`] with the Normal-only sink refusal supplied by the caller, which
+/// has already computed it; `normal_failure` runs only when R1 does not bind.
+pub(crate) fn bind_seeded(
+    normal: &[u8],
+    kernel: &[u8],
+    normal_failure: impl FnOnce() -> Option<super::sinks::Failure>,
+) -> Result<BoundaryCertificate, BoundaryFailure> {
     let failure = match bind_r1(normal, kernel) {
         Ok(certificate) => return Ok(certificate),
         Err(failure) => failure,
@@ -374,11 +385,11 @@ pub(crate) fn bind(normal: &[u8], kernel: &[u8]) -> Result<BoundaryCertificate, 
     if kernel.is_empty() {
         return Err(failure);
     }
-    let Err(super::sinks::Failure::UnclassifiedAddressReference {
+    let Some(super::sinks::Failure::UnclassifiedAddressReference {
         stage: super::sinks::Stage::ClosedEntries,
         at,
         ..
-    }) = super::sinks::diagnose(normal)
+    }) = normal_failure()
     else {
         return Err(failure);
     };

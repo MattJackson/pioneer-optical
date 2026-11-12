@@ -93,7 +93,7 @@ impl Build {
             end: 0x3500,
         }];
         Space {
-            ram: &ram,
+            ram: &ram[self.block as usize..],
             block: self.block..self.block + 0x110,
             normal: &normal,
             sections: &sections,
@@ -233,10 +233,30 @@ fn a_decision_that_reads_firmware_owned_memory_refuses() {
 fn an_entry_outside_the_block_refuses() {
     let (ram, normal) = A.images(&A.entry_code(), &A.logger_code());
     let space = Space {
-        ram: &ram,
+        ram: &ram[A.block as usize..],
         block: A.block..A.block + 0x110,
         normal: &normal,
         sections: &[],
     };
     assert_eq!(space.digest(A.block + 0x200), None);
+}
+
+#[test]
+fn an_odd_copy_destination_refuses() {
+    // H8S fetches instructions only at even addresses. An odd destination
+    // would put block offsets at the opposite parity to the addresses the
+    // CPU executes, so no entry in such a block may fingerprint.
+    let odd = Build {
+        block: 0x5f1,
+        entry: 0x601,
+        builder: 0x641,
+        ..A
+    };
+    assert_eq!(odd.digest(), None);
+    let even_entry = Build {
+        entry: 0x602,
+        builder: 0x642,
+        ..odd
+    };
+    assert_eq!(even_entry.digest(), None);
 }

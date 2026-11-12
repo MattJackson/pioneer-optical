@@ -11,6 +11,22 @@
 //! Slim solenoid-eject drives run different `[LOADIN]`/`[LOADOUT]` programs
 //! with no arrival/confirmation pair. For those, [`slim`] binds the exact
 //! direct peripheral bit I/O each referenced state machine performs.
+//!
+//! Memory accesses through a base register are classified by bounded
+//! constant propagation over the walked instructions (`mov`/`movea`/
+//! `movhi`/`mov imm32`, `addi`, `add`/`sub` of known values, a few logic
+//! ops; anything else makes the written register unknown; joins keep only
+//! equal values). Edges come from the walk's own branches and `switch`
+//! tables; the walk's start, positions with no edge inside the walk and
+//! positions that branches or bounded `switch` tables outside the walk may
+//! enter all start from nothing known. A known peripheral address counts
+//! exactly like `disp16[r0]`; a known address inside the Normal image is
+//! not I/O; any other known address (external bus, an alias of the I/O
+//! region) and an unknown base refuse. By the calling convention sp
+//! addresses the stack and gp the small data area within the disp16[gp]
+//! window (gp is set before the Normal runs, so its value is not known
+//! here), both RAM; a call (`jarl`, `callt`, `jarl [reg]`) preserves only
+//! r20-r29, sp and gp.
 use crate::image::layout::{Observation, Unresolved};
 use alloc::{format, string::String, vec::Vec};
 
@@ -24,7 +40,8 @@ const OPENED: &[u8] = b"[LOADOUT]\n\r\0";
 /// One physical pin a role waits on. The required level is bit == 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct Pin {
-    /// Sign-extended `disp16[r0]` peripheral address.
+    /// Peripheral address: sign-extended `disp16[r0]`, or a tracked base
+    /// register plus its displacement.
     pub address: u32,
     /// Bit index within the byte.
     pub bit: u8,
@@ -114,16 +131,29 @@ fn unique(b: &[u8], needle: &[u8]) -> Option<usize> {
     found.next().is_none().then_some(at)
 }
 
-/// The unique `mov imm32, r7` loading the unique diagnostic for its print.
-fn reference(b: &[u8], label: &[u8]) -> Option<usize> {
-    let address = u32::try_from(unique(b, label)? + BASE).ok()?;
+/// The unique `mov imm32, r7` loading the diagnostic at `label` for its print.
+fn referenced(b: &[u8], label: usize) -> Option<usize> {
+    let address = u32::try_from(label + BASE).ok()?;
     let mut reference = [0x27, 0x06, 0, 0, 0, 0];
     reference[2..].copy_from_slice(&address.to_le_bytes());
     unique(b, &reference).filter(|at| at & 1 == 0)
 }
 
-fn role(b: &[u8], label: &[u8]) -> Observation<Role> {
-    let Some(start) = reference(b, label) else {
+/// Each diagnostic's unique offset and its unique reference, located once.
+struct Anchors {
+    labels: [Option<usize>; 2],
+    starts: [Option<usize>; 2],
+}
+fn anchors(b: &[u8]) -> Anchors {
+    let labels = [unique(b, CLOSED), unique(b, OPENED)];
+    Anchors {
+        labels,
+        starts: labels.map(|label| label.and_then(|at| referenced(b, at))),
+    }
+}
+
+fn role(b: &[u8], start: Option<usize>) -> Observation<Role> {
+    let Some(start) = start else {
         return Observation::Unresolved(Unresolved::ReaderNotRecognized);
     };
     let mut found: Option<Role> = None;
@@ -165,8 +195,8 @@ fn role(b: &[u8], label: &[u8]) -> Observation<Role> {
 }
 
 /// Native-order (bus-decoded) Normal. Both roles must bind.
-pub(super) fn native(normal: &[u8]) -> Observation<Predicates> {
-    match (role(normal, CLOSED), role(normal, OPENED)) {
+fn predicates(normal: &[u8], starts: [Option<usize>; 2]) -> Observation<Predicates> {
+    match (role(normal, starts[0]), role(normal, starts[1])) {
         (Observation::Known(closed), Observation::Known(opened)) => {
             Observation::Known(Predicates { closed, opened })
         }
@@ -178,9 +208,15 @@ pub(super) fn native(normal: &[u8]) -> Observation<Predicates> {
     }
 }
 
+#[cfg(test)]
+fn native(normal: &[u8]) -> Observation<Predicates> {
+    predicates(normal, anchors(normal).starts)
+}
+
 /// Whether both loading diagnostics exist, so a miss is a recognizer gap.
-pub(super) fn diagnostics(normal: &[u8]) -> bool {
-    unique(normal, CLOSED).is_some() && unique(normal, OPENED).is_some()
+#[cfg(test)]
+fn diagnostics(normal: &[u8]) -> bool {
+    anchors(normal).labels.iter().all(Option::is_some)
 }
 
 /// One direct peripheral bit access of a slim loading program.
@@ -201,14 +237,48 @@ pub(super) struct Program {
     pub end: usize,
     /// gp-relative RAM bit operations (mnemonic, displacement, bit): evidence.
     pub gates: Vec<(&'static str, u16, u8)>,
+    /// Whether the direct set was incomplete, so one helper level was followed.
+    pub followed: bool,
     /// Helper paths not bound (failed closed or deeper calls): evidence only.
-    /// Empty unless the direct set was incomplete.
+    /// Empty unless a helper level was followed.
     pub unbound: Vec<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Slim {
     pub closed: Program,
     pub opened: Program,
+}
+
+/// reg2 == r0 forms under opcode 0x3c/0x3d whose second halfword has bit 0
+/// set (jr disp22 has it clear).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Extended {
+    /// prepare list, imm5 (00001) or prepare list, imm5, sp | imm16 |
+    /// imm16 << 16 | imm32 (ff011): its length.
+    Prepare(usize),
+    /// V850E2 format XIV ld.b/bu/h/hu/w and st.b/h/w disp23[reg1] (6 bytes):
+    /// sub-opcodes 0101, 1101, 00111, 01001, 01111.
+    Disp23,
+    /// No instruction this walker can decode.
+    Unknown,
+}
+fn extended(b: &[u8], at: usize) -> Option<Option<Extended>> {
+    let w = half(b, at)?;
+    let sub = half(b, at + 2)?;
+    if w >> 11 != 0 || !matches!((w >> 5) & 0x3f, 0x3c | 0x3d) || sub & 1 == 0 {
+        return Some(None);
+    }
+    Some(Some(if sub & 0x1f == 1 {
+        Extended::Prepare(4)
+    } else if sub & 7 == 3 {
+        Extended::Prepare([4, 6, 6, 8][usize::from((sub >> 3) & 3)])
+    } else if matches!(sub & 0xf, 0b0101 | 0b1101)
+        || matches!(sub & 0x1f, 0b00111 | 0b01001 | 0b01111)
+    {
+        Extended::Disp23
+    } else {
+        Extended::Unknown
+    }))
 }
 
 /// V850E2 instruction length from its leading halfwords.
@@ -221,89 +291,729 @@ fn length(b: &[u8], at: usize) -> Option<usize> {
         0..=0x2f => 2,
         // mov imm32, reg / jmp disp32[reg]
         0x31 | 0x37 if reg2 == 0 => 6,
-        // prepare list, imm5 [, imm16 | imm32]; jr disp22 has an even disp.
-        0x3c | 0x3d if reg2 == 0 && half(b, at + 2)? & 7 == 1 => {
-            [4, 6, 6, 8][usize::from((half(b, at + 2)? >> 3) & 3)]
-        }
+        0x3c | 0x3d if reg2 == 0 => match extended(b, at)? {
+            Some(Extended::Prepare(len)) => len,
+            Some(Extended::Disp23) => 6,
+            Some(Extended::Unknown) | None => 4,
+        },
         _ => 4,
     })
 }
 /// Longest referenced state machine walked before giving up.
 const PROGRAM: usize = 0x1000;
+/// Most `switch` table entries decoded for one table.
+const CASES: usize = 0x400;
+/// How far before a walk a `switch` may sit whose table enters the walk.
+const SWITCH_REACH: usize = 0x1_0000;
 
-/// Direct bit I/O, RAM gates and `jarl` targets of one walked routine.
+/// Abstract register value of the bounded constant propagation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Val {
+    Unknown,
+    Known(u32),
+    /// The stack pointer plus an offset: RAM by the calling convention.
+    Stack,
+    /// gp plus a known offset: the small data area, RAM by the calling
+    /// convention when the offset stays within [`GP_REACH`].
+    Gp(u32),
+}
+type Regs = [Val; 32];
+const SP: usize = 3;
+const GP: usize = 4;
+const EP: usize = 30;
+/// Offsets from gp inside its data area: the disp16[gp] window.
+const GP_REACH: u32 = 0x8000;
+
+/// Register state where nothing is known: r0 is zero, sp is the stack.
+fn unknown() -> Regs {
+    let mut regs = [Val::Unknown; 32];
+    regs[0] = Val::Known(0);
+    regs[SP] = Val::Stack;
+    regs[GP] = Val::Gp(0);
+    regs
+}
+/// Merge at a join: equal values survive, differing ones become unknown.
+fn join(into: &mut Option<Regs>, from: &Regs) -> bool {
+    let Some(into) = into else {
+        *into = Some(*from);
+        return true;
+    };
+    let mut changed = false;
+    for (a, b) in into.iter_mut().zip(from) {
+        if *a != *b && *a != Val::Unknown {
+            *a = Val::Unknown;
+            changed = true;
+        }
+    }
+    changed
+}
+fn plus(a: Val, d: u32) -> Val {
+    match a {
+        Val::Known(v) => Val::Known(v.wrapping_add(d)),
+        Val::Stack => Val::Stack,
+        Val::Gp(v) => Val::Gp(v.wrapping_add(d)),
+        Val::Unknown => Val::Unknown,
+    }
+}
+fn known(a: Val, b: Val, f: impl Fn(u32, u32) -> u32) -> Val {
+    match (a, b) {
+        (Val::Known(a), Val::Known(b)) => Val::Known(f(a, b)),
+        _ => Val::Unknown,
+    }
+}
+fn sext16(v: u16) -> u32 {
+    v as i16 as i32 as u32
+}
+fn word(b: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from(half(b, at)?) | u32::from(half(b, at + 2)?) << 16)
+}
+
+/// Control flow leaving one instruction.
+enum Flow {
+    /// Falls through only.
+    Next,
+    /// Conditional branch: falls through and may take the target.
+    Branch(usize),
+    /// Unconditional transfer to a target (inside or outside the walk).
+    Jump(usize),
+    /// `switch`: an inline table of entries follows the instruction.
+    Switch,
+    /// Leaves with no known successor (`jmp [reg]`, `jmp disp32[reg]`,
+    /// `dispose ..., [reg]`).
+    Exit,
+}
+/// `dispose imm5, list, [reg]`: returns (without [reg] it falls through).
+fn returning_dispose(b: &[u8], at: usize) -> bool {
+    half(b, at).is_some_and(|w| w & 0xffc0 == 0x0640)
+        && half(b, at + 2).is_some_and(|sub| sub & 31 != 0)
+}
+/// A computed jump: `jmp [reg]` other than the `jmp [lp]` return, or
+/// `jmp disp32[reg]`.
+fn computed(w: u16) -> bool {
+    (w & 0xffe0 == 0x0060 && w != 0x007f) || w & 0xffe0 == 0x06e0
+}
+fn flow(b: &[u8], at: usize) -> Flow {
+    let Some(w) = half(b, at) else {
+        return Flow::Exit;
+    };
+    let (op, reg1, reg2) = ((w >> 5) & 0x3f, w & 31, w >> 11);
+    let sub = half(b, at + 2).unwrap_or(0);
+    if returning_dispose(b, at) {
+        return Flow::Exit;
+    }
+    match op {
+        0x2c..=0x2f => match branch(b, at) {
+            Some((BR, target)) => Flow::Jump(target),
+            Some((_, target)) => Flow::Branch(target),
+            None => Flow::Exit,
+        },
+        0x02 if reg2 == 0 && reg1 != 0 => Flow::Switch,
+        0x03 if reg2 == 0 => Flow::Exit,
+        0x37 if reg2 == 0 => Flow::Exit,
+        // jr disp22
+        0x3c | 0x3d if reg2 == 0 && sub & 1 == 0 => {
+            let d = ((u32::from(w & 0x3f) << 16) | u32::from(sub)) as i32;
+            at.checked_add_signed(((d << 10) >> 10) as isize)
+                .map_or(Flow::Exit, Flow::Jump)
+        }
+        // jr disp32
+        0x17 if reg2 == 0 && reg1 == 0 => word(b, at + 2)
+            .and_then(|d| at.checked_add_signed(d as i32 as isize))
+            .map_or(Flow::Exit, Flow::Jump),
+        _ => Flow::Next,
+    }
+}
+/// Targets of the inline table of a `switch` at `at`: halfword entries,
+/// each a signed halfword offset from the table, ending where the lowest
+/// forward target begins. `None` when no bound is found within [`CASES`].
+fn table(b: &[u8], at: usize) -> Option<(Vec<usize>, usize)> {
+    let base = at + 2;
+    let (mut targets, mut lowest) = (Vec::new(), usize::MAX);
+    for i in 0..CASES {
+        let entry = base + 2 * i;
+        if entry >= lowest {
+            return Some((targets, entry));
+        }
+        let e = half(b, entry)? as i16;
+        let target = base.checked_add_signed(isize::from(e) * 2)?;
+        if target > entry {
+            lowest = lowest.min(target);
+        }
+        targets.push(target);
+    }
+    (base + 2 * CASES >= lowest).then_some((targets, base + 2 * CASES))
+}
+
+/// Register effect of one instruction. Anything not modelled makes the
+/// registers it may write unknown.
+fn effect(b: &[u8], at: usize, len: usize, regs: &mut Regs) {
+    let Some(w) = half(b, at) else { return };
+    let (op, r1, r2) = ((w >> 5) & 0x3f, usize::from(w & 31), usize::from(w >> 11));
+    let sub = if len >= 4 {
+        half(b, at + 2).unwrap_or(0)
+    } else {
+        0
+    };
+    let r3 = usize::from(sub >> 11);
+    let imm5 = (((w & 31) as i8) << 3 >> 3) as i32 as u32;
+    let call = |regs: &mut Regs| {
+        // Calling convention: r20-r29, sp and gp survive a call.
+        for (r, v) in regs.iter_mut().enumerate() {
+            if !matches!(r, 0 | SP | GP | 20..=29) {
+                *v = Val::Unknown;
+            }
+        }
+    };
+    let clobber_all = |regs: &mut Regs| *regs = unknown();
+    let set = |regs: &mut Regs, r: usize, v: Val| {
+        if r != 0 {
+            regs[r] = if r == SP { Val::Stack } else { v };
+        }
+    };
+    if w & 0xffc0 == 0x0640 {
+        // dispose: sp moves within the stack; listed r20-r31 are restored.
+        for v in &mut regs[20..32] {
+            *v = Val::Unknown;
+        }
+        return;
+    }
+    match op {
+        // mov reg1, reg2
+        0x00 if r2 != 0 => set(regs, r2, regs[r1]),
+        0x00 if r1 == 0 => {}
+        // add / sub / subr reg1, reg2
+        0x0e => set(
+            regs,
+            r2,
+            match (regs[r2], regs[r1]) {
+                (Val::Stack, Val::Known(_)) | (Val::Known(_), Val::Stack) => Val::Stack,
+                (Val::Gp(g), Val::Known(k)) | (Val::Known(k), Val::Gp(g)) => {
+                    Val::Gp(g.wrapping_add(k))
+                }
+                (a, b) => known(a, b, u32::wrapping_add),
+            },
+        ),
+        0x0d => set(
+            regs,
+            r2,
+            match (regs[r2], regs[r1]) {
+                (Val::Stack, Val::Known(_)) => Val::Stack,
+                (Val::Gp(g), Val::Known(k)) => Val::Gp(g.wrapping_sub(k)),
+                (a, b) => known(a, b, u32::wrapping_sub),
+            },
+        ),
+        0x0c => set(regs, r2, known(regs[r1], regs[r2], u32::wrapping_sub)),
+        0x08 => set(regs, r2, known(regs[r2], regs[r1], |a, b| a | b)),
+        0x0a => set(regs, r2, known(regs[r2], regs[r1], |a, b| a & b)),
+        // tst, cmp, cmp imm5, Format III branches: flags only.
+        0x0b | 0x0f | 0x13 | 0x2c..=0x2f => {}
+        // jmp [reg1], switch: no register written.
+        0x02 | 0x03 if r2 == 0 => {}
+        // callt
+        // callt imm6: imm6 bit 5 is opcode bit 0, so callt 32..63 is 0x11.
+        0x10 | 0x11 if r2 == 0 => call(regs),
+        0x10 => set(regs, r2, Val::Known(imm5)),
+        0x12 => set(regs, r2, plus(regs[r2], imm5)),
+        0x14 => set(
+            regs,
+            r2,
+            known(regs[r2], Val::Known(0), |a, _| a >> (w & 31)),
+        ),
+        0x16 => set(
+            regs,
+            r2,
+            known(regs[r2], Val::Known(0), |a, _| a << (w & 31)),
+        ),
+        // jr / jarl disp32
+        0x17 if r2 == 0 => {
+            if r1 != 0 {
+                call(regs);
+                regs[r1] = Val::Unknown;
+            }
+        }
+        // sst.b, sst.h, sst.w: memory only.
+        0x1c..=0x1f | 0x24..=0x27 => {}
+        0x28..=0x2b if w & 1 == 1 => {}
+        // sld.b, sld.h, sld.w, sld.bu, sld.hu
+        0x18..=0x1b | 0x20..=0x23 | 0x28..=0x2b | 0x03 => set(regs, r2, Val::Unknown),
+        0x30 => set(regs, r2, plus(regs[r1], sext16(sub))),
+        // mov imm32, reg1
+        0x31 if r2 == 0 => set(regs, r1, word(b, at + 2).map_or(Val::Unknown, Val::Known)),
+        0x31 => set(regs, r2, plus(regs[r1], sext16(sub))),
+        0x32 if r2 != 0 => set(regs, r2, plus(regs[r1], u32::from(sub) << 16)),
+        0x34 => set(
+            regs,
+            r2,
+            known(regs[r1], Val::Known(sub.into()), |a, b| a | b),
+        ),
+        0x35 => set(
+            regs,
+            r2,
+            known(regs[r1], Val::Known(sub.into()), |a, b| a ^ b),
+        ),
+        0x36 => set(
+            regs,
+            r2,
+            known(regs[r1], Val::Known(sub.into()), |a, b| a & b),
+        ),
+        // ld.b, ld.h/ld.w
+        0x38 | 0x39 => set(regs, r2, Val::Unknown),
+        // st.b, st.h/st.w, bit operations: memory and flags only.
+        0x3a | 0x3b | 0x3e => {}
+        // ld.bu
+        0x3c | 0x3d if r2 != 0 && sub & 1 == 1 => set(regs, r2, Val::Unknown),
+        // jarl disp22
+        0x3c | 0x3d if r2 != 0 => {
+            call(regs);
+            regs[r2] = Val::Unknown;
+        }
+        // jr disp22
+        0x3c | 0x3d if r2 == 0 && sub & 1 == 0 => {}
+        0x3c | 0x3d => match extended(b, at).flatten() {
+            // prepare: sp moves within the stack; the ff form also sets ep.
+            Some(Extended::Prepare(_)) if sub & 0x1f == 1 => {}
+            Some(Extended::Prepare(_)) => {
+                regs[EP] = match (sub >> 3) & 3 {
+                    0 => Val::Stack,
+                    1 => half(b, at + 4).map_or(Val::Unknown, |v| Val::Known(sext16(v))),
+                    2 => half(b, at + 4).map_or(Val::Unknown, |v| Val::Known(u32::from(v) << 16)),
+                    _ => word(b, at + 4).map_or(Val::Unknown, Val::Known),
+                }
+            }
+            // disp23 loads write reg3; stores write nothing.
+            Some(Extended::Disp23) if matches!(sub & 0xf, 0b1101) || sub & 0x1f == 0b01111 => {}
+            Some(Extended::Disp23) => set(regs, r3, Val::Unknown),
+            _ => clobber_all(regs),
+        },
+        // ld.hu
+        0x3f if sub & 1 == 1 => set(regs, r2, Val::Unknown),
+        0x3f => match sub & 0x07ff {
+            // set1/not1/clr1/tst1 reg2, [reg1]; ldsr; di/ei, halt, trap, reti
+            // di, ei exactly; E2V3 `jarl [reg1], reg3` shares their second
+            // halfword and is an indirect call.
+            0x0160 if sub == 0x0160 && matches!(w, 0x07e0 | 0x87e0) => {}
+            0x0160 => {
+                call(regs);
+                set(regs, r3, Val::Unknown);
+            }
+            0x00e0 | 0x00e2 | 0x00e4 | 0x00e6 | 0x0020 | 0x0120 | 0x0100 | 0x0140 => {}
+            // setf, stsr, shr/sar/shl, sasf, mul/mulu, divh(u), div(u), mul
+            // imm9, cmov, bsw/bsh/hsw: reg2 and/or reg3.
+            0x0000 | 0x0040 | 0x0080 | 0x00a0 | 0x00c0 | 0x0082 | 0x00a2 | 0x00c2 | 0x0200
+            | 0x0220 | 0x0222 | 0x0280 | 0x0282 | 0x02c0 | 0x02c2 | 0x0340 | 0x0342 | 0x0344 => {
+                set(regs, r2, Val::Unknown);
+                set(regs, r3, Val::Unknown);
+            }
+            s if s & 0x07c3 == 0x0240 || s & 0x07c1 == 0x0300 => {
+                set(regs, r2, Val::Unknown);
+                set(regs, r3, Val::Unknown);
+            }
+            _ => clobber_all(regs),
+        },
+        // Every other Format I/II/VI instruction writes reg2 (reg1 when
+        // reg2 is r0: zxb, sxb, zxh, sxh).
+        0x00..=0x17 | 0x30..=0x37 => {
+            if r2 != 0 {
+                set(regs, r2, Val::Unknown)
+            } else {
+                set(regs, r1, Val::Unknown)
+            }
+        }
+        _ => clobber_all(regs),
+    }
+}
+
+/// Where one memory access goes, from the propagated base register.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Base {
+    /// The effective address is known.
+    Address(u32),
+    /// Stack-pointer or gp data-area relative: RAM by the calling convention.
+    Ram,
+    /// The base register's value is not known here.
+    Unknown,
+}
+/// One memory access of a walked instruction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Access {
+    /// Bit operation (kind: set1, not1, clr1, tst1) on a bit; `None` when
+    /// the bit number is a register whose value is not known.
+    Bit(Base, u8, Option<u8>),
+    /// Byte, halfword or word load or store (or caxi).
+    Transfer(Base),
+}
+/// Peripheral I/O region, as reached by negative `disp16[r0]`.
+fn peripheral(address: u32) -> bool {
+    address >= 0xffff_8000
+}
+fn base(regs: &Regs, reg: usize, disp: u32) -> Base {
+    match regs[reg] {
+        Val::Known(v) => Base::Address(v.wrapping_add(disp)),
+        Val::Stack => Base::Ram,
+        Val::Gp(v) => match v.wrapping_add(disp).wrapping_add(GP_REACH) {
+            0..=0xffff => Base::Ram,
+            _ => Base::Unknown,
+        },
+        Val::Unknown => Base::Unknown,
+    }
+}
+/// The memory access of the instruction at `at`, if it has one, with its
+/// base register.
+fn access(b: &[u8], at: usize, len: usize, regs: &Regs) -> Option<(usize, Access)> {
+    let w = half(b, at)?;
+    let (op, r1, r2) = ((w >> 5) & 0x3f, usize::from(w & 31), usize::from(w >> 11));
+    let sub = if len >= 4 { half(b, at + 2)? } else { 0 };
+    let short = |disp: u16| Some((EP, Access::Transfer(base(regs, EP, disp.into()))));
+    match op {
+        0x03 if r2 != 0 && w & 0x10 == 0 => short(w & 0xf),
+        0x03 if r2 != 0 => short((w & 0xf) << 1),
+        0x18..=0x1f => short(w & 0x7f),
+        0x20..=0x27 => short((w & 0x7f) << 1),
+        0x28..=0x2b => short((w & 0x7e) << 1),
+        // ld.b, st.b: disp16; ld.h/ld.w, st.h/st.w: bit 0 selects the width.
+        0x38 | 0x3a => Some((r1, Access::Transfer(base(regs, r1, sext16(sub))))),
+        0x39 | 0x3b => Some((r1, Access::Transfer(base(regs, r1, sext16(sub & !1))))),
+        0x3c | 0x3d if r2 != 0 && sub & 1 == 1 => {
+            // ld.bu: displacement bit 0 is bit 5 of the first halfword.
+            let disp = (sub & !1) | ((w >> 5) & 1);
+            Some((r1, Access::Transfer(base(regs, r1, sext16(disp)))))
+        }
+        0x3c | 0x3d if r2 == 0 && extended(b, at).flatten() == Some(Extended::Disp23) => {
+            let high = u32::from(half(b, at + 4)?);
+            let disp = (high << 7) | u32::from((sub >> 4) & 0x7f);
+            let disp = ((disp << 9) as i32 >> 9) as u32;
+            Some((r1, Access::Transfer(base(regs, r1, disp))))
+        }
+        0x3e => Some((
+            r1,
+            Access::Bit(
+                base(regs, r1, sext16(sub)),
+                (w >> 14) as u8,
+                Some((w >> 11) as u8 & 7),
+            ),
+        )),
+        0x3f if sub & 1 == 1 => Some((r1, Access::Transfer(base(regs, r1, sext16(sub & !1))))),
+        0x3f if matches!(sub & 0x07ff, 0x00e0 | 0x00e2 | 0x00e4 | 0x00e6) => {
+            let bit = match regs[r2] {
+                Val::Known(v) => Some(v as u8 & 7),
+                _ => None,
+            };
+            Some((
+                r1,
+                Access::Bit(base(regs, r1, 0), (sub >> 1) as u8 & 3, bit),
+            ))
+        }
+        // caxi [reg1], reg2, reg3
+        0x3f if sub & 0x07ff == 0x00ee => Some((r1, Access::Transfer(base(regs, r1, 0)))),
+        _ => None,
+    }
+}
+
+/// Direct bit I/O, RAM gates, direct call (`jarl disp22`/`jarl disp32`)
+/// targets and indirect calls (`callt`, `jarl [reg]`) of one walked routine.
 struct Walk {
     io: Vec<Io>,
     gates: Vec<(&'static str, u16, u8)>,
     calls: Vec<usize>,
+    /// Offsets of indirect calls, whose callees are not known here.
+    indirect: Vec<usize>,
     end: usize,
 }
-/// Walk instruction by instruction from `start` to the closing `dispose`
-/// (or, for a called helper, also `jmp [lp]`). A helper must be straight
-/// line code: no switch table and no indirect jump.
-fn walk(b: &[u8], name: &str, start: usize, helper: bool) -> Result<Walk, String> {
-    let (mut io, mut gates, mut calls) = (Vec::new(), Vec::new(), Vec::new());
+
+/// Instruction offsets from `start` to the closing returning `dispose ...,
+/// [reg]` (or, for a called helper, also `jmp [lp]`; a `dispose` without
+/// [reg] falls through and is walked), with inline `switch` tables skipped.
+/// The closing return is the first one no walked branch or `switch` case
+/// jumps past, so every path of a routine with early returns is walked; a
+/// target before `start` or beyond [`PROGRAM`] leaves the walk and refuses.
+fn decode(b: &[u8], name: &str, start: usize, helper: bool) -> Result<(Vec<usize>, usize), String> {
+    let mut ats = Vec::new();
     let mut at = start;
+    let mut furthest = start;
     let end = loop {
         let w = half(b, at).ok_or_else(|| format!("{name} code is truncated"))?;
-        if w & 0xffc0 == 0x0640 || (helper && w == 0x007f) {
+        if (returning_dispose(b, at) || (helper && w == 0x007f)) && furthest <= at {
             break at;
         }
-        if helper && (w & 0xffe0 == 0x0040 || w & 0xffe0 == 0x0060 || w & 0xffe0 == 0x06e0) {
+        // An early `jmp [lp]` return is walked past, never a dispatch.
+        if helper
+            && w != 0x007f
+            && (w & 0xffe0 == 0x0040 || w & 0xffe0 == 0x0060 || w & 0xffe0 == 0x06e0)
+        {
             return Err(format!(
                 "{name} dispatches indirectly at Normal+{at:#x}; its reached pins are not fixed"
             ));
         }
         let len = length(b, at).ok_or_else(|| format!("{name} code is truncated"))?;
-        let disp = half(b, at + 2).unwrap_or(0);
-        let reg1 = w & 31;
-        if len == 4 && w & 0x07e0 == 0x07c0 {
-            let pin = Pin {
-                address: 0xffff_0000 | u32::from(disp),
-                bit: (w >> 11) as u8 & 7,
-            };
-            match (reg1, disp >= 0x8000, w >> 14) {
-                (0, true, 3) => io.push(Io::Input(pin)),
-                (0, true, 0) => io.push(Io::Output(pin, true)),
-                (0, true, 2) => io.push(Io::Output(pin, false)),
-                (0, true, _) => {
-                    return Err(format!("{name} toggles {:#010x}.b{} at Normal+{at:#x}; a toggle has no fixed driven level", pin.address, pin.bit))
-                }
-                (4, _, kind) => gates.push((["set1", "not1", "clr1", "tst1"][usize::from(kind)], disp, pin.bit)),
-                _ => {}
-            }
-        } else if len == 4
-            && reg1 == 0
-            && disp >= 0x8000
-            && matches!((w >> 5) & 0x3f, 0x38..=0x3b | 0x3f)
-        {
-            // A byte/halfword/word peripheral transfer is not a bit set.
+        if extended(b, at).flatten() == Some(Extended::Unknown) {
             return Err(format!(
-                "{name} transfers peripheral data at Normal+{at:#x}; not a fixed bit I/O set"
+                "{name} has an undecoded instruction at Normal+{at:#x}"
             ));
-        } else if len == 4
-            && w >> 11 == 31
-            && matches!((w >> 5) & 0x3f, 0x3c | 0x3d)
-            && disp & 1 == 0
-        {
-            // jarl disp22, lp
-            let d = ((u32::from(w & 0x3f) << 16) | u32::from(disp)) as i32;
-            let d = (d << 10) >> 10;
-            if let Some(target) = at.checked_add_signed(d as isize) {
-                calls.push(target);
-            }
         }
-        at += len;
+        ats.push(at);
+        let (targets, next) = match flow(b, at) {
+            Flow::Switch => table(b, at)
+                .ok_or_else(|| format!("{name} has an unbounded switch table at Normal+{at:#x}"))?,
+            Flow::Branch(t) | Flow::Jump(t) => (alloc::vec![t], at + len),
+            Flow::Next | Flow::Exit => (Vec::new(), at + len),
+        };
+        for t in targets {
+            if t < start || t - start > PROGRAM {
+                return Err(format!(
+                    "{name} branches outside its walk to Normal+{t:#x} at Normal+{at:#x}"
+                ));
+            }
+            furthest = furthest.max(t);
+        }
+        at = next;
         if at - start > PROGRAM {
             return Err(format!(
                 "{name} has no closing dispose within {PROGRAM:#x} bytes"
             ));
         }
     };
+    Ok((ats, end))
+}
+
+/// Positions of the walk that code outside it may enter: direct branches
+/// (Format III, `jr`) anywhere in the scanned window ([`PROGRAM`] after
+/// the walk and, before it, [`PROGRAM`] for a helper or [`SWITCH_REACH`]
+/// for a state machine) and, for a state
+/// machine (a case inside a larger routine), the bounded tables of `switch`
+/// instructions within [`SWITCH_REACH`] before it; a computed jump in the
+/// instruction stream before a state machine may enter every position.
+/// For direct branches and `switch` tables every halfword is tried,
+/// so this over-approximates; such a position merges the unknown state. A
+/// helper starts at its routine's entry, so no other routine's `switch`
+/// enters it.
+fn outside(b: &[u8], start: usize, end: usize, ats: &[usize], helper: bool) -> Vec<usize> {
+    let mut marks = Vec::new();
+    let mut mark = |target: usize| {
+        if let Ok(i) = ats.binary_search(&target) {
+            marks.push(i);
+        }
+    };
+    let reach = if helper { PROGRAM } else { SWITCH_REACH };
+    let from = start.saturating_sub(reach) & !1;
+    let to = (end + PROGRAM).min(b.len());
+    for at in (from..to).step_by(2) {
+        if (start..=end).contains(&at) {
+            continue;
+        }
+        match flow(b, at) {
+            Flow::Branch(t) | Flow::Jump(t) => mark(t),
+            // A table is bounded by its lowest forward case and, being
+            // data, cannot run into the walk.
+            Flow::Switch if !helper => match table(b, at) {
+                Some((targets, table_end)) if table_end <= start => {
+                    targets.into_iter().for_each(&mut mark)
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    // The enclosing routine's jump table may enter any case: a computed
+    // jump in the instruction stream before a state machine marks every
+    // position. Operand halfwords are skipped by following instruction
+    // lengths (and inline `switch` tables) from the window start.
+    if !helper {
+        let mut at = from;
+        while at < start {
+            let Some(w) = half(b, at) else { break };
+            if computed(w) {
+                marks.extend(0..ats.len());
+                break;
+            }
+            at = match flow(b, at) {
+                Flow::Switch => table(b, at).map_or(at + 2, |t| t.1),
+                _ => at + length(b, at).unwrap_or(2),
+            };
+        }
+    }
+    marks
+}
+
+/// Register state on entry to each walked instruction: constant
+/// propagation over the walk's own control flow. The walk's first
+/// instruction, every instruction with no edge inside the walk and every
+/// position code outside the walk may enter start from [`unknown`], as does
+/// every position of a state machine with a computed jump in or around it.
+fn states(
+    b: &[u8],
+    name: &str,
+    ats: &[usize],
+    end: usize,
+    helper: bool,
+) -> Result<Vec<Regs>, String> {
+    let n = ats.len();
+    let mut succ: Vec<Vec<usize>> = Vec::with_capacity(n);
+    let mut entered = alloc::vec![false; n];
+    let start = ats.first().copied().unwrap_or(end);
+    for (i, &at) in ats.iter().enumerate() {
+        let targets = match flow(b, at) {
+            Flow::Next => alloc::vec![],
+            Flow::Branch(t) | Flow::Jump(t) => alloc::vec![t],
+            Flow::Switch => table(b, at).map(|t| t.0).unwrap_or_default(),
+            Flow::Exit => alloc::vec![],
+        };
+        let mut next = Vec::new();
+        if matches!(flow(b, at), Flow::Next | Flow::Branch(_)) && i + 1 < n {
+            next.push(i + 1);
+        }
+        for t in targets {
+            // [`decode`] keeps every target within the walk or at its
+            // closing return, which has no successor.
+            if t == end {
+                continue;
+            }
+            let j = ats
+                .binary_search(&t)
+                .map_err(|_| format!("{name} branches into an instruction at Normal+{t:#x}"))?;
+            next.push(j);
+        }
+        for &j in &next {
+            entered[j] = true;
+        }
+        succ.push(next);
+    }
+    // A computed jump (`jmp [reg]` other than the `jmp [lp]` return,
+    // `jmp disp32[reg]`) may enter any position: every one starts unknown.
+    let computed = ats.iter().any(|&at| half(b, at).is_some_and(computed));
+    let mut state: Vec<Option<Regs>> = alloc::vec![None; n];
+    let mut work = Vec::new();
+    let seeds = (0..n)
+        .filter(|&i| computed || i == 0 || !entered[i])
+        .chain(outside(b, start, end, ats, helper));
+    for i in seeds {
+        if join(&mut state[i], &unknown()) {
+            work.push(i);
+        }
+    }
+    loop {
+        while let Some(i) = work.pop() {
+            let Some(mut regs) = state[i] else { continue };
+            effect(b, ats[i], length(b, ats[i]).unwrap_or(2), &mut regs);
+            for &j in &succ[i] {
+                if join(&mut state[j], &regs) {
+                    work.push(j);
+                }
+            }
+        }
+        // Positions reached only from unreached cycles start unknown.
+        match state.iter().position(Option::is_none) {
+            Some(i) => {
+                state[i] = Some(unknown());
+                work.push(i);
+            }
+            None => break,
+        }
+    }
+    Ok(state
+        .into_iter()
+        .map(|s| s.unwrap_or_else(unknown))
+        .collect())
+}
+
+/// Walk instruction by instruction from `start` to the closing `dispose`
+/// (or, for a called helper, also `jmp [lp]`), including every path past
+/// an early return. A helper has no switch table and no indirect jump.
+fn walk(b: &[u8], name: &str, start: usize, helper: bool) -> Result<Walk, String> {
+    let (mut io, mut gates, mut calls, mut indirect) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (ats, end) = decode(b, name, start, helper)?;
+    let states = states(b, name, &ats, end, helper)?;
+    for (&at, regs) in ats.iter().zip(&states) {
+        let w = half(b, at).ok_or_else(|| format!("{name} code is truncated"))?;
+        let len = length(b, at).ok_or_else(|| format!("{name} code is truncated"))?;
+        let disp = half(b, at + 2).unwrap_or(0);
+        let reg1 = w & 31;
+        let access = access(b, at, len, regs);
+        // disp23 sign is bit 15 of the third halfword.
+        if extended(b, at).flatten() == Some(Extended::Disp23)
+            && reg1 == 0
+            && half(b, at + 4).is_some_and(|h| h >= 0x8000)
+        {
+            return Err(format!(
+                "{name} transfers peripheral data at Normal+{at:#x}; not a fixed bit I/O set"
+            ));
+        }
+        let (reg, base) = match access {
+            Some((reg, Access::Bit(base, ..) | Access::Transfer(base))) => (reg, base),
+            None => (0, Base::Ram),
+        };
+        match (base, access) {
+            (Base::Unknown, _) => {
+                return Err(format!(
+                    "{name} accesses memory through r{reg} of unknown value at Normal+{at:#x}; whether it is peripheral I/O is not known"
+                ))
+            }
+            (Base::Address(address), Some((_, Access::Bit(_, kind, bit)))) if peripheral(address) => {
+                let Some(bit) = bit else {
+                    return Err(format!(
+                        "{name} operates on {address:#010x} with a register bit number of unknown value at Normal+{at:#x}"
+                    ));
+                };
+                let pin = Pin { address, bit };
+                match kind {
+                    3 => io.push(Io::Input(pin)),
+                    0 => io.push(Io::Output(pin, true)),
+                    2 => io.push(Io::Output(pin, false)),
+                    _ => {
+                        return Err(format!("{name} toggles {:#010x}.b{} at Normal+{at:#x}; a toggle has no fixed driven level", pin.address, pin.bit))
+                    }
+                }
+            }
+            (Base::Address(address), Some((_, Access::Transfer(_)))) if peripheral(address) => {
+                // A byte/halfword/word peripheral transfer is not a bit set.
+                return Err(format!(
+                    "{name} transfers peripheral data at Normal+{at:#x}; not a fixed bit I/O set"
+                ));
+            }
+            // Only the Normal image itself is known not to be I/O: an
+            // external bus device or an alias of the I/O region may not be.
+            (Base::Address(address), Some(_))
+                if !peripheral(address)
+                    && !(BASE..BASE + b.len()).contains(&(address as usize)) =>
+            {
+                return Err(format!(
+                    "{name} accesses {address:#010x} at Normal+{at:#x}, neither peripheral I/O nor the Normal image"
+                ));
+            }
+            (_, Some((_, Access::Bit(_, kind, Some(bit))))) if reg1 == 4 && w & 0x07e0 == 0x07c0 => {
+                gates.push((["set1", "not1", "clr1", "tst1"][usize::from(kind)], disp, bit))
+            }
+            _ => {}
+        }
+        let (op, reg2) = ((w >> 5) & 0x3f, w >> 11);
+        if len == 4 && reg2 != 0 && matches!(op, 0x3c | 0x3d) && disp & 1 == 0 {
+            // jarl disp22, reg2
+            let d = ((u32::from(w & 0x3f) << 16) | u32::from(disp)) as i32;
+            let d = (d << 10) >> 10;
+            if let Some(target) = at.checked_add_signed(d as isize) {
+                calls.push(target);
+            }
+        } else if op == 0x17 && reg2 == 0 && reg1 != 0 {
+            // jarl disp32, reg1
+            if let Some(target) =
+                word(b, at + 2).and_then(|d| at.checked_add_signed(d as i32 as isize))
+            {
+                calls.push(target);
+            }
+        } else if (matches!(op, 0x10 | 0x11) && reg2 == 0)
+            || (op == 0x3f
+                && disp & 0x07ff == 0x0160
+                && !(disp == 0x0160 && matches!(w, 0x07e0 | 0x87e0)))
+        {
+            // callt imm6, jarl [reg1], reg3
+            indirect.push(at);
+        }
+    }
     Ok(Walk {
         io,
         gates,
         calls,
+        indirect,
         end,
     })
 }
@@ -320,22 +1030,24 @@ fn io_text(io: &[Io]) -> String {
         .join(", ")
 }
 
-fn program(b: &[u8], label: &[u8]) -> Result<Program, String> {
+fn program(b: &[u8], label: &[u8], start: Option<usize>) -> Result<Program, String> {
     let name = core::str::from_utf8(&label[..label.len() - 3]).unwrap_or("?");
-    let start = reference(b, label)
-        .ok_or_else(|| format!("{name} has no unique diagnostic and unique reference"))?;
+    let start =
+        start.ok_or_else(|| format!("{name} has no unique diagnostic and unique reference"))?;
     // From the diagnostic case to the state machine's single closing dispose.
     let program = walk(b, &format!("{name} state machine"), start, false)?;
     let Walk {
         mut io,
         mut gates,
         mut calls,
+        indirect,
         end,
     } = program;
     io.sort();
     io.dedup();
     let mut unbound = Vec::new();
-    if !complete(&io) {
+    let followed = !complete(&io);
+    if followed {
         // Follow exactly one level into each directly called helper and take
         // only the fixed outputs it drives itself. A helper that fails closed
         // contributes nothing; its own further calls are not followed. Both
@@ -343,6 +1055,9 @@ fn program(b: &[u8], label: &[u8]) -> Result<Program, String> {
         let direct = io_text(&io);
         calls.sort();
         calls.dedup();
+        unbound.extend(indirect.iter().map(|at| {
+            format!("{name} state machine calls indirectly at Normal+{at:#x}, not followed")
+        }));
         let mut reached = Vec::new();
         for &target in &calls {
             match walk(b, &format!("helper Normal+{target:#x}"), target, true) {
@@ -353,7 +1068,7 @@ fn program(b: &[u8], label: &[u8]) -> Result<Program, String> {
                         .into_iter()
                         .filter(|x| matches!(x, Io::Output(..)))
                         .collect();
-                    if !helper.calls.is_empty() && !outputs.is_empty() {
+                    if !helper.calls.is_empty() {
                         let mut deeper = helper.calls;
                         deeper.sort();
                         deeper.dedup();
@@ -364,6 +1079,9 @@ fn program(b: &[u8], label: &[u8]) -> Result<Program, String> {
                             deeper.join(", ")
                         ));
                     }
+                    unbound.extend(helper.indirect.iter().map(|at| {
+                        format!("helper Normal+{target:#x} calls indirectly at Normal+{at:#x}, not followed")
+                    }));
                     reached.extend(outputs);
                 }
             }
@@ -392,16 +1110,21 @@ fn program(b: &[u8], label: &[u8]) -> Result<Program, String> {
         start,
         end,
         gates,
+        followed,
         unbound,
     })
 }
 
 /// Slim-mechanism I/O for both roles of a native-order Normal.
-pub(super) fn slim(normal: &[u8]) -> Result<Slim, String> {
+fn slim_at(normal: &[u8], starts: [Option<usize>; 2]) -> Result<Slim, String> {
     Ok(Slim {
-        closed: program(normal, CLOSED)?,
-        opened: program(normal, OPENED)?,
+        closed: program(normal, CLOSED, starts[0])?,
+        opened: program(normal, OPENED, starts[1])?,
     })
+}
+#[cfg(test)]
+fn slim(normal: &[u8]) -> Result<Slim, String> {
+    slim_at(normal, anchors(normal).starts)
 }
 
 /// V850 observations of a stored bus-order Normal, as held in the context.
@@ -420,14 +1143,15 @@ pub(super) fn bus(normal: &[u8]) -> Bus {
             slim: None,
         };
     };
-    let arrival = native(&native_order);
-    let diagnostics = diagnostics(&native_order);
+    let anchors = anchors(&native_order);
+    let arrival = predicates(&native_order, anchors.starts);
+    let diagnostics = anchors.labels.iter().all(Option::is_some);
     let slim = (diagnostics
         && matches!(
             arrival,
             Observation::Unresolved(Unresolved::ReaderNotRecognized)
         ))
-    .then(|| slim(&native_order));
+    .then(|| slim_at(&native_order, anchors.starts));
     Bus {
         arrival,
         diagnostics,
@@ -750,7 +1474,7 @@ pub(super) mod tests {
     }
 
     /// `[LOADOUT]` reading 0xFFFFF413.b7 and calling one helper at +0x400.
-    fn with_helper(helper: &[u8]) -> Vec<u8> {
+    pub(crate) fn with_helper(helper: &[u8]) -> Vec<u8> {
         // ref; tst1 7, -3053[r0]; jarl +0x3f6, lp; dispose 0, {lp}, lp
         let mut raw = slim_fixture(K15_LOADIN, "270600000000c0ff13f480fff60340063f00");
         raw[0x2400..0x2400 + helper.len()].copy_from_slice(helper);
@@ -788,6 +1512,391 @@ pub(super) mod tests {
         }
         // Helper inputs are not taken: a tst1-only helper binds no output.
         assert!(slim(&with_helper(&[0xc0, 0x37 | 0xc0, 0x12, 0xf4, 0x7f, 0x00])).is_err());
+    }
+
+    #[test]
+    fn a_followed_helper_that_only_calls_further_is_named_unbound() {
+        // [LOADOUT]: tst1 7, -3053[r0]; jarl A (+0x400); jarl B (+0x500).
+        // A drives set1 6, -3054[r0]; B drives nothing itself and calls C.
+        let mut raw = slim_fixture(K15_LOADIN, "270600000000c0ff13f480fff60380fff20440063f00");
+        raw[0x2400..0x2406].copy_from_slice(&[0xc0, 0x37, 0x12, 0xf4, 0x7f, 0x00]);
+        raw[0x2500..0x2506].copy_from_slice(&[0x80, 0xff, 0x00, 0x01, 0x7f, 0x00]);
+        raw[0x2600..0x2606].copy_from_slice(&[0xc0, 0x0f, 0x12, 0xf4, 0x7f, 0x00]);
+        let opened = slim(&raw).unwrap().opened;
+        assert_eq!(opened.io.len(), 2);
+        assert_eq!(
+            opened.unbound,
+            ["helper Normal+0x2500 calls Normal+0x2600 further, not followed"]
+        );
+    }
+
+    #[test]
+    fn unsigned_byte_peripheral_reads_fail_closed() {
+        // ld.bu -3053[r0], r10 (format VII 11110b, disp bit 0 in the first
+        // halfword, second halfword bit 0 set) in the state machine itself.
+        let direct = slim_fixture(K15_LOADIN, "270600000000a05713f4c0ff13f4c03712f440063f00");
+        let error = slim(&direct).unwrap_err();
+        assert!(error.contains("transfers peripheral data"), "{error}");
+        // The same read in the one followed helper level adds no pins.
+        let helper = with_helper(&[0xa0, 0x57, 0x13, 0xf4, 0xc0, 0x37, 0x12, 0xf4, 0x7f, 0x00]);
+        let error = slim(&helper).unwrap_err();
+        assert!(
+            error.contains("none of its 1 directly called helpers"),
+            "{error}"
+        );
+        // ld.bu disp16[gp] is a RAM read, not peripheral I/O.
+        let ram = with_helper(&[0xa4, 0x57, 0x13, 0x74, 0xc0, 0x37, 0x12, 0xf4, 0x7f, 0x00]);
+        assert_eq!(slim(&ram).unwrap().opened.io.len(), 2);
+    }
+
+    #[test]
+    fn extended_prepare_operands_are_not_walked_as_instructions() {
+        use Io::{Input, Output};
+        // prepare {}, 0, imm32 whose operand bytes encode `set1 6, -3054[r0]`,
+        // then the helper's real `set1 1, -3054[r0]; jmp [lp]`.
+        let raw = with_helper(&[
+            0x80, 0x07, 0x1b, 0x00, 0xc0, 0x37, 0x12, 0xf4, 0xc0, 0x0f, 0x12, 0xf4, 0x7f, 0x00,
+        ]);
+        assert_eq!(
+            slim(&raw).unwrap().opened.io,
+            [
+                Input(pin(0xffff_f413, 7)),
+                Output(pin(0xffff_f412, 1), true)
+            ]
+        );
+        // prepare {}, 0, imm16 whose operand is `jmp [lp]` does not end the helper.
+        let raw = with_helper(&[
+            0x80, 0x07, 0x0b, 0x00, 0x7f, 0x00, 0xc0, 0x0f, 0x12, 0xf4, 0x7f, 0x00,
+        ]);
+        assert_eq!(slim(&raw).unwrap().opened.io.len(), 2);
+    }
+
+    #[test]
+    fn v850e2_disp23_transfers_are_walked_whole_and_r0_ones_fail_closed() {
+        // set1 6, -3054[r0]; ld.b -3053[r0], r10 (format XIV, disp23); nop;
+        // nop; jmp [lp].
+        let raw = with_helper(&[
+            0xc0, 0x37, 0x12, 0xf4, 0x80, 0x07, 0x35, 0x51, 0xe8, 0xff, 0, 0, 0, 0, 0x7f, 0x00,
+        ]);
+        let error = slim(&raw).unwrap_err();
+        assert!(
+            error.contains("none of its 1 directly called helpers"),
+            "{error}"
+        );
+        // ld.b disp23[gp], r10 whose high displacement halfword reads as
+        // `jmp [lp]` is one 6-byte instruction, not the end of the helper.
+        let raw = with_helper(&[
+            0x84, 0x07, 0x35, 0x51, 0x7f, 0x00, 0xc0, 0x37, 0x12, 0xf4, 0x7f, 0x00,
+        ]);
+        assert_eq!(slim(&raw).unwrap().opened.io.len(), 2);
+    }
+
+    #[test]
+    fn register_format_instructions_under_opcode_3f_are_not_transfers() {
+        // bsw r10, r20 (reg1 field 0, second halfword 0xa340, bit 0 clear).
+        let raw = with_helper(&[0xe0, 0x57, 0x40, 0xa3, 0xc0, 0x37, 0x12, 0xf4, 0x7f, 0x00]);
+        assert_eq!(slim(&raw).unwrap().opened.io.len(), 2);
+        // ld.hu -3054[r0], r10 (bit 0 set) is still a peripheral transfer.
+        let raw = with_helper(&[0xe0, 0x57, 0x13, 0xf4, 0xc0, 0x37, 0x12, 0xf4, 0x7f, 0x00]);
+        assert!(slim(&raw).is_err());
+    }
+
+    /// `[LOADOUT]`: reference; `tst1 7, -3053[r0]`; `body`; closing dispose.
+    fn opened_with(body: &str) -> Result<Slim, String> {
+        slim(&slim_fixture(
+            K15_LOADIN,
+            &format!("270600000000c0ff13f4{body}40063f00"),
+        ))
+    }
+    // movea -3054, r0, r14 (r14 = 0xFFFFF412)
+    const R14_F412: &str = "207612f4";
+    // movea 0x100, gp, r14 (a gp data-area pointer)
+    const R14_GP: &str = "24760001";
+
+    #[test]
+    fn base_register_peripheral_bit_io_is_bound_like_absolute_io() {
+        use Io::{Input, Output};
+        // set1 6, 0[r14] with r14 = 0xFFFFF412
+        let opened = opened_with(&format!("{R14_F412}ce370000")).unwrap().opened;
+        assert_eq!(
+            opened.io,
+            [
+                Input(pin(0xffff_f413, 7)),
+                Output(pin(0xffff_f412, 6), true)
+            ]
+        );
+        assert!(!opened.followed);
+        // Another vendor build driving bit 1 through the same base differs.
+        let other = opened_with(&format!("{R14_F412}ce0f0000")).unwrap().opened;
+        assert_ne!(other.io, opened.io);
+        // movhi 0xffff, r0, r14; clr1 6, -3054[r14] reaches 0xFFFEF412:
+        // neither the peripheral region nor the Normal image.
+        let low = opened_with("4076ffffce b712f4c03712f4".replace(' ', "").as_str());
+        assert!(low
+            .unwrap_err()
+            .contains("neither peripheral I/O nor the Normal"));
+        // not1 through the base has no fixed level.
+        let toggle = opened_with(&format!("{R14_F412}ce770000")).unwrap_err();
+        assert!(toggle.contains("toggles"), "{toggle}");
+        // ld.b 0[r14], r10: a peripheral data transfer.
+        let read = opened_with(&format!("{R14_F412}c03712f40e570000")).unwrap_err();
+        assert!(read.contains("transfers peripheral data"), "{read}");
+    }
+
+    #[test]
+    fn unknown_base_registers_refuse_and_known_ram_is_ignored() {
+        // set1 6, -3054[r0] makes the direct set complete.
+        let set = "c03712f4";
+        // ld.b 0[r14], r10 with r14 never set in the walk.
+        let error = opened_with(&format!("{set}0e570000")).unwrap_err();
+        assert!(error.contains("unknown value"), "{error}");
+        // sld.b 0[ep], r10 with ep never set.
+        let error = opened_with(&format!("{set}0053")).unwrap_err();
+        assert!(error.contains("unknown value"), "{error}");
+        // mov 0x03FFF412, r14; ld.b 0[r14]: a mirror of the peripheral region.
+        let error = opened_with(&format!("{set}2e0612f4ff030e570000")).unwrap_err();
+        assert!(error.contains("neither peripheral I/O"), "{error}");
+        // gp data area, the stack and ROM are not I/O.
+        for body in [
+            format!("{R14_GP}4e570000"),          // st.b r10, 0[r14]
+            "63570500".into(),                    // st.w r10, 4[sp]
+            "40760100 0e570000".replace(' ', ""), // movhi 1, r0, r14; ld.b 0[r14]
+        ] {
+            let opened = opened_with(&format!("{set}{body}")).unwrap().opened;
+            assert_eq!(opened.io.len(), 2, "{body}");
+        }
+        // Paths joining with a peripheral and a RAM base: unknown.
+        // movea -3054, r0, r14; bne +6; movea 0x100, gp, r14; ld.b 0[r14], r10
+        let error = opened_with(&format!("{set}{R14_F412}ba05{R14_GP}0e570000")).unwrap_err();
+        assert!(error.contains("unknown value"), "{error}");
+        // A call clobbers r14 but preserves r20.
+        // movea -3054, r0, rN; jarl +0x3f0, lp; set1 6, 0[rN]
+        let call = |reg: u16| {
+            let movea = (reg << 11) | 0x0620;
+            let set1 = (6 << 11) | 0x07c0 | reg;
+            format!(
+                "{:02x}{:02x}12f480fff003{:02x}{:02x}0000",
+                movea & 0xff,
+                movea >> 8,
+                set1 & 0xff,
+                set1 >> 8
+            )
+        };
+        assert!(opened_with(&call(14))
+            .unwrap_err()
+            .contains("unknown value"));
+        assert_eq!(opened_with(&call(20)).unwrap().opened.io.len(), 2);
+        // In a followed helper an unknown base fails the helper closed.
+        let helper = with_helper(&[0x0e, 0x57, 0, 0, 0xc0, 0x37, 0x12, 0xf4, 0x7f, 0x00]);
+        let error = slim(&helper).unwrap_err();
+        assert!(
+            error.contains("none of its 1 directly called helpers")
+                && error.contains("unknown value"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn calls_clobber_and_unbound_addresses_refuse() {
+        let set = "c03712f4";
+        for body in [
+            // movea 0x100, gp, r10; callt 40; set1 6, 0[r10]
+            "24560001 2802 ca370000",
+            // movea 0x100, gp, r12; jarl [r11], r10; set1 6, 0[r12]
+            "24660001 ebc76051 cc370000",
+            // movhi 0x10, r0, r14; ld.b 0[r14], r10: neither Normal nor I/O
+            "40761000 0e570000",
+            // movea 0x7fff, gp, r14; st.b r10, 0x10[r14]: beyond disp16[gp]
+            "2476ff7f 4e571000",
+        ] {
+            let body = body.replace(' ', "");
+            assert!(opened_with(&format!("{set}{body}")).is_err(), "{body}");
+        }
+        // di and ei keep every register.
+        let body = format!("{set}{R14_GP}e0076001e0876001 4e570000").replace(' ', "");
+        assert_eq!(opened_with(&body).unwrap().opened.io.len(), 2);
+    }
+
+    #[test]
+    fn edges_from_outside_the_walk_enter_with_nothing_known() {
+        // set1 6, -3054[r0]; movea 0x100, gp, r14; st.b r10, 0[r14] at +0x12.
+        let program = format!("270600000000c0ff13f4c03712f4{R14_GP}4e57000040063f00");
+        let raw = slim_fixture(K15_LOADIN, &program);
+        assert_eq!(slim(&raw).unwrap().opened.io.len(), 2);
+        // br +0x22 from 0x1ff0 enters at the store with r14 unknown.
+        let mut branched = raw.clone();
+        branched[0x1ff0..0x1ff2].copy_from_slice(&[0x95, 0x15]);
+        let error = slim(&branched).unwrap_err();
+        assert!(error.contains("unknown value"), "{error}");
+        // switch r10 at 0x1f00 whose bounded table [0x2012, 0x1f06] ends
+        // before the walk: its case 0 enters at the store.
+        let mut switched = raw.clone();
+        switched[0x1f00..0x1f06].copy_from_slice(&[0x4a, 0x00, 0x88, 0x00, 0x02, 0x00]);
+        let error = slim(&switched).unwrap_err();
+        assert!(error.contains("unknown value"), "{error}");
+    }
+
+    #[test]
+    fn far_branches_from_the_scanned_window_enter_with_nothing_known() {
+        let program = format!("270600000000c0ff13f4c03712f4{R14_GP}4e57000040063f00");
+        let mut far = slim_fixture(K15_LOADIN, &program);
+        // jr +0x1812 from 0x800 (0x1800 before the walk) enters at the store.
+        far[0x800..0x804].copy_from_slice(&[0x80, 0x07, 0x12, 0x18]);
+        let error = slim(&far).unwrap_err();
+        assert!(error.contains("unknown value"), "{error}");
+    }
+
+    #[test]
+    fn branches_past_a_return_are_walked_and_branches_out_refuse() {
+        use Io::{Input, Output};
+        // Helper: bne L; set1 6, -3054[r0]; jmp [lp]; L: clr1 7, -3054[r0];
+        // jmp [lp]. Both returns' paths are walked.
+        let raw = with_helper(&[
+            0xca, 0x05, 0xc0, 0x37, 0x12, 0xf4, 0x7f, 0x00, 0xc0, 0xbf, 0x12, 0xf4, 0x7f, 0x00,
+        ]);
+        assert_eq!(
+            slim(&raw).unwrap().opened.io,
+            [
+                Input(pin(0xffff_f413, 7)),
+                Output(pin(0xffff_f412, 6), true),
+                Output(pin(0xffff_f412, 7), false)
+            ]
+        );
+        // State machine: bne L; set1 6, -3054[r0]; dispose; L: clr1 7,
+        // -3054[r0]; dispose.
+        let opened = opened_with("da05c03712f440063f00c0bf12f4").unwrap().opened;
+        assert!(opened.io.contains(&Output(pin(0xffff_f412, 7), false)));
+        assert_eq!(opened.end, 0x2018);
+        // A branch before the walk's start leaves the walk: refused.
+        let error = opened_with("c03712f485f5").unwrap_err();
+        assert!(error.contains("branches outside"), "{error}");
+    }
+
+    #[test]
+    fn computed_jumps_in_a_state_machine_enter_every_position_unknown() {
+        // set1 6, -3054[r0]; movea 0x100, gp, r14; st.b r10, 0[r14];
+        // jmp [r11]: the table may enter the store with r14 unknown.
+        let error = opened_with(&format!("c03712f4{R14_GP}4e5700006b00")).unwrap_err();
+        assert!(error.contains("unknown value"), "{error}");
+        assert!(opened_with(&format!("c03712f4{R14_GP}4e570000")).is_ok());
+    }
+
+    #[test]
+    fn a_computed_jump_before_a_state_machine_enters_every_position_unknown() {
+        let program = format!("270600000000c0ff13f4c03712f4{R14_GP}4e57000040063f00");
+        let raw = slim_fixture(K15_LOADIN, &program);
+        assert!(slim(&raw).is_ok());
+        // jmp [r11] at 0x1f00: the enclosing routine's jump table may
+        // enter the store with r14 unknown.
+        let mut table = raw.clone();
+        table[0x1f00..0x1f02].copy_from_slice(&[0x6b, 0x00]);
+        let error = slim(&table).unwrap_err();
+        assert!(error.contains("unknown value"), "{error}");
+        // A `jmp [lp]` return there is not a dispatch.
+        let mut ret = raw.clone();
+        ret[0x1f00..0x1f02].copy_from_slice(&[0x7f, 0x00]);
+        assert!(slim(&ret).is_ok());
+    }
+
+    #[test]
+    fn only_returning_disposes_close_a_walk() {
+        use Io::Output;
+        // dispose 0, {lp} without [reg] does not return: the set1 after it
+        // is walked up to the returning dispose.
+        let opened = opened_with("40062000c03712f4").unwrap().opened;
+        assert!(opened.io.contains(&Output(pin(0xffff_f412, 6), true)));
+        // movea -3054, r0, r20; bne L; dispose 0, {lp}, [lp]; L: set1 6,
+        // 0[r20]. The returning dispose (which restores r20-r31) has no
+        // fallthrough edge, so L keeps r20 from the branch alone.
+        let opened = opened_with("20a612f4ba0540063f00d4370000").unwrap().opened;
+        assert!(opened.io.contains(&Output(pin(0xffff_f412, 6), true)));
+    }
+
+    #[test]
+    fn every_direct_call_form_is_followed_and_indirect_calls_are_named() {
+        use Io::{Input, Output};
+        // [LOADOUT]: tst1 7, -3053[r0]; jarl disp32 +0x3f6, lp; dispose.
+        let mut raw = slim_fixture(K15_LOADIN, "270600000000c0ff13f4ff02f603000040063f00");
+        raw[0x2400..0x2406].copy_from_slice(&[0xc0, 0x37, 0x12, 0xf4, 0x7f, 0x00]);
+        assert_eq!(
+            slim(&raw).unwrap().opened.io,
+            [
+                Input(pin(0xffff_f413, 7)),
+                Output(pin(0xffff_f412, 6), true)
+            ]
+        );
+        // tst1; jarl disp22 +0x3f6, lp; callt 40; dispose: the callt is named.
+        let mut raw = slim_fixture(
+            K15_LOADIN,
+            "270600000000c0ff13f480fff6032802 40063f00"
+                .replace(' ', "")
+                .as_str(),
+        );
+        raw[0x2400..0x2406].copy_from_slice(&[0xc0, 0x37, 0x12, 0xf4, 0x7f, 0x00]);
+        let opened = slim(&raw).unwrap().opened;
+        assert_eq!(opened.io.len(), 2);
+        assert!(
+            opened
+                .unbound
+                .iter()
+                .any(|u| u.contains("indirectly at Normal+0x200e")),
+            "{:?}",
+            opened.unbound
+        );
+        // jarl disp22 with r10 as the link register is a direct call too.
+        let mut raw = slim_fixture(K15_LOADIN, "270600000000c0ff13f48057f60340063f00");
+        raw[0x2400..0x2406].copy_from_slice(&[0xc0, 0x37, 0x12, 0xf4, 0x7f, 0x00]);
+        assert_eq!(slim(&raw).unwrap().opened.io.len(), 2);
+        // jarl [r11], lp and callt 5 in the state machine, and callt 40 in
+        // the followed helper, are each named.
+        let mut raw = slim_fixture(
+            K15_LOADIN,
+            "270600000000c0ff13f480fff603ebc760f9050240063f00",
+        );
+        raw[0x2400..0x2408].copy_from_slice(&[0x28, 0x02, 0xc0, 0x37, 0x12, 0xf4, 0x7f, 0x00]);
+        let opened = slim(&raw).unwrap().opened;
+        assert_eq!(opened.io.len(), 2);
+        for at in ["0x200e", "0x2012"] {
+            let text = format!("state machine calls indirectly at Normal+{at}, not followed");
+            assert!(
+                opened.unbound.iter().any(|u| u.contains(&text)),
+                "{:?}",
+                opened.unbound
+            );
+        }
+        assert!(opened
+            .unbound
+            .iter()
+            .any(|u| u == "helper Normal+0x2400 calls indirectly at Normal+0x2400, not followed"));
+        // A forward jr beyond the walk bound refuses.
+        let error = opened_with("c03712f480070011").unwrap_err();
+        assert!(error.contains("branches outside"), "{error}");
+    }
+
+    #[test]
+    fn disp23_lengths_effects_and_undecoded_forms_are_exact() {
+        // A sub-opcode under 0x0780 this walker cannot decode fails closed.
+        let error = slim(&with_helper(&[
+            0x84, 0x07, 0x11, 0x00, 0xc0, 0x37, 0x12, 0xf4, 0x7f, 0x00,
+        ]))
+        .unwrap_err();
+        assert!(error.contains("undecoded instruction"), "{error}");
+        // st.w r10, disp23[gp] whose high halfword reads as `jmp [lp]` is
+        // one 6-byte instruction.
+        let raw = with_helper(&[
+            0x84, 0x07, 0x0f, 0x50, 0x7f, 0x00, 0xc0, 0x37, 0x12, 0xf4, 0x7f, 0x00,
+        ]);
+        assert_eq!(slim(&raw).unwrap().opened.io.len(), 2);
+        // movea -3054, r0, r10; st.w / ld.w r10, 0[gp] (disp23); set1 6,
+        // 0[r10]: the store keeps r10, the load makes it unknown.
+        let through = |sub: u8| {
+            with_helper(&[
+                0x20, 0x56, 0x12, 0xf4, 0x84, 0x07, sub, 0x50, 0, 0, 0xca, 0x37, 0, 0, 0x7f, 0x00,
+            ])
+        };
+        assert_eq!(slim(&through(0x0f)).unwrap().opened.io.len(), 2);
+        let error = slim(&through(0x09)).unwrap_err();
+        assert!(error.contains("unknown value"), "{error}");
     }
 
     fn k06(ranges: &[(usize, &str)]) -> Vec<u8> {

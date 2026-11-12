@@ -34,8 +34,7 @@ fn matches_at(body: &[u8], at: usize, expected: &[u8], calls: &[usize]) -> bool 
 /// Serial M32C storage formats currently return unresolved here; callers must
 /// not substitute a default layout for a missing reader.
 pub fn discover_m32c_records(body: &[u8]) -> Observation<ParameterLayout> {
-    let has_three = body.windows(GEOMETRY.len()).any(|b| b == GEOMETRY);
-    let has_two = body.windows(TWO_WIDTH.len()).any(|b| b == TWO_WIDTH);
+    let (has_three, has_two) = anchors(body);
     if has_three && has_two {
         return Observation::Conflicting;
     }
@@ -43,6 +42,19 @@ pub fn discover_m32c_records(body: &[u8]) -> Observation<ParameterLayout> {
         return discover_two(body);
     }
     discover_three(body)
+}
+
+fn anchors(body: &[u8]) -> (bool, bool) {
+    (
+        body.windows(GEOMETRY.len()).any(|b| b == GEOMETRY),
+        body.windows(TWO_WIDTH.len()).any(|b| b == TWO_WIDTH),
+    )
+}
+
+/// Whether a flash-record reader's geometry anchor is present, bound or not.
+pub(crate) fn records_present(body: &[u8]) -> bool {
+    let (three, two) = anchors(body);
+    three || two
 }
 
 fn discover_two(body: &[u8]) -> Observation<ParameterLayout> {
@@ -130,10 +142,10 @@ fn discover_three(body: &[u8]) -> Observation<ParameterLayout> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn fixture() -> Vec<u8> {
+    pub(crate) fn fixture() -> Vec<u8> {
         let mut body = vec![0; 0xce + PAYLOAD_COPIER.len()];
         for (at, bytes) in [
             (0, GEOMETRY),

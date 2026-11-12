@@ -100,6 +100,7 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
     };
     for region in &regions.stored {
         let base = region.as_ptr() as usize - normal.as_ptr() as usize;
+        let mut anchors = super::Anchors::new(region, base);
         for local in (base & 1..region.len()).step_by(2) {
             let bytes = &region[local..];
             let at = base + local;
@@ -131,7 +132,20 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
             if let Some((kind, target)) = incoming {
                 let matched = lookup(target);
                 if !matched.is_empty() {
-                    let (start, domain) = argument::suffix(region, local, 1);
+                    let (mut start, mut domain) = argument::suffix(region, local, 1);
+                    // The suffix must be decoded instructions, never operand
+                    // bytes of a longer earlier one (as argument::discover).
+                    if !matches!(domain, Domain::Unresolved { .. })
+                        && !argument::decoded(&mut anchors, start, local)
+                    {
+                        (start, domain) = (
+                            local,
+                            Domain::Unresolved {
+                                register: 1,
+                                addend: 0,
+                            },
+                        );
+                    }
                     for &i in matched {
                         result[i].callers.push(Caller {
                             offset: at,
@@ -245,5 +259,26 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].callers[0].first_index, Domain::Constant(0x9e));
         assert_eq!(found[0].other_references, alloc::vec![0x90]);
+    }
+    #[test]
+    fn caller_index_loads_must_be_decoded_instructions() {
+        let mut raw = fixture(1);
+        // MOV.L #0x79010005,ER0; JSR @block: 79 01 00 05 is an immediate.
+        raw[0x80..0x8a].copy_from_slice(&[0x7a, 0, 0x79, 1, 0, 5, 0x5e, 0x41, 0x20, 0]);
+        let Observation::Known(found) = discover(&raw) else {
+            panic!("fixture")
+        };
+        let caller = &found[0].callers[0];
+        assert_eq!(caller.offset, 0x86);
+        assert_eq!(
+            (caller.suffix_start, caller.first_index),
+            (
+                0x86,
+                Domain::Unresolved {
+                    register: 1,
+                    addend: 0
+                }
+            )
+        );
     }
 }

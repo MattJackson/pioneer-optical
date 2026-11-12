@@ -36,8 +36,11 @@
 //! or eventual device startup. Keep those boundaries explicit in evidence.
 //!
 //! Corrections are confined to Normal/Kernel firmware components. Existing drive
-//! data may supply enforced read-only prerequisites; separate persistent data
-//! must not be written, erased, migrated, reformatted, or temporarily replaced.
+//! data may supply enforced read-only prerequisites. The one write is a
+//! startup word from `Operation::word_writes`, disjoint from those reads and
+//! set by the receiver's settings transaction before the first transfer;
+//! other persistent data must not be written, erased, migrated, reformatted,
+//! or temporarily replaced.
 //! Ordinary OEM persistence must retain its semantics; observing an initializer
 //! does not authorize invoking it as a conversion step or broadening its trigger.
 //! Complete-pair preparation requires explicit component integrity and pair

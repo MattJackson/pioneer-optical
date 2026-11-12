@@ -10,13 +10,19 @@ pub enum PreparationError {
     /// Persistent storage requirements differ or could not be recovered.
     Startup(crate::startup::checks::Error),
     /// More than one startup comparison prevents selecting a target value.
+    /// Retained for compatibility; preparation reports ambiguous startup words
+    /// as [`Self::Startup`] and unresolved ones as [`Self::PhaseCorrection`].
     AmbiguousStartup,
     /// An observed startup comparison is not bound to a proven parameter getter.
+    /// Retained for compatibility; preparation reports it as
+    /// [`Self::PhaseCorrection`].
     UnresolvedStartup,
     /// The native compatibility plan or its prepared correction was refused.
     /// The historical variant name also covers non-phase filter failures.
     PhaseCorrection(crate::compatibility::Error),
     /// Target requires a setting but the installed write surface is unknown.
+    /// Retained for compatibility; preparation no longer produces it, since
+    /// startup word writes belong to the verified correction plan.
     UnknownStartupAccess,
     /// Installed updater cannot hand control to the replacement Kernel.
     KernelHandoff(crate::image::KernelHandoffError),
@@ -431,9 +437,12 @@ impl Receiver {
             match step {
                 KernelStep::Handoff { .. } => {
                     let bridge = super::handoff_bridge::prepare(self, target.kernel())?;
-                    // This stage retains the source Normal's startup decision,
-                    // but must check the final correction's live prerequisites
-                    // before installing any bridge firmware.
+                    // This stage retains the source Normal's startup decision and
+                    // carries no correction. The executor checks the final
+                    // correction's read-only prerequisites across all stages
+                    // before installing any bridge firmware, and refuses a final
+                    // correction word write here: it could only run after the
+                    // bridge transfer.
                     let bridge_settings = self
                         .settings_plan_for(bridge.normal(), bridge.kernel(), false)?
                         .with_startup_checks(self.prepare_startup_with_policy(

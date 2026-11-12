@@ -536,18 +536,19 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Producer>> {
     };
     let regions = crate::image::regions(normal).expect("cache checked regions");
     let mut semantics = None;
-    let mut result = Vec::new();
-    for block in blocks {
-        for region in &regions.stored {
-            let start = region.as_ptr() as usize - normal.as_ptr() as usize;
-            for local in (start & 1..region.len()).step_by(2) {
-                for shape in PRODUCERS {
-                    let Some(bytes) = region.get(local..local + shape.bytes.len()) else {
-                        continue;
-                    };
-                    if bytes[..2] != shape.bytes[..2] {
-                        continue;
-                    }
+    // One shape scan for every cache block; producers stay in block-major order.
+    let mut per_block: Vec<Vec<Producer>> = blocks.iter().map(|_| Vec::new()).collect();
+    for region in &regions.stored {
+        let start = region.as_ptr() as usize - normal.as_ptr() as usize;
+        for local in (start & 1..region.len()).step_by(2) {
+            for shape in PRODUCERS {
+                let Some(bytes) = region.get(local..local + shape.bytes.len()) else {
+                    continue;
+                };
+                if bytes[..2] != shape.bytes[..2] {
+                    continue;
+                }
+                for (block, found) in blocks.iter().zip(per_block.iter_mut()) {
                     let Some((overflow_callees, diagnostic_sources)) =
                         shape.bind(bytes, block.ram_base)
                     else {
@@ -562,7 +563,7 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Producer>> {
                     } else {
                         Vec::new()
                     };
-                    result.push(Producer {
+                    found.push(Producer {
                         offset,
                         end: offset + bytes.len(),
                         argument_register: shape.register,
@@ -577,6 +578,7 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Producer>> {
             }
         }
     }
+    let mut result: Vec<Producer> = per_block.into_iter().flatten().collect();
     // One reference pass for every producer, in the same per-producer order.
     // Literal occurrences compare the low 24 address bits; relative calls the
     // full CPU target.

@@ -33,8 +33,9 @@ fn revision() -> String {
     };
     match git(&["rev-parse", "HEAD"]) {
         Some(rev) => {
+            // A failed status cannot establish a clean tree.
             let dirty = git(&["status", "--porcelain", "--untracked-files=no"])
-                .is_some_and(|s| !s.is_empty());
+                .map_or(true, |s| !s.is_empty());
             if dirty {
                 format!("{rev}-dirty")
             } else {

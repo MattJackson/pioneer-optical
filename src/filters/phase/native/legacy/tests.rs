@@ -218,3 +218,28 @@ fn byte_pair_correction_uses_native_programs_across_platform_labels() {
         }
     }
 }
+
+std::thread_local! {
+    pub(super) static COMPARISONS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+#[test]
+fn tiled_template_instances_refuse_without_quadratic_deduplication() {
+    let t = templates::TEMPLATES
+        .iter()
+        .find(|t| !t.requires_leaf)
+        .unwrap();
+    let count = 2000;
+    let stride = (t.bytes.len() + 1) & !1;
+    let mut raw = alloc::vec![0xff; 0x200000];
+    for k in 0..count {
+        install(&mut raw, t, AT + k * stride);
+    }
+    COMPARISONS.with(|c| c.set(0));
+    assert_eq!(
+        correct(&raw, Assignment::Direct),
+        Err(CorrectionError::Unresolved)
+    );
+    let comparisons = COMPARISONS.with(core::cell::Cell::get);
+    assert!(comparisons <= 1, "{comparisons} binding comparisons");
+}

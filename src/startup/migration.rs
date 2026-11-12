@@ -5,6 +5,7 @@ use crate::drive::{self, Data, Transport};
 
 /// Result of an attempted rollback before any firmware write was attempted.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Rollback<E> {
     /// The original word was restored and read back.
     Restored,
@@ -20,7 +21,22 @@ pub enum Rollback<E> {
 }
 
 /// Stage-aware failure, retaining the original word only in this attempt.
+///
+/// ```compile_fail,E0004
+/// use pioneer_optical::startup::migration::Error;
+/// fn f(e: Error<(), ()>) -> u8 {
+///     match e {
+///         Error::Preflight(_) => 0,
+///         Error::InvalidParameter(_) => 1,
+///         Error::ConflictingParameters => 2,
+///         Error::Read(_) => 3,
+///         Error::Change { .. } => 4,
+///         Error::Flash { .. } => 5,
+///     }
+/// }
+/// ```
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error<E, F> {
     /// Host policy or receiver binding refused before any parameter read/change.
     Preflight(F),
@@ -32,11 +48,15 @@ pub enum Error<E, F> {
     Read(drive::Error<E>),
     /// Parameter change or verification failed; flash was never invoked.
     Change {
-        /// Original captured word.
+        /// Original captured word of the setting whose write or verification
+        /// failed (for multi-setting plans, not of the earlier settings).
         original: u16,
         /// Failed write or verification.
         source: drive::Error<E>,
-        /// Outcome of the single restoration attempt.
+        /// Restoration outcome: the single attempt for a one-setting plan; for
+        /// a multi-setting plan, [`Rollback::Settings`] with one outcome per
+        /// word, the failing setting first and then every earlier setting in
+        /// reverse order.
         rollback: Rollback<E>,
     },
     /// Flash callback failed, with rollback limited to pre-transfer failures.

@@ -88,7 +88,8 @@ fn call(bytes: &[u8], pos: &mut usize) -> Option<u32> {
     let target = u32::from_be_bytes([0, b[0], b[1], b[2]]);
     (target & 1 == 0).then_some(target)
 }
-fn identity_leaf(raw: &[u8], address: u32) -> bool {
+/// `stored` is `crate::image::regions(raw)?.stored`, decoded once by the caller.
+fn identity_leaf(raw: &[u8], stored: &[&[u8]], address: u32) -> bool {
     let Some(at) = address.checked_sub(0x410000).map(|at| at as usize) else {
         return false;
     };
@@ -100,15 +101,13 @@ fn identity_leaf(raw: &[u8], address: u32) -> bool {
         return false;
     };
     d.insn.mnemonic == "RTS"
-        && crate::image::regions(raw).is_some_and(|regions| {
-            regions.stored.iter().any(|r| {
-                let begin = r.as_ptr() as usize - raw.as_ptr() as usize;
-                at >= begin && at + d.len <= begin + r.len()
-            })
+        && stored.iter().any(|r| {
+            let begin = r.as_ptr() as usize - raw.as_ptr() as usize;
+            at >= begin && at + d.len <= begin + r.len()
         })
 }
 
-fn full_body(raw: &[u8], b: &[u8], at: usize) -> Option<Function> {
+fn full_body(raw: &[u8], stored: &[&[u8]], b: &[u8], at: usize) -> Option<Function> {
     let mut p = 0;
     consume(
         b,
@@ -144,7 +143,7 @@ fn full_body(raw: &[u8], b: &[u8], at: usize) -> Option<Function> {
         Some(high) => high,
         None => {
             let high = low.checked_sub(2)?;
-            if !identity_leaf(raw, high) {
+            if !identity_leaf(raw, stored, high) {
                 return None;
             }
             high
@@ -174,7 +173,7 @@ fn full_body(raw: &[u8], b: &[u8], at: usize) -> Option<Function> {
         spans: alloc::vec![at..at + p],
     })
 }
-fn short_body(raw: &[u8], b: &[u8], at: usize) -> Option<Function> {
+fn short_body(raw: &[u8], _stored: &[&[u8]], b: &[u8], at: usize) -> Option<Function> {
     let mut p = 0;
     consume(b, &mut p, &[0x0c, 0x8a, 0x1a, 0x80, 0x6a, 0x80, 0xf9])?;
     let control_at = at + p;
@@ -206,24 +205,28 @@ fn short_body(raw: &[u8], b: &[u8], at: usize) -> Option<Function> {
     })
 }
 
+/// A complete OEM function grammar over `(image, stored regions, body, entry)`.
+type Grammar = fn(&[u8], &[&[u8]], &[u8], usize) -> Option<Function>;
+
 // Existing OEM grammars remain the authority; placement only reconstructs their
 // instruction stream across a single typed JMP. Operand coordinates remain physical.
+// The caller supplies the stored regions it already decoded: re-decoding every
+// COMP stream per candidate site would make crafted images super-linear.
 fn split_function(
     raw: &[u8],
+    stored: &[&[u8]],
     at: usize,
     lengths: &[usize],
-    parse: fn(&[u8], &[u8], usize) -> Option<Function>,
+    parse: Grammar,
 ) -> Option<Function> {
-    let regions = crate::image::regions(raw)?;
     for length in lengths {
-        let Some(mut body) = placement::read(raw, &regions.stored, at, &alloc::vec![None; *length])
-        else {
+        let Some(mut body) = placement::read(raw, stored, at, &alloc::vec![None; *length]) else {
             continue;
         };
         if body.spans.len() != 2 {
             continue;
         }
-        let Some(mut function) = parse(raw, &body.bytes, at) else {
+        let Some(mut function) = parse(raw, stored, &body.bytes, at) else {
             continue;
         };
         if function.body.len() != body.bytes.len() {
@@ -254,7 +257,7 @@ fn split_function(
             .ok()?;
             if nop.insn.mnemonic != "NOP"
                 || end + nop.len > at + footprint
-                || !regions.stored.iter().any(|r| {
+                || !stored.iter().any(|r| {
                     let begin = r.as_ptr() as usize - raw.as_ptr() as usize;
                     end >= begin && end + nop.len <= begin + r.len()
                 })
@@ -273,9 +276,9 @@ fn split_function(
     }
     None
 }
-fn full(raw: &[u8], at: usize) -> Option<Function> {
-    let mut f = full_body(raw, raw.get(at..)?, at)
-        .or_else(|| split_function(raw, at, &[44, 48], full_body))?;
+fn full(raw: &[u8], stored: &[&[u8]], at: usize) -> Option<Function> {
+    let mut f = full_body(raw, stored, raw.get(at..)?, at)
+        .or_else(|| split_function(raw, stored, at, &[44, 48], full_body))?;
     if f.identity_call.is_none() && f.body.len() == 40 {
         let mut end = f.end;
         while end < at + 44 {
@@ -297,8 +300,9 @@ fn full(raw: &[u8], at: usize) -> Option<Function> {
     }
     Some(f)
 }
-fn short(raw: &[u8], at: usize) -> Option<Function> {
-    short_body(raw, raw.get(at..)?, at).or_else(|| split_function(raw, at, &[26, 28], short_body))
+fn short(raw: &[u8], stored: &[&[u8]], at: usize) -> Option<Function> {
+    short_body(raw, stored, raw.get(at..)?, at)
+        .or_else(|| split_function(raw, stored, at, &[26, 28], short_body))
 }
 
 /// Recognize the complete paired output functions in decoded H8 Normal.
@@ -330,8 +334,8 @@ pub fn discover_pair(normal: &[u8]) -> Observation<PairedPhase> {
                 inline.push(pair);
             }
             let parsed = match normal[at] {
-                1 => full(normal, at),
-                0x0c => short(normal, at),
+                1 => full(normal, &regions.stored, at),
+                0x0c => short(normal, &regions.stored, at),
                 _ => None,
             };
             if let Some(function) = parsed {
@@ -390,6 +394,7 @@ pub fn discover_pair(normal: &[u8]) -> Observation<PairedPhase> {
 
 /// A Normal-only phase correction could not be established.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CorrectionError {
     /// A complete unambiguous binding with an execution-preserving correction
     /// is unavailable. A program can remain observable without such a correction.
@@ -732,6 +737,30 @@ pub(crate) mod tests {
         raw[400] ^= 1;
         assert!(!matches!(discover_pair(&raw), Observation::Known(_)));
     }
+
+    #[test]
+    fn failing_candidate_sites_share_the_one_region_decode() {
+        // Every crafted candidate fails its contiguous parse, so each one also
+        // tries the split reader; full-form candidates first probe their
+        // identity leaf. None of that may decode the image's regions again.
+        let mut raw = fixture(false);
+        raw.resize(0x10000, 0xff);
+        let full_candidate: &[u8] = &[
+            1, 0, 0x6d, 0xf3, 0x1a, 0xb3, 0x0c, 0x8b, 0x10, 0x73, 0x0a, 0x93, 0x69, 0x30, 0x0c,
+            0x80, 0x12, 0xc0, 0xe0, 3, 0x6a, 0x80, 0xf9, 0x12, 0x69, 0x30, 0x5e, 0x41, 0x01, 0x92,
+        ];
+        for at in (0x1000..0x8000).step_by(16) {
+            raw[at..at + 4].copy_from_slice(&[0x0c, 0x8a, 0x1a, 0x80]);
+        }
+        for at in (0x8000..0xf000).step_by(32) {
+            raw[at..at + full_candidate.len()].copy_from_slice(full_candidate);
+        }
+        crate::comp_streams::READS.with(|reads| reads.set(0));
+        let observed = discover_pair(&raw);
+        let reads = crate::comp_streams::READS.with(|reads| reads.get());
+        assert!(matches!(observed, Observation::Known(p) if p.functions == [32, 160]));
+        assert_eq!(reads, 1);
+    }
 }
 
 mod adapted;
@@ -787,6 +816,10 @@ fn template_matches(t: &Template, normal: &[u8], at: usize) -> bool {
     template_matches_bytes(t, normal, at, candidate)
 }
 fn template_matches_bytes(t: &Template, normal: &[u8], at: usize, candidate: &[u8]) -> bool {
+    // Call and jump destinations are even Kernel or Normal CPU addresses.
+    let executable = |value: u32| {
+        value & 1 == 0 && value >= 0x400000 && u64::from(value) < 0x410000 + normal.len() as u64
+    };
     let mut cursor = 0;
     for r in t.relocations {
         if candidate[cursor..r.start] != t.bytes[cursor..r.start] {
@@ -795,10 +828,7 @@ fn template_matches_bytes(t: &Template, normal: &[u8], at: usize, candidate: &[u
         let value = integer(&candidate[r.start..r.end]);
         match r.kind {
             RelocationKind::Call => {
-                if value & 1 != 0
-                    || value < 0x400000
-                    || u64::from(value) >= 0x410000 + normal.len() as u64
-                {
+                if !executable(value) {
                     return false;
                 }
                 if t.requires_leaf {
@@ -814,10 +844,7 @@ fn template_matches_bytes(t: &Template, normal: &[u8], at: usize, candidate: &[u
                 }
             }
             RelocationKind::Jump => {
-                if value & 1 != 0
-                    || value < 0x400000
-                    || u64::from(value) >= 0x410000 + normal.len() as u64
-                {
+                if !executable(value) {
                     return false;
                 }
                 if r.reference >= t.reference_cpu

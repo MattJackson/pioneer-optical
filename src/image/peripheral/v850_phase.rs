@@ -1,6 +1,6 @@
 //! Paired V850 source loads bound to the complete indexed writer.
 //! Native operand correction is separate from full image/update admission.
-use super::{unique, Interface, Observation, Phase, Unresolved};
+use super::{Interface, Observation, Phase, Unresolved};
 use crate::image::phase::{Assignment, CorrectionError};
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
@@ -194,13 +194,13 @@ pub fn native(normal: &[u8], kernel: Option<&[u8]>) -> Observation<Phase> {
         return Observation::Unresolved(Unresolved::ResidentCodeRequired(0));
     };
     match super::v850_host::ep(kernel) {
-        Observation::Known(base) => unique(Vec::from([Phase {
+        Observation::Known(base) => Observation::Known(Phase {
             assignment: found[0].assignment,
             interface: Interface::Indexed16 {
                 window: base + 0x100,
                 channels: [0x8e, 0x8f],
             },
-        }])),
+        }),
         Observation::Unresolved(reason) => Observation::Unresolved(reason),
         Observation::Conflicting => Observation::Conflicting,
     }
@@ -386,5 +386,26 @@ mod tests {
                 assert!(!matched(&wrong, s));
             }
         }
+    }
+    #[test]
+    fn phase_owner_treats_an_undecodable_kernel_as_missing_resident_code() {
+        use crate::compatibility::Firmware;
+        let mut native = fixture();
+        native.resize(8192, 0xff);
+        let normal = crate::image::layout::encode_v850_bus(&native).unwrap();
+        let firmware = |kernel| Firmware {
+            hardware: "",
+            normal: &normal,
+            kernel,
+        };
+        let missing = |kernel| {
+            matches!(
+                crate::filters::phase::observe(firmware(kernel)),
+                Observation::Unresolved(Unresolved::ResidentCodeRequired(0))
+            )
+        };
+        assert!(missing(None));
+        // A supplied Kernel that is not a bus-order image is no more usable.
+        assert!(missing(Some(&[0xff; 100])));
     }
 }

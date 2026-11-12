@@ -214,9 +214,26 @@ fn versioned_operands_and_bindings_change_or_refuse_the_contract() {
     assert_eq!(discover(&b), None);
 }
 
+/// The fixed operands of a rejecting form: (tail, blank-bank writer calls,
+/// second-header blank checks).
+fn reject_form(code: &[u8]) -> (usize, [usize; 2], &'static [usize]) {
+    if code == shapes::REJECT_LONG {
+        (0x96, [92, 144], &[56])
+    } else if code == shapes::REJECT_SHORT {
+        (0x5a, [72, 84], &[52])
+    } else {
+        (0x5e, [74, 88], &[52])
+    }
+}
+
 /// legacy::fixture with its initializer replaced by a rejecting form whose
 /// operands carry the same magic and markers.
 fn rejecting(code: &[u8]) -> Vec<u8> {
+    rejecting_with(code, 0x41_19e0)
+}
+
+/// [`rejecting`] with both blank-bank writes calling `writer`.
+fn rejecting_with(code: &[u8], writer: u32) -> Vec<u8> {
     let mut b = vec![0; 0x2000];
     super::legacy::fixture(&mut b);
     b[0x1800..0x18f0].fill(0);
@@ -227,15 +244,19 @@ fn rejecting(code: &[u8]) -> Vec<u8> {
     }
     put(&mut b, at, code);
     put32(&mut b, at + 10, 0xfedc_4321);
+    put32(&mut b, at + 22, 0x7d_fffe);
     put32(&mut b, at + if long { 0x26 } else { 0x20 }, 0x7d_fffa);
-    let tail = at
-        + if long {
-            0x96
-        } else if code[0x5a] == 0x1f {
-            0x5a
-        } else {
-            0x5e
-        };
+    if long {
+        put32(&mut b, at + 32, 0x7e_fffe);
+    }
+    let (tail, writes, blank) = reject_form(code);
+    for &offset in blank {
+        put32(&mut b, at + offset, 0x7e_fffa);
+    }
+    for offset in writes {
+        put_call(&mut b, at + offset, writer);
+    }
+    let tail = at + tail;
     put32(&mut b, tail + 8, 0x7e_fffa);
     put_call(&mut b, tail + 16, BASE + 0x1a00);
     // Older restart helper: set both loader flags before its restart.
@@ -282,6 +303,18 @@ fn legacy_initializer_and_rejecting_forms_recover_fixed_contracts() {
         marker[0x1907] ^= 4;
         assert_eq!(analyze_pair(&marker, None), None);
     }
+    // A writer at 0x411fa0 puts [0x1f, 0xa0] at +0x5a of the alternate form;
+    // the form is chosen by its fixed bytes, not by those operand bytes.
+    let alt = rejecting_with(shapes::REJECT_SHORT_ALT, 0x41_1fa0);
+    assert_eq!(alt[0x185a..0x185c], [0x1f, 0xa0]);
+    assert_eq!(analyze_pair(&alt, None), Some(reject));
+    assert_eq!(
+        check(
+            analyze_pair(&rejecting(shapes::REJECT_SHORT_ALT), None),
+            analyze_pair(&alt, None)
+        ),
+        Ok(())
+    );
     assert_eq!(
         check(Some(initialize), Some(reject)),
         Err(Error::ConversionRequired {
@@ -289,6 +322,38 @@ fn legacy_initializer_and_rejecting_forms_recover_fixed_contracts() {
             target: reject
         })
     );
+}
+
+/// The blank check and initialization of a rejecting form act on the banks
+/// it compares: the first sequence word, the blank-checked second header and
+/// both writes through one writer are bound, never left free.
+#[test]
+fn rejecting_forms_bind_their_blank_check_sequence_and_writer_operands() {
+    for code in [
+        shapes::REJECT_SHORT,
+        shapes::REJECT_SHORT_ALT,
+        shapes::REJECT_LONG,
+    ] {
+        let long = code == shapes::REJECT_LONG;
+        let at = if long { 0x1804 } else { 0x1800 };
+        let (_, writes, blank) = reject_form(code);
+        let b = rejecting(code);
+        assert!(analyze_pair(&b, None).is_some());
+        let sequence: &[usize] = if long { &[22, 32] } else { &[22] };
+        for &offset in sequence.iter().chain(blank) {
+            let mut changed = b.clone();
+            changed[at + offset + 3] ^= 0x10;
+            assert_eq!(
+                analyze_pair(&changed, None),
+                None,
+                "{:#x} +{offset}",
+                code[1]
+            );
+        }
+        let mut writer = b.clone();
+        put_call(&mut writer, at + writes[1], 0x41_1a40);
+        assert_eq!(analyze_pair(&writer, None), None, "{:#x} writer", code[1]);
+    }
 }
 
 const HEADERS: [[u32; 2]; 2] = [[0x7d_0000, 0x7d_0004], [0x7e_0000, 0x7e_0004]];
@@ -382,7 +447,10 @@ fn state_banks_recover_headers_sequences_and_status() {
         let moved = word(&spacing, at).unwrap() + 0x8000;
         put32(&mut spacing, at, moved);
     }
-    assert!(super::legacy::state_selector(&spacing, BASE).is_some());
+    assert!(matches!(
+        super::legacy::state_selector(&spacing, BASE),
+        Ok(Some(_))
+    ));
     assert_eq!(analyze_pair(&spacing, None), None);
     assert_eq!(check(Some(state), Some(state)), Ok(()));
     let mut fixed = vec![0; 0x2000];
@@ -396,23 +464,9 @@ fn state_banks_recover_headers_sequences_and_status() {
     assert_eq!(check(Some(state), None), Err(Error::UnknownTarget));
 }
 
-#[test]
-fn kernel_owned_banks_recover_selector_and_sequence_contracts() {
-    let mut kernel = vec![0; 0x10000];
-    state_selector_at(&mut kernel, 0x800);
-    put_call(&mut kernel, 0x100, 0x40_0800);
-    assert_eq!(
-        super::legacy::state_selector(&kernel, 0x40_0000),
-        Some(Storage::StateHeaders {
-            headers: HEADERS,
-            sequences: SEQUENCES,
-            status: STATUS,
-        })
-    );
-    // Without a call into the selector there is no contract.
-    kernel[0x100] = 0;
-    assert_eq!(super::legacy::state_selector(&kernel, 0x40_0000), None);
-
+/// Earlier Kernel: a called sequence-word selector at 0x2000 and no state
+/// selector.
+fn sequence_kernel() -> Vec<u8> {
     let mut kernel = vec![0; 0x10000];
     let at = 0x2000;
     put(&mut kernel, at, &[0x6b, 0x28]);
@@ -432,6 +486,186 @@ fn kernel_owned_banks_recover_selector_and_sequence_contracts() {
     put32(&mut kernel, at + 38, 0x7d_0000);
     put(&mut kernel, at + 42, &[0x54, 0x70]);
     put_call(&mut kernel, 0x100, 0x40_2000);
+    kernel
+}
+
+const KERNEL_SEQUENCES: Storage = Storage::KernelSequences {
+    sequences: [0x7c_fffe, 0x7d_fffe],
+    bases: [0x7c_0000, 0x7d_0000],
+};
+
+/// A recognized update-entry receiver, which admits Kernel-owned storage.
+fn receiver(b: &mut [u8], at: usize) {
+    put(
+        b,
+        at,
+        &[
+            0x7a, 0x20, 0x9a, 0x78, 0x23, 0x61, 0x47, 22, 0x79, 1, 0, 0x10, 1, 0, 0x6f, 0x70, 0,
+            0x74, 0x5d, 0x40, 0x7a, 0x20, 1, 2, 3, 4, 0x58, 0x60, 5, 0xba,
+        ],
+    );
+}
+
+/// Ambiguous evidence in one tier is unresolved, not absent: it never lets a
+/// later tier (Normal state banks, Kernel selectors) supply the contract.
+#[test]
+fn ambiguous_bank_evidence_never_falls_through_to_another_tier() {
+    let kernel = sequence_kernel();
+    let mut plain = vec![0; 0x2000];
+    receiver(&mut plain, 0x1d00);
+    assert!(crate::image::receiver_control(&plain).is_some());
+    assert_eq!(analyze_pair(&plain, Some(&kernel)), Some(KERNEL_SEQUENCES));
+
+    // Two different called Kernel state selectors.
+    let mut selectors = kernel.clone();
+    state_selector_at(&mut selectors, 0x800);
+    put_call(&mut selectors, 0x104, 0x40_0800);
+    assert!(matches!(
+        analyze_pair(&plain, Some(&selectors)),
+        Some(Storage::StateHeaders { .. })
+    ));
+    state_selector_at(&mut selectors, 0xa00);
+    put32(&mut selectors, 0xa00 + 88, 0x7d_0010);
+    put_call(&mut selectors, 0x108, 0x40_0a00);
+    assert_eq!(
+        super::legacy::state_selector(&selectors, 0x40_0000),
+        Err(())
+    );
+    assert_eq!(analyze_pair(&plain, Some(&selectors)), None);
+
+    // Normal state banks with two different called state selectors.
+    let mut state = state_normal();
+    receiver(&mut state, 0x1d00);
+    assert!(matches!(
+        analyze_pair(&state, Some(&kernel)),
+        Some(Storage::StateHeaders { .. })
+    ));
+    let mut two = state.clone();
+    state_selector_at(&mut two, 0xc00);
+    put32(&mut two, 0xc00 + 88, 0x7d_0010);
+    put_call(&mut two, 0x108, BASE + 0xc00);
+    assert_eq!(analyze_pair(&two, Some(&kernel)), None);
+
+    // Two called state validators bound to the one selector.
+    let mut two = state.clone();
+    two.copy_within(0x400..0x522, 0x1400);
+    put_call(&mut two, 0x14a0, BASE + 0x1400 + 0x11a);
+    two[0x14a0] = 0x5a;
+    put_call(&mut two, 0x10c, BASE + 0x1400);
+    assert_eq!(analyze_pair(&two, Some(&kernel)), None);
+
+    // A capacity guard whose address calculation is unresolved.
+    let mut guard = versioned();
+    receiver(&mut guard, 0x3f00);
+    assert!(matches!(
+        analyze_pair(&guard, Some(&kernel)),
+        Some(Storage::Versioned(_))
+    ));
+    put_call(&mut guard, 0x1604, 0x41_3a00);
+    assert!(discover(&guard).is_some() && analyze(&guard).is_none());
+    assert_eq!(analyze_pair(&guard, Some(&kernel)), None);
+
+    // Two capacity guards: which one runs is unproven.
+    let mut guards = versioned();
+    receiver(&mut guards, 0x3f00);
+    let copy = guards[VALIDATOR..VALIDATOR + 0x92].to_vec();
+    put(&mut guards, 0x2000, &copy);
+    assert_eq!(discover(&guards), None);
+    let banks = analyze_banks(&guards, Some(&kernel));
+    assert_eq!(banks.storage, None);
+    assert!(banks.capacity_guard && banks.capacity_query.is_none());
+
+    // Two called fixed-bank initializers.
+    let mut fixed = vec![0; 0x2000];
+    super::legacy::fixture(&mut fixed);
+    receiver(&mut fixed, 0x1d00);
+    assert!(matches!(
+        analyze_pair(&fixed, Some(&kernel)),
+        Some(Storage::Versioned(_))
+    ));
+    fixed.copy_within(0x1800..0x1862, 0x1c00);
+    put_call(&mut fixed, 0x17e4, BASE + 0x1c00);
+    assert_eq!(analyze_pair(&fixed, Some(&kernel)), None);
+}
+
+/// A called rejecting validator whose bank operands do not bind is not
+/// absent evidence: beside a bound validator for the same selector, which
+/// one runs is unproven, so the contract is unresolved.
+#[test]
+fn an_unbound_rejecting_validator_beside_a_bound_one_is_ambiguous() {
+    for code in [
+        shapes::REJECT_SHORT,
+        shapes::REJECT_SHORT_ALT,
+        shapes::REJECT_LONG,
+    ] {
+        let mut b = rejecting(code);
+        let kernel = sequence_kernel();
+        receiver(&mut b, 0x1f00);
+        assert!(matches!(
+            analyze_pair(&b, Some(&kernel)),
+            Some(Storage::Versioned(_))
+        ));
+        let long = code == shapes::REJECT_LONG;
+        let (from, len) = if long {
+            (0x1800, 0xbc)
+        } else {
+            (0x1800, code.len())
+        };
+        b.copy_within(from..from + len, 0x1c00);
+        let at = 0x1c00 + if long { 4 } else { 0 };
+        b[at + 22 + 3] ^= 0x10;
+        put_call(&mut b, 0x17e4, BASE + 0x1c00);
+        assert_eq!(analyze_pair(&b, None), None, "{:#x}", code[1]);
+        assert_eq!(
+            analyze_pair(&b, Some(&kernel)),
+            None,
+            "{:#x} Kernel",
+            code[1]
+        );
+    }
+}
+
+/// The same for the initialize form: a called copy of a used selector whose
+/// sequence operand does not follow its first header, or whose two writes
+/// use different writers, is unresolved rather than skipped.
+#[test]
+fn an_unbound_initializer_beside_a_bound_one_is_ambiguous() {
+    let kernel = sequence_kernel();
+    for (offset, what) in [(22 + 3, "sequence"), (84 + 3, "writer")] {
+        let mut b = vec![0; 0x2000];
+        super::legacy::fixture(&mut b);
+        receiver(&mut b, 0x1d00);
+        assert!(matches!(
+            analyze_pair(&b, Some(&kernel)),
+            Some(Storage::Versioned(_))
+        ));
+        b.copy_within(0x1800..0x1862, 0x1c00);
+        b[0x1c00 + offset] ^= 0x10;
+        put_call(&mut b, 0x17e4, BASE + 0x1c00);
+        assert_eq!(analyze_pair(&b, None), None, "{what}");
+        assert_eq!(analyze_pair(&b, Some(&kernel)), None, "{what} Kernel");
+    }
+}
+
+#[test]
+fn kernel_owned_banks_recover_selector_and_sequence_contracts() {
+    let mut kernel = vec![0; 0x10000];
+    state_selector_at(&mut kernel, 0x800);
+    put_call(&mut kernel, 0x100, 0x40_0800);
+    assert_eq!(
+        super::legacy::state_selector(&kernel, 0x40_0000),
+        Ok(Some(Storage::StateHeaders {
+            headers: HEADERS,
+            sequences: SEQUENCES,
+            status: STATUS,
+        }))
+    );
+    // Without a call into the selector there is no contract.
+    kernel[0x100] = 0;
+    assert_eq!(super::legacy::state_selector(&kernel, 0x40_0000), Ok(None));
+
+    let kernel = sequence_kernel();
+    let at = 0x2000;
     let sequences = Storage::KernelSequences {
         sequences: [0x7c_fffe, 0x7d_fffe],
         bases: [0x7c_0000, 0x7d_0000],

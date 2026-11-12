@@ -487,10 +487,18 @@ fn decode(code: &Code<'_>, start: usize, end: usize) -> Option<Body> {
 /// This narrower root is useful for native copy/clear contracts independently
 /// of whether later hardware/cache initializer shapes are currently supported.
 pub fn c_startup(normal: &[u8]) -> Observation<Function> {
+    match crate::image::regions(normal) {
+        Some(regions) => c_startup_in(normal, &regions),
+        None => Observation::Unresolved(Unresolved::ReaderNotRecognized),
+    }
+}
+
+/// [`c_startup`] over regions the caller already decoded from `normal`.
+pub(super) fn c_startup_in(
+    normal: &[u8],
+    regions: &crate::image::Regions<'_>,
+) -> Observation<Function> {
     let unknown = || Observation::Unresolved(Unresolved::ReaderNotRecognized);
-    let Some(regions) = crate::image::regions(normal) else {
-        return unknown();
-    };
     let code = Code {
         normal,
         stored: regions
@@ -523,13 +531,10 @@ pub fn c_startup(normal: &[u8]) -> Observation<Function> {
 /// All compressed bytes are excluded from native entry and body matching.
 pub fn bind(normal: &[u8]) -> Observation<BootChain> {
     let unknown = || Observation::Unresolved(Unresolved::ReaderNotRecognized);
-    let caches = match super::cache::discover(normal) {
+    let (caches, regions) = match super::cache::discover_in(normal) {
         Observation::Known(v) => v,
         Observation::Unresolved(r) => return Observation::Unresolved(r),
         Observation::Conflicting => return Observation::Conflicting,
-    };
-    let Some(regions) = crate::image::regions(normal) else {
-        return unknown();
     };
     let code = Code {
         normal,
@@ -632,11 +637,10 @@ pub fn bind(normal: &[u8]) -> Observation<BootChain> {
                 else {
                     continue;
                 };
-                for (bulk_reader_call, reader_address) in wrapper
+                for (bulk_reader_call, _) in wrapper
                     .calls()
                     .filter(|(_, target)| code.offset(*target) == Some(reader.function.start))
                 {
-                    let _ = reader_address;
                     let requests = [
                         (&c_startup, c_startup.function.start, dispatch_call),
                         (&dispatcher, dispatcher.function.start, dispatch_at + 4),

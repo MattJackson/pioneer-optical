@@ -82,12 +82,13 @@ pub(crate) fn read(
     Some(Body { bytes, spans })
 }
 
-/// Decode every instruction and resolve every relative edge to an instruction
-/// start inside the OEM routine. Computed branches and early returns are refused.
+/// Instruction starts and relative `(from, to)` edges of one OEM routine.
 struct Flow {
     starts: Vec<usize>,
     edges: Vec<(usize, usize)>,
 }
+/// Decode every instruction and resolve every relative edge to an instruction
+/// start inside the OEM routine. Computed branches and early returns are refused.
 fn flow(bytes: &[u8]) -> Option<Flow> {
     let mut starts = Vec::new();
     let mut edges = Vec::new();

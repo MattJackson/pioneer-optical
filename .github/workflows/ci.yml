@@ -32,7 +32,7 @@ jobs:
             base=$(python3 -c 'import json,os;print(json.load(open(os.environ["GITHUB_EVENT_PATH"])).get("before", ""))')
             if git rev-parse --verify "$base^{commit}" >/dev/null 2>&1; then
               changes=$(git diff --name-only --no-renames "$base" HEAD)
-              if ! printf '%s\n' "$changes" | grep -v '^.github/' | grep -q .; then build=false; branch=dev; fi
+              if ! { printf '%s\n' "$changes" | grep -v '^\.github/'; printf '%s\n' "$changes" | grep -x '\.github/scripts/check-features\.py'; } | grep -q .; then build=false; branch=dev; fi
             fi
           fi
           echo "build=$build" >> "$GITHUB_OUTPUT"
@@ -66,6 +66,8 @@ jobs:
           cache-on-failure: true
           cache-workspace-crates: true
       - run: cargo fmt --all --check
+      - name: Check macro-declared filter modules are formatted
+        run: find src/filters -name '*.rs' -print0 | xargs -0 rustfmt --edition 2021 --check
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-targets --all-features
       - run: cargo test --locked --doc --all-features

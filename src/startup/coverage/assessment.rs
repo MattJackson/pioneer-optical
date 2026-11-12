@@ -179,7 +179,11 @@ pub fn assess(normal: &[u8]) -> Assessment {
     if let Observation::Known(value) = super::cache_indices::discover(normal) {
         for call in value.calls {
             match call.indices {
-                Some(indices) if !indices.iter().any(|i| (126..=127).contains(i)) => {
+                Some(indices)
+                    if !indices
+                        .iter()
+                        .any(|i| super::cache::WORD_009F_BYTES.contains(i)) =>
+                {
                     result.cache_calls_with_domains += 1;
                 }
                 _ => result.obligations.push(Obligation::CacheInput(call.offset)),

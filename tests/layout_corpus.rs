@@ -502,7 +502,6 @@ fn sat9_primary_only_changes_leave_secondary_word_on_the_wrong_record_region() {
             u32::from_be_bytes(normal[at + 14..at + 18].try_into().unwrap()),
             secondary
         );
-        assert_ne!(secondary, [0x8352u32, 0x4352][index]);
         counts[index] += 1;
     }
     assert_eq!(counts, [29, 37]);

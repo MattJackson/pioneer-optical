@@ -78,15 +78,12 @@ fn target(bytes: &[u8], offset: usize, base: u32) -> Option<(Range<usize>, u32)>
     None
 }
 
-// `limit` bounds the derived reference memory of the whole component; a
-// hostile run of 2-byte branches otherwise yields ~20 bytes per input byte.
+// The caller admits only H8 components. `limit` bounds the derived reference
+// memory of the whole component; a hostile run of 2-byte branches otherwise yields ~20 bytes per input byte.
 pub(super) fn identify(
     analysis: &mut FirmwareAnalysis<'_>,
     limit: usize,
 ) -> Result<(), super::Error> {
-    if analysis.identity.component != "Kernel" && analysis.identity.family.is_none() {
-        return Ok(());
-    }
     let mut used = 0usize;
     // First establish body references, then analyze only expanded regions that
     // those direct transfers reach. Data-only overlays do not become code merely

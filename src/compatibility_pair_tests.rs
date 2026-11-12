@@ -390,5 +390,13 @@ fn public_envelope_guards_refuse_wrong_original_bytes_presence_and_hardware() {
         plan.prepare_components(&normal, Some(&kernel)),
         Err(Error::ComponentMismatch)
     );
+    // The public call also refuses this unregistered owner; pin the hardware
+    // guard itself before any runner invocation.
+    assert_eq!(
+        plan.prepare_components_using(&normal, Some(&kernel), |_| panic!(
+            "hardware guard must reject before runner invocation"
+        )),
+        Err(Error::ComponentMismatch)
+    );
     assert_eq!(owner.0.verifications.load(Ordering::SeqCst), 0);
 }

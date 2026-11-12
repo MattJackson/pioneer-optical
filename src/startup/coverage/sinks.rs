@@ -17,13 +17,23 @@ fn offset(address: u32, normal: &[u8]) -> Option<usize> {
     let at = address.checked_sub(BASE)? as usize;
     (at & 1 == 0 && at < normal.len()).then_some(at)
 }
-fn stored(normal: &[u8], span: &Range<usize>) -> bool {
-    crate::image::regions(normal).is_some_and(|regions| {
-        regions.stored.iter().any(|bytes| {
-            let at = bytes.as_ptr() as usize - normal.as_ptr() as usize;
-            span.start >= at && span.end <= at + bytes.len()
-        })
-    })
+/// Stored (non-COMP) spans of the decoded Normal, decoded once per caller.
+fn stored_spans(normal: &[u8]) -> Option<Vec<Range<usize>>> {
+    Some(
+        crate::image::regions(normal)?
+            .stored
+            .iter()
+            .map(|bytes| {
+                let at = bytes.as_ptr() as usize - normal.as_ptr() as usize;
+                at..at + bytes.len()
+            })
+            .collect(),
+    )
+}
+fn stored(spans: &[Range<usize>], span: &Range<usize>) -> bool {
+    spans
+        .iter()
+        .any(|stored| span.start >= stored.start && span.end <= stored.end)
 }
 
 /// Exact code/table spans establishing a host WRITE BUFFER callback's ownership.
@@ -40,20 +50,8 @@ pub struct HostCommand {
 /// startup acceptance is inferred. Arbitrary indirect jumps and overlapping
 /// instruction decodes refuse.
 pub fn write_buffer(normal: &[u8], sink: usize) -> Option<HostCommand> {
-    let regions = crate::image::regions(normal)?;
-    let spans: Vec<_> = regions
-        .stored
-        .iter()
-        .map(|bytes| {
-            let at = bytes.as_ptr() as usize - normal.as_ptr() as usize;
-            at..at + bytes.len()
-        })
-        .collect();
-    let contains = |span: &Range<usize>| {
-        spans
-            .iter()
-            .any(|stored| span.start >= stored.start && span.end <= stored.end)
-    };
+    let spans = stored_spans(normal)?;
+    let contains = |span: &Range<usize>| stored(&spans, span);
     let mut registries = Vec::new();
     for at in (0..normal.len().saturating_sub(256)).step_by(2) {
         if word(normal, at)? == 0 || word(normal, at)? >= 0x8000 || word(normal, at + 8)? != 0 {
@@ -103,7 +101,7 @@ pub fn write_buffer(normal: &[u8], sink: usize) -> Option<HostCommand> {
     // Native saved-register callback frame. Frame size and command-pointer
     // register allocation vary; ownership follows the actual registry edge.
     if normal.get(entry..entry + 10)? != [1, 0, 0x6d, 0xf3, 1, 0x20, 0x6d, 0xf4, 0x79, 0x37]
-        || normal[entry + 11] & 1 != 0
+        || normal.get(entry + 11)? & 1 != 0
     {
         return None;
     }
@@ -260,22 +258,23 @@ pub enum Failure {
 /// address literal must have a classified owner. Address-taking and tails refuse.
 fn calls_diagnostic(
     normal: &[u8],
+    spans: &[Range<usize>],
     target: u32,
     stage: Stage,
     failure: &mut Failure,
 ) -> Option<Vec<usize>> {
-    let regions = crate::image::regions(normal)?;
     let mut found = Vec::new();
-    for bytes in regions.stored {
-        let start = bytes.as_ptr() as usize - normal.as_ptr() as usize;
+    for span in spans {
+        let start = span.start;
+        let bytes = normal.get(span.clone())?;
         for (local, value) in bytes.windows(3).enumerate() {
             if value != &target.to_be_bytes()[1..] {
                 continue;
             }
-            let at = (start + local).checked_sub(1)?;
-            if local == 0 || at & 1 != 0 {
+            if local == 0 || (start + local - 1) & 1 != 0 {
                 continue;
             }
+            let at = start + local - 1;
             match normal[at] {
                 0x5e => found.push(at),
                 0 | 0x5a => {
@@ -287,17 +286,12 @@ fn calls_diagnostic(
         }
         for local in (start & 1..bytes.len()).step_by(2) {
             let at = start + local;
-            let (length, delta) = if bytes.get(local) == Some(&0x55) {
-                (2, i32::from(*bytes.get(local + 1)? as i8))
-            } else if bytes.get(local..local + 2) == Some(&[0x5c, 0]) {
-                (
-                    4,
-                    i32::from(i16::from_be_bytes(
-                        bytes.get(local + 2..local + 4)?.try_into().ok()?,
-                    )),
-                )
-            } else {
-                continue;
+            // A truncated encoding at the end of a stored region is not an
+            // instruction; it is skipped rather than refusing every target.
+            let (length, delta) = match &bytes[local..] {
+                [0x55, delta, ..] => (2, i32::from(*delta as i8)),
+                [0x5c, 0, a, b, ..] => (4, i32::from(i16::from_be_bytes([*a, *b]))),
+                _ => continue,
             };
             if (BASE as i64 + at as i64 + length + i64::from(delta)) == i64::from(target) {
                 *failure = Failure::UnclassifiedAddressReference { stage, at, target };
@@ -314,7 +308,8 @@ pub(super) fn calls(normal: &[u8], target: u32) -> Option<Vec<usize>> {
     let mut failure = Failure::Unsupported {
         stage: Stage::ServiceCalls,
     };
-    calls_diagnostic(normal, target, Stage::ServiceCalls, &mut failure)
+    let spans = stored_spans(normal)?;
+    calls_diagnostic(normal, &spans, target, Stage::ServiceCalls, &mut failure)
 }
 
 // An instruction-shaped entry into a bound predicate must come from that
@@ -322,28 +317,44 @@ pub(super) fn calls(normal: &[u8], target: u32) -> Option<Vec<usize>> {
 // from bypassing a comparison and entering an existing rejection tail.
 fn closed_entries_diagnostic(
     normal: &[u8],
+    spans: &[Range<usize>],
     scopes: &[(Range<usize>, Vec<usize>)],
     failure: &mut Failure,
     boundary: Option<&super::sink_boundaries::BoundaryCertificate>,
 ) -> Option<()> {
-    for bytes in crate::image::regions(normal)?.stored {
-        let start = bytes.as_ptr() as usize - normal.as_ptr() as usize;
-        for local in (start & 1..bytes.len().saturating_sub(3)).step_by(2) {
+    // Sorted classified sites: membership is a binary search per candidate.
+    let scopes: Vec<_> = scopes
+        .iter()
+        .map(|(range, allowed)| {
+            let mut allowed = allowed.clone();
+            allowed.sort_unstable();
+            (range.clone(), allowed)
+        })
+        .collect();
+    for span in spans {
+        let start = span.start;
+        let bytes = normal.get(span.clone())?;
+        // Every complete encoding, including a final two-byte relative branch.
+        for local in (start & 1..bytes.len()).step_by(2) {
             let at = start + local;
             let b = &bytes[local..];
-            if b[0] == 0 && boundary.is_some_and(|proof| proof.is_cross_instruction_literal(at, 4))
+            if b.len() >= 4
+                && b[0] == 0
+                && boundary.is_some_and(|proof| proof.is_cross_instruction_literal(at, 4))
             {
                 continue;
             }
-            let target = match b[0] {
-                0 => word(b, 0).and_then(|v| offset(v, normal)),
-                0x5e | 0x5a => offset(address(&b[1..4]), normal),
-                0x40..=0x4f | 0x55 => (at + 2).checked_add_signed(b[1] as i8 as isize),
-                0x58 if b[1] & 15 == 0 => {
-                    (at + 4).checked_add_signed(i16::from_be_bytes([b[2], b[3]]) as isize)
+            let target = match b {
+                [0, ..] => word(b, 0).and_then(|v| offset(v, normal)),
+                [0x5e | 0x5a, x, y, z, ..] => offset(address(&[*x, *y, *z]), normal),
+                [0x40..=0x4f | 0x55, delta, ..] => {
+                    (at + 2).checked_add_signed(*delta as i8 as isize)
                 }
-                0x5c if b[1] == 0 => {
-                    (at + 4).checked_add_signed(i16::from_be_bytes([b[2], b[3]]) as isize)
+                [0x58, cond, x, y, ..] if cond & 15 == 0 => {
+                    (at + 4).checked_add_signed(i16::from_be_bytes([*x, *y]) as isize)
+                }
+                [0x5c, 0, x, y, ..] => {
+                    (at + 4).checked_add_signed(i16::from_be_bytes([*x, *y]) as isize)
                 }
                 _ => None,
             };
@@ -351,7 +362,7 @@ fn closed_entries_diagnostic(
                 scopes.iter().any(|(range, allowed)| {
                     range.contains(target)
                         && !range.contains(&at)
-                        && !allowed.contains(&at)
+                        && allowed.binary_search(&at).is_err()
                         && !(*target == range.start
                             && scopes.iter().any(|(owner, _)| owner.contains(&at)))
                 })
@@ -372,7 +383,8 @@ pub(super) fn closed_entries(normal: &[u8], scopes: &[(Range<usize>, Vec<usize>)
     let mut failure = Failure::Unsupported {
         stage: Stage::ClosedEntries,
     };
-    closed_entries_diagnostic(normal, scopes, &mut failure, None)
+    let spans = stored_spans(normal)?;
+    closed_entries_diagnostic(normal, &spans, scopes, &mut failure, None)
 }
 
 const CONSOLE: &[u8] = &[
@@ -401,11 +413,12 @@ pub(super) fn console(normal: &[u8], call: usize, reject: u32) -> Option<Vec<Ran
         return None;
     }
     let pointer = (BASE + start as u32).to_be_bytes();
+    let spans = stored_spans(normal)?;
     let entries: Vec<_> = normal
         .windows(6)
         .enumerate()
         .filter_map(|(at, b)| {
-            (b[..2] == *b"KL" && b[2..] == pointer && stored(normal, &(at..at + 6))).then_some(at)
+            (b[..2] == *b"KL" && b[2..] == pointer && stored(&spans, &(at..at + 6))).then_some(at)
         })
         .collect();
     let [entry] = entries.as_slice() else {
@@ -538,6 +551,8 @@ fn discover_with_failure(
     failure: &mut Failure,
     boundary: Option<&super::sink_boundaries::BoundaryCertificate>,
 ) -> Option<Certificate> {
+    #[cfg(test)]
+    tests::DISCOVERIES.with(|c| c.set(c.get() + 1));
     let mut protected = Vec::new();
     let mut scopes = Vec::new();
     let mut generation = None;
@@ -554,7 +569,9 @@ fn discover_with_failure(
     *failure = Failure::Unsupported {
         stage: Stage::ServiceCalls,
     };
-    let service_calls = calls_diagnostic(normal, 0x400a1a, Stage::ServiceCalls, failure)?;
+    // Stored regions are decoded once; every reference scan below reuses them.
+    let spans = stored_spans(normal)?;
+    let service_calls = calls_diagnostic(normal, &spans, 0x400a1a, Stage::ServiceCalls, failure)?;
     if service_calls.is_empty() {
         return None;
     }
@@ -578,9 +595,18 @@ fn discover_with_failure(
         return None;
     }
     protected.push(validator..validator + 0x9c);
+    // The validator rejects through the helper call at +0x8a: a resident
+    // caller of it is a caller predicate outside this certificate.
+    entries.push(bank.validator);
     scopes.push((
         validator..validator + 0x9c,
-        calls_diagnostic(normal, bank.validator, Stage::ValidatorCalls, failure)?,
+        calls_diagnostic(
+            normal,
+            &spans,
+            bank.validator,
+            Stage::ValidatorCalls,
+            failure,
+        )?,
     ));
     protected.push(reject..reject + 18);
     let mode_wrapper = offset(address(normal.get(reject + 3..reject + 6)?), normal)?;
@@ -588,7 +614,13 @@ fn discover_with_failure(
     *failure = Failure::Unsupported {
         stage: Stage::RejectCalls,
     };
-    let reject_calls = calls_diagnostic(normal, bank.reject_helper, Stage::RejectCalls, failure)?;
+    let reject_calls = calls_diagnostic(
+        normal,
+        &spans,
+        bank.reject_helper,
+        Stage::RejectCalls,
+        failure,
+    )?;
     scopes.push((reject..reject + 18, reject_calls.clone()));
     for call in reject_calls {
         if call == validator + 0x8a {
@@ -618,8 +650,13 @@ fn discover_with_failure(
         }
         protected.push(wrapper..wrapper + 6);
         entries.push(BASE + wrapper as u32);
-        let wrapper_calls =
-            calls_diagnostic(normal, BASE + wrapper as u32, Stage::WrapperCalls, failure)?;
+        let wrapper_calls = calls_diagnostic(
+            normal,
+            &spans,
+            BASE + wrapper as u32,
+            Stage::WrapperCalls,
+            failure,
+        )?;
         scopes.push((wrapper..wrapper + 6, wrapper_calls.clone()));
         for call in wrapper_calls {
             *failure = Failure::Unsupported {
@@ -697,7 +734,7 @@ fn discover_with_failure(
     *failure = Failure::Unsupported {
         stage: Stage::ClosedEntries,
     };
-    closed_entries_diagnostic(normal, &scopes, failure, boundary)?;
+    closed_entries_diagnostic(normal, &spans, &scopes, failure, boundary)?;
     if let Some(boundary) = boundary {
         protected.extend(boundary.protected());
     }
@@ -713,8 +750,11 @@ fn discover_with_failure(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    std::thread_local! {
+        pub(crate) static DISCOVERIES: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    }
 
     #[test]
     fn reference_failures_retain_stage_site_and_cpu_target() {
@@ -722,7 +762,14 @@ mod tests {
             let mut normal = [0xff; 64];
             normal[16..20].copy_from_slice(&[opcode, 0x41, 0, 0x30]);
             let mut failure = Failure::Unsupported { stage };
-            assert!(calls_diagnostic(&normal, 0x410030, stage, &mut failure).is_none());
+            assert!(calls_diagnostic(
+                &normal,
+                core::slice::from_ref(&(0..64)),
+                0x410030,
+                stage,
+                &mut failure
+            )
+            .is_none());
             assert_eq!(
                 failure,
                 Failure::UnclassifiedAddressReference {
@@ -737,7 +784,14 @@ mod tests {
         let mut failure = Failure::Unsupported {
             stage: Stage::WrapperCalls,
         };
-        assert!(calls_diagnostic(&normal, 0x410030, Stage::WrapperCalls, &mut failure).is_none());
+        assert!(calls_diagnostic(
+            &normal,
+            core::slice::from_ref(&(0..64)),
+            0x410030,
+            Stage::WrapperCalls,
+            &mut failure
+        )
+        .is_none());
         assert_eq!(
             failure,
             Failure::UnclassifiedAddressReference {
@@ -756,7 +810,14 @@ mod tests {
         let mut failure = Failure::Unsupported {
             stage: Stage::ClosedEntries,
         };
-        assert!(closed_entries_diagnostic(&normal, &scopes, &mut failure, None).is_none());
+        assert!(closed_entries_diagnostic(
+            &normal,
+            core::slice::from_ref(&(0..64)),
+            &scopes,
+            &mut failure,
+            None
+        )
+        .is_none());
         assert_eq!(
             failure,
             Failure::UnclassifiedAddressReference {
@@ -765,5 +826,80 @@ mod tests {
                 target: 0x410032
             }
         );
+    }
+
+    #[test]
+    fn truncated_relative_encodings_at_a_region_end_are_not_references() {
+        // A final 0x55 / 5C 00 lacks its displacement; it is no instruction.
+        let mut odd = [0xff; 63];
+        odd[62] = 0x55;
+        assert_eq!(calls(&odd, 0x410030), Some(Vec::new()));
+        let mut even = [0xff; 64];
+        even[62..64].copy_from_slice(&[0x5c, 0]);
+        assert_eq!(calls(&even, 0x410030), Some(Vec::new()));
+        // Target bytes at the very start of the body have no opcode byte.
+        let mut start = [0xff; 64];
+        start[0..3].copy_from_slice(&[0x41, 0, 0x30]);
+        assert_eq!(calls(&start, 0x410030), Some(Vec::new()));
+    }
+
+    #[test]
+    fn final_two_byte_branch_of_a_region_is_a_closed_entry_candidate() {
+        let mut normal = [0xff; 64];
+        // BRA at 62 into the protected scope 48..56 (64 - 14 = 50).
+        normal[62..64].copy_from_slice(&[0x40, 0xf2]);
+        let scopes = [(48..56, Vec::new())];
+        assert_eq!(closed_entries(&normal, &scopes), None);
+        let mut failure = Failure::Unsupported {
+            stage: Stage::ClosedEntries,
+        };
+        assert!(closed_entries_diagnostic(
+            &normal,
+            core::slice::from_ref(&(0..64)),
+            &scopes,
+            &mut failure,
+            None
+        )
+        .is_none());
+        assert_eq!(
+            failure,
+            Failure::UnclassifiedAddressReference {
+                stage: Stage::ClosedEntries,
+                at: 62,
+                target: 0x410032
+            }
+        );
+    }
+
+    #[test]
+    fn write_buffer_callback_frame_at_the_image_end_refuses_without_panic() {
+        let mut normal = alloc::vec![0xff; 0x800];
+        // Opcode registry: required slots set, object pointer in slot 0x3b.
+        let registry = 0x100;
+        for i in 0..64 {
+            let value: u32 = match i {
+                0x3b => 0x1000,
+                0 | 1 | 3 | 4 | 0x12 | 0x3c => 2,
+                _ => 0,
+            };
+            normal[registry + 4 * i..registry + 4 * i + 4].copy_from_slice(&value.to_be_bytes());
+        }
+        // MOV.L #table,ER1; MOV.L ER1,@object.
+        normal[0x400..0x40e]
+            .copy_from_slice(&[0x7a, 1, 0, 0x41, 0x05, 0, 1, 0, 0x6b, 0xa1, 0, 0, 0x10, 0]);
+        let entry = normal.len() - 10;
+        let table = 0x500;
+        normal[table + 0x14..table + 0x18].fill(0);
+        normal[table + 0x1e..table + 0x22].fill(0);
+        for (field, value) in [
+            (0x10, 0x410600),
+            (0x1a, 0x410600),
+            (0x24, BASE + entry as u32),
+        ] {
+            normal[table + field..table + field + 4].copy_from_slice(&u32::to_be_bytes(value));
+        }
+        // Callback frame prologue as the final ten bytes of the image.
+        normal[entry..].copy_from_slice(&[1, 0, 0x6d, 0xf3, 1, 0x20, 0x6d, 0xf4, 0x79, 0x37]);
+        assert_eq!(write_buffer(&normal, entry), None);
     }
 }

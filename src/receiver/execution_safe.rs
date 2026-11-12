@@ -8,7 +8,18 @@ use crate::envelope::Envelope;
 use crate::{DriveClass, Identity};
 
 /// Deliberate host policy for a prepared operation.
+///
+/// ```compile_fail,E0004
+/// use pioneer_optical::receiver::ExecutionMode;
+/// fn f(mode: ExecutionMode) -> u8 {
+///     match mode {
+///         ExecutionMode::Flash => 0,
+///         ExecutionMode::Recovery => 1,
+///     }
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ExecutionMode {
     /// Require the captured running receiver and perform all startup migration.
     Flash,
@@ -122,9 +133,17 @@ impl<E: core::fmt::Debug> core::fmt::Display for ExecutionError<E> {
             Self::VerificationIncomplete(_) => {
                 f.write_str("target firmware started, but complete Normal readback is unavailable")
             }
-            Self::Prerequisite(source) => {
-                write!(f, "read-only correction prerequisite: {source:?}")
+            Self::Prerequisite(crate::filters::prerequisites::CheckError::Read(source)) => {
+                write!(f, "read-only correction prerequisite read: {source}")
             }
+            Self::Prerequisite(crate::filters::prerequisites::CheckError::Mismatch {
+                required,
+                actual,
+            }) => write!(
+                f,
+                "read-only correction prerequisite: {} requires word {:#x} == {:#06x}; the drive holds {actual:#06x}",
+                required.filter, required.word.parameter, required.word.value
+            ),
             Self::Plan(reason) => {
                 write!(f, "update plan refused before firmware transfer: {reason}")
             }
@@ -319,10 +338,96 @@ impl<E> crate::CodedError for ExecutionError<E> {
     }
 }
 
-fn class<E>(class: Option<DriveClass>) -> Result<DriveClass, ExecutionError<E>> {
-    class.ok_or(ExecutionError::Plan(
-        "Kernel has no unique update dialect signature",
-    ))
+/// Why a prepared update cannot run in an [`ExecutionMode`], established from
+/// the plan alone without device I/O. See [`PreparedUpdate::check_plan`] and
+/// [`PreparedNormal::check_plan`].
+///
+/// Its code is `pioneer.execute.plan`, the same as the executor's
+/// [`ExecutionError::Plan`] refusal for the same reason. As on every error,
+/// [`CodedError::kind`](crate::CodedError::kind) is the host
+/// [`IssueKind`](crate::operation::IssueKind); the refusing rule is
+/// [`Self::reason`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlanError {
+    detail: &'static str,
+    reason: PlanReason,
+}
+
+/// Which plan-level rule a [`PlanError`] refuses, for host guidance.
+///
+/// ```compile_fail,E0004
+/// use pioneer_optical::receiver::PlanReason;
+/// fn guidance(reason: PlanReason) -> &'static str {
+///     match reason {
+///         PlanReason::Empty => "empty",
+///         PlanReason::Transfer => "transfer",
+///         PlanReason::Requirements => "requirements",
+///         PlanReason::StartupWordPlacement => "placement",
+///         PlanReason::StartupWordInRecovery => "recovery",
+///     }
+/// }
+/// ```
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum PlanReason {
+    /// The plan has no stages.
+    Empty,
+    /// A stage's transfer cannot run: no installed Kernel evidence, no unique
+    /// update dialect, or an unsupported transfer layout or address span.
+    Transfer,
+    /// Read-only requirements are invalid or conflict with each other or with
+    /// a settings write.
+    Requirements,
+    /// A startup word write would not run in the first stage's settings
+    /// transaction before the first transfer.
+    StartupWordPlacement,
+    /// The plan writes a startup word, which only [`ExecutionMode::Flash`]
+    /// performs; the same plan may still be executable as a Flash.
+    StartupWordInRecovery,
+}
+
+impl PlanError {
+    const fn new(reason: PlanReason, detail: &'static str) -> Self {
+        Self { detail, reason }
+    }
+    /// The plan-level rule this refusal comes from.
+    pub fn reason(&self) -> PlanReason {
+        self.reason
+    }
+    /// Diagnostic English detail; not a parsing contract (use the code and
+    /// [`Self::reason`]).
+    pub fn detail(&self) -> &'static str {
+        self.detail
+    }
+    fn into_execution<E>(self) -> ExecutionError<E> {
+        let error = ExecutionError::Plan(self.detail);
+        // The executor reports every refusal past the transfer checks inside
+        // `ExecutionError::BeforeWrite`.
+        if !matches!(self.reason, PlanReason::Empty | PlanReason::Transfer) {
+            ExecutionError::BeforeWrite(Box::new(error))
+        } else {
+            error
+        }
+    }
+}
+impl core::fmt::Display for PlanError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "update plan refused before firmware transfer: {}",
+            self.detail
+        )
+    }
+}
+impl std::error::Error for PlanError {}
+impl crate::CodedError for PlanError {
+    fn code(&self) -> &'static str {
+        "pioneer.execute.plan"
+    }
+}
+
+fn class(class: Option<DriveClass>) -> Result<DriveClass, &'static str> {
+    class.ok_or("Kernel has no unique update dialect signature")
 }
 fn identity<T: Transport>(
     t: &mut T,
@@ -534,20 +639,40 @@ fn verify_normal_at<T: Transport, H: ExecutionRuntime<T::Error>>(
     ));
     Ok(complete)
 }
-fn plan<'a, E>(
+fn plan<'a>(
     kernel: Option<&'a [u8]>,
     normal: &'a [u8],
     receive: transport::KernelReceive,
     storage: &'a mut [Segment<'a>; 3],
-) -> Result<drive::Plan<'a>, ExecutionError<E>> {
+) -> Result<drive::Plan<'a>, &'static str> {
     let plan = transport::plan(kernel, normal, receive, storage)
-        .map_err(|_| ExecutionError::Plan("receiver transfer layout is unsupported"))?;
-    drive::validate_plan::<E>(plan)
-        .map_err(|_| ExecutionError::Plan("transfer span exceeds the command address space"))?;
+        .map_err(|_| "receiver transfer layout is unsupported")?;
+    drive::validate_plan::<()>(plan)
+        .map_err(|_| "transfer span exceeds the command address space")?;
     Ok(plan)
 }
 
 impl PreparedUpdate {
+    /// Check, without device I/O, whether this plan can execute in `mode`.
+    ///
+    /// This is the executor's plan-level preflight, and [`Self::execute`]
+    /// runs this same check first: a nonempty sequence whose
+    /// every stage has installed Kernel evidence, a unique update dialect and a
+    /// supported transfer layout; valid, non-conflicting read-only requirements
+    /// that no settings write overlaps; and startup-word writes that all run
+    /// in the first stage's settings transaction (only stages that reuse its
+    /// unchanged Normal may repeat the same writes) and only under
+    /// [`ExecutionMode::Flash`]. Host apps should call it before backup,
+    /// consent or any device I/O instead of re-deriving these rules.
+    ///
+    /// `Ok` is not permission to flash: execution still binds the live
+    /// receiver, refuses a loader where a word must be read or written,
+    /// checks the read-only requirements against the drive, applies host
+    /// policy at every stage, and each settings transaction validates its own
+    /// entries (parameter range, conflicting values) before its first write.
+    pub fn check_plan(&self, mode: ExecutionMode) -> Result<(), PlanError> {
+        check_stages(self.stages(), mode)
+    }
     /// Execute and require complete Normal readback as well as startup.
     pub fn flash<R, W, H>(
         &self,
@@ -590,6 +715,30 @@ impl PreparedUpdate {
     }
 }
 impl PreparedNormal {
+    /// Check, without device I/O, whether this Normal-only plan can execute
+    /// in `mode`.
+    ///
+    /// This runs the same plan-level preflight as
+    /// [`PreparedUpdate::check_plan`] on this plan's single stage, and the
+    /// Normal-only executors run it first: installed Kernel evidence, a unique
+    /// update dialect and a supported transfer layout; valid,
+    /// non-conflicting read-only requirements that no settings write
+    /// overlaps; and no startup-word write outside [`ExecutionMode::Flash`].
+    /// [`Self::execute`], [`Self::flash`] and [`Self::flash_completed`] always
+    /// run under [`ExecutionMode::Flash`]. Host apps should call it before
+    /// backup, consent or any device I/O.
+    ///
+    /// `Ok` is not permission to flash: execution still binds the live
+    /// receiver, refuses a loader where a word must be read or written,
+    /// checks the read-only requirements against the drive, applies host
+    /// policy, and the settings transaction validates its own entries
+    /// (parameter range, conflicting values) before its first write.
+    pub fn check_plan(&self, mode: ExecutionMode) -> Result<(), PlanError> {
+        check_stages(self.stages(), mode)
+    }
+    fn stages(&self) -> &[PreparedStage] {
+        std::slice::from_ref(self.stage())
+    }
     /// Execute and require complete Normal readback as well as startup.
     pub fn flash<R, W, H>(
         &self,
@@ -614,12 +763,8 @@ impl PreparedNormal {
         R: Transport<Error = W::Error>,
         H: ExecutionRuntime<W::Error>,
     {
-        execute_stages(
-            std::slice::from_ref(self.stage()),
-            io,
-            runtime,
-            ExecutionMode::Flash,
-        )
+        // `execute_stages` runs `check_plan`'s check before any device I/O.
+        execute_stages(self.stages(), io, runtime, ExecutionMode::Flash)
     }
     /// Execute the complete prepared sequence with per-stage settings and checks.
     pub fn execute<R, W, H>(
@@ -632,26 +777,33 @@ impl PreparedNormal {
         R: Transport<Error = W::Error>,
         H: ExecutionRuntime<W::Error>,
     {
-        execute_stages(
-            std::slice::from_ref(self.stage()),
-            io,
-            runtime,
-            ExecutionMode::Flash,
-        )
+        // `execute_stages` runs `check_plan`'s check before any device I/O.
+        execute_stages(self.stages(), io, runtime, ExecutionMode::Flash)
     }
 }
-fn preflight_stages<E>(stages: &[PreparedStage]) -> Result<(), ExecutionError<E>> {
+/// The I/O-free plan check shared by [`PreparedUpdate::check_plan`],
+/// [`PreparedNormal::check_plan`] and the executor, which runs it before any
+/// device I/O.
+fn check_stages(stages: &[PreparedStage], mode: ExecutionMode) -> Result<(), PlanError> {
+    if stages.is_empty() {
+        return Err(PlanError::new(PlanReason::Empty, "empty update sequence"));
+    }
+    check_transfers(stages).map_err(|reason| PlanError::new(PlanReason::Transfer, reason))?;
+    check_requirements(stages)
+        .map_err(|reason| PlanError::new(PlanReason::Requirements, reason))?;
+    check_word_writes(stages, mode)
+}
+
+fn check_transfers(stages: &[PreparedStage]) -> Result<(), &'static str> {
     // Validate the whole sequence before the first settings or firmware write.
     for stage in stages {
         let installed = stage
             .receiver
             .installed_kernel()
-            .ok_or(ExecutionError::Plan(
-                "installed Kernel evidence unavailable",
-            ))?;
-        class::<E>(installed.update_dialect())?;
+            .ok_or("installed Kernel evidence unavailable")?;
+        class(installed.update_dialect())?;
         let mut storage = [Segment::PLACEHOLDER; 3];
-        plan::<E>(
+        plan(
             stage.kernel_transfer(),
             stage.normal_transfer(),
             transport::detect(&installed.image),
@@ -661,19 +813,15 @@ fn preflight_stages<E>(stages: &[PreparedStage]) -> Result<(), ExecutionError<E>
     Ok(())
 }
 
-fn preflight_requirements<T: Transport, H: ExecutionRuntime<T::Error>>(
-    stages: &[PreparedStage],
-    reads: &mut T,
-    runtime: &mut H,
-    mode: ExecutionMode,
-) -> Result<(), ExecutionError<T::Error>> {
-    let requirements: Vec<_> = stages
+fn requirements(stages: &[PreparedStage]) -> Vec<crate::filters::prerequisites::OwnedWord> {
+    stages
         .iter()
         .flat_map(|stage| stage.settings.required_words().iter().cloned())
-        .collect();
-    if requirements.is_empty() {
-        return Ok(());
-    }
+        .collect()
+}
+
+fn check_requirements(stages: &[PreparedStage]) -> Result<(), &'static str> {
+    let requirements = requirements(stages);
     for required in &requirements {
         if required.filter.is_empty()
             || required.word.parameter >= 0x400
@@ -682,15 +830,27 @@ fn preflight_requirements<T: Transport, H: ExecutionRuntime<T::Error>>(
                     && other.word.value != required.word.value
             })
         {
-            return Err(ExecutionError::Plan(
-                "invalid or conflicting read-only requirements",
-            ));
+            return Err("invalid or conflicting read-only requirements");
         }
         if stages.iter().flat_map(|stage| stage.settings.entries()).any(|entry|
             matches!(entry.effect(), crate::settings::update::Effect::ParameterWord {parameter, ..}
                 if parameter == required.word.parameter)) {
-            return Err(ExecutionError::Plan("settings write overlaps a read-only requirement"));
+            return Err("settings write overlaps a read-only requirement");
         }
+    }
+    Ok(())
+}
+
+/// Live part of the requirement preflight, after [`check_requirements`].
+fn preflight_requirements<T: Transport, H: ExecutionRuntime<T::Error>>(
+    stages: &[PreparedStage],
+    reads: &mut T,
+    runtime: &mut H,
+    mode: ExecutionMode,
+) -> Result<(), ExecutionError<T::Error>> {
+    let requirements = requirements(stages);
+    if requirements.is_empty() {
+        return Ok(());
     }
     let (updating, _) = stages[0].bind_stage(reads, runtime, mode, FlashStage::at(0), None)?;
     if updating {
@@ -704,29 +864,64 @@ fn preflight_requirements<T: Transport, H: ExecutionRuntime<T::Error>>(
     .map_err(ExecutionError::Prerequisite)
 }
 
+/// Whether `stages[index]` runs its own settings transaction. A marker-only
+/// intermediate already applied the same Normal's settings; a source bridge
+/// has a different Normal and must apply the next plan.
+fn applies_settings(stages: &[PreparedStage], index: usize) -> bool {
+    index == 0 || stages[index - 1].normal_image() != stages[index].normal_image()
+}
+
+fn writes_words(stages: &[PreparedStage]) -> bool {
+    stages
+        .iter()
+        .any(|stage| !stage.settings.word_writes().is_empty())
+}
+
 /// A correction's startup-word write runs inside the first stage's settings
-/// transaction, which needs the installed firmware running in normal mode.
+/// transaction, which needs the installed firmware running in normal mode
+/// under [`ExecutionMode::Flash`]. A later stage may carry the same writes only when it reuses that
+/// transaction (unchanged Normal); any other placement would skip the write
+/// or perform it after a transfer, so it refuses before any I/O.
+fn check_word_writes(stages: &[PreparedStage], mode: ExecutionMode) -> Result<(), PlanError> {
+    let first = stages[0].settings.word_writes();
+    let mut shared = true;
+    for (index, stage) in stages.iter().enumerate() {
+        let writes = stage.settings.word_writes();
+        if applies_settings(stages, index) {
+            shared = index == 0;
+        }
+        if !writes.is_empty() && (!shared || writes != first) {
+            return Err(PlanError::new(
+                PlanReason::StartupWordPlacement,
+                "a startup word write must precede the first transfer",
+            ));
+        }
+    }
+    // Recovery plans from caller-supplied Current evidence and may meet a
+    // loader; the word is set only by a Flash on the running receiver.
+    if writes_words(stages) && mode == ExecutionMode::Recovery {
+        return Err(PlanError::new(
+            PlanReason::StartupWordInRecovery,
+            "a startup word write is not performed in Recovery mode",
+        ));
+    }
+    Ok(())
+}
+
+/// Live part of the word-write preflight, after [`check_word_writes`].
 fn preflight_word_writes<T: Transport, H: ExecutionRuntime<T::Error>>(
     stages: &[PreparedStage],
     reads: &mut T,
     runtime: &mut H,
     mode: ExecutionMode,
 ) -> Result<(), ExecutionError<T::Error>> {
-    let writing: Vec<usize> = stages
-        .iter()
-        .enumerate()
-        .filter(|(_, stage)| !stage.settings.word_writes().is_empty())
-        .map(|(index, _)| index)
-        .collect();
-    if writing.is_empty() {
+    if !writes_words(stages) {
         return Ok(());
     }
-    if writing != [0] {
-        return Err(ExecutionError::Plan(
-            "a startup word write must precede the first transfer",
-        ));
-    }
     let (updating, _) = stages[0].bind_stage(reads, runtime, mode, FlashStage::at(0), None)?;
+    // Defensive only: `check_word_writes` already refused Recovery, and under
+    // Flash `check_receiver` refuses a loader (at this bind and at every
+    // stage's own bind) with `IdentityMismatch` instead of reporting one.
     if updating {
         return Err(ExecutionError::Plan("loader cannot set the startup word"));
     }
@@ -744,19 +939,16 @@ where
     R: Transport<Error = W::Error>,
     H: ExecutionRuntime<W::Error>,
 {
-    if stages.is_empty() {
-        return Err(ExecutionError::Plan("empty update sequence"));
-    }
-    preflight_stages(stages)?;
+    // The same I/O-free check a host runs through `check_plan`, then the
+    // checks that need the live receiver.
+    check_stages(stages, mode).map_err(PlanError::into_execution)?;
     preflight_requirements(stages, io.reads, runtime, mode)
         .map_err(|source| ExecutionError::BeforeWrite(Box::new(source)))?;
     preflight_word_writes(stages, io.reads, runtime, mode)
         .map_err(|source| ExecutionError::BeforeWrite(Box::new(source)))?;
     let mut result: Option<FlashOutcome> = None;
     for (index, stage) in stages.iter().enumerate() {
-        // A marker-only intermediate already applied the same Normal's settings.
-        // A source bridge has a different Normal and must apply the next plan.
-        let settings = index == 0 || stages[index - 1].normal_image() != stage.normal_image();
+        let settings = applies_settings(stages, index);
         let next = stage.execute_stage(
             FlashTransport {
                 reads: io.reads,
@@ -828,6 +1020,8 @@ impl PreparedStage {
             return self.transfer_stage(io, runtime, false, recovery, stage, previous);
         }
         let (updating, _) = self.bind_stage(io.reads, runtime, mode, stage, previous)?;
+        // A loader is accepted only in Recovery, which preflight refuses for
+        // correction word writes, so skipping settings here never drops one.
         if !updating && apply_settings && !self.settings.entries().is_empty() {
             return self
                 .settings
@@ -912,9 +1106,10 @@ impl PreparedStage {
             self.normal_transfer(),
             transport::detect(&installed.image),
             &mut storage,
-        )?;
+        )
+        .map_err(ExecutionError::Plan)?;
         let options = UpdateOptions {
-            class: class(installed.update_dialect())?,
+            class: class(installed.update_dialect()).map_err(ExecutionError::Plan)?,
             recover: updating,
         };
         let written = if recovery {

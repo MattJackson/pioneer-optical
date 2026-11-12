@@ -134,7 +134,10 @@ fn selector(b: &[u8], magic: u32, markers: [u32; 2]) -> bool {
         })
 }
 
-fn initialize(b: &[u8]) -> Option<(u32, [u32; 2])> {
+/// A recognized initialize-form validator: (magic, markers, bound). `bound`
+/// is false when its sequence word or writer calls do not act on the banks
+/// it compares; such a validator is unresolved evidence, never absent.
+fn initialize(b: &[u8]) -> Option<(u32, [u32; 2], bool)> {
     if !grammar(b, patterns::INITIALIZE) {
         return None;
     }
@@ -163,16 +166,16 @@ fn initialize(b: &[u8]) -> Option<(u32, [u32; 2])> {
     }
     let magic = word(b, 10)?;
     let markers = [word(b, 32)?, word(b, 48)?];
-    if word(b, 22) != markers[0].checked_add(4)
-        || call(b, 72) != call(b, 84)
-        || call(b, 72).is_none()
-    {
-        return None;
-    }
-    Some((magic, markers))
+    let bound = word(b, 22) == markers[0].checked_add(4)
+        && call(b, 72) == call(b, 84)
+        && call(b, 72).is_some();
+    Some((magic, markers, bound))
 }
 
-fn rejecting(normal: &[u8], at: usize) -> Option<(u32, [u32; 2], usize)> {
+/// A recognized rejecting validator: (magic, markers, entry, bound). `bound`
+/// is false when its blank check or initialization does not act on the banks
+/// it compares; such a validator is unresolved evidence, never absent.
+fn rejecting(normal: &[u8], at: usize) -> Option<(u32, [u32; 2], usize, bool)> {
     let b = normal.get(at..)?;
     let (reg, entry) = if matches(b, &[(0, &[1, 0x10, 0x6d, 0xf4, 0x79, 0x37, 0, 6, 0x7a, 2])]) {
         (2, at)
@@ -188,21 +191,15 @@ fn rejecting(normal: &[u8], at: usize) -> Option<(u32, [u32; 2], usize)> {
     let magic = word(b, 10)?;
     // These forms have the same two equality tests and bypass rejection when
     // either header matches. The longer form also handles sequence recovery.
-    let tail = if reg == 3 {
-        0x96
-    } else if b.get(0x5a..0x5c) == Some(&[0x1f, 0xa0][..]) {
-        0x5a
+    // The short forms differ in fixed bytes, so the grammar selects the form;
+    // (tail, both blank-bank writer calls).
+    let (tail, writes) = if reg == 3 {
+        grammar(b, patterns::REJECT_LONG).then_some((0x96, [92, 144]))?
+    } else if grammar(b, patterns::REJECT_SHORT) {
+        (0x5a, [72, 84])
     } else {
-        0x5e
+        grammar(b, patterns::REJECT_SHORT_ALT).then_some((0x5e, [74, 88]))?
     };
-    let pattern = match tail {
-        0x96 => patterns::REJECT_LONG,
-        0x5a => patterns::REJECT_SHORT,
-        _ => patterns::REJECT_SHORT_ALT,
-    };
-    if !grammar(b, pattern) {
-        return None;
-    }
     let t = b.get(tail..)?;
     let compare = if reg == 2 { [0x1f, 0xa0] } else { [0x1f, 0xb0] };
     let second = if reg == 2 {
@@ -240,7 +237,19 @@ fn rejecting(normal: &[u8], at: usize) -> Option<(u32, [u32; 2], usize)> {
     if !matches(b, &[(14, &[1, 0, 0x6f, 0xf0 + reg, 0, 2])]) {
         return None;
     }
-    Some((magic, markers, entry))
+    // The blank check and initialization act on the same banks: the first
+    // sequence word follows the first header, the second header is the one
+    // blank-checked and compared, and both writes use one writer.
+    let second = if reg == 3 {
+        word(b, 56) == Some(markers[1]) && word(b, 32) == markers[1].checked_add(4)
+    } else {
+        word(b, 52) == Some(markers[1])
+    };
+    let bound = word(b, 22) == markers[0].checked_add(4)
+        && second
+        && call(b, writes[0]).is_some()
+        && call(b, writes[0]) == call(b, writes[1]);
+    Some((magic, markers, entry, bound))
 }
 
 /// Additional complete SAT1 witness used only alongside the exact predicate
@@ -259,17 +268,22 @@ pub(crate) fn legacy_predicate_witness(
     validator: usize,
     selection: usize,
 ) -> Option<LegacyPredicateBank> {
-    let (magic, headers, entry) = rejecting(normal, validator)?;
+    let (magic, headers, entry, bound) = rejecting(normal, validator)?;
     let b = normal.get(validator..selection)?;
-    if entry != validator
-        || b.len() != 124
+    // The witnessed validator is exactly the REJECT_SHORT_ALT grammar, followed
+    // by the selector; its calls are that grammar's call operands.
+    let grammar = patterns::REJECT_SHORT_ALT;
+    let call_at = |operand: usize| grammar.operands[operand].0 - 1;
+    if !bound
+        || entry != validator
+        || b.len() != grammar.code.len()
         || headers != [0x7dfffa, 0x7efffa]
         || !selector(normal.get(selection..)?, magic, headers)
     {
         return None;
     }
-    let writer = call(b, 0x4a)?;
-    if call(b, 0x58)? != writer {
+    let writer = call(b, call_at(4))?;
+    if call(b, call_at(5))? != writer {
         return None;
     }
     Some(LegacyPredicateBank {
@@ -277,28 +291,34 @@ pub(crate) fn legacy_predicate_witness(
         headers,
         sequences: [headers[0] + 4, headers[1] + 4],
         writer,
-        reject: call(b, 0x6e)?,
+        reject: call(b, call_at(7))?,
     })
 }
 
-pub(super) fn discover(normal: &[u8]) -> Option<Fixed> {
+/// The unique called fixed-bank validator. `Err` means more than one, or one
+/// whose bank operands do not bind: unresolved, never the same as absent.
+pub(super) fn discover(normal: &[u8]) -> Result<Option<Fixed>, ()> {
     let mut calls = Calls::new(normal);
     let mut selectors = Selectors::new(normal);
     let mut result = None;
     for at in (0..normal.len().saturating_sub(9)).step_by(2) {
-        let (magic, markers, entry, rejects) = if let Some((m, a)) = initialize(&normal[at..]) {
-            (m, a, at, false)
-        } else if let Some((m, a, e)) = rejecting(normal, at) {
-            (m, a, e, true)
-        } else {
-            continue;
-        };
+        let (magic, markers, entry, rejects, bound) =
+            if let Some((m, a, bound)) = initialize(&normal[at..]) {
+                (m, a, at, false, bound)
+            } else if let Some((m, a, e, bound)) = rejecting(normal, at) {
+                (m, a, e, true, bound)
+            } else {
+                continue;
+            };
         if magic == u32::MAX
             || markers[0] >= markers[1]
             || !called(&mut calls, entry)
             || !selectors.contains(magic, markers)
         {
             continue;
+        }
+        if !bound {
+            return Err(());
         }
         let candidate = Fixed {
             routine: BASE + entry as u32,
@@ -307,13 +327,16 @@ pub(super) fn discover(normal: &[u8]) -> Option<Fixed> {
             rejects,
         };
         if result.replace(candidate).is_some() {
-            return None;
+            return Err(());
         }
     }
-    result
+    Ok(result)
 }
 
-pub(super) fn state_banks(normal: &[u8]) -> Option<super::Storage> {
+/// The unique called erased-state validator agreeing with the unique called
+/// state selector. `Err` means ambiguous or malformed evidence: unresolved,
+/// never the same as absent.
+pub(super) fn state_banks(normal: &[u8]) -> Result<Option<super::Storage>, ()> {
     let mut calls = Calls::new(normal);
     // The selector does not depend on the candidate, so it is evaluated once.
     let mut selected = None;
@@ -327,21 +350,23 @@ pub(super) fn state_banks(normal: &[u8]) -> Option<super::Storage> {
         if !grammar(b, patterns::STATE_NORMAL) || !called(&mut calls, at) {
             continue;
         }
-        let sequences = [word(b, 8)?, word(b, 18)?];
-        let headers = [[word(b, 26)?, word(b, 42)?], [word(b, 54)?, word(b, 68)?]];
-        let spacing = sequences[1].checked_sub(sequences[0])?;
+        // The grammar spans every operand, so these words are present.
+        let operand = |at| word(b, at).unwrap_or(0);
+        let sequences = [operand(8), operand(18)];
+        let headers = [[operand(26), operand(42)], [operand(54), operand(68)]];
+        let spacing = sequences[1].checked_sub(sequences[0]).ok_or(())?;
         if !spacing.is_power_of_two()
             || headers[0][0].checked_add(4) != Some(headers[0][1])
             || headers[1][0].checked_add(4) != Some(headers[1][1])
             || headers[0][1].checked_add(4) != Some(sequences[0])
             || headers[1][1].checked_add(4) != Some(sequences[1])
-            || word(b, 92) != Some(headers[0][1])
-            || word(b, 106) != Some(headers[1][0])
-            || word(b, 120) != Some(headers[1][1])
+            || operand(92) != headers[0][1]
+            || operand(106) != headers[1][0]
+            || operand(120) != headers[1][1]
         {
             continue;
         }
-        let helper = call(b, 0x116)?.checked_sub(BASE)? as usize;
+        let helper = call(b, 0x116).and_then(|a| a.checked_sub(BASE)).ok_or(())? as usize;
         let Some(h) = normal.get(helper..helper + 88) else {
             continue;
         };
@@ -355,13 +380,14 @@ pub(super) fn state_banks(normal: &[u8]) -> Option<super::Storage> {
         }
         // The absolute early exit in this grammar must target its own common
         // epilogue. It cannot be treated as an arbitrary relocation operand.
-        let jump = b.get(0xa0..0xa4)?;
+        let jump = &b[0xa0..0xa4];
         if jump[0] != 0x5a
             || u32::from_be_bytes([0, jump[1], jump[2], jump[3]]) != BASE + at as u32 + 0x11a
         {
             continue;
         }
-        let Some(candidate) = *selected.get_or_insert_with(|| state_selector(normal, BASE)) else {
+        let Some(candidate) = (*selected.get_or_insert_with(|| state_selector(normal, BASE)))?
+        else {
             continue;
         };
         if !matches!(candidate,super::Storage::StateHeaders {headers:h,sequences:s,..} if h==headers && s==sequences)
@@ -369,13 +395,15 @@ pub(super) fn state_banks(normal: &[u8]) -> Option<super::Storage> {
             continue;
         }
         if result.replace(candidate).is_some() {
-            return None;
+            return Err(());
         }
     }
-    result
+    Ok(result)
 }
 
-pub(super) fn state_selector(image: &[u8], base: u32) -> Option<super::Storage> {
+/// The unique called state-header selector. `Err` means more than one:
+/// ambiguous evidence, never the same as absent evidence.
+pub(super) fn state_selector(image: &[u8], base: u32) -> Result<Option<super::Storage>, ()> {
     #[cfg(test)]
     tests::SCANS.with(|c| c.set(c.get() + 1));
     let mut calls = Calls::new(image);
@@ -389,9 +417,11 @@ pub(super) fn state_selector(image: &[u8], base: u32) -> Option<super::Storage> 
         if !grammar(b, patterns::STATE_SELECTOR) {
             continue;
         }
-        let sequences = [word(b, 2)?, word(b, 8)?];
-        let headers = [[word(b, 16)?, word(b, 46)?], [word(b, 34)?, word(b, 58)?]];
-        let status = [word(b, 88)?, word(b, 112)?];
+        // The grammar spans every operand, so these words are present.
+        let operand = |at| word(b, at).unwrap_or(0);
+        let sequences = [operand(2), operand(8)];
+        let headers = [[operand(16), operand(46)], [operand(34), operand(58)]];
+        let status = [operand(88), operand(112)];
         if headers[0][0].checked_add(4) != Some(headers[0][1])
             || headers[1][0].checked_add(4) != Some(headers[1][1])
             || headers[0][1].checked_add(4) != Some(sequences[0])
@@ -408,10 +438,10 @@ pub(super) fn state_selector(image: &[u8], base: u32) -> Option<super::Storage> 
             status,
         };
         if result.replace(candidate).is_some() {
-            return None;
+            return Err(());
         }
     }
-    result
+    Ok(result)
 }
 
 pub(super) fn kernel_sequences(kernel: &[u8]) -> Option<super::Storage> {

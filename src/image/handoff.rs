@@ -5,6 +5,7 @@ use super::{KERNEL_BASE, KERNEL_LEN};
 
 /// Kernel replacement cannot establish a supported post-write handoff.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum KernelHandoffError {
     /// Installed programming routine is missing, ambiguous or unsupported.
     UnknownInstalled,

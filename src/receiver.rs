@@ -17,7 +17,9 @@ mod execution;
 mod execution_safe;
 mod handoff_bridge;
 #[cfg(feature = "drive")]
-pub use execution_safe::{ExecutionError, ExecutionMode, ExecutionRuntime, FlashOutcome};
+pub use execution_safe::{
+    ExecutionError, ExecutionMode, ExecutionRuntime, FlashOutcome, PlanError, PlanReason,
+};
 #[cfg(feature = "drive")]
 pub mod transport;
 #[cfg(feature = "drive")]
@@ -140,7 +142,9 @@ const CODECS: &[&dyn ReceiverCodec] = &[&Oem];
 
 impl Receiver {
     /// Recover entry requirements from decoded installed firmware instructions.
-    pub fn detect(normal: &Envelope) -> Result<Self, Error> {
+    ///
+    /// File-derived only: this performs no device I/O.
+    pub fn from_firmware(normal: &Envelope) -> Result<Self, Error> {
         Self::detect_components(normal, None)
     }
 
@@ -154,7 +158,10 @@ impl Receiver {
             &normal.image,
             kernel.map(|kernel| kernel.image.as_slice()),
         )?;
-        receiver.family = normal.family();
+        receiver.family = match kernel {
+            Some(kernel) => normal.family_with_kernel(kernel),
+            None => normal.family(),
+        };
         receiver.installed_normal = Some(normal.clone());
         Ok(receiver)
     }
@@ -189,7 +196,7 @@ impl Receiver {
             descriptor,
             policy,
             family: None,
-            startup: crate::startup::checks::Checks::discover(image, None),
+            startup: crate::startup::checks::Checks::discover(image, kernel),
             kernel_policy: None,
             installed_kernel: None,
             installed_normal: None,
@@ -202,7 +209,7 @@ impl Receiver {
     /// Unlike Normal-only detection, this also retains the installed Kernel's
     /// recognized marker policy for complete-pair preparation.
     pub fn from_installed(installed: &crate::envelope::Update) -> Result<Self, Error> {
-        Self::detect_with_kernel(installed.normal(), installed.kernel())
+        Self::from_firmware_with_kernel(installed.normal(), installed.kernel())
     }
 
     /// Detect from decoded Normal and Kernel captured from the same drive.
@@ -211,9 +218,9 @@ impl Receiver {
     /// This inspects installed code, not permission to transfer these envelopes.
     /// The caller must bind both images to its capture; header agreement alone
     /// cannot prove they are currently installed on a physical device.
-    pub fn detect_with_kernel(normal: &Envelope, kernel: &Envelope) -> Result<Self, Error> {
+    pub fn from_firmware_with_kernel(normal: &Envelope, kernel: &Envelope) -> Result<Self, Error> {
         if normal.info().kind != ComponentKind::Normal {
-            return Self::detect(normal);
+            return Self::from_firmware(normal);
         }
         if kernel.info().kind != ComponentKind::Kernel {
             return Err(Error::KernelComponent {
@@ -233,9 +240,6 @@ impl Receiver {
         }
         let mut receiver = Self::detect_components(normal, Some(kernel))?;
         receiver.kernel_policy = crate::image::kernel_marker_policy(&kernel.image);
-        receiver.startup =
-            crate::startup::checks::Checks::discover(&normal.image, Some(&kernel.image));
-        receiver.family = normal.family_with_kernel(kernel);
         receiver.installed_kernel = Some(kernel.clone());
         Ok(receiver)
     }

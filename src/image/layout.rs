@@ -22,7 +22,13 @@ mod m7900_shapes;
 mod v850;
 mod v850_shapes;
 pub use m32c::discover_m32c_records;
+pub(crate) use m32c::records_present as m32c_records_present;
+#[cfg(test)]
+pub(crate) use m32c::tests::fixture as m32c_records_fixture;
 pub use m32c_serial::discover_m32c_serial;
+pub(crate) use m32c_serial::serial_present as m32c_serial_present;
+#[cfg(test)]
+pub(crate) use m32c_serial::tests::fixture as m32c_serial_fixture;
 pub use m7900::{discover_m7900_ata, discover_m7900_scsi};
 pub(crate) use v850::{decode_bus as decode_v850_bus, encode_bus as encode_v850_bus};
 pub use v850::{discover_v850_bus, discover_v850_native};

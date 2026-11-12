@@ -2,7 +2,7 @@
 //!
 //! A detected phase is not evidence that its file can be corrected. Native
 //! interfaces remain part of identity even when source assignment is normalized.
-/// Sled mechanism convention bundle bound from native code.
+/// Masked native code pattern search shared by the phase and calibration recognizers.
 pub mod bundle;
 /// Native phase recognition, operand corrections and instruction contracts.
 pub mod native;
@@ -217,13 +217,13 @@ pub fn observe(firmware: Firmware<'_>) -> Observation<NativePhase> {
         }));
     }
     if let Some(normal) = layout::decode_v850_bus(firmware.normal) {
+        // An undecodable Kernel is unavailable resident code, as a missing one
+        // is: the backend still reports what Normal requires, never a phase.
         let kernel = firmware.kernel.and_then(layout::decode_v850_bus);
-        if firmware.kernel.is_none() || kernel.is_some() {
-            observations.push(map(
-                peripheral::v850_phase_native(&normal, kernel.as_deref()),
-                |p| ata(Architecture::V850, p),
-            ));
-        }
+        observations.push(map(
+            peripheral::v850_phase_native(&normal, kernel.as_deref()),
+            |p| ata(Architecture::V850, p),
+        ));
     }
     let mut known = None;
     let mut unresolved = Unresolved::ReaderNotRecognized;

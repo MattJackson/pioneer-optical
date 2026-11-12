@@ -6,6 +6,7 @@ use core::ops::Range;
 
 /// A source-word rewrite could not be proved.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     /// A complete unambiguous paired program was not bound.
     Unresolved,
@@ -18,10 +19,13 @@ pub enum Error {
 }
 
 fn bound_functions(normal: &[u8], proof: &PairedPhase) -> Result<Vec<Function>, Error> {
+    let regions = crate::image::regions(normal).ok_or(Error::Unresolved)?;
     proof
         .functions
         .iter()
-        .map(|at| full(normal, *at).or_else(|| short(normal, *at)))
+        .map(|at| {
+            full(normal, &regions.stored, *at).or_else(|| short(normal, &regions.stored, *at))
+        })
         .collect::<Option<Vec<_>>>()
         .ok_or(Error::Unresolved)
 }
@@ -40,7 +44,10 @@ pub fn rewrite(
     if proof.assignment == target {
         return Ok(normal.to_vec());
     }
-    let donor = super::correct_pair(normal, target).map_err(|_| Error::Unresolved)?;
+    let donor = super::correct_pair(normal, target).map_err(|error| match error {
+        CorrectionError::VerificationFailed => Error::VerificationFailed,
+        CorrectionError::Unresolved | CorrectionError::InvalidNormal => Error::Unresolved,
+    })?;
     transplant(normal, &donor, reservation)
 }
 
@@ -85,7 +92,7 @@ pub fn transplant(
             (Encoder::Full(high, low), Encoder::Full(_, _)) => {
                 if source.identity_call.is_some() {
                     alloc::vec![high, low]
-                } else if identity_leaf(normal, high) {
+                } else if identity_leaf(normal, &regions.stored, high) {
                     alloc::vec![low]
                 } else {
                     return Err(Error::Unresolved);
@@ -122,7 +129,7 @@ pub fn transplant(
         // Elide only a complete direct call whose target is a stored RTS.
         // Remaining bytes are copied OEM instructions; no replacement algorithm.
         if let (Encoder::Full(high, _), Some(call)) = (function.encoder, &source.identity_call) {
-            if identity_leaf(normal, high) {
+            if identity_leaf(normal, &regions.stored, high) {
                 bytes.drain(call.clone());
             }
         }
@@ -148,10 +155,10 @@ pub fn transplant(
                 || functions.iter().flat_map(|f| &f.spans).any(|span| {
                     space.start < span.end && span.start < space.end && Some(span) != old_spill
                 })
-                || !normal
+                || (!normal
                     .get(space.clone())
                     .is_some_and(|b| b.iter().all(|b| *b == 0xff))
-                    && old_spill != Some(&space)
+                    && old_spill != Some(&space))
             {
                 return Err(Error::InvalidSpace);
             }
@@ -246,6 +253,39 @@ mod tests {
             Err(Error::InvalidSpace)
         );
     }
+
+    #[test]
+    fn donor_view_verification_failure_is_reported_as_such() {
+        // Agreeing legacy split-word evidence also fixes this image's
+        // assignment, so exchanging only the pair cannot verify.
+        let t = super::super::templates::TEMPLATES
+            .iter()
+            .find(|t| {
+                t.interface == Interface::SplitWord
+                    && t.assignment == Assignment::Direct
+                    && !t.requires_leaf
+            })
+            .unwrap();
+        let mut normal = super::super::tests::fixture(false);
+        normal.resize(0x200000, 0xff);
+        let at = (t.reference_cpu - 0x410000) as usize;
+        normal[at..at + t.bytes.len()].copy_from_slice(t.bytes);
+        assert!(matches!(
+            discover(&normal),
+            Observation::Known(Phase {
+                assignment: Assignment::Direct,
+                interface: Interface::SplitWord
+            })
+        ));
+        assert_eq!(
+            correct_pair(&normal, Assignment::Swapped),
+            Err(CorrectionError::VerificationFailed)
+        );
+        assert_eq!(
+            rewrite(&normal, Assignment::Swapped, None),
+            Err(Error::VerificationFailed)
+        );
+    }
 }
 
 #[cfg(test)]
@@ -267,7 +307,7 @@ mod transplant_tests {
         .unwrap();
         original[398..400].copy_from_slice(&rts);
         for start in [32, 160] {
-            let f = full(&original, start).unwrap();
+            let f = full(&original, &[original.as_slice()], start).unwrap();
             let mut at = start;
             let mut high = true;
             while at < f.end {

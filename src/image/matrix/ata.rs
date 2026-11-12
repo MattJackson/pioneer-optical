@@ -40,7 +40,9 @@ fn geometry(value: &Observation<ParameterLayout>) -> Observation<geometry::Perip
 }
 impl AtaEvidence {
     /// Recognize M32C from native Normal code at its established load base.
-    /// Flash and serial readers are both checked; conflicting layouts fail closed.
+    /// Flash and serial readers are both checked; conflicting layouts fail
+    /// closed. One reader's layout is taken alone only when the other reader
+    /// is absent: a present but unbound second reader is not ignored.
     pub fn discover_m32c(normal: &[u8], normal_base: u32) -> Self {
         let records = layout::discover_m32c_records(normal);
         let serial = layout::discover_m32c_serial(normal, normal_base);
@@ -49,8 +51,28 @@ impl AtaEvidence {
                 Observation::Conflicting
             }
             (Observation::Known(a), Observation::Known(b)) if a != b => Observation::Conflicting,
-            (Observation::Known(v), _) | (_, Observation::Known(v)) => Observation::Known(v),
-            (Observation::Unresolved(r), _) => Observation::Unresolved(r),
+            (Observation::Known(v), Observation::Known(_)) => Observation::Known(v),
+            (Observation::Known(v), Observation::Unresolved(r)) => {
+                if layout::m32c_serial_present(normal) {
+                    Observation::Unresolved(r)
+                } else {
+                    Observation::Known(v)
+                }
+            }
+            (Observation::Unresolved(r), Observation::Known(v)) => {
+                if layout::m32c_records_present(normal) {
+                    Observation::Unresolved(r)
+                } else {
+                    Observation::Known(v)
+                }
+            }
+            (
+                Observation::Unresolved(layout::Unresolved::ReaderNotRecognized),
+                Observation::Unresolved(r),
+            )
+            | (Observation::Unresolved(r), Observation::Unresolved(_)) => {
+                Observation::Unresolved(r)
+            }
         };
         Self {
             geometry: geometry(&layout),
@@ -91,5 +113,47 @@ mod tests {
     #[test]
     fn partial_v850_bus_is_rejected() {
         assert!(AtaEvidence::discover_v850_bus(&[0; 7], None).is_none());
+    }
+
+    fn layout_of(body: &[u8]) -> Observation<ParameterLayout> {
+        AtaEvidence::discover_m32c(body, 0xf80000).layout
+    }
+    #[test]
+    fn an_unbound_second_m32c_reader_is_not_ignored() {
+        use crate::image::layout::{m32c_records_fixture, m32c_serial_fixture, Unresolved};
+        let serial = m32c_serial_fixture();
+        let records = m32c_records_fixture();
+        assert!(matches!(layout_of(&serial), Observation::Known(_)));
+        assert!(matches!(layout_of(&records), Observation::Known(_)));
+        // Serial reader plus a duplicated flash-record reader.
+        let mut both = serial.clone();
+        both.extend_from_slice(&records);
+        both.extend_from_slice(&records);
+        assert!(matches!(
+            layout_of(&both),
+            Observation::Unresolved(Unresolved::AmbiguousReader)
+        ));
+        // Serial reader plus an incomplete flash-record reader.
+        let mut both = serial.clone();
+        both.extend_from_slice(&records);
+        let last = both.len() - 1;
+        both[last] ^= 1;
+        assert!(!matches!(layout_of(&both), Observation::Known(_)));
+        // Flash-record reader plus serial routines whose loader is not bound.
+        let mut both = serial.clone();
+        both[300] ^= 1;
+        both.extend_from_slice(&records);
+        assert!(!matches!(layout_of(&both), Observation::Known(_)));
+    }
+    #[test]
+    fn an_ambiguous_serial_reader_keeps_its_reason() {
+        use crate::image::layout::{m32c_serial_fixture, Unresolved};
+        let mut serial = m32c_serial_fixture();
+        let loader = serial[300..400].to_vec();
+        serial.extend_from_slice(&loader);
+        assert!(matches!(
+            layout_of(&serial),
+            Observation::Unresolved(Unresolved::AmbiguousReader)
+        ));
     }
 }

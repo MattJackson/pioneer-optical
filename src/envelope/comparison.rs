@@ -68,8 +68,7 @@ impl Envelope {
             component_changed: a.kind != b.kind,
             hardware_changed: a.hardware_version != b.hardware_version,
             destination_changed: a.kernel_version != b.kernel_version
-                || super::header_info(&self.header).map(|h| h.destination)
-                    != super::header_info(&other.header).map(|h| h.destination),
+                || self.header_info().destination != other.header_info().destination,
         }
     }
 }

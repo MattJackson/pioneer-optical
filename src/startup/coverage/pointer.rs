@@ -201,8 +201,8 @@ fn near9f_tail(normal: &[u8], regions: &[&[u8]], start: usize) -> Option<usize> 
 /// Caller evidence for every candidate formatter entry target, from one
 /// shared pass over the regions (crafted images may hold many candidates).
 /// `None` for a target means it is refused: it has a 32-bit literal alias
-/// anywhere (any alignment, stored or expanded), an absolute-jump alias, an
-/// unbound caller, or no caller at all.
+/// anywhere (any alignment, stored or expanded), an absolute-jump or branch
+/// transfer, an unbound caller, or no caller at all.
 fn callers_for(
     normal: &[u8],
     regions: &[&[u8]],
@@ -232,12 +232,22 @@ fn callers_for(
     }
     for region in regions {
         let origin = region.as_ptr() as usize - normal.as_ptr() as usize;
+        let mut anchors = super::Anchors::new(region, origin);
         for local in (origin & 1..region.len()).step_by(2) {
             #[cfg(test)]
             tests::WINDOWS.with(|c| c.set(c.get() + 1));
             let bytes = &region[local..];
             if bytes.len() >= 4 && bytes[0] == 0x5a {
                 if let Some(entry) = state.get_mut(&word(&bytes[1..4])) {
+                    *entry = None;
+                }
+            }
+            // A branch tail transfer enters with an unbound R1 index.
+            if let Some(target) = super::branch_target(bytes, origin + local)
+                .and_then(|t| u32::try_from(t).ok())
+                .filter(|t| state.contains_key(t) && !anchors.call_operand(local))
+            {
+                if let Some(entry) = state.get_mut(&target) {
                     *entry = None;
                 }
             }
@@ -261,10 +271,14 @@ fn callers_for(
             let Some(Some(result)) = state.get_mut(&target) else {
                 continue;
             };
-            let bound = local.checked_sub(4).and_then(|load| {
-                let index = u16::from_be_bytes([region[load + 2], region[load + 3]]);
-                (region[load..load + 2] == [0x79, 1] && index > 0x9f).then_some(index)
-            });
+            // The R1 load must be the decoded instruction ending at the call.
+            let bound = local
+                .checked_sub(4)
+                .filter(|&load| anchors.previous(local) == Some(load))
+                .and_then(|load| {
+                    let index = u16::from_be_bytes([region[load + 2], region[load + 3]]);
+                    (region[load..load + 2] == [0x79, 1] && index > 0x9f).then_some(index)
+                });
             match bound {
                 Some(index) => result.push(Caller {
                     offset: origin + local,
@@ -301,19 +315,20 @@ fn callers(
 /// Bind complete pointer-use blocks, retaining every uncovered pointer load.
 /// This does not substitute for cache, boot, queue or arbitrary-alias analysis.
 pub fn discover(normal: &[u8]) -> Observation<Evidence> {
-    match super::references(normal) {
-        Observation::Known(references) => bind(normal, &references),
+    match super::references_in(normal) {
+        Observation::Known((references, regions)) => bind(normal, &references, &regions),
         Observation::Unresolved(reason) => Observation::Unresolved(reason),
         Observation::Conflicting => Observation::Conflicting,
     }
 }
-fn bind(normal: &[u8], references: &References) -> Observation<Evidence> {
+fn bind(
+    normal: &[u8],
+    references: &References,
+    regions: &crate::image::Regions<'_>,
+) -> Observation<Evidence> {
     if references.argument_register != 0 {
         return Observation::Unresolved(Unresolved::ReaderNotRecognized);
     }
-    let Some(regions) = crate::image::regions(normal) else {
-        return Observation::Unresolved(Unresolved::ReaderNotRecognized);
-    };
     // Formatter candidates share one caller/alias scan instead of one each.
     let mut targets = BTreeSet::new();
     for pointer in &references.pointers {
@@ -698,6 +713,51 @@ mod tests {
         );
         let empty = alloc::vec![0xffu8; 0x600];
         assert_eq!(callers(&empty, &[&empty], &[], 0x300), None, "no callers");
+    }
+    #[test]
+    fn branch_transfers_to_the_formatter_entry_refuse() {
+        let mut raw = alloc::vec![0xff;0x600];
+        raw[0x40..0x48].copy_from_slice(&[0x79, 1, 1, 0x20, 0x5e, 0x41, 3, 0]);
+        assert!(callers(&raw, &[&raw], &[], 0x300).is_some());
+        // BRA, BNE (disp8) and BEQ (disp16) tail transfers into the entry.
+        for (at, branch) in [
+            (0x2f0, &[0x40, 0x0e][..]),
+            (0x2f0, &[0x46, 0x0e]),
+            (0x100, &[0x58, 0x70, 0x01, 0xfc]),
+        ] {
+            let mut raw = raw.clone();
+            raw[at..at + branch.len()].copy_from_slice(branch);
+            assert_eq!(
+                callers(&raw, &[&raw], &[], 0x300),
+                None,
+                "branch {branch:02x?}"
+            );
+        }
+        // The address word of an absolute JSR is its operand, not a branch.
+        let mut jsr = raw.clone();
+        jsr[0x2ee..0x2f2].copy_from_slice(&[0x5e, 0x55, 0x40, 0x0e]);
+        assert!(callers(&jsr, &[&jsr], &[], 0x300).is_some());
+        // MOV.W #H'5E00,R0; BRA entry: the 5e byte is an immediate operand,
+        // so the branch is real and still refuses.
+        let mut bra = raw.clone();
+        bra[0x2ec..0x2f2].copy_from_slice(&[0x79, 0x00, 0x5e, 0x00, 0x40, 0x0e]);
+        assert_eq!(callers(&bra, &[&bra], &[], 0x300), None);
+    }
+    #[test]
+    fn formatter_index_must_be_the_decoded_load_before_the_call() {
+        let mut raw = alloc::vec![0xff;0x600];
+        // MOV.L #H'79010120,ER0; JSR entry: R1 is not loaded.
+        raw[0x3e..0x48].copy_from_slice(&[0x7a, 0, 0x79, 1, 1, 0x20, 0x5e, 0x41, 3, 0]);
+        assert_eq!(callers(&raw, &[&raw], &[], 0x300), None);
+        // MOV.W #H'0120,R1; JSR entry binds the index.
+        raw[0x3e..0x40].fill(0xff);
+        assert_eq!(
+            callers(&raw, &[&raw], &[], 0x300),
+            Some(alloc::vec![Caller {
+                offset: 0x44,
+                index: 0x120
+            }])
+        );
     }
     #[test]
     fn many_formatter_candidates_share_one_alias_and_caller_scan() {

@@ -540,8 +540,21 @@ mod tests {
 
     #[test]
     fn explicit_unchanged_extent_matches_same_length_acceptance_and_refusals() {
+        // Expected outcome for (effect set, integrity fields), in loop order.
+        use Error::{ComponentMismatch as M, Representation as R, Unsupported as U};
+        let rejected = |error: Error| [Err(error), Err(error), Err(error), Err(error), Err(error)];
+        let expected: [[Result<&[u8], Error>; 5]; 8] = [
+            rejected(U),
+            [Ok(&[1, 0]), Ok(&[0, 0]), Err(R), Err(R), Err(R)],
+            rejected(R),
+            rejected(R),
+            rejected(M),
+            rejected(M),
+            [Err(U), Ok(&[0, 0]), Err(R), Err(R), Err(R)],
+            [Ok(&[1, 2]), Ok(&[0, 2]), Err(R), Err(R), Err(R)],
+        ];
         let original = [0, 0];
-        for effects in [
+        for (e, effects) in [
             vec![],
             vec![effect(Role::Normal, &original, &[1, 0])],
             vec![effect(Role::Normal, &original, &[1])],
@@ -556,26 +569,38 @@ mod tests {
                 effect(Role::Normal, &original, &[1, 0]),
                 effect(Role::Normal, &original, &[0, 2]),
             ],
-        ] {
-            for fields in [
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            for (f, fields) in [
                 vec![],
                 core::iter::once(0..1).collect(),
                 core::iter::once(0..0).collect(),
                 core::iter::once(0..3).collect(),
                 vec![0..1, 0..1],
-            ] {
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let explicit = compose_component_with_extent(
+                    Role::Normal,
+                    &original,
+                    original.len(),
+                    &effects,
+                    &fields,
+                    |image| Ok(image.to_vec()),
+                );
+                assert_eq!(
+                    explicit,
+                    expected[e][f].map(<[u8]>::to_vec),
+                    "effects {e}, fields {f}"
+                );
                 assert_eq!(
                     compose_component(Role::Normal, &original, &effects, &fields, |image| Ok(
                         image.to_vec()
                     )),
-                    compose_component_with_extent(
-                        Role::Normal,
-                        &original,
-                        original.len(),
-                        &effects,
-                        &fields,
-                        |image| Ok(image.to_vec())
-                    )
+                    explicit
                 );
             }
         }

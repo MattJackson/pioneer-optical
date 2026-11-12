@@ -20,7 +20,8 @@ pub struct Caller {
     pub offset: usize,
     /// Absolute or relative native encoding.
     pub kind: CallKind,
-    /// Actual byte indices; None means the input still needs dataflow analysis.
+    /// Byte indices from the index load decoded directly before the call;
+    /// None means the input still needs dataflow analysis.
     pub indices: Option<Vec<u8>>,
 }
 /// Exact wrapper and its incoming-reference observations.
@@ -109,42 +110,60 @@ impl Shape {
 /// Bind R0 byte/pair helper inputs through complete stored bodies and the exact
 /// proven cache accessor. R1 helpers require additional initializer contracts.
 pub fn discover(normal: &[u8]) -> Observation<Vec<Helper>> {
-    let caches = match super::cache::discover(normal) {
+    let (caches, regions) = match super::cache::discover_in(normal) {
         Observation::Known(v) => v,
         Observation::Unresolved(r) => return Observation::Unresolved(r),
         Observation::Conflicting => return Observation::Conflicting,
     };
-    let regions = crate::image::regions(normal).expect("bound cache");
     let mut helpers = Vec::new();
     for cache in caches {
-        for accessor in cache.accessors.iter().filter(|a| a.argument_register == 0) {
-            for region in &regions.stored {
-                let base = region.as_ptr() as usize - normal.as_ptr() as usize;
-                for local in (base & 1..region.len()).step_by(2) {
-                    for shape in SHAPES {
-                        let Some(bytes) = region.get(local..local + shape.bytes.len()) else {
-                            continue;
-                        };
-                        let Some(converter) =
-                            shape.bind(bytes, 0x410000 + accessor.offset as u32, base + local)
-                        else {
-                            continue;
-                        };
-                        if converter >= normal.len() {
-                            continue;
-                        }
-                        helpers.push(Helper {
+        // One pass binds every R0 accessor: each candidate body's first read
+        // operand selects the accessor, ordered as one pass per accessor was.
+        let accessors: BTreeMap<u32, usize> = cache
+            .accessors
+            .iter()
+            .filter(|a| a.argument_register == 0)
+            .enumerate()
+            .map(|(rank, a)| (0x410000 + a.offset as u32, rank))
+            .collect();
+        let mut bound = Vec::new();
+        for region in &regions.stored {
+            #[cfg(test)]
+            tests::BIND_SCANS.with(|c| c.set(c.get() + 1));
+            let base = region.as_ptr() as usize - normal.as_ptr() as usize;
+            for local in (base & 1..region.len()).step_by(2) {
+                for shape in SHAPES {
+                    let Some(bytes) = region.get(local..local + shape.bytes.len()) else {
+                        continue;
+                    };
+                    let read = shape.reads[0];
+                    let accessor =
+                        u32::from_be_bytes([0, bytes[read + 1], bytes[read + 2], bytes[read + 3]]);
+                    let Some(&rank) = accessors.get(&accessor) else {
+                        continue;
+                    };
+                    let Some(converter) = shape.bind(bytes, accessor, base + local) else {
+                        continue;
+                    };
+                    if converter >= normal.len() {
+                        continue;
+                    }
+                    bound.push((
+                        rank,
+                        Helper {
                             offset: base + local,
                             kind: shape.kind,
                             reads: shape.reads.iter().map(|o| base + local + o).collect(),
                             converter,
                             callers: Vec::new(),
                             other_references: Vec::new(),
-                        });
-                    }
+                        },
+                    ));
                 }
             }
         }
+        bound.sort_by_key(|&(rank, _)| rank);
+        helpers.extend(bound.into_iter().map(|(_, helper)| helper));
     }
     if helpers.is_empty() {
         return Observation::Known(helpers);
@@ -168,6 +187,7 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Helper>> {
     };
     for region in &regions.stored {
         let base = region.as_ptr() as usize - normal.as_ptr() as usize;
+        let mut anchors = super::Anchors::new(region, base);
         for local in (base & 1..region.len()).step_by(2) {
             let b = &region[local..];
             let at = base + local;
@@ -187,16 +207,17 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Helper>> {
             } else {
                 None
             };
-            if let Some((kind, target)) = call {
+            if let Some((kind, target)) = call.filter(|&(_, t)| !lookup(t).is_empty()) {
+                // The index load must be the decoded instruction ending at the
+                // call, never operand bytes of a longer earlier instruction.
+                let index = anchors
+                    .previous(local)
+                    .and_then(|p| match region[p..local] {
+                        [0x79, 0, _, i] | [0xf8, i] => Some(i),
+                        _ => None,
+                    });
                 for &h in lookup(target) {
                     let helper = &mut helpers[h];
-                    let index = if (local >= 4 && region[local - 4..local - 2] == [0x79, 0])
-                        || (local >= 2 && region[local - 2] == 0xf8)
-                    {
-                        Some(region[local - 1])
-                    } else {
-                        None
-                    };
                     let indices = index.map(|i| {
                         if helper.kind == Kind::Pair {
                             alloc::vec![i, i.wrapping_add(1)]
@@ -213,6 +234,14 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Helper>> {
             }
             if b.len() >= 4 && b[0] == 0x5a {
                 for &h in lookup(absolute(b)) {
+                    helpers[h].other_references.push(Reference::Stored(at));
+                }
+            }
+            // Branch tail transfers enter with an unrecorded caller input.
+            if let Some(target) = super::branch_target(b, at)
+                .filter(|&t| !lookup(t).is_empty() && !anchors.call_operand(local))
+            {
+                for &h in lookup(target) {
                     helpers[h].other_references.push(Reference::Stored(at));
                 }
             }
@@ -242,11 +271,54 @@ pub(super) mod tests {
     use core::cell::Cell;
     std::thread_local! {
         pub(super) static REFERENCE_SCANS: Cell<usize> = const { Cell::new(0) };
+        pub(super) static BIND_SCANS: Cell<usize> = const { Cell::new(0) };
+    }
+    #[test]
+    fn branch_transfers_to_a_helper_entry_stay_visible() {
+        for (at, branch) in [
+            (0x3f80, &[0x40, 0x7e][..]),
+            (0x3f80, &[0x47, 0x7e]),
+            (0x100, &[0x58, 0x60, 0x3e, 0xfc]),
+        ] {
+            let mut raw = fixture(&SHAPES[0]);
+            raw[at..at + branch.len()].copy_from_slice(branch);
+            let Observation::Known(found) = discover(&raw) else {
+                panic!("fixture")
+            };
+            assert_eq!(
+                found[0].other_references,
+                alloc::vec![Reference::Stored(at)],
+                "branch {branch:02x?}"
+            );
+        }
+    }
+    #[test]
+    fn helper_binding_scans_the_image_once_for_every_accessor() {
+        let mut raw = fixture(&SHAPES[0]);
+        let leaf = raw[0x3000..0x3010].to_vec();
+        for at in [0x3100, 0x3200, 0x3300] {
+            raw[at..at + leaf.len()].copy_from_slice(&leaf);
+        }
+        install(&mut raw, &SHAPES[1], 0x5000);
+        // The earlier helper reads a later accessor.
+        raw[0x4000 + 7..0x4000 + 10].copy_from_slice(&[0x41, 0x32, 0]);
+        BIND_SCANS.with(|c| c.set(0));
+        let Observation::Known(found) = discover(&raw) else {
+            panic!("fixture")
+        };
+        // Order follows the accessor, then the image position.
+        assert_eq!(
+            found.iter().map(|h| h.offset).collect::<Vec<_>>(),
+            alloc::vec![0x5000, 0x4000]
+        );
+        assert_eq!(BIND_SCANS.with(Cell::get), 1);
     }
     /// Bulk loop, R0 accessor at 0x3000 and `shape` at 0x4000 reading it.
     fn fixture(shape: &Shape) -> Vec<u8> {
         let mut raw = alloc::vec![0xff;0x8000];
         crate::image::layout::install_test_layout(&mut raw, 0x1000);
+        // RTS anchoring the decoded caller code that tests place from 0x72.
+        raw[0x70..0x72].copy_from_slice(&[0x54, 0x70]);
         let bulk = &super::super::cache_shapes::SHAPES[0];
         raw[0x2000..0x2000 + bulk.bytes.len()].copy_from_slice(bulk.bytes);
         raw[0x2000 + bulk.call + 1..0x2000 + bulk.call + 4].copy_from_slice(&[0x41, 0x10, 0]);
@@ -344,6 +416,32 @@ pub(super) mod tests {
         }
     }
     #[test]
+    fn operand_tails_of_earlier_instructions_are_not_index_loads() {
+        for prefix in [
+            &[0x6a, 0x08, 0xf8, 0x05][..],      // MOV.B @H'F805:16,R0L
+            &[0x6b, 0x00, 0x79, 0x00, 0, 0x05], // MOV.W @H'7900:16,R0; data word
+        ] {
+            let mut raw = fixture(&SHAPES[0]);
+            let call = 0x84;
+            raw[call - prefix.len()..call].copy_from_slice(prefix);
+            raw[call..call + 4].copy_from_slice(&[0x5e, 0x41, 0x40, 0]);
+            let Observation::Known(found) = discover(&raw) else {
+                panic!("fixture")
+            };
+            assert_eq!(found[0].callers[0].offset, call);
+            assert_eq!(found[0].callers[0].indices, None, "{prefix:02x?}");
+        }
+        // An RTS-shaped operand word does not restart the decode:
+        // MOV.W @H'5470F805:32,R0 is one instruction.
+        let mut raw = fixture(&SHAPES[0]);
+        raw[0x7e..0x88].copy_from_slice(&[0x6b, 0x20, 0x54, 0x70, 0xf8, 0x05, 0x5e, 0x41, 0x40, 0]);
+        let Observation::Known(found) = discover(&raw) else {
+            panic!("fixture")
+        };
+        assert_eq!(found[0].callers[0].offset, 0x84);
+        assert_eq!(found[0].callers[0].indices, None);
+    }
+    #[test]
     fn converter_offsets_follow_each_native_call_encoding() {
         for (shape, expected) in SHAPES.iter().zip([0x6000, 0x4000 + 38 + 2 + 0x36]) {
             let mut raw = fixture(shape);
@@ -372,7 +470,8 @@ pub(super) mod tests {
     #[test]
     fn relative_callers_resolve_their_targets_and_index_loads() {
         let mut raw = fixture(&SHAPES[0]);
-        // MOV.B #126,R0L; BSR 0x4000
+        // RTS; MOV.B #126,R0L; BSR 0x4000
+        raw[0x3f9e..0x3fa0].copy_from_slice(&[0x54, 0x70]);
         raw[0x3fa0..0x3fa4].copy_from_slice(&[0xf8, 0x7e, 0x55, 0x5c]);
         // MOV.W #126,R0; BSR.W 0x4000
         raw[0x100..0x108].copy_from_slice(&[0x79, 0, 0, 0x7e, 0x5c, 0, 0x3e, 0xf8]);
@@ -400,6 +499,7 @@ pub(super) mod tests {
         for shape in SHAPES {
             let mut raw = alloc::vec![0xff;0x8000];
             crate::image::layout::install_test_layout(&mut raw, 0x1000);
+            raw[0x70..0x72].copy_from_slice(&[0x54, 0x70]);
             let bulk = &super::super::cache_shapes::SHAPES[0];
             raw[0x2000..0x2000 + bulk.bytes.len()].copy_from_slice(bulk.bytes);
             raw[0x2000 + bulk.call + 1..0x2000 + bulk.call + 4].copy_from_slice(&[0x41, 0x10, 0]);

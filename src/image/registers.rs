@@ -32,8 +32,17 @@ pub fn masked_writes(normal: &[u8], address: u16, mask: u8) -> Observation<Maske
     let Some(regions) = super::regions(normal) else {
         return Observation::Unresolved(Unresolved::ReaderNotRecognized);
     };
+    masked_writes_in(normal, &regions, address, mask)
+}
+
+fn masked_writes_in(
+    normal: &[u8],
+    regions: &super::Regions<'_>,
+    address: u16,
+    mask: u8,
+) -> Observation<MaskedWrites> {
     let mut writes = Vec::new();
-    for region in regions.stored {
+    for &region in &regions.stored {
         let origin = region.as_ptr() as usize - normal.as_ptr() as usize;
         for offset in (origin & 1..region.len().saturating_sub(5)).step_by(2) {
             let b = &region[offset..offset + 6];
@@ -157,7 +166,7 @@ pub fn startup(normal: &[u8]) -> Observation<Startup> {
             }
         }
     }
-    match (legacy, masked_writes(normal, 0xe46b, 0x11)) {
+    match (legacy, masked_writes_in(normal, &regions, 0xe46b, 0x11)) {
         (Some(_), Observation::Known(_) | Observation::Conflicting) => Observation::Conflicting,
         (Some(program), _) => Observation::Known(program),
         (None, Observation::Known(value)) => Observation::Known(Startup::Register(value)),

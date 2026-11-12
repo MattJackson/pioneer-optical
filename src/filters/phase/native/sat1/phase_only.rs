@@ -88,7 +88,8 @@ pub fn correct(normal: &[u8], assignment: Assignment) -> Result<Vec<u8>, Correct
     {
         return Err(CorrectionError::VerificationFailed);
     }
-    verify(normal, assignment, &output)?;
+    // `output` is exactly the image `verify` would rebuild as expected.
+    confirm(normal, &before, assignment, &output, &output)?;
     Ok(output)
 }
 
@@ -101,13 +102,24 @@ pub fn verify(
 ) -> Result<(), CorrectionError> {
     let before = bind(normal)?;
     let expected = super::super::correct_legacy(normal, assignment)?;
+    confirm(normal, &before, assignment, &expected, changed)
+}
+
+/// Rebind `changed` against `normal`'s binding and its expected correction.
+fn confirm(
+    normal: &[u8],
+    before: &Binding,
+    assignment: Assignment,
+    expected: &[u8],
+    changed: &[u8],
+) -> Result<(), CorrectionError> {
     let after = bind(changed)?;
     let mut wanted = before.clone();
     wanted.phase.assignment = assignment;
     if after != wanted || changed.len() != normal.len() {
         return Err(CorrectionError::VerificationFailed);
     }
-    for span in core::iter::once(before.program).chain(before.leaf) {
+    for span in core::iter::once(before.program.clone()).chain(before.leaf.clone()) {
         if expected[span.clone()] != changed[span] {
             return Err(CorrectionError::VerificationFailed);
         }

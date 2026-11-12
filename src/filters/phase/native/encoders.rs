@@ -30,6 +30,7 @@ pub struct Binding {
 }
 /// A native representation or bounded transplant was not proved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     /// Complete callers or stored leaves are not recognized.
     Unresolved,
@@ -40,10 +41,10 @@ pub enum Error {
     /// The output did not reproduce the required native convention.
     VerificationFailed,
 }
-fn functions(normal: &[u8], pair: &PairedPhase) -> Result<[Function; 2], Error> {
+fn functions(normal: &[u8], stored: &[&[u8]], pair: &PairedPhase) -> Result<[Function; 2], Error> {
     let bind = |at| {
-        full(normal, at)
-            .or_else(|| short(normal, at))
+        full(normal, stored, at)
+            .or_else(|| short(normal, stored, at))
             .ok_or(Error::Unresolved)
     };
     Ok([bind(pair.functions[0])?, bind(pair.functions[1])?])
@@ -53,9 +54,10 @@ pub fn observe(normal: &[u8]) -> Result<Binding, Error> {
     let Observation::Known(pair) = discover_pair(normal) else {
         return Err(Error::Unresolved);
     };
-    let functions = functions(normal, &pair)?;
+    let regions = crate::image::regions(normal).ok_or(Error::Unresolved)?;
+    let functions = functions(normal, &regions.stored, &pair)?;
     let (representation, low) = match functions[0].encoder {
-        Encoder::Full(high, low) if identity_leaf(normal, high) => {
+        Encoder::Full(high, low) if identity_leaf(normal, &regions.stored, high) => {
             (Representation::SplitTenBits, low)
         }
         Encoder::Short(low) => (Representation::HighByte, low),
@@ -79,12 +81,14 @@ pub fn observe(normal: &[u8]) -> Result<Binding, Error> {
     {
         return Err(Error::Unresolved);
     }
-    let start = if low.checked_sub(2).is_some_and(|a| identity_leaf(normal, a)) {
+    let start = if low
+        .checked_sub(2)
+        .is_some_and(|a| identity_leaf(normal, &regions.stored, a))
+    {
         at - 2
     } else {
         at
     };
-    let regions = crate::image::regions(normal).ok_or(Error::Unresolved)?;
     if !regions.stored.iter().any(|r| {
         let begin = r.as_ptr() as usize - normal.as_ptr() as usize;
         start >= begin && at + 4 <= begin + r.len()
@@ -110,13 +114,14 @@ pub fn transplant(
 ) -> Result<Vec<u8>, Error> {
     let before = observe(target)?;
     let wanted = observe(donor)?;
-    let destination = functions(target, &before.pair)?;
-    let sources = functions(donor, &wanted.pair)?;
+    let regions = crate::image::regions(target).ok_or(Error::Unresolved)?;
+    let donor_regions = crate::image::regions(donor).ok_or(Error::Unresolved)?;
+    let destination = functions(target, &regions.stored, &before.pair)?;
+    let sources = functions(donor, &donor_regions.stored, &wanted.pair)?;
     let low = 0x410000 + before.leaf.end as u32 - 4;
     if wanted.representation == Representation::SplitTenBits && before.leaf.len() != 6 {
         return Err(Error::Unresolved);
     }
-    let regions = crate::image::regions(target).ok_or(Error::Unresolved)?;
     let mut writes: Vec<(Range<usize>, Vec<u8>)> = Vec::new();
     for (index, function) in destination.iter().enumerate() {
         let source = sources

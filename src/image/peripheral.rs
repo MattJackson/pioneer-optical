@@ -95,37 +95,6 @@ pub fn m32c_host(normal: &[u8]) -> Observation<HostSignature> {
     unique(values)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn signature_requires_both_adjacent_reset_writes_and_preserves_split_addresses() {
-        for p in HOSTS {
-            let mut b = p.one[0].to_vec();
-            b.extend_from_slice(p.signature);
-            b.extend_from_slice(p.one[1]);
-            assert!(matches!(m32c_host(&b),Observation::Known(v) if v==p.value));
-            assert!(matches!(m32c_host(p.signature), Observation::Unresolved(_)));
-            b[0] ^= 1;
-            assert!(matches!(m32c_host(&b), Observation::Unresolved(_)));
-        }
-        assert_eq!(
-            HOSTS[2].value.signature_high - HOSTS[2].value.signature_low,
-            4
-        );
-    }
-    #[test]
-    fn conflicting_interfaces_are_not_arbitrarily_selected() {
-        let mut b = Vec::new();
-        for p in &HOSTS[..2] {
-            b.extend_from_slice(p.one[0]);
-            b.extend_from_slice(p.signature);
-            b.extend_from_slice(p.one[1]);
-        }
-        assert!(matches!(m32c_host(&b), Observation::Conflicting));
-    }
-}
-
 mod m32c_phase;
 /// Native M32C phase assignment and output interface.
 pub use m32c_phase::{
@@ -207,3 +176,34 @@ pub use v850_phase::{
 mod v850_input;
 /// Native V850 key-event state-machine classification.
 pub use v850_input::{bus as v850_input_bus, native as v850_input_native, KeyAlgorithm};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn signature_requires_both_adjacent_reset_writes_and_preserves_split_addresses() {
+        for p in HOSTS {
+            let mut b = p.one[0].to_vec();
+            b.extend_from_slice(p.signature);
+            b.extend_from_slice(p.one[1]);
+            assert!(matches!(m32c_host(&b),Observation::Known(v) if v==p.value));
+            assert!(matches!(m32c_host(p.signature), Observation::Unresolved(_)));
+            b[0] ^= 1;
+            assert!(matches!(m32c_host(&b), Observation::Unresolved(_)));
+        }
+        assert_eq!(
+            HOSTS[2].value.signature_high - HOSTS[2].value.signature_low,
+            4
+        );
+    }
+    #[test]
+    fn conflicting_interfaces_are_not_arbitrarily_selected() {
+        let mut b = Vec::new();
+        for p in &HOSTS[..2] {
+            b.extend_from_slice(p.one[0]);
+            b.extend_from_slice(p.signature);
+            b.extend_from_slice(p.one[1]);
+        }
+        assert!(matches!(m32c_host(&b), Observation::Conflicting));
+    }
+}

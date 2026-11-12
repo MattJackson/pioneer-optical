@@ -52,15 +52,13 @@ pub(super) const HOLES: &[(usize, usize, u8, usize)] = &[
 fn integer(bytes: &[u8]) -> u32 {
     bytes.iter().fold(0, |n, b| (n << 8) | u32::from(*b))
 }
-fn stored(normal: &[u8], at: usize, len: usize) -> bool {
+fn stored(normal: &[u8], regions: &crate::image::Regions<'_>, at: usize, len: usize) -> bool {
     let Some(end) = at.checked_add(len) else {
         return false;
     };
-    crate::image::regions(normal).is_some_and(|regions| {
-        regions.stored.iter().any(|r| {
-            let start = r.as_ptr() as usize - normal.as_ptr() as usize;
-            at >= start && end <= start + r.len()
-        })
+    regions.stored.iter().any(|r| {
+        let start = r.as_ptr() as usize - normal.as_ptr() as usize;
+        at >= start && end <= start + r.len()
     })
 }
 fn normalized(program: &[u8], normal_len: usize) -> Option<Vec<u8>> {
@@ -104,7 +102,11 @@ fn normalized(program: &[u8], normal_len: usize) -> Option<Vec<u8>> {
 }
 pub(super) fn discover(normal: &[u8]) -> Observation<Vec<u8>> {
     let missing = || Observation::Unresolved(Unresolved::ReaderNotRecognized);
-    if !stored(normal, ENTRY, 4) {
+    // Decode the stored spans once for both range checks.
+    let Some(regions) = crate::image::regions(normal) else {
+        return missing();
+    };
+    if !stored(normal, &regions, ENTRY, 4) {
         return missing();
     }
     let call = &normal[ENTRY..ENTRY + 4];
@@ -115,7 +117,7 @@ pub(super) fn discover(normal: &[u8]) -> Observation<Vec<u8>> {
     let Some(at) = target.checked_sub(BASE).map(|v| v as usize) else {
         return missing();
     };
-    if at & 1 != 0 || !stored(normal, at, PROGRAM.len()) {
+    if at & 1 != 0 || !stored(normal, &regions, at, PROGRAM.len()) {
         return missing();
     }
     match normalized(&normal[at..at + PROGRAM.len()], normal.len()) {

@@ -210,6 +210,32 @@ impl Envelope {
     ) -> Result<FirmwareAnalysis<'_>, Error> {
         check(observer, "Inspecting firmware", 0, self.image.len())?;
         let info = self.info();
+        // The lean reader: analysis needs neither recompression nor uniform ranges.
+        // It runs first so an over-limit or cancelled image refuses before any
+        // native discovery expands it again without the caller's limit.
+        let streams =
+            match crate::comp_streams::read(&self.image, options.expanded_bytes, &mut || {
+                observer.proceed("Expanding streams", 0, self.image.len())
+            }) {
+                Err(envelope::StreamError::Limit) => return Err(Error::ResourceLimit),
+                Err(envelope::StreamError::Cancelled) => return Err(Error::Cancelled),
+                streams => streams,
+            };
+        // One native inspection supplies both the filter results and the family.
+        let context = (info.kind == crate::ComponentKind::Normal).then(|| {
+            crate::filters::Context::new(crate::compatibility::Firmware {
+                hardware: &info.hardware_version,
+                normal: &self.image,
+                kernel: None,
+            })
+        });
+        let family = || {
+            context
+                .as_ref()
+                .and_then(crate::image::matrix::discover_in)
+                .and_then(|identity| identity.candidate.family())
+                .map(|f| f.to_string())
+        };
         let mut result = FirmwareAnalysis {
             identity: Identity {
                 family: None,
@@ -223,16 +249,9 @@ impl Envelope {
                 size: self.image.len(),
                 uhd: None,
                 encoding_seed: self.encoding_seed(),
-                filters: if info.kind == crate::ComponentKind::Normal {
-                    crate::compatibility::Firmware {
-                        hardware: &info.hardware_version,
-                        normal: &self.image,
-                        kernel: None,
-                    }
-                    .filters()
-                } else {
-                    Vec::new()
-                },
+                filters: context
+                    .as_ref()
+                    .map_or_else(Vec::new, crate::filters::Context::filters),
             },
             regions: Vec::new(),
             startup_requirement: None,
@@ -254,15 +273,8 @@ impl Envelope {
                     .into(),
             });
         }
-        // The lean reader: analysis needs neither recompression nor uniform ranges.
-        let streams = match crate::comp_streams::read(
-            &self.image,
-            options.expanded_bytes,
-            &mut || observer.proceed("Expanding streams", 0, self.image.len()),
-        ) {
+        let streams = match streams {
             Ok(streams) => streams,
-            Err(envelope::StreamError::Limit) => return Err(Error::ResourceLimit),
-            Err(envelope::StreamError::Cancelled) => return Err(Error::Cancelled),
             Err(error) => {
                 let code = match error {
                     envelope::StreamError::Directory => "pioneer.analysis.invalid_directory",
@@ -275,7 +287,7 @@ impl Envelope {
         };
         // Only non-COMP images may be scanned without decoded streams.
         if streams.is_none() && self.image.get(0x1000..0x1004) != Some(b"COMP") {
-            result.identity.family = self.family().map(|f| f.to_string());
+            result.identity.family = family();
             if info.kind == crate::ComponentKind::Normal {
                 result.identity.uhd = Some(crate::image::uhd_regions(&[&self.image]));
             }
@@ -295,7 +307,7 @@ impl Envelope {
                 .collect();
             if let Some(mut regions) = crate::image::stored_regions(&self.image, &spans) {
                 regions.extend(ordered.iter().map(|s| s.expanded.as_slice()));
-                result.identity.family = self.family().map(|f| f.to_string());
+                result.identity.family = family();
                 if info.kind == crate::ComponentKind::Normal {
                     result.identity.uhd = Some(crate::image::uhd_regions(&regions));
                 }
@@ -367,6 +379,9 @@ impl Envelope {
             }
         }
         metadata::identify(self, &mut result.regions);
+        // H8 framing needs H8 code: a Kernel, or a Normal whose structured tag
+        // selects H8 SAT native discovery. The matrix identity is not required;
+        // an unresolved hardware filter does not make the code less H8.
         if matches!(
             info.layout,
             envelope::Layout::Normal
@@ -374,7 +389,9 @@ impl Envelope {
                 | envelope::Layout::NormalScaledKey
                 | envelope::Layout::KernelFront
                 | envelope::Layout::KernelDerived
-        ) {
+        ) && (info.kind == crate::ComponentKind::Kernel
+            || crate::image::matrix::SatPlatform::from_hardware(&info.hardware_version).is_some())
+        {
             references::identify(&mut result, options.expanded_bytes)?;
         }
         result.diagnostics.push(Diagnostic { code: "pioneer.analysis.semantic_coverage", message: "Unrecognized data and table fields are retained as bytes. String-table recognition does not establish write-strategy field meanings.".into() });

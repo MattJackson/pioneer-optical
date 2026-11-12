@@ -11,7 +11,8 @@ use super::{
 mod ata;
 pub use ata::{AtaEvidence, AtaInput};
 
-/// An established typed family identity. Variant tags preserve platform boundaries.
+/// An established typed family identity: the complete registered identity,
+/// whose structured-header domain keeps platforms apart.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Key {
     /// Complete version-seven identity supplied by the shared filter registry.
@@ -47,12 +48,19 @@ pub struct Identity {
 /// ATA architecture/load base must be established by complete native consumers.
 /// Unsupported tags, missing required fields and conflicting keys return None.
 pub fn discover(hardware: &str, normal: &[u8], kernel: Option<&[u8]>) -> Option<Identity> {
-    let context = crate::filters::Context::new(crate::compatibility::Firmware {
-        hardware,
-        normal,
-        kernel,
-    });
-    let identity = crate::filters::identity::discover(&context)?;
+    discover_in(&crate::filters::Context::new(
+        crate::compatibility::Firmware {
+            hardware,
+            normal,
+            kernel,
+        },
+    ))
+}
+
+/// [`discover`] over an already inspected context, so one native inspection
+/// can also supply the registered filter results.
+pub(crate) fn discover_in(context: &crate::filters::Context<'_>) -> Option<Identity> {
+    let identity = crate::filters::identity::discover(context)?;
     Some(Identity {
         as_is: Key::Registered(identity.as_is),
         candidate: Key::Registered(identity.candidate),

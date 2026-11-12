@@ -28,7 +28,7 @@ fn held_native_startup_gates_set_the_target_word_for_changed_fixed_comparisons()
         }
     }
     let owner = &filters::startup::FILTER;
-    let mut refused = 0;
+    let (mut written, mut refused) = (0, 0);
     for (package, target, bound) in &images {
         let Some((donor_package, donor, _)) = images.iter().find(|(_, _, other)| {
             other.layout == bound.layout && other.requirement.required != bound.requirement.required
@@ -71,15 +71,16 @@ fn held_native_startup_gates_set_the_target_word_for_changed_fixed_comparisons()
                     "{}",
                     package.component
                 );
+                written += 1;
             }
             // A conditional target gate keeps the refusal.
-            Err(pioneer_optical::compatibility::Error::Unsupported) => {}
+            Err(pioneer_optical::compatibility::Error::Unsupported) => refused += 1,
             other => panic!("{}: {other:?}", package.component),
         }
-        refused += 1;
     }
-    assert!(refused > 0);
-    eprintln!("startup changed-comparison directions={refused}");
+    eprintln!("startup changed-comparison directions written={written} refused={refused}");
+    // Every direction refusing would satisfy the arms above vacuously.
+    assert!(written > 0 && refused > 0);
 }
 
 #[test]

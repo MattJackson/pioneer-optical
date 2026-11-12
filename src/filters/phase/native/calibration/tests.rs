@@ -123,11 +123,7 @@ fn fixture(packed: bool, address: u32) -> Vec<u8> {
     } else {
         WHOLE.to_vec()
     };
-    for at in if packed {
-        &[43usize, 53][..]
-    } else {
-        &[31usize][..]
-    } {
+    for at in if packed { PACKED_CALLS } else { WHOLE_CALLS } {
         code[*at..*at + 3].copy_from_slice(&address.to_be_bytes()[1..]);
     }
     normal[0x100..0x100 + code.len()].copy_from_slice(&code);
@@ -172,10 +168,10 @@ fn rewritten_readers_preserve_consumed_calibration_bytes_for_every_word_and_mode
         } else {
             WHOLE.len()
         };
-        let fields: &[usize] = if source.packed_shape {
-            &[43, 53]
+        let fields = if source.packed_shape {
+            PACKED_CALLS
         } else {
-            &[31]
+            WHOLE_CALLS
         };
         for offset in 0..len {
             if !fields
@@ -268,7 +264,7 @@ fn split_calibration_reuses_prefix_and_refuses_a_branch_crossing_the_split() {
 fn reader_binding_and_rewrite_refuse_partial_ambiguous_or_mismatched_getter_code() {
     let packed = fixture(true, 0x410600);
     let whole = fixture(false, 0x410600);
-    for (template, holes) in [(PACKED, &[43usize, 53][..]), (WHOLE, &[31usize][..])] {
+    for (template, holes) in [(PACKED, PACKED_CALLS), (WHOLE, WHOLE_CALLS)] {
         let original = if template.len() == PACKED.len() {
             &packed
         } else {
@@ -303,32 +299,113 @@ fn reader_binding_and_rewrite_refuse_partial_ambiguous_or_mismatched_getter_code
     }
 }
 
+fn native_fixture(hash: &str) -> Vec<u8> {
+    let fixtures: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/phase-native-spans.json"
+    )))
+    .unwrap();
+    let fixture = fixtures
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["original_sha256"].as_str() == Some(hash))
+        .unwrap();
+    let mut image = vec![0xff; fixture["size"].as_u64().unwrap() as usize];
+    for span in fixture["spans"].as_array().unwrap() {
+        let at = span[0].as_u64().unwrap() as usize;
+        let text = span[1].as_str().unwrap();
+        for i in 0..text.len() / 2 {
+            image[at + i] = u8::from_str_radix(&text[2 * i..2 * i + 2], 16).unwrap();
+        }
+    }
+    image
+}
+/// OEM whole-word reader with its low-byte four-mode caller.
+fn oem_whole() -> Vec<u8> {
+    native_fixture("84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750")
+}
+/// OEM packed reader with its low-byte four-mode caller.
+fn oem_packed() -> Vec<u8> {
+    native_fixture("87e8152f1de1d3be53eb4ad9144c1bb0c45a9be6f78713a0b7487a637f989bf1")
+}
+/// Model the same bound word-getter contract while executing each reader's
+/// actual instruction stream and both of its persistent addresses.
+fn shared_getter(normal: &[u8]) -> Program {
+    let mut program = program(normal);
+    for (insn, _) in program.instructions.values_mut() {
+        if insn.mnemonic == "JSR" {
+            insn.operands[0] = Operand::Address(Ea::Absolute {
+                value: 0x410600,
+                bits: 24,
+            });
+        }
+    }
+    program
+}
+
+#[test]
+fn rewrite_preserves_the_effective_interpretation_selected_at_the_bound_caller() {
+    let whole = oem_whole();
+    let packed = oem_packed();
+    // Whole-word reader whose caller selects R0H for modes zero and two.
+    let high = transplant_effective(&whole, &packed).unwrap();
+    assert_eq!(observe(&whole), Ok(Convention::WholeWord));
+    assert_eq!(observe(&packed), Ok(Convention::PackedBytes));
+    assert_eq!(observe(&high), Ok(Convention::PackedBytes));
+    // Equal effective interpretations need no reader change, whichever
+    // program establishes them.
+    assert_eq!(rewrite(&packed, &high, None), Ok(packed.clone()));
+    assert_eq!(rewrite(&high, &packed, None), Ok(high.clone()));
+    // A difference expressed only by the installed caller's byte selection
+    // is refused: the installed reader holds no OEM selection instruction to
+    // copy, and the library never synthesizes one.
+    assert!(rewrite(&whole, &high, None).is_err());
+    assert!(rewrite(&high, &whole, None).is_err());
+    let unselected = rewrite(&packed, &whole, None).unwrap();
+    assert_eq!(observe(&unselected), Ok(Convention::WholeWord));
+    // That holds even for a packed-shape target whose own selection was
+    // removed: restoring it would need bytes the donor does not supply.
+    assert!(rewrite(&unselected, &high, None).is_err());
+    // transplant_effective must verify the same effective result: copying a
+    // whole-word reader cannot select packed bytes at a low-byte caller.
+    assert!(transplant_effective(&unselected, &high).is_err());
+    assert_eq!(
+        transplant_effective(&unselected, &packed),
+        Ok(packed.clone())
+    );
+}
+
+#[test]
+fn growing_rewrite_keeps_the_bound_caller_entry_for_every_word_and_mode() {
+    let whole = oem_whole();
+    let packed = oem_packed();
+    let reservation = 0x1000..0x1050;
+    let changed = rewrite(&whole, &packed, Some(reservation.clone())).unwrap();
+    assert_eq!(observe(&changed), Ok(Convention::PackedBytes));
+    // The same four calls still reach the unmoved reader entry.
+    assert_eq!(callers::observe(&changed), callers::observe(&whole));
+    let reader = bind(&whole).unwrap().body.spans[0].clone();
+    for (at, (a, b)) in whole.iter().zip(&changed).enumerate() {
+        assert!(a == b || reader.contains(&at) || reservation.contains(&at));
+    }
+    let (grown, donor) = (shared_getter(&changed), shared_getter(&packed));
+    // Modes zero to three plus the shared out-of-range default.
+    for word in 0..=u16::MAX {
+        for mode in 0..=4 {
+            let words = [word, !word];
+            let (actual, reads) = Reader::run(&grown, mode, words);
+            let (expected, expected_reads) = Reader::run(&donor, mode, words);
+            assert_eq!(actual & 255, expected & 255, "word {word:#x}, mode {mode}");
+            assert_eq!(reads, expected_reads);
+        }
+    }
+}
+
 #[test]
 fn whole_reader_consumers_select_packed_bytes_without_growth_for_every_word() {
-    fn native_fixture(hash: &str) -> Vec<u8> {
-        let fixtures: serde_json::Value = serde_json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/phase-native-spans.json"
-        )))
-        .unwrap();
-        let fixture = fixtures
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|f| f["original_sha256"].as_str() == Some(hash))
-            .unwrap();
-        let mut image = vec![0xff; fixture["size"].as_u64().unwrap() as usize];
-        for span in fixture["spans"].as_array().unwrap() {
-            let at = span[0].as_u64().unwrap() as usize;
-            let text = span[1].as_str().unwrap();
-            for i in 0..text.len() / 2 {
-                image[at + i] = u8::from_str_radix(&text[2 * i..2 * i + 2], 16).unwrap();
-            }
-        }
-        image
-    }
-    let target = native_fixture("84fab289c44ce2de98e96272e607869de4501b45f8f4badc43e492920ce07750");
-    let donor = native_fixture("87e8152f1de1d3be53eb4ad9144c1bb0c45a9be6f78713a0b7487a637f989bf1");
+    let target = oem_whole();
+    let donor = oem_packed();
     let changed = transplant_effective(&target, &donor).unwrap();
     let caller = callers::observe(&changed).unwrap();
     assert!(caller.high_byte_modes);
@@ -347,20 +424,8 @@ fn whole_reader_consumers_select_packed_bytes_without_growth_for_every_word() {
     assert_eq!(transplant_effective(&changed, &donor).unwrap(), changed);
     assert_eq!(transplant_effective(&changed, &target).unwrap(), target);
     assert_eq!(transplant_effective(&target, &changed).unwrap(), changed);
-    let mut raw = program(&target);
-    let mut packed = program(&donor);
-    // Model the same bound word-getter contract while executing each OEM
-    // reader's actual instruction stream and both of its persistent addresses.
-    for program in [&mut raw, &mut packed] {
-        for (insn, _) in program.instructions.values_mut() {
-            if insn.mnemonic == "JSR" {
-                insn.operands[0] = Operand::Address(Ea::Absolute {
-                    value: 0x410600,
-                    bits: 24,
-                });
-            }
-        }
-    }
+    let raw = shared_getter(&target);
+    let packed = shared_getter(&donor);
     let selects: Vec<_> = [10, 12, 20, 28]
         .into_iter()
         .map(|i| {

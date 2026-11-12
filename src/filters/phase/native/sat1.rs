@@ -193,6 +193,7 @@ const ZERO: &[u8] = &[
 
 /// Complete bounded SAT1 mechanism proof is unavailable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     /// A complete native grammar or resource was unavailable.
     Unresolved,
@@ -240,12 +241,12 @@ struct Bound {
 fn read(bytes: &[u8], at: usize, n: usize) -> u32 {
     integer(&bytes[at..at + n])
 }
-fn stored(n: &[u8], a: u32, len: usize) -> Result<Range<usize>, Error> {
+/// `regions` are the stored regions `bind` decoded once for `n`.
+fn stored(n: &[u8], regions: &[&[u8]], a: u32, len: usize) -> Result<Range<usize>, Error> {
     let start = a.checked_sub(0x410000).ok_or(Error::ResourceMismatch)? as usize;
     let end = start.checked_add(len).ok_or(Error::ResourceMismatch)?;
-    let r = crate::image::regions(n).ok_or(Error::Unresolved)?;
     if a & 1 != 0
-        || !r.stored.iter().any(|r| {
+        || !regions.iter().any(|r| {
             let o = r.as_ptr() as usize - n.as_ptr() as usize;
             start >= o && end <= o + r.len()
         })
@@ -450,7 +451,7 @@ fn bind(normal: &[u8]) -> Result<Bound, Error> {
                     };
                     let flag = field(38);
                     let helpers = [field(45), field(63)];
-                    let jt = stored(normal, field(82), 12)?;
+                    let jt = stored(normal, &regions.stored, field(82), 12)?;
                     let base = at + 96 - shift;
                     if field(90) != 0x410000 + base as u32 {
                         continue;
@@ -474,7 +475,12 @@ fn bind(normal: &[u8]) -> Result<Bound, Error> {
                     };
                     let mut tables = alloc::vec![];
                     for offset in table_offsets {
-                        tables.push(stored(normal, read(&caller, offset - shift, 4), 256)?);
+                        tables.push(stored(
+                            normal,
+                            &regions.stored,
+                            read(&caller, offset - shift, 4),
+                            256,
+                        )?);
                     }
                     let tables: [Range<usize>; 5] =
                         tables.try_into().map_err(|_| Error::Unresolved)?;
@@ -486,12 +492,12 @@ fn bind(normal: &[u8]) -> Result<Bound, Error> {
                     }
                     let state = read(c, 12, 4);
                     let direction = read(c, 134, 4);
-                    let getter = stored(normal, helpers[0], 18)?;
+                    let getter = stored(normal, &regions.stored, helpers[0], 18)?;
                     let g = &normal[getter.clone()];
                     if g[..2] != [0x6a, 0x28]
                         || g[6..] != [0xa8, 3, 0x46, 4, 0xf8, 1, 0x40, 2, 0x18, 0x88, 0x54, 0x70]
-                        || read(g, 2, 4) != state + 13
-                        || flag + 2 != direction
+                        || state.checked_add(13) != Some(read(g, 2, 4))
+                        || flag.checked_add(2) != Some(direction)
                     {
                         continue;
                     }
@@ -618,7 +624,10 @@ pub fn observe_normal(normal: &[u8]) -> Result<Binding, Error> {
 }
 /// Bind complete phase command/mode/output routines and both exact Kernel leaves.
 pub fn observe(normal: &[u8], kernel: &[u8]) -> Result<Binding, Error> {
-    let b = bind(normal)?.facts;
+    resident(bind(normal)?.facts, kernel)
+}
+/// Validate the exact Kernel identity leaf of an already bound Normal graph.
+fn resident(b: Binding, kernel: &[u8]) -> Result<Binding, Error> {
     if kernel.len() != crate::image::KERNEL_LEN {
         return Err(Error::ResourceMismatch);
     }
@@ -706,7 +715,7 @@ fn field(code: &mut [u8], at: usize, width: usize, value: u32) -> Result<(), Err
 /// The native sign-extended mode comparisons are narrowed to their original byte
 /// argument; signed branch outcomes agree for every 8-bit input. The complete
 /// mode getter kills differing H before any use. Removing identity calls and
-/// their dead literal frees18 bytes in the existing output body; a six-byte
+/// their dead literal frees 18 bytes in the existing output body; a six-byte
 /// caller epilogue can occupy that positively owned tail without moving entries.
 pub fn transplant(
     target: &[u8],
@@ -714,8 +723,10 @@ pub fn transplant(
     donor: &[u8],
     donor_kernel: &[u8],
 ) -> Result<Vec<u8>, Error> {
-    let a = observe(target, target_kernel)?;
-    let b = observe(donor, donor_kernel)?;
+    let original = bind(target)?;
+    let a = resident(original.facts.clone(), target_kernel)?;
+    let source = bind(donor)?;
+    let b = resident(source.facts.clone(), donor_kernel)?;
     if a.assignment == b.assignment
         && a.tables
             .iter()
@@ -725,8 +736,6 @@ pub fn transplant(
         return Ok(target.to_vec());
     }
     ownership(target, target_kernel, &a)?;
-    let original = bind(target)?;
-    let source = bind(donor)?;
     let mut caller = if source.selector_compact {
         source.caller_code.clone()
     } else {
@@ -784,7 +793,7 @@ pub fn transplant(
             return Err(Error::ResourceMismatch);
         }
         // All native conditional edges and the internal table destinations stay
-        // before142. Only the LDM/RTS epilogue crosses this typed terminal jump.
+        // before 142. Only the LDM/RTS epilogue crosses this typed terminal jump.
         changed[a.caller.start..a.caller.start + 142].copy_from_slice(&caller[..142]);
         let tail = a.output.start + 156;
         changed[a.caller.start + 142..a.caller.end]
@@ -844,4 +853,69 @@ pub fn verify(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The two held native SAT1 Normal images, rebuilt from their bound spans.
+    fn normals() -> Vec<Vec<u8>> {
+        let fixtures: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/phase-sat1-native.json"
+        )))
+        .unwrap();
+        fixtures
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                let mut normal = alloc::vec![0xff; f["normal_len"].as_u64().unwrap() as usize];
+                for span in f["spans"].as_array().unwrap() {
+                    // Kernel leaves (below the Normal base) are not needed here.
+                    let Some(at) = (span[0].as_u64().unwrap() as usize).checked_sub(0x410000)
+                    else {
+                        continue;
+                    };
+                    let hex = span[1].as_str().unwrap();
+                    for i in 0..hex.len() / 2 {
+                        normal[at + i] = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap();
+                    }
+                }
+                normal
+            })
+            .collect()
+    }
+
+    #[test]
+    fn binding_decodes_the_image_regions_once() {
+        for normal in normals() {
+            crate::comp_streams::READS.with(|reads| reads.set(0));
+            assert!(observe_normal(&normal).is_ok());
+            assert_eq!(crate::comp_streams::READS.with(|reads| reads.get()), 1);
+        }
+    }
+
+    #[test]
+    fn hostile_state_and_flag_operands_refuse_without_overflow() {
+        for normal in normals() {
+            let bound = observe_normal(&normal).unwrap();
+            let [state, _, flag] = bound.state;
+            // Command state operand, compared as state + 13 by the mode getter.
+            let at = bound.command.start + 12;
+            assert_eq!(read(&normal, at, 4), state);
+            let mut hostile = normal.clone();
+            hostile[at..at + 4].copy_from_slice(&0xffff_fff5u32.to_be_bytes());
+            assert_eq!(observe_normal(&hostile), Err(Error::Unresolved));
+            // Caller direction-flag operand, compared as flag + 2.
+            let sites: Vec<_> = (bound.caller.start..bound.caller.end - 3)
+                .filter(|at| read(&normal, *at, 4) == flag)
+                .collect();
+            assert_eq!(sites.len(), 1);
+            let mut hostile = normal.clone();
+            hostile[sites[0]..sites[0] + 4].copy_from_slice(&u32::MAX.to_be_bytes());
+            assert_eq!(observe_normal(&hostile), Err(Error::Unresolved));
+        }
+    }
 }

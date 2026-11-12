@@ -72,32 +72,65 @@ pub enum Storage {
 
 /// Analyze both decoded components. Missing evidence remains unresolved.
 pub fn analyze_pair(normal: &[u8], kernel: Option<&[u8]>) -> Option<Storage> {
-    if let Some(contract) = analyze(normal) {
-        return Some(Storage::Versioned(contract));
+    analyze_banks(normal, kernel).storage
+}
+
+/// Native bank evidence from one scan of the decoded components.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Banks {
+    /// The recovered storage contract; `None` is unresolved.
+    pub storage: Option<Storage>,
+    /// A versioned capacity guard (bank-header validator) was recognized.
+    pub capacity_guard: bool,
+    /// CPU address of the capacity discriminator routine, when the guard's
+    /// address calculation was recovered. This is the entry the capacity
+    /// owner fingerprints (via h8-asm) to prove two firmwares resolve the
+    /// discriminator identically.
+    pub capacity_query: Option<u32>,
+}
+
+/// [`analyze_pair`], also reporting the capacity guard and discriminator
+/// entry found by the same validator and layout scans.
+pub(crate) fn analyze_banks(normal: &[u8], kernel: Option<&[u8]>) -> Banks {
+    let (contract, capacity_guard, capacity_query) = versioned(normal);
+    Banks {
+        storage: storage(normal, kernel, contract).ok().flatten(),
+        capacity_guard,
+        capacity_query,
     }
-    if let Some(contract) = legacy::state_banks(normal) {
-        return Some(contract);
+}
+
+/// The first tier with evidence supplies the contract. `Err` is unresolved
+/// evidence in a tier, which never lets a later tier supply the contract.
+fn storage(
+    normal: &[u8],
+    kernel: Option<&[u8]>,
+    contract: Result<Option<Contract>, ()>,
+) -> Result<Option<Storage>, ()> {
+    if let Some(contract) = contract? {
+        return Ok(Some(Storage::Versioned(contract)));
+    }
+    if let Some(contract) = legacy::state_banks(normal)? {
+        return Ok(Some(contract));
     }
     // Kernel-owned storage is accepted only with a decoded Normal which has
     // an independently recognized native receiver, and a complete Kernel.
-    let kernel = kernel?;
-    if kernel.len() != 0x10000 || crate::image::receiver_control(normal).is_none() {
-        return None;
+    let Some(kernel) = kernel else {
+        return Ok(None);
+    };
+    if kernel.len() != crate::image::KERNEL_LEN || crate::image::receiver_control(normal).is_none()
+    {
+        return Ok(None);
     }
-    legacy::state_selector(kernel, 0x400000).or_else(|| legacy::kernel_sequences(kernel))
-}
-
-/// CPU address of the capacity discriminator routine, when the versioned
-/// contract selects persistent-bank addresses by a runtime capacity query.
-/// This is the entry the capacity owner fingerprints (via h8-asm) to prove two
-/// firmwares resolve the discriminator identically. `None` when there is no
-/// versioned capacity contract (fixed or state-header storage needs no proof).
-pub(crate) fn discriminator_entry(normal: &[u8]) -> Option<u32> {
-    Some(discover(normal)?.layout(normal)?.capacity_query)
+    if let Some(contract) = legacy::state_selector(kernel, 0x400000)? {
+        return Ok(Some(contract));
+    }
+    Ok(legacy::kernel_sequences(kernel))
 }
 
 /// A storage transition cannot be established from the supplied components.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     /// Installed storage requirements could not be recovered.
     UnknownInstalled,
@@ -159,26 +192,43 @@ pub(crate) fn versioned_fixture(magic: u32, markers: [u32; 2]) -> Vec<u8> {
 
 /// Recover a storage contract. `None` means unresolved, never "no check".
 pub fn analyze(normal: &[u8]) -> Option<Contract> {
-    if let Some(guard) = discover(normal) {
-        let layout = guard.layout(normal)?;
-        return Some(Contract {
+    versioned(normal).0.ok().flatten()
+}
+
+/// The versioned or fixed contract, whether a capacity guard was recognized,
+/// and the guard's discriminator entry when its address calculation is known.
+/// `Err` is a recognized guard or validator whose contract is unresolved,
+/// including several guards.
+fn versioned(normal: &[u8]) -> (Result<Option<Contract>, ()>, bool, Option<u32>) {
+    let Ok(guard) = guards(normal) else {
+        return (Err(()), true, None);
+    };
+    if let Some(guard) = guard {
+        let Some(layout) = guard.layout(normal) else {
+            return (Err(()), true, None);
+        };
+        let contract = Contract {
             magic: guard.magic,
             addresses: Addresses::Capacity {
                 when_one: layout.when_one.markers,
                 otherwise: layout.otherwise.markers,
             },
             validation: Validation::RejectMismatch,
-        });
+        };
+        return (Ok(Some(contract)), true, Some(layout.capacity_query));
     }
-    legacy::discover(normal).map(|fixed| Contract {
-        magic: fixed.magic,
-        addresses: Addresses::Fixed(fixed.markers),
-        validation: if fixed.rejects {
-            Validation::RejectMismatch
-        } else {
-            Validation::InitializeAndSelect
-        },
-    })
+    let contract = legacy::discover(normal).map(|fixed| {
+        fixed.map(|fixed| Contract {
+            magic: fixed.magic,
+            addresses: Addresses::Fixed(fixed.markers),
+            validation: if fixed.rejects {
+                Validation::RejectMismatch
+            } else {
+                Validation::InitializeAndSelect
+            },
+        })
+    });
+    (contract, false, None)
 }
 
 /// One startup guard accepting either of two persistent-bank headers.
@@ -398,13 +448,21 @@ fn candidate(normal: &[u8], at: usize) -> Option<Requirement> {
 
 /// Recover a unique supported bank-header validator, or unknown.
 /// This identifies code evidence only: it neither reads banks nor authorizes
-/// changing a marker. Unknown does not establish absence of another guard.
+/// changing a marker. Unknown does not establish absence of another guard:
+/// several guards are also unknown, never one of them.
 pub fn discover(normal: &[u8]) -> Option<Requirement> {
+    guards(normal).ok().flatten()
+}
+
+/// [`discover`], keeping several guards (`Err`) apart from none.
+fn guards(normal: &[u8]) -> Result<Option<Requirement>, ()> {
     let mut matches = (0..normal.len().saturating_sub(0x91))
         .step_by(2)
         .filter_map(|at| candidate(normal, at));
-    let result = matches.next()?;
-    matches.next().is_none().then_some(result)
+    let Some(result) = matches.next() else {
+        return Ok(None);
+    };
+    matches.next().is_none().then_some(Some(result)).ok_or(())
 }
 
 #[cfg(test)]

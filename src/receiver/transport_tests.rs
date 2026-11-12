@@ -104,6 +104,6 @@ fn two_region_rejects_unexpected_wire_length() {
             KernelReceive::FrontKeyTwoRegion,
             &mut storage
         ),
-        Err(PlanError::KernelLayout)
+        Err(LayoutError::KernelLayout)
     ));
 }

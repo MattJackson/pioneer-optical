@@ -38,7 +38,17 @@ Each selected `Operation::required_words()` supplies the existing live values
 its correction requires. The shared collector retains filter ownership,
 deduplicates equal requests and rejects conflicts before I/O. The receiver reads
 and checks these requirements before firmware transfer. This includes phase's
-`0x28F == 1` and bound startup words; it never writes either requirement.
+`0x28F == 1` and equal bound startup words; it never writes a requirement.
+
+`Operation::word_writes()` is disjoint from those reads. Only the startup owner
+supplies one: a differing fixed H8 comparison keeps the target image and sets
+the target's own startup word. The receiver writes it once, in the first
+stage's startup settings transaction (read, write, verify, rollback if no
+firmware was written), with the drive in normal mode under a Flash execution,
+before the first transfer. Any other placement or Recovery mode refuses
+before I/O (`check_plan`); a loader is refused by execution's live identity
+read (`IdentityMismatch`) before any write. A differing conditional comparison
+refuses.
 
 Historical `ParameterAction` and standalone settings APIs remain separate from
 release image correction. Receiver preparation rejects nonempty parameter

@@ -90,7 +90,8 @@ fn selector(b: &[u8], magic: u32, markers: [u32; 2]) -> bool {
         })
 }
 
-fn initialize(b: &[u8]) -> Option<(u32, [u32; 2])> {
+/// A recognized initialize-form validator: (magic, markers, bound).
+fn initialize(b: &[u8]) -> Option<(u32, [u32; 2], bool)> {
     if !grammar(b, patterns::INITIALIZE) {
         return None;
     }
@@ -119,16 +120,16 @@ fn initialize(b: &[u8]) -> Option<(u32, [u32; 2])> {
     }
     let magic = word(b, 10)?;
     let markers = [word(b, 32)?, word(b, 48)?];
-    if word(b, 22) != markers[0].checked_add(4)
-        || call(b, 72) != call(b, 84)
-        || call(b, 72).is_none()
-    {
-        return None;
-    }
-    Some((magic, markers))
+    let bound = word(b, 22) == markers[0].checked_add(4)
+        && call(b, 72) == call(b, 84)
+        && call(b, 72).is_some();
+    Some((magic, markers, bound))
 }
 
-fn rejecting(normal: &[u8], at: usize) -> Option<(u32, [u32; 2], usize)> {
+/// A recognized reject-form validator: (magic, markers, entry, bound). An
+/// unbound one matched its grammar, but its blank-check, sequence or writer
+/// operands do not agree with its markers.
+fn rejecting(normal: &[u8], at: usize) -> Option<(u32, [u32; 2], usize, bool)> {
     let b = normal.get(at..)?;
     let (reg, entry) = if matches(b, &[(0, &[1, 0x10, 0x6d, 0xf4, 0x79, 0x37, 0, 6, 0x7a, 2])]) {
         (2, at)
@@ -144,21 +145,15 @@ fn rejecting(normal: &[u8], at: usize) -> Option<(u32, [u32; 2], usize)> {
     let magic = word(b, 10)?;
     // These forms have the same two equality tests and bypass rejection when
     // either header matches. The longer form also handles sequence recovery.
-    let tail = if reg == 3 {
-        0x96
-    } else if b.get(0x5a..0x5c) == Some(&[0x1f, 0xa0][..]) {
-        0x5a
+    // The short forms differ in fixed bytes, so the grammar selects the form;
+    // (tail, both blank-bank writer calls).
+    let (tail, writes) = if reg == 3 {
+        grammar(b, patterns::REJECT_LONG).then_some((0x96, [92, 144]))?
+    } else if grammar(b, patterns::REJECT_SHORT) {
+        (0x5a, [72, 84])
     } else {
-        0x5e
+        grammar(b, patterns::REJECT_SHORT_ALT).then_some((0x5e, [74, 88]))?
     };
-    let pattern = match tail {
-        0x96 => patterns::REJECT_LONG,
-        0x5a => patterns::REJECT_SHORT,
-        _ => patterns::REJECT_SHORT_ALT,
-    };
-    if !grammar(b, pattern) {
-        return None;
-    }
     let t = b.get(tail..)?;
     let compare = if reg == 2 { [0x1f, 0xa0] } else { [0x1f, 0xb0] };
     let second = if reg == 2 {
@@ -196,7 +191,19 @@ fn rejecting(normal: &[u8], at: usize) -> Option<(u32, [u32; 2], usize)> {
     if !matches(b, &[(14, &[1, 0, 0x6f, 0xf0 + reg, 0, 2])]) {
         return None;
     }
-    Some((magic, markers, entry))
+    // The blank check and initialization act on the same banks: the first
+    // sequence word follows the first header, the second header is the one
+    // blank-checked and compared, and both writes use one writer.
+    let second = if reg == 3 {
+        word(b, 56) == Some(markers[1]) && word(b, 32) == markers[1].checked_add(4)
+    } else {
+        word(b, 52) == Some(markers[1])
+    };
+    let bound = word(b, 22) == markers[0].checked_add(4)
+        && second
+        && call(b, writes[0]).is_some()
+        && call(b, writes[0]) == call(b, writes[1]);
+    Some((magic, markers, entry, bound))
 }
 
 pub(super) fn discover(normal: &[u8]) -> Option<Fixed> {
@@ -204,13 +211,14 @@ pub(super) fn discover(normal: &[u8]) -> Option<Fixed> {
     let mut calls: Option<Vec<u32>> = None;
     let mut selectors_found: Option<Vec<(u32, [u32; 2])>> = None;
     for at in (0..normal.len().saturating_sub(9)).step_by(2) {
-        let (magic, markers, entry, rejects) = if let Some((m, a)) = initialize(&normal[at..]) {
-            (m, a, at, false)
-        } else if let Some((m, a, e)) = rejecting(normal, at) {
-            (m, a, e, true)
-        } else {
-            continue;
-        };
+        let (magic, markers, entry, rejects, bound) =
+            if let Some((m, a, bound)) = initialize(&normal[at..]) {
+                (m, a, at, false, bound)
+            } else if let Some((m, a, e, bound)) = rejecting(normal, at) {
+                (m, a, e, true, bound)
+            } else {
+                continue;
+            };
         if magic == u32::MAX
             || markers[0] >= markers[1]
             || calls
@@ -223,6 +231,11 @@ pub(super) fn discover(normal: &[u8]) -> Option<Fixed> {
                 .is_err()
         {
             continue;
+        }
+        // A called validator of a used selector whose own operands do not
+        // bind is present but unproven: never treat it as absent.
+        if !bound {
+            return None;
         }
         let candidate = Fixed {
             routine: BASE + entry as u32,
@@ -237,7 +250,9 @@ pub(super) fn discover(normal: &[u8]) -> Option<Fixed> {
     result
 }
 
-pub(super) fn state_selector(image: &[u8], base: u32) -> Option<super::Storage> {
+/// The unique called state-header selector. `Err` means more than one:
+/// ambiguous evidence, never the same as absent evidence.
+pub(super) fn state_selector(image: &[u8], base: u32) -> Result<Option<super::Storage>, ()> {
     let mut result = None;
     let mut calls: Option<Vec<u32>> = None;
     for at in (0..image
@@ -249,12 +264,14 @@ pub(super) fn state_selector(image: &[u8], base: u32) -> Option<super::Storage> 
         if !grammar(b, patterns::STATE_SELECTOR) {
             continue;
         }
-        let sequences = [word(b, 2)?, word(b, 8)?];
-        let headers = [[word(b, 16)?, word(b, 46)?], [word(b, 34)?, word(b, 58)?]];
-        let status = [word(b, 88)?, word(b, 112)?];
-        if word(b, 136) != Some(headers[0][1])
-            || word(b, 146).and_then(|a| a.checked_add(0xfffe)) != Some(sequences[0])
-            || word(b, 154).and_then(|a| a.checked_add(0xfffe)) != Some(sequences[1])
+        // The grammar spans every operand, so these words are present.
+        let operand = |at| word(b, at).unwrap_or(0);
+        let sequences = [operand(2), operand(8)];
+        let headers = [[operand(16), operand(46)], [operand(34), operand(58)]];
+        let status = [operand(88), operand(112)];
+        if operand(136) != headers[0][1]
+            || operand(146).checked_add(0xfffe) != Some(sequences[0])
+            || operand(154).checked_add(0xfffe) != Some(sequences[1])
             || sequences[1].checked_sub(sequences[0]) != Some(0x10000)
             || headers[0][0].checked_add(4) != Some(headers[0][1])
             || headers[1][0].checked_add(4) != Some(headers[1][1])
@@ -276,10 +293,10 @@ pub(super) fn state_selector(image: &[u8], base: u32) -> Option<super::Storage> 
             status,
         };
         if result.replace(candidate).is_some() {
-            return None;
+            return Err(());
         }
     }
-    result
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -306,6 +323,30 @@ pub(super) fn fixture(normal: &mut [u8]) {
         0x40, 6, 0x7a, 0, 0, 0x7e, 0, 0, 0x54, 0x70,
     ]);
     normal[0x19e0..0x19e2].copy_from_slice(&[0x54, 0x70]);
+}
+
+/// A called state-header selector at `at` with the given status words.
+#[cfg(test)]
+pub(super) fn state_fixture(b: &mut [u8], at: usize, caller: usize, status: [u32; 2]) {
+    let code = patterns::STATE_SELECTOR.code;
+    b[at..at + code.len()].copy_from_slice(code);
+    for (offset, value) in [
+        (2, 0x7dfffeu32),
+        (8, 0x7efffe),
+        (16, 0x7dfff6),
+        (46, 0x7dfffa),
+        (34, 0x7efff6),
+        (58, 0x7efffa),
+        (88, status[0]),
+        (112, status[1]),
+        (136, 0x7dfffa),
+        (146, 0x7d0000),
+        (154, 0x7e0000),
+    ] {
+        b[at + offset..at + offset + 4].copy_from_slice(&value.to_be_bytes());
+    }
+    let target = (BASE + at as u32).to_be_bytes();
+    b[caller..caller + 4].copy_from_slice(&[0x5e, target[1], target[2], target[3]]);
 }
 
 #[cfg(test)]
@@ -343,6 +384,192 @@ mod tests {
         assert!(SCANS.with(Cell::get) <= 2);
     }
 
+    /// A called reject-form validator over the module fixture's selector,
+    /// with the audited restart helper at 0x1a00. `writer` is the CPU target
+    /// of both blank-bank write calls; `entry` is where the routine starts.
+    fn rejecting_fixture(
+        pattern: &patterns::Pattern,
+        entry: usize,
+        operands: &[(usize, u32)],
+        writes: [usize; 2],
+        tail: usize,
+        writer: u32,
+    ) -> Vec<u8> {
+        let mut b = vec![0xff; 0x8000];
+        fixture(&mut b);
+        let at = if pattern.code[1] == 0x20 {
+            b[entry..entry + 4].copy_from_slice(&[1, 0, 0x6d, 0xf3]);
+            entry + 4
+        } else {
+            entry
+        };
+        b[at..at + pattern.code.len()].copy_from_slice(pattern.code);
+        for &(offset, value) in operands {
+            b[at + offset..at + offset + 4].copy_from_slice(&value.to_be_bytes());
+        }
+        for offset in writes {
+            put_call(&mut b, at + offset, writer);
+        }
+        put_call(&mut b, at + tail + 16, BASE + 0x1a00);
+        b[0x1a00..0x1a0e].copy_from_slice(&[
+            0xf8, 1, 0x6a, 0xa8, 0, 0, 1, 0x42, 0x6a, 0xa8, 0, 0, 1, 0x40,
+        ]);
+        b[0x1a0e..0x1a12].copy_from_slice(&[0x5a, 0x40, 0, 0x10]);
+        put_call(&mut b, 0x17e0, BASE + entry as u32);
+        b
+    }
+    const SHORT: &[(usize, u32)] = &[
+        (10, 0xfedc4321),
+        (22, 0x7dfffe),
+        (32, 0x7dfffa),
+        (52, 0x7efffa),
+        (0x5a + 8, 0x7efffa),
+    ];
+    const ALT: &[(usize, u32)] = &[
+        (10, 0xfedc4321),
+        (22, 0x7dfffe),
+        (32, 0x7dfffa),
+        (52, 0x7efffa),
+        (0x5e + 8, 0x7efffa),
+    ];
+    const LONG: &[(usize, u32)] = &[
+        (10, 0xfedc4321),
+        (22, 0x7dfffe),
+        (32, 0x7efffe),
+        (38, 0x7dfffa),
+        (56, 0x7efffa),
+        (0x96 + 8, 0x7efffa),
+    ];
+    fn rejecting_contract(entry: usize) -> Option<Fixed> {
+        Some(Fixed {
+            routine: BASE + entry as u32,
+            magic: 0xfedc4321,
+            markers: [0x7dfffa, 0x7efffa],
+            rejects: true,
+        })
+    }
+
+    #[test]
+    fn every_reject_form_binds_its_contract() {
+        let short = rejecting_fixture(
+            patterns::REJECT_SHORT,
+            0x1800,
+            SHORT,
+            [72, 84],
+            0x5a,
+            0x4119e0,
+        );
+        assert_eq!(discover(&short), rejecting_contract(0x1800));
+        let alt = rejecting_fixture(
+            patterns::REJECT_SHORT_ALT,
+            0x1800,
+            ALT,
+            [74, 88],
+            0x5e,
+            0x4119e0,
+        );
+        assert_eq!(discover(&alt), rejecting_contract(0x1800));
+        let long = rejecting_fixture(
+            patterns::REJECT_LONG,
+            0x17fc,
+            LONG,
+            [92, 144],
+            0x96,
+            0x4119e0,
+        );
+        assert_eq!(discover(&long), rejecting_contract(0x17fc));
+        // The restart helper and its loader-flag prefix are required.
+        let mut bad = short.clone();
+        bad[0x1a07] ^= 1;
+        assert_eq!(discover(&bad), None);
+        // The register-3 form needs its saved-register entry instruction.
+        let mut bad = long.clone();
+        bad[0x17ff] ^= 1;
+        assert_eq!(discover(&bad), None);
+    }
+
+    #[test]
+    fn the_alternate_short_form_is_selected_by_grammar_not_operand_bytes() {
+        // Writer at 0x411fa0 puts [0x1f, 0xa0] at +0x5a of the alternate form.
+        let alt = rejecting_fixture(
+            patterns::REJECT_SHORT_ALT,
+            0x1800,
+            ALT,
+            [74, 88],
+            0x5e,
+            0x411fa0,
+        );
+        assert_eq!(alt[0x185a..0x185c], [0x1f, 0xa0]);
+        assert_eq!(discover(&alt), rejecting_contract(0x1800));
+    }
+
+    #[test]
+    fn reject_forms_bind_blank_check_sequence_and_writer_operands() {
+        type Form = (
+            &'static patterns::Pattern,
+            usize,
+            &'static [(usize, u32)],
+            [usize; 2],
+            usize,
+        );
+        let forms: [(Form, &[usize]); 3] = [
+            (
+                (patterns::REJECT_SHORT, 0x1800, SHORT, [72, 84], 0x5a),
+                &[22, 52],
+            ),
+            (
+                (patterns::REJECT_SHORT_ALT, 0x1800, ALT, [74, 88], 0x5e),
+                &[22, 52],
+            ),
+            (
+                (patterns::REJECT_LONG, 0x17fc, LONG, [92, 144], 0x96),
+                &[22, 32, 56],
+            ),
+        ];
+        for ((pattern, entry, operands, writes, tail), unbound) in forms {
+            let at = if entry == 0x17fc { 0x1800 } else { entry };
+            for &offset in unbound {
+                let mut bad = rejecting_fixture(pattern, entry, operands, writes, tail, 0x4119e0);
+                bad[at + offset + 3] ^= 0x10;
+                assert_eq!(discover(&bad), None, "{tail:#x} +{offset}");
+            }
+            // Both blank-bank writes go through the same writer.
+            let mut bad = rejecting_fixture(pattern, entry, operands, writes, tail, 0x4119e0);
+            put_call(&mut bad, at + writes[1], 0x411a40);
+            assert_eq!(discover(&bad), None, "{tail:#x} writer");
+        }
+    }
+
+    #[test]
+    fn a_called_unbound_validator_is_not_absent_evidence() {
+        // A second called REJECT_SHORT on the same selector whose second
+        // blank-bank write uses another writer: which validator runs is unproven.
+        let mut b = rejecting_fixture(
+            patterns::REJECT_SHORT,
+            0x1800,
+            SHORT,
+            [72, 84],
+            0x5a,
+            0x4119e0,
+        );
+        let len = patterns::REJECT_SHORT.code.len();
+        b.copy_within(0x1800..0x1800 + len, 0x2800);
+        put_call(&mut b, 0x27e0, BASE + 0x2800);
+        assert_eq!(discover(&b), None);
+        put_call(&mut b, 0x2800 + 84, 0x411a40);
+        assert_eq!(discover(&b), None);
+        // The same for the initialize form: a called copy whose sequence
+        // operand does not follow its first header.
+        let mut b = vec![0xff; 0x8000];
+        fixture(&mut b);
+        assert!(discover(&b).is_some());
+        let len = patterns::INITIALIZE.code.len();
+        b.copy_within(0x1800..0x1800 + len, 0x2800);
+        put_call(&mut b, 0x27e0, BASE + 0x2800);
+        b[0x2800 + 25] ^= 0x10;
+        assert_eq!(discover(&b), None);
+    }
+
     #[test]
     fn state_selector_lookalikes_share_one_call_index() {
         let mut b = vec![0xff; 0x4000];
@@ -367,12 +594,12 @@ mod tests {
             sequences: [0x7dfffe, 0x7efffe],
             status: [0, 0],
         });
-        assert_eq!(state_selector(&b, BASE), expected);
+        assert_eq!(state_selector(&b, BASE), Ok(expected));
         for at in (0x400..0x3800).step_by(0xc0) {
             b.copy_within(0x100..0x100 + code.len(), at);
         }
         SCANS.with(|c| c.set(0));
-        assert_eq!(state_selector(&b, BASE), expected);
+        assert_eq!(state_selector(&b, BASE), Ok(expected));
         assert!(SCANS.with(Cell::get) <= 1);
     }
 }

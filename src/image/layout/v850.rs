@@ -5,8 +5,10 @@ const BASE: usize = 0x10000;
 
 // Both directions share physical wiring coordinates; only data bit direction differs.
 const DATA_BITS: [usize; 16] = [0, 1, 3, 2, 5, 4, 6, 7, 9, 8, 11, 10, 14, 12, 13, 15];
+/// Swaps address bits 1/2, 3/4, 7/8, 9/10 and 11/12; `0x1f9e` is the set of
+/// those ten permuted bits, every other bit is kept.
 fn bus_address(at: usize) -> usize {
-    (at & !8094)
+    (at & !0x1f9e)
         | ((at & 2) << 1)
         | ((at & 4) >> 1)
         | ((at & 8) << 1)

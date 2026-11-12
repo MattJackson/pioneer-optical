@@ -49,7 +49,14 @@ pub fn observe(normal: &[u8]) -> Result<Binding, Error> {
 }
 
 pub(super) fn observe_optional(normal: &[u8]) -> Result<Option<Binding>, Error> {
-    let reader = super::bind(normal)?;
+    observe_bound(normal, &super::bind(normal)?)
+}
+
+/// `observe_optional` for the reader already bound in `normal`.
+pub(super) fn observe_bound(
+    normal: &[u8],
+    reader: &super::Reader,
+) -> Result<Option<Binding>, Error> {
     let regions = crate::image::regions(normal).ok_or(Error::Unresolved)?;
     let mut found = None;
     for relative in [false, true] {

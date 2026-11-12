@@ -1,14 +1,16 @@
-//! Shared read-only conditions for filter-owned correction operations.
+//! Shared device-word conditions and writes for filter-owned correction
+//! operations. Reads and writes are collected separately and stay disjoint.
 use super::Operation;
 use crate::compatibility::Error;
 use alloc::vec::Vec;
 
-/// An existing device word required by a correction; never a write effect.
+/// A device word named by a correction: a required existing value from
+/// `required_words`, or the value set by `word_writes`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Word {
     /// Native parameter index.
     pub parameter: u16,
-    /// Required existing value.
+    /// Required existing value, or the value to set.
     pub value: u16,
 }
 
@@ -17,7 +19,7 @@ pub struct Word {
 pub struct OwnedWord {
     /// Filter that established this condition.
     pub filter: &'static str,
-    /// Read-only condition to check before firmware transfer.
+    /// Word checked, or set, before firmware transfer.
     pub word: Word,
 }
 
@@ -62,7 +64,18 @@ fn collect_with<'a>(
 }
 
 /// Why a read-only prerequisite was not met.
+///
+/// ```compile_fail,E0004
+/// use pioneer_optical::filters::prerequisites::CheckError;
+/// fn f(e: CheckError<()>) -> u8 {
+///     match e {
+///         CheckError::Read(_) => 0,
+///         CheckError::Mismatch { .. } => 1,
+///     }
+/// }
+/// ```
 #[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CheckError<E> {
     /// Reading the actual device word failed.
     Read(E),

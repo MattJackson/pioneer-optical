@@ -273,20 +273,23 @@ fn bind(graph: &Graph, body: &[u8], root: usize, base: u32) -> bool {
 /// must also be reached through their native calls. Arithmetic/diagnostic
 /// runtime calls remain external; this does not execute code or certify writes.
 pub fn discover_h8_component(body: &[u8], cpu_base: u32) -> Observation<ParameterLayout> {
-    match reader(body, cpu_base) {
+    match reader(body, cpu_base).unwrap_or(Observation::Unresolved(Unresolved::ReaderNotRecognized))
+    {
         Observation::Known((_, layout)) => Observation::Known(layout),
         Observation::Unresolved(reason) => Observation::Unresolved(reason),
         Observation::Conflicting => Observation::Conflicting,
     }
 }
 
-fn reader(body: &[u8], cpu_base: u32) -> Observation<(u32, ParameterLayout)> {
+/// The component's unique complete reader graph. `None` only when no getter
+/// root shape occurs at all; a root whose graph does not bind is unresolved.
+fn reader(body: &[u8], cpu_base: u32) -> Option<Observation<(u32, ParameterLayout)>> {
     if cpu_base & 1 != 0
         || cpu_base
             .checked_add(u32::try_from(body.len()).unwrap_or(u32::MAX))
             .is_none()
     {
-        return Observation::Unresolved(Unresolved::TruncatedEvidence);
+        return Some(Observation::Unresolved(Unresolved::TruncatedEvidence));
     }
     let mut result = None;
     for (at, prefix) in body.windows(8).enumerate().step_by(2) {
@@ -305,10 +308,10 @@ fn reader(body: &[u8], cpu_base: u32) -> Observation<(u32, ParameterLayout)> {
                 continue;
             };
             let Some(layout) = bound_layout(graph, &binding, body) else {
-                return Observation::Unresolved(Unresolved::TruncatedEvidence);
+                return Some(Observation::Unresolved(Unresolved::TruncatedEvidence));
             };
             if matched.as_ref().is_some_and(|old| old != &layout) {
-                return Observation::Conflicting;
+                return Some(Observation::Conflicting);
             }
             matched = Some(layout);
         }
@@ -316,16 +319,14 @@ fn reader(body: &[u8], cpu_base: u32) -> Observation<(u32, ParameterLayout)> {
             continue;
         }
         let Some(layout) = matched else {
-            return Observation::Unresolved(Unresolved::ReaderNotRecognized);
+            return Some(Observation::Unresolved(Unresolved::ReaderNotRecognized));
         };
         if result.is_some() {
-            return Observation::Unresolved(Unresolved::AmbiguousReader);
+            return Some(Observation::Unresolved(Unresolved::AmbiguousReader));
         }
         result = Some((cpu_base + at as u32, layout));
     }
-    result
-        .map(Observation::Known)
-        .unwrap_or(Observation::Unresolved(Unresolved::ReaderNotRecognized))
+    result.map(Observation::Known)
 }
 
 fn native_body(body: &[u8]) -> Option<Vec<u8>> {
@@ -414,7 +415,9 @@ pub(crate) fn normal_reader(normal: &[u8]) -> Observation<(u32, u8, ParameterLay
     let Some(bytes) = native_body(normal) else {
         return Observation::Unresolved(Unresolved::ReaderNotRecognized);
     };
-    match reader(&bytes, 0x410000) {
+    match reader(&bytes, 0x410000)
+        .unwrap_or(Observation::Unresolved(Unresolved::ReaderNotRecognized))
+    {
         Observation::Known((entry, layout)) => {
             let at = (entry - 0x410000) as usize;
             let argument = index_register(&bytes, at);
@@ -496,15 +499,15 @@ pub fn discover_h8_reader(normal: &[u8], kernel: Option<&[u8]>) -> Observation<H
     let Some(normal) = native_body(normal) else {
         return Observation::Unresolved(Unresolved::ReaderNotRecognized);
     };
+    // Only a Normal with no getter root at all may delegate to the Kernel; a
+    // Normal getter whose graph does not bind is not proven unused.
     match reader(&normal, 0x410000) {
-        Observation::Known((entry, layout)) => {
+        Some(Observation::Known((entry, layout))) => {
             return reader_evidence(&normal, H8ReaderComponent::Normal, entry, layout)
         }
-        Observation::Conflicting => return Observation::Conflicting,
-        Observation::Unresolved(Unresolved::AmbiguousReader) => {
-            return Observation::Unresolved(Unresolved::AmbiguousReader)
-        }
-        _ => {}
+        Some(Observation::Conflicting) => return Observation::Conflicting,
+        Some(Observation::Unresolved(reason)) => return Observation::Unresolved(reason),
+        None => {}
     }
     let address = match external_parameter_reader(&normal) {
         Observation::Known(address) => address,
@@ -517,7 +520,9 @@ pub fn discover_h8_reader(normal: &[u8], kernel: Option<&[u8]>) -> Observation<H
     let Some(kernel) = native_body(kernel) else {
         return Observation::Unresolved(Unresolved::ReaderNotRecognized);
     };
-    match reader(&kernel, 0x400000) {
+    match reader(&kernel, 0x400000)
+        .unwrap_or(Observation::Unresolved(Unresolved::ReaderNotRecognized))
+    {
         Observation::Known((entry, layout)) if entry == address => {
             reader_evidence(&kernel, H8ReaderComponent::Kernel, entry, layout)
         }
@@ -655,6 +660,36 @@ pub(crate) mod tests {
             Observation::Known(_)
         ));
         normal[19] = 0;
+        assert!(!matches!(
+            discover_h8(&normal, Some(&kernel)),
+            Observation::Known(_)
+        ));
+    }
+    #[test]
+    fn an_unbound_normal_getter_is_not_replaced_by_the_kernel_reader() {
+        let graph = &GRAPHS[0];
+        let (mut kernel, locations) = fixture(graph);
+        for edge in graph.edges.iter().filter(|e| e.kind == 0) {
+            let address = 0x400000 + u32::try_from(locations[edge.to] + edge.delta).unwrap();
+            let at = locations[edge.from] + edge.offset + 1;
+            kernel[at..at + 3].copy_from_slice(&address.to_be_bytes()[1..]);
+        }
+        let mut normal = vec![0xff; 0x400];
+        normal[..24].copy_from_slice(&[
+            0x79, 0, 0, 0xa4, 0x5e, 0x40, 1, 0, 0x6f, 0xf0, 0, 4, 0x79, 0, 0, 0xa5, 0x5e, 0x40, 1,
+            0, 0x6f, 0xf0, 0, 6,
+        ]);
+        assert!(matches!(
+            discover_h8(&normal, Some(&kernel)),
+            Observation::Known(_)
+        ));
+        // Normal also carries its own getter root whose graph does not bind.
+        let root = SHAPES[graph.nodes[0]].bytes.len();
+        normal[0x100..0x100 + root].copy_from_slice(&kernel[locations[0]..locations[0] + root]);
+        assert!(matches!(
+            reader(&native_body(&normal).unwrap(), 0x410000),
+            Some(Observation::Unresolved(Unresolved::ReaderNotRecognized))
+        ));
         assert!(!matches!(
             discover_h8(&normal, Some(&kernel)),
             Observation::Known(_)

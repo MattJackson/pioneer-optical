@@ -1,6 +1,16 @@
 //! Stored-code getter-reference inventory. An inventory is not an absence proof.
 //! Every dynamic caller and literal-pointer lifetime still needs a bound consumer
 //! contract before a no-fixed-requirement observation can authorize a policy.
+//!
+//! Instruction boundaries (index loads before a call, argument suffixes, the
+//! JSR/JMP operand-word test) come from one linear forward decode per stored
+//! region, not a control-flow walk from proven routine entries. Inline data
+//! that decodes cleanly can keep that decode misaligned until a byte fails to
+//! decode; the analysis relies only on the resulting spurious refusals. A false
+//! boundary needs an operand tail matching a load pattern while the decode is
+//! misaligned, which compiler-generated vendor code does not produce: this is
+//! a limit against deliberately crafted firmware only, outside the analysis's
+//! threat model. The audited corpus shows no such boundary.
 use crate::image::layout::{self, Observation, Unresolved};
 use alloc::vec::Vec;
 
@@ -82,8 +92,8 @@ pub struct Call {
     pub offset: usize,
     /// Native instruction encoding.
     pub kind: CallKind,
-    /// Contiguous immediate index load, if present. This is not a CFG proof
-    /// that every incoming path executes that load.
+    /// Immediate index load decoded directly before the call, if present. This
+    /// is not a CFG proof that every incoming path executes that load.
     pub preceding_index_load: Option<u16>,
 }
 /// A literal getter address loaded into an extended register.
@@ -107,10 +117,109 @@ pub struct References {
     pub pointers: Vec<Pointer>,
 }
 
+/// Instruction boundaries of one stored region from a single forward decode
+/// that starts at the region's first aligned byte. After undecodable bytes the
+/// decode resumes only at the next aligned RTS; an RTS-shaped word inside a
+/// decoded instruction is an operand and never restarts it. A byte pattern
+/// ending at a call is an instruction only when this decode places the call
+/// directly after it. The sweep is extended lazily and runs at most once.
+pub(super) struct Anchors<'a> {
+    region: &'a [u8],
+    /// Decoded instruction starts, ascending.
+    starts: Vec<u32>,
+    /// Starts at which the decode resumed after undecodable bytes.
+    resumed: alloc::collections::BTreeSet<u32>,
+    cursor: usize,
+}
+impl<'a> Anchors<'a> {
+    /// `base` is the region's offset in decoded Normal, fixing its alignment.
+    pub(super) fn new(region: &'a [u8], base: usize) -> Self {
+        Self {
+            region,
+            starts: Vec::new(),
+            resumed: alloc::collections::BTreeSet::new(),
+            cursor: base & 1,
+        }
+    }
+    fn extend(&mut self, to: usize) {
+        while self.cursor <= to && self.cursor < self.region.len() {
+            let at = self.cursor;
+            // The shared decoder's length recognizer; operands are not needed.
+            match h8_asm::isa::insn_len(
+                &self.region[at..],
+                h8_asm::Target::H8S2000,
+                h8_asm::Mode::Advanced,
+            ) {
+                Some(len) if len > 0 => {
+                    self.starts.push(at as u32);
+                    self.cursor = at + len;
+                }
+                _ => {
+                    let resume = (at + 2..self.region.len().saturating_sub(1))
+                        .step_by(2)
+                        .find(|&j| self.region[j..j + 2] == [0x54, 0x70]);
+                    let Some(resume) = resume else {
+                        self.cursor = self.region.len();
+                        break;
+                    };
+                    self.resumed.insert(resume as u32);
+                    self.cursor = resume;
+                }
+            }
+        }
+    }
+    /// Whether `local` starts a decoded instruction.
+    pub(super) fn starts_at(&mut self, local: usize) -> bool {
+        self.extend(local);
+        u32::try_from(local).is_ok_and(|l| self.starts.binary_search(&l).is_ok())
+    }
+    /// Region offset of the decoded instruction ending exactly at `local`, or
+    /// None when `local` is not on the decoded boundary chain.
+    pub(super) fn previous(&mut self, local: usize) -> Option<usize> {
+        self.extend(local);
+        let local = u32::try_from(local).ok()?;
+        let k = self.starts.binary_search(&local).ok()?;
+        if self.resumed.contains(&local) {
+            return None;
+        }
+        self.starts.get(k.checked_sub(1)?).map(|&p| p as usize)
+    }
+    /// Whether `local` is the address word of a decoded absolute JSR/JMP.
+    pub(super) fn call_operand(&mut self, local: usize) -> bool {
+        local >= 2
+            && matches!(self.region[local - 2], 0x5a | 0x5e)
+            && self.starts_at(local - 2)
+            && !self.starts_at(local)
+    }
+}
+
+/// CPU target of an aligned BRA/BRN/Bcc (eight- or sixteen-bit displacement)
+/// starting at decoded Normal offset `at`, if `bytes` begins with one. Callers
+/// drop it only when [`Anchors::call_operand`] proves it is a JSR/JMP operand.
+pub(super) fn branch_target(bytes: &[u8], at: usize) -> Option<i64> {
+    match bytes {
+        [0x40..=0x4f, disp, ..] => Some(0x410000 + at as i64 + 2 + i64::from(*disp as i8)),
+        [0x58, condition, high, low, ..] if condition & 15 == 0 => {
+            Some(0x410000 + at as i64 + 4 + i64::from(i16::from_be_bytes([*high, *low])))
+        }
+        _ => None,
+    }
+}
+
 /// Enumerate instruction-shaped references to the exact proven Normal getter.
 /// Compressed payload bytes are excluded. This makes no claim about complete
 /// function reachability, pointer use, cached data or startup acceptance.
 pub fn references(normal: &[u8]) -> Observation<References> {
+    match references_in(normal) {
+        Observation::Known((references, _)) => Observation::Known(references),
+        Observation::Unresolved(reason) => Observation::Unresolved(reason),
+        Observation::Conflicting => Observation::Conflicting,
+    }
+}
+
+/// [`references`] with the regions it decoded, so callers need not inflate the
+/// COMP streams a second time.
+pub(super) fn references_in(normal: &[u8]) -> Observation<(References, crate::image::Regions<'_>)> {
     let (getter, argument_register) = match layout::normal_reader(normal) {
         Observation::Known((entry, register, _)) => (entry, register),
         Observation::Unresolved(reason) => return Observation::Unresolved(reason),
@@ -125,8 +234,9 @@ pub fn references(normal: &[u8]) -> Observation<References> {
         calls: Vec::new(),
         pointers: Vec::new(),
     };
-    for region in regions.stored {
+    for region in &regions.stored {
         let start = region.as_ptr() as usize - normal.as_ptr() as usize;
+        let mut anchors = Anchors::new(region, start);
         for local in (start & 1..region.len()).step_by(2) {
             let at = start + local;
             let bytes = &region[local..];
@@ -148,12 +258,14 @@ pub fn references(normal: &[u8]) -> Observation<References> {
             } else {
                 None
             };
-            if let Some((kind, target)) = call.filter(|(_, target)| *target == i64::from(getter)) {
-                debug_assert_eq!(target, i64::from(getter));
-                let preceding_index_load = local.checked_sub(4).and_then(|p| {
-                    (region[p..p + 2] == [0x79, argument_register])
-                        .then(|| u16::from_be_bytes([region[p + 2], region[p + 3]]))
-                });
+            if let Some((kind, _)) = call.filter(|(_, target)| *target == i64::from(getter)) {
+                let preceding_index_load = local
+                    .checked_sub(4)
+                    .filter(|&p| anchors.previous(local) == Some(p))
+                    .and_then(|p| {
+                        (region[p..p + 2] == [0x79, argument_register])
+                            .then(|| u16::from_be_bytes([region[p + 2], region[p + 3]]))
+                    });
                 result.calls.push(Call {
                     offset: at,
                     kind,
@@ -172,7 +284,7 @@ pub fn references(normal: &[u8]) -> Observation<References> {
             }
         }
     }
-    Observation::Known(result)
+    Observation::Known((result, regions))
 }
 
 #[cfg(test)]
@@ -220,6 +332,13 @@ mod tests {
         let Observation::Known(found) = references(&raw) else {
             panic!("fixture");
         };
+        assert_eq!(found.calls[0].preceding_index_load, None);
+        // MOV.L #H'7900009F,ER0 holds the load bytes as its operand.
+        raw[0x7e..0x82].copy_from_slice(&[0x7a, 0, 0x79, 0]);
+        let Observation::Known(found) = references(&raw) else {
+            panic!("fixture");
+        };
+        assert_eq!(found.calls[0].offset, 0x84);
         assert_eq!(found.calls[0].preceding_index_load, None);
         raw[0x1000] ^= 1;
         assert!(!matches!(references(&raw), Observation::Known(_)));

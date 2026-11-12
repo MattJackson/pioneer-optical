@@ -132,8 +132,8 @@ Classes are `match`, `accepted`, `correctable`, `incompatible`, `refused:<error>
   distinct Normal either analyzed or reported undecodable; family equal to the
   update path's family; no family crossing a platform; a family ID exactly when
   every hardware finding is established; unresolved findings carrying reasons;
-  no phase correction admitted inside a family without identical bound mechanism
-  bundles.
+  planning every same-family pair with differing as-is identities without a
+  panic.
 
   ```sh
   PIONEER_HOARD=/path/to/hoard cargo test --release --all-features \

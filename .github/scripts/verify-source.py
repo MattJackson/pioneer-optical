@@ -9,8 +9,15 @@ def command(*args):
     return subprocess.check_output(args, text=True).strip()
 
 
+# Shipped in the crate (Cargo.toml `include`) and defines the CI feature matrix,
+# so a change to it is a package change even though it lives under .github/.
+PACKAGED_CI_FILES = {'.github/scripts/check-features.py'}
+
+
 def same_package_source(base):
-    return all(p.startswith('.github/') for p in command('git', 'diff', '--name-only', '--no-renames', base, 'HEAD', '--').splitlines())
+    # --no-renames: a rename src/x -> .github/x must list the src/ path too.
+    changed = command('git', 'diff', '--name-only', '--no-renames', base, 'HEAD', '--').splitlines()
+    return all(p.startswith('.github/') and p not in PACKAGED_CI_FILES for p in changed)
 
 
 def main():
@@ -22,7 +29,12 @@ def main():
     for run in runs:
         if run.get('conclusion') != 'success' or run.get('head_branch') != args.branch or run.get('event') != 'push':
             continue
-        command('git', 'fetch', '--no-tags', 'origin', run['head_sha'])
+        try:
+            command('git', 'fetch', '--no-tags', 'origin', run['head_sha'])
+        except subprocess.CalledProcessError:
+            # A force-pushed run's commit may no longer be fetchable; it cannot
+            # match, so examine the older runs instead of aborting the scan.
+            continue
         if same_package_source(run['head_sha']):
             print(f'Package inputs match successful {args.branch} CI {run["id"]} at {run["head_sha"]}')
             return

@@ -101,35 +101,54 @@ impl Certificate {
 /// Additional profiles require a supplied Kernel; a missing one is not erased
 /// evidence. This API grants only the local predicate preservation contract.
 pub fn discover_pair(normal: &[u8], kernel: Option<&[u8]>) -> Option<Certificate> {
+    diagnose_pair(normal, kernel).ok()
+}
+
+/// [`discover_pair`], retaining the refusal of the profile actually tried:
+/// the Normal-only sink failure, the paired instruction-owned sink failure, or
+/// `KernelAliases` when a bound certificate refuses the supplied Kernel.
+pub(crate) fn diagnose_pair(
+    normal: &[u8],
+    kernel: Option<&[u8]>,
+) -> Result<Certificate, sinks::Failure> {
+    let aliases = sinks::Failure::Unsupported {
+        stage: sinks::Stage::KernelAliases,
+    };
     let kernel_id = kernel.map(|bytes| Sha256::digest(bytes).into());
-    if let Some(certificate) = sinks::discover(normal) {
-        if kernel.map_or(true, |kernel| certificate.accepts_kernel(kernel)) {
-            return Some(Certificate {
-                evidence: Evidence::Normal(certificate),
-                kernel: kernel_id,
-            });
+    let failure = match sinks::diagnose(normal) {
+        Ok(certificate) => {
+            if kernel.map_or(true, |kernel| certificate.accepts_kernel(kernel)) {
+                return Ok(Certificate {
+                    evidence: Evidence::Normal(certificate),
+                    kernel: kernel_id,
+                });
+            }
+            return Err(aliases);
         }
-        return None;
-    }
-    let kernel = kernel?;
-    if let Ok(boundary) = sink_boundaries::bind(normal, kernel) {
-        let certificate = sinks::diagnose_with_boundary(normal, &boundary).ok()?;
+        Err(failure) => failure,
+    };
+    let Some(kernel) = kernel else {
+        return Err(failure);
+    };
+    // The Normal-only refusal just computed seeds the declaration search.
+    if let Ok(boundary) = sink_boundaries::bind_seeded(normal, kernel, || Some(failure.clone())) {
+        let certificate = sinks::diagnose_with_boundary(normal, &boundary)?;
         if certificate.accepts_kernel(kernel) && boundary.accepts_kernel(kernel) {
-            return Some(Certificate {
+            return Ok(Certificate {
                 evidence: Evidence::InstructionOwned(certificate, boundary),
                 kernel: kernel_id,
             });
         }
-        return None;
+        return Err(aliases);
     }
     if let Some((certificate, resident)) = fixed_bank_resident::discover(normal, kernel) {
-        return Some(Certificate {
+        return Ok(Certificate {
             evidence: Evidence::FixedBank(certificate, resident),
             kernel: kernel_id,
         });
     }
-    let legacy = legacy_sinks::discover(normal, kernel)?;
-    Some(Certificate {
+    let legacy = legacy_sinks::discover(normal, kernel).ok_or(failure)?;
+    Ok(Certificate {
         evidence: Evidence::Legacy(Box::new(legacy)),
         kernel: kernel_id,
     })

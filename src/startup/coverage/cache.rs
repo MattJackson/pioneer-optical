@@ -50,19 +50,36 @@ pub struct Block {
     /// Complete bound accessor leaves; empty does not mean no consumers exist.
     pub accessors: Vec<Accessor>,
 }
+/// Cache bytes holding parameter word 0x009F: the final two of the 128 bytes
+/// copied from words 0x0060..=0x009F.
+pub(super) const WORD_009F_BYTES: core::ops::RangeInclusive<u8> = 126..=127;
 const R0: &[u8] = &[0x0c, 0x89, 0x1a, 0x80, 0x0c, 0x98, 0x78, 0, 0x6a, 0x28];
 const R1: &[u8] = &[0x1a, 0x80, 0x0c, 0x98, 0x78, 0, 0x6a, 0x28];
+impl Accessor {
+    /// Offset of the low 24 bits of the leaf's RAM base operand.
+    pub(super) fn ram_literal(&self) -> usize {
+        let head = if self.argument_register == 0 { R0 } else { R1 };
+        self.offset + head.len() + 1
+    }
+}
 /// Recognize full fixed-count bulk loops and their byte accessors in stored
 /// Normal. All branch/count operands and both RAM destinations must match.
 /// This establishes data placement only, not startup-value acceptance.
 /// More than one bound loop is reported as conflicting.
 pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
-    let refs = match super::references(normal) {
+    match discover_in(normal) {
+        Observation::Known((blocks, _)) => Observation::Known(blocks),
+        Observation::Unresolved(r) => Observation::Unresolved(r),
+        Observation::Conflicting => Observation::Conflicting,
+    }
+}
+/// [`discover`] with the regions it decoded, for consumers that scan them.
+pub(super) fn discover_in(normal: &[u8]) -> Observation<(Vec<Block>, crate::image::Regions<'_>)> {
+    let (refs, regions) = match super::references_in(normal) {
         Observation::Known(r) => r,
         Observation::Unresolved(r) => return Observation::Unresolved(r),
         Observation::Conflicting => return Observation::Conflicting,
     };
-    let regions = crate::image::regions(normal).expect("stored references");
     let mut bound = Vec::new();
     for call in refs.calls.iter().filter(|c| c.kind == CallKind::Absolute) {
         for shape in super::cache_shapes::SHAPES
@@ -103,7 +120,7 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
                 .unwrap_or_default(),
         })
         .collect();
-    Observation::Known(blocks)
+    Observation::Known((blocks, regions))
 }
 /// One pass over stored Normal collecting every accessor leaf keyed by the RAM
 /// base it reads, in physical order.

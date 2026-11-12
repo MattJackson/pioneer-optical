@@ -244,6 +244,27 @@ mod tests {
                 h8_asm::isa::decode_insn(&changed, Target::H8S2000, Mode::Advanced).unwrap();
             assert_eq!(after.insn.mnemonic, instruction.mnemonic);
             assert_eq!(after.insn.operands[1..], instruction.operands[1..]);
+            // The retargeted operand itself must decode to the new address.
+            let mut expected = instruction;
+            expected.operands[0] = match instruction.operands[0] {
+                Operand::Address(Ea::Absolute { bits, .. }) => {
+                    Operand::Address(Ea::Absolute { value, bits })
+                }
+                Operand::Immediate { bits, .. } => Operand::Immediate { value, bits },
+                Operand::Address(Ea::Displacement { base, bits, .. }) => {
+                    Operand::Address(Ea::Displacement {
+                        base,
+                        value: value as i32,
+                        bits,
+                    })
+                }
+                other => panic!("unexpected retarget operand {other:?}"),
+            };
+            assert_eq!(after.insn.operands, expected.operands);
+            assert_eq!(
+                changed,
+                encode_insn(expected, Target::H8S2000, Mode::Advanced).unwrap()
+            );
             assert_eq!(retarget_field(&mut changed, field, width, value), Some(()));
             for bad in [0, field + 1, original.len()] {
                 let mut invalid = original.clone();

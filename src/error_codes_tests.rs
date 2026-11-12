@@ -53,7 +53,7 @@ fn envelope_and_receiver_codes_preserve_nested_errors_and_parameters() {
     };
     assert_eq!(error.code(), "pioneer.update.decode");
     let error = receiver::PreparationError::Target(error);
-    assert_eq!(error.code(), "pioneer.preparation.target");
+    assert_eq!(error.code(), "pioneer.prepare.target");
     if let receiver::PreparationError::Target(envelope::UpdateError::Decode { source, .. }) = error
     {
         assert_eq!(source.code(), "pioneer.decode.payload_length_mismatch");
@@ -274,12 +274,12 @@ fn protocol_incomplete_code() {
 #[cfg(all(feature = "envelope", feature = "drive"))]
 #[test]
 fn plan_error_code_and_display() {
-    use crate::receiver::transport::PlanError;
+    use crate::receiver::transport::LayoutError;
     assert_eq!(
-        PlanError::KernelLayout.code(),
+        LayoutError::KernelLayout.code(),
         "pioneer.transport.kernel_layout"
     );
-    assert!(!PlanError::KernelLayout.to_string().is_empty());
+    assert!(!LayoutError::KernelLayout.to_string().is_empty());
 }
 
 #[cfg(feature = "envelope")]
@@ -446,64 +446,58 @@ fn receiver_and_preparation_error_catalogues_have_stable_codes() {
         assert_eq!(error.code(), code);
     }
     let preparation = [
-        (
-            P::UnresolvedStartup,
-            "pioneer.preparation.unresolved_startup",
-        ),
-        (P::AmbiguousStartup, "pioneer.preparation.ambiguous_startup"),
+        (P::UnresolvedStartup, "pioneer.prepare.unresolved_startup"),
+        (P::AmbiguousStartup, "pioneer.prepare.ambiguous_startup"),
         (
             P::UnknownStartupAccess,
-            "pioneer.preparation.unknown_startup_access",
+            "pioneer.prepare.unknown_startup_access",
         ),
         (
             P::Target(crate::envelope::UpdateError::Authentication),
-            "pioneer.preparation.target",
+            "pioneer.prepare.target",
         ),
         (
             P::KernelHandoff(crate::image::KernelHandoffError::UnknownTarget),
-            "pioneer.preparation.kernel_handoff",
+            "pioneer.prepare.kernel_handoff",
         ),
         (
             P::MissingInstalledKernel,
-            "pioneer.preparation.missing_installed_kernel",
+            "pioneer.prepare.missing_installed_kernel",
         ),
         (
             P::InstalledKernelRepresentation,
-            "pioneer.preparation.installed_kernel_representation",
+            "pioneer.prepare.installed_kernel_representation",
         ),
         (
             P::Compatibility(R::Unsupported),
-            "pioneer.preparation.compatibility",
+            "pioneer.prepare.compatibility",
         ),
         (
             P::UnknownInstalledKernel,
-            "pioneer.preparation.unknown_installed_kernel",
+            "pioneer.prepare.unknown_installed_kernel",
         ),
-        (P::RejectedMarker, "pioneer.preparation.rejected_marker"),
+        (P::RejectedMarker, "pioneer.prepare.rejected_marker"),
         (
             P::UnsupportedFinalStage,
-            "pioneer.preparation.unsupported_restoration",
+            "pioneer.prepare.unsupported_restoration",
         ),
         (
             P::FinalStageEntry(R::Unsupported),
-            "pioneer.preparation.restoration_entry",
+            "pioneer.prepare.restoration_entry",
         ),
         (
             P::PatchedRepresentation,
-            "pioneer.preparation.patched_representation",
+            "pioneer.prepare.patched_representation",
         ),
-        (
-            P::UnsupportedDialect,
-            "pioneer.preparation.unsupported_dialect",
-        ),
+        (P::UnsupportedDialect, "pioneer.prepare.unsupported_dialect"),
         (
             P::UnsupportedTransport,
-            "pioneer.preparation.unsupported_transport",
+            "pioneer.prepare.unsupported_transport",
         ),
         // Wrapped causes that surface their own stable code.
         (
             P::Startup(crate::startup::checks::Error::AmbiguousWord),
-            "pioneer.preparation.ambiguous_startup",
+            "pioneer.prepare.ambiguous_startup",
         ),
         (
             P::PhaseCorrection(crate::compatibility::Error::PersistentLayoutOverlap {

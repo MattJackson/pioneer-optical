@@ -949,8 +949,10 @@ fn tar_members(bytes: &[u8]) -> Result<BTreeMap<String, &[u8]>, String> {
         } else {
             format!("{prefix}/{}", text(&h[..100]))
         };
-        let data = bytes
-            .get(at + 512..at + 512 + size)
+        let data = at
+            .checked_add(512)
+            .and_then(|start| Some(start..start.checked_add(size)?))
+            .and_then(|range| bytes.get(range))
             .ok_or("truncated tar")?;
         if h[156] == b'0' || h[156] == 0 {
             out.insert(name, data);
@@ -981,6 +983,13 @@ pub fn hoard_packages(root: &Path) -> Result<(Vec<Package>, Vec<u8>), String> {
         };
         let (normal, normal_member) = component("normal")
             .ok_or_else(|| format!("{}: no Normal component", text(p, "path")))?;
+        // The digest is the image identity packages are deduplicated by.
+        if normal.is_empty() {
+            return Err(format!(
+                "{}: Normal component has no sha256",
+                text(p, "path")
+            ));
+        }
         let kernel = component("kernel");
         out.push(Package {
             model: text(p, "embedded_model"),

@@ -66,10 +66,10 @@ impl std::error::Error for KernelPlanningError {
 impl crate::CodedError for KernelPlanningError {
     fn code(&self) -> &'static str {
         match self {
-            Self::UnknownInstalledPolicy => "pioneer.preparation.unknown_installed_kernel",
+            Self::UnknownInstalledPolicy => "pioneer.prepare.unknown_installed_kernel",
             Self::Handoff(error) => error.code(),
-            Self::RejectedBridgeMarker => "pioneer.preparation.rejected_marker",
-            Self::UnsupportedRestoration => "pioneer.preparation.unsupported_restoration",
+            Self::RejectedBridgeMarker => "pioneer.prepare.rejected_marker",
+            Self::UnsupportedRestoration => "pioneer.prepare.unsupported_restoration",
         }
     }
 }

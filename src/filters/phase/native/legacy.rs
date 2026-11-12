@@ -92,7 +92,10 @@ fn binding(t: &Template, normal: &[u8], at: usize) -> Option<Binding> {
             interface: t.interface,
         },
         changes,
-        operand_only: t.patches.iter().all(|patch| matches!(patch, Patch::Byte(_))),
+        operand_only: t
+            .patches
+            .iter()
+            .all(|patch| matches!(patch, Patch::Byte(_))),
     })
 }
 fn stored(normal: &[u8], regions: &[&[u8]], at: usize, len: usize) -> bool {
@@ -135,6 +138,12 @@ pub(super) fn observe(t: &Template, normal: &[u8], at: usize, regions: &[&[u8]])
         interface: t.interface,
     })
 }
+/// Linear membership check; its comparisons are what the ambiguity stop bounds.
+fn present(found: &[Binding], value: &Binding) -> bool {
+    #[cfg(test)]
+    tests::COMPARISONS.with(|c| c.set(c.get() + found.len()));
+    found.contains(value)
+}
 fn bindings(normal: &[u8]) -> Option<Vec<Binding>> {
     let regions = crate::image::regions(normal)?;
     let mut result = Vec::new();
@@ -148,8 +157,13 @@ fn bindings(normal: &[u8]) -> Option<Vec<Binding>> {
                     continue;
                 }
                 if let Some(b) = binding(t, normal, at) {
-                    if !result.contains(&b) {
+                    if !present(&result, &b) {
                         result.push(b);
+                        // Two distinct bindings already refuse correction and
+                        // its verification; crafted repetitions stay linear.
+                        if result.len() > 1 {
+                            return Some(result);
+                        }
                     }
                 }
             }

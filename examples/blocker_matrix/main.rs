@@ -32,8 +32,6 @@ struct Held {
     component: String,
     model: String,
     hardware: String,
-    normal: Vec<u8>,
-    kernel: Option<Vec<u8>>,
     normal_envelope: pioneer_optical::envelope::Envelope,
     kernel_envelope: Option<pioneer_optical::envelope::Envelope>,
 }
@@ -41,8 +39,8 @@ impl Held {
     fn firmware(&self) -> Firmware<'_> {
         Firmware {
             hardware: &self.hardware,
-            normal: &self.normal,
-            kernel: self.kernel.as_deref(),
+            normal: &self.normal_envelope.image,
+            kernel: self.kernel_envelope.as_ref().map(|k| k.image.as_slice()),
         }
     }
 }
@@ -84,7 +82,7 @@ fn reason(installed: &Assessment, target: &Assessment) -> String {
 /// revision's Kernel would be a guess; the pair is not correctable for this
 /// release because that Kernel is missing.
 fn missing_kernel(assessment: &Assessment, image: &Held) -> bool {
-    image.kernel.is_none()
+    image.kernel_envelope.is_none()
         && matches!(&assessment.finding, Finding::Unresolved(reason)
             if reason.contains("resident")
                 || reason.contains("ResidentCodeRequired")
@@ -117,8 +115,6 @@ fn main() {
             component: analysis.component.clone(),
             model: package.model.clone(),
             hardware: analysis.hardware.clone(),
-            normal: decoded.normal.image.clone(),
-            kernel: decoded.kernel.as_ref().map(|k| k.image.clone()),
             normal_envelope: decoded.normal.clone(),
             kernel_envelope: decoded.kernel.clone(),
         });
@@ -307,13 +303,15 @@ fn main() {
                                 // the plan needs a paired Kernel that is not held.
                                 || (known(x)
                                     && known(y)
-                                    && (held[a].kernel.is_none() || held[b].kernel.is_none())))
+                                    && (held[a].kernel_envelope.is_none()
+                                        || held[b].kernel_envelope.is_none())))
                         {
                             "missing-input".to_owned()
                         } else {
                             c
                         };
-                        reasons.push((!passes(&c)).then(|| reason(x, y)));
+                        // Only unresolved owners have their reasons tallied.
+                        reasons.push((c == "unresolved").then(|| reason(x, y)));
                         classes.push(c);
                     }
                     local.push(Row {
@@ -358,16 +356,22 @@ fn main() {
                             built.fetch_add(1, Ordering::Relaxed);
                         }
                     }
-                    Err(error) => disagreements.lock().unwrap().push(json!({
-                        "installed": held[r.a].component,
-                        "target": target.component,
-                        "product_error": error,
-                    })),
+                    Err(error) => disagreements.lock().unwrap().push((
+                        i,
+                        json!({
+                            "installed": held[r.a].component,
+                            "target": target.component,
+                            "product_error": error,
+                        }),
+                    )),
                 }
             });
         }
     });
-    let disagreements = disagreements.into_inner().unwrap();
+    // Report in pair order, independent of worker completion order.
+    let mut disagreements = disagreements.into_inner().unwrap();
+    disagreements.sort_by_key(|(i, _)| *i);
+    let disagreements: Vec<Json> = disagreements.into_iter().map(|(_, d)| d).collect();
 
     let mut tsv =
         std::io::BufWriter::new(std::fs::File::create(out.join("pairs.tsv")).expect("pairs.tsv"));
@@ -484,7 +488,9 @@ fn main() {
         }
         for (k, id) in ids.iter().enumerate() {
             *route.classes[k].entry(r.classes[k].clone()).or_default() += 1;
-            if r.classes[k] != "match" && route.example[k].is_none() {
+            // The example is shown for a blocking filter, so take it from a
+            // refusing revision pair, never from one that passed.
+            if !passes(&r.classes[k]) && route.example[k].is_none() {
                 route.example[k] = Some((
                     page::label(id, &inspected[r.a].1[k].finding),
                     page::label(id, &inspected[r.b].1[k].finding),

@@ -72,8 +72,10 @@ that missing initialization field.
 
 Operational startup findings include 85 M32C comparisons for parameter
 `0x00D9 == 0xFFFF`. H8 startup is a guarded correctable filter: a bound comparison
-can be rewritten in Normal to preserve the installed accepted value, with a
-read-only live prerequisite. Missing comparisons never select neutral FFFF.
+stays unchanged. An equal installed value is a read-only live prerequisite; a
+differing value against a fixed target gate sets the target's word on the drive
+before the first transfer, and against a conditional gate refuses. Missing
+comparisons never select neutral FFFF.
 ATA/SCSI do not inherit an H8 write command. Native absence remains unproved
 when coverage is incomplete.
 

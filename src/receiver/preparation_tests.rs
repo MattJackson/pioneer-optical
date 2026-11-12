@@ -560,7 +560,7 @@ fn ungated_receiver_preserves_every_marker_without_a_second_pass() {
 #[test]
 fn refuses_missing_installed_evidence_and_unproven_restoration() {
     let installed = update_with_bound_startup(true, 1, 0x12, true);
-    let entry_only = Receiver::detect(installed.normal()).unwrap();
+    let entry_only = Receiver::from_firmware(installed.normal()).unwrap();
     assert_eq!(
         entry_only.prepare(installed.clone()).unwrap_err(),
         PreparationError::UnknownInstalledKernel
@@ -605,7 +605,7 @@ fn captured_receiver_evidence_does_not_require_a_distribution_signature() {
     let mut bytes = installed.normal_transfer().to_vec();
     bytes[crate::envelope::builder::NORMAL_SIGNATURE_RANGE].fill(0);
     let captured = Envelope::load_with_kernel(&bytes, installed.kernel()).unwrap();
-    let receiver = Receiver::detect_with_kernel(&captured, installed.kernel()).unwrap();
+    let receiver = Receiver::from_firmware_with_kernel(&captured, installed.kernel()).unwrap();
     assert_eq!(receiver.family(), installed.family());
     assert_eq!(
         receiver.installed_kernel().unwrap().image,
@@ -614,7 +614,7 @@ fn captured_receiver_evidence_does_not_require_a_distribution_signature() {
     assert!(receiver.prepare(update(false, 0, 0x12, true)).is_ok());
     assert!(Update::load(installed.kernel_transfer(), &bytes).is_err());
     assert_eq!(
-        Receiver::detect_with_kernel(&captured, &captured).unwrap_err(),
+        Receiver::from_firmware_with_kernel(&captured, &captured).unwrap_err(),
         Error::KernelComponent {
             actual: crate::ComponentKind::Normal
         }
@@ -626,7 +626,7 @@ fn captured_receiver_evidence_does_not_require_a_distribution_signature() {
     let other_kernel_tag =
         Envelope::load_with_kernel(&other_kernel_tag, installed.kernel()).unwrap();
     assert_eq!(
-        Receiver::detect_with_kernel(&other_kernel_tag, installed.kernel()).unwrap_err(),
+        Receiver::from_firmware_with_kernel(&other_kernel_tag, installed.kernel()).unwrap_err(),
         Error::InstalledPairMismatch
     );
     let mut blank_normal = bytes.clone();
@@ -640,7 +640,7 @@ fn captured_receiver_evidence_does_not_require_a_distribution_signature() {
     assert_eq!(blank_normal.info().kernel_version, "");
     assert_eq!(blank_kernel.info().kernel_version, "");
     assert_eq!(
-        Receiver::detect_with_kernel(&blank_normal, &blank_kernel).unwrap_err(),
+        Receiver::from_firmware_with_kernel(&blank_normal, &blank_kernel).unwrap_err(),
         Error::InstalledPairMismatch
     );
     let mut mismatched = bytes;
@@ -651,7 +651,7 @@ fn captured_receiver_evidence_does_not_require_a_distribution_signature() {
     mismatched[hardware + 7] = b'1';
     let mismatched = Envelope::load_with_kernel(&mismatched, installed.kernel()).unwrap();
     assert_eq!(
-        Receiver::detect_with_kernel(&mismatched, installed.kernel()).unwrap_err(),
+        Receiver::from_firmware_with_kernel(&mismatched, installed.kernel()).unwrap_err(),
         Error::InstalledPairMismatch
     );
 }
@@ -677,7 +677,7 @@ fn explicit_family_override_does_not_waive_native_owner_receiver_or_restore_chec
             .unwrap_err(),
         PreparationError::UnsupportedFinalStage
     );
-    let entry_only = Receiver::detect(installed.normal()).unwrap();
+    let entry_only = Receiver::from_firmware(installed.normal()).unwrap();
     assert_eq!(
         entry_only
             .prepare_without_family_check(update_with_bound_startup(false, 0, 0x12, true))
@@ -700,7 +700,7 @@ fn normal_only_uses_installed_kernel_without_selecting_a_kernel_write() {
     unknown_marker_handler.image[0x300] ^= 1;
     fix_sum(&mut unknown_marker_handler.image);
     let receiver =
-        Receiver::detect_with_kernel(installed.normal(), &unknown_marker_handler).unwrap();
+        Receiver::from_firmware_with_kernel(installed.normal(), &unknown_marker_handler).unwrap();
     assert!(receiver.prepare_normal(target.normal_transfer()).is_ok());
     assert_eq!(
         receiver.prepare(target).unwrap_err(),
@@ -737,7 +737,7 @@ fn normal_only_force_preserves_native_owner_authentication_and_missing_evidence_
             .unwrap_err(),
         PreparationError::Target(UpdateError::Authentication)
     );
-    let entry_only = Receiver::detect(installed.normal()).unwrap();
+    let entry_only = Receiver::from_firmware(installed.normal()).unwrap();
     assert_eq!(
         entry_only
             .prepare_normal_without_family_check(other.normal_transfer())
@@ -771,7 +771,7 @@ fn normal_only_retains_typed_target_errors_and_rejects_kernel_tag_mismatch() {
 
 #[test]
 #[ignore = "set PIONEER_SETTINGS_HOARD to the settings hoard root"]
-fn held_ud04_211m_recovery_does_not_invent_a_settings_requirement() {
+fn held_ud04_211m_family_override_refuses_differing_input_initialization() {
     let root = std::env::var("PIONEER_SETTINGS_HOARD").expect("PIONEER_SETTINGS_HOARD");
     let root = std::path::Path::new(&root);
     let read = |path: &str| std::fs::read(root.join(path)).unwrap();
@@ -791,13 +791,15 @@ fn held_ud04_211m_recovery_does_not_invent_a_settings_requirement() {
                 Error::FamilyMismatch { .. }
             ))
         ));
-        let prepared = receiver
-            .prepare_without_family_check(target.clone())
-            .unwrap();
-        assert!(prepared.settings().correction_id().is_none());
-        let final_stage = prepared.stages().last().unwrap();
-        assert_eq!(final_stage.normal_image(), target.normal().image);
-        assert_eq!(final_stage.normal_transfer(), target.normal_transfer());
+        // The override waives only the family gate: the hardware
+        // startup-inputs-initialization filter differs and has no correction,
+        // so no route (and no settings requirement) is prepared.
+        assert!(matches!(
+            receiver.prepare_without_family_check(target.clone()),
+            Err(PreparationError::PhaseCorrection(
+                crate::compatibility::Error::Incompatible
+            ))
+        ));
     }
 }
 
@@ -931,7 +933,7 @@ fn handoff_bridge_signs_unsigned_capture_without_accepting_invalid_signatures() 
             bytes[0x170] = 1;
         }
         let normal = Envelope::load_with_kernel(&bytes, source.kernel()).unwrap();
-        let receiver = Receiver::detect_with_kernel(&normal, source.kernel()).unwrap();
+        let receiver = Receiver::from_firmware_with_kernel(&normal, source.kernel()).unwrap();
         let result = receiver.prepare(target.clone());
         if invalid {
             assert!(matches!(

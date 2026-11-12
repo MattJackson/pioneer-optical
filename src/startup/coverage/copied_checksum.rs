@@ -52,15 +52,17 @@ const ADAPTER: &[u8] = &[
     0xa1, 1, 0, 0x6d, 0x72, 0x5e, 0, 0, 0, 0x0f, 0x90, 0x54, 0x70,
 ];
 const MEMCPY: u32 = 0x1058dc;
+/// Offsets of the copy and clear helper-pointer `MOV.L` immediates in every
+/// `boot_shapes::C_STARTUP` shape (holes in both shapes).
+const COPY_HELPER_OPERAND: usize = 34;
+const CLEAR_HELPER_OPERAND: usize = 56;
 const CLEAR: &[u8] = &[
     0x6d, 0xf4, 0x0d, 0x24, 0x0f, 0x92, 0x1a, 0x82, 0x0d, 0x41, 0x5e, 0, 0, 0, 0x6d, 0x74, 0x54,
     0x70,
 ];
-const FILL: &[u8] = &[
-    0x6d, 0xf3, 0x0f, 0xa2, 0x47, 0x28, 0x0a, 0xa0, 0x73, 0x08, 0x47, 0x06, 0x6c, 0x89, 0x1b, 0x72,
-    0x47, 0x1c, 0x0c, 0x91, 0x0d, 0x19, 0x0d, 0x23, 0x11, 0x72, 0x47, 0x08, 1, 0, 0x6d, 0x81, 0x1b,
-    0x72, 0x46, 0xf8, 0xeb, 3, 0x47, 6, 0x6c, 0x89, 0x1a, 0x0b, 0x46, 0xfa, 0x6d, 0x73, 0x54, 0x70,
-];
+/// The native fill leaf the clear wrapper calls: the same routine cache
+/// writers bind, so one recognition contract covers both.
+const FILL: &[u8] = super::cache_writers::MEMSET;
 
 #[cfg(all(test, feature = "envelope"))]
 pub(super) fn install_fixture(normal: &mut [u8]) -> usize {
@@ -108,14 +110,11 @@ pub(crate) struct Relocation {
     pub initializer: Range<usize>,
     /// Fixed platform memcpy entry explicitly retained as an external contract.
     pub memcpy_service: u32,
+    /// Every RAM range the bound C initializer copies or clears: the
+    /// firmware's own initialized and zeroed data.
+    pub sections: Vec<Range<u32>>,
 }
 
-/// Resolve the single validated C-startup copy that relocates `[entry, entry +
-/// extent)` into low RAM, through the positively bound C initializer and the
-/// complete native copy helper chain. Multiple writes to the selected RAM range
-/// refuse (`Conflicting`); an unrecognized initializer or helper refuses
-/// (`Unresolved`). The returned source bytes are a verbatim copy of what runs
-/// at the RAM destination, so a caller may analyze the relocated routine there.
 /// The positively bound C initializer and its two helper entries.
 struct Initializer {
     boot: Range<usize>,
@@ -133,15 +132,20 @@ fn stored(normal: &[u8], regions: &crate::image::Regions<'_>, span: &Range<usize
 }
 
 fn initializer(normal: &[u8], regions: &crate::image::Regions<'_>) -> Option<Initializer> {
-    let Observation::Known(boot) = super::boot::c_startup(normal) else {
+    let Observation::Known(boot) = super::boot::c_startup_in(normal, regions) else {
         return None;
     };
     // Both complete C-startup shapes load the two saved helper registers at
     // these decoded MOV.L instructions. Their register numbers may swap.
-    let copy_helper =
-        u32::from_be_bytes(normal[boot.start + 34..boot.start + 38].try_into().unwrap());
-    let clear_helper =
-        u32::from_be_bytes(normal[boot.start + 56..boot.start + 60].try_into().unwrap());
+    let operand = |at: usize| {
+        u32::from_be_bytes(
+            normal[boot.start + at..boot.start + at + 4]
+                .try_into()
+                .unwrap(),
+        )
+    };
+    let copy_helper = operand(COPY_HELPER_OPERAND);
+    let clear_helper = operand(CLEAR_HELPER_OPERAND);
     let clear_start = clear_helper.checked_sub(BASE)? as usize;
     let clear = clear_start..clear_start + CLEAR.len();
     if !stored(normal, regions, &clear) || !matches(&normal[clear.clone()], CLEAR, 11..14) {
@@ -215,30 +219,12 @@ fn step(d: &h8_asm::isa::Decoded, registers: &mut [Option<u32>; 8]) -> Result<Op
     Ok(None)
 }
 
-/// Every RAM range the bound C initializer copies or clears: the firmware's
-/// own initialized and zeroed data. `None` unless every helper call is bound.
-pub(crate) fn data_sections(normal: &[u8]) -> Option<Vec<Range<u32>>> {
-    let regions = crate::image::regions(normal)?;
-    let init = initializer(normal, &regions)?;
-    let mut registers = [None; 8];
-    let mut sections = Vec::new();
-    let mut at = init.boot.start;
-    while at < init.boot.end {
-        let d = decode_insn(&normal[at..init.boot.end], Target::H8S2000, Mode::Advanced).ok()?;
-        if let Some(call) = step(&d, &mut registers).ok()? {
-            if call.helper == init.copy_helper {
-                sections.push(call.value..call.value.checked_add(call.end - call.begin)?);
-            } else if call.helper == init.clear_helper && call.value == 0 {
-                sections.push(call.begin..call.end);
-            } else {
-                return None;
-            }
-        }
-        at += d.len;
-    }
-    Some(sections)
-}
-
+/// Resolve the single validated C-startup copy that relocates `[entry, entry +
+/// extent)` into low RAM, through the positively bound C initializer and the
+/// complete native copy helper chain. Any other write to the copied RAM block
+/// refuses (`Conflicting`); an unrecognized initializer or helper refuses
+/// (`Unresolved`). The returned source bytes are a verbatim copy of what runs
+/// at the RAM destination, so a caller may analyze the whole relocated block.
 pub(crate) fn relocated(normal: &[u8], entry: u32, extent: u32) -> Observation<Relocation> {
     let unknown = || Observation::Unresolved(Unresolved::ReaderNotRecognized);
     let Some(regions) = crate::image::regions(normal) else {
@@ -260,12 +246,26 @@ pub(crate) fn relocated(normal: &[u8], entry: u32, extent: u32) -> Observation<R
     };
     let overlaps = |begin: u32, end: u32| begin < last && entry < end;
     let mut registers = [None; 8];
+    // Offset of the instruction that set each register's tracked value.
+    let mut loaded = [0usize; 8];
     let mut copies = Vec::new();
+    // Every RAM range the initializer writes, by call position.
+    let mut writes = Vec::new();
     let mut at = boot.start;
     while at < boot.end {
         let Ok(d) = decode_insn(&normal[at..boot.end], Target::H8S2000, Mode::Advanced) else {
             return unknown();
         };
+        // Mirrors the two ways `step` sets a tracked argument register.
+        match (d.insn.mnemonic, d.insn.operands[0], d.insn.operands[1]) {
+            ("MOV", Operand::Immediate { bits: 32, .. }, Operand::Register(Reg::Long(reg))) => {
+                loaded[reg as usize] = at
+            }
+            ("SUB", Operand::Register(Reg::Word(2)), Operand::Register(Reg::Word(2))) => {
+                loaded[2] = at
+            }
+            _ => {}
+        }
         let Ok(call) = step(&d, &mut registers) else {
             return unknown();
         };
@@ -280,18 +280,23 @@ pub(crate) fn relocated(normal: &[u8], entry: u32, extent: u32) -> Observation<R
                 let Some(write_end) = value.checked_add(end - begin) else {
                     return unknown();
                 };
+                writes.push((at, value..write_end));
                 if overlaps(value, write_end) {
                     // Partial writes and repeated copies cannot establish one
                     // unambiguous whole routine at the called RAM entry.
                     if value > entry || write_end < last {
                         return Observation::Conflicting;
                     }
-                    copies.push((begin, end, value, helper, at - 18..at + d.len));
+                    // From the first of the three argument loads; the first
+                    // copy also loads its saved helper pointer in between.
+                    let first = loaded[..3].iter().copied().min().unwrap_or(at);
+                    copies.push((at, begin, end, value, helper, first..at + d.len));
                 }
             } else if helper == clear_helper {
                 if value != 0 || overlaps(begin, end) {
                     return Observation::Conflicting;
                 }
+                writes.push((at, begin..end));
             } else {
                 return unknown();
             }
@@ -305,7 +310,15 @@ pub(crate) fn relocated(normal: &[u8], entry: u32, extent: u32) -> Observation<R
             unknown()
         };
     }
-    let (begin, end, destination, helper, copy) = copies.remove(0);
+    let (call_at, begin, end, destination, helper, copy) = copies.remove(0);
+    // The caller analyzes the whole copied block, not only the requested
+    // entry, so any other write into any part of it refuses.
+    let block = destination..destination + (end - begin);
+    if writes.iter().any(|(call, w)| {
+        *call != call_at && !w.is_empty() && w.start < block.end && block.start < w.end
+    }) {
+        return Observation::Conflicting;
+    }
     let Some(source_start) = begin.checked_sub(BASE).map(|v| v as usize) else {
         return unknown();
     };
@@ -342,6 +355,7 @@ pub(crate) fn relocated(normal: &[u8], entry: u32, extent: u32) -> Observation<R
         clear_helpers: [clear, fill],
         initializer: boot.start..boot.end,
         memcpy_service,
+        sections: writes.into_iter().map(|(_, range)| range).collect(),
     })
 }
 
@@ -371,4 +385,85 @@ pub fn discover(normal: &[u8], entry: u32) -> Observation<Checksum> {
         initializer: relocation.initializer,
         memcpy_service: relocation.memcpy_service,
     })
+}
+
+#[cfg(all(test, feature = "envelope"))]
+mod tests {
+    use super::*;
+
+    fn word(normal: &mut [u8], at: usize, value: u32) {
+        normal[at..at + 4].copy_from_slice(&value.to_be_bytes());
+    }
+
+    /// Bound C startup (shape 0) at 0x2800 whose third call copies the
+    /// checksum body to RAM 0x600; `writes` overrides further operands.
+    fn startup(writes: &[(usize, u32)]) -> Vec<u8> {
+        let mut normal = alloc::vec![0u8; 0x3000];
+        let body_len = install_fixture(&mut normal);
+        let shape = &super::super::boot_shapes::C_STARTUP[0];
+        normal[0x2800..0x2800 + shape.bytes.len()].copy_from_slice(shape.bytes);
+        for &(at, len) in shape.holes {
+            let value: u32 = if len == 3 { 0x412f00 } else { 0x800 };
+            normal[0x2800 + at..0x2800 + at + len].copy_from_slice(&value.to_be_bytes()[4 - len..]);
+        }
+        normal[0x2f00..0x2f02].copy_from_slice(&[0x54, 0x70]);
+        for &(at, value) in [
+            (16, 0x412f00),
+            (22, 0x412f04),
+            (34, 0x412b00),
+            (56, 0x412b80),
+            (64, 0x412a00),
+            (70, 0x412a00 + body_len as u32),
+            (76, 0x600),
+        ]
+        .iter()
+        .chain(writes)
+        {
+            word(&mut normal, 0x2800 + at, value);
+        }
+        normal[0x2000..0x2004].copy_from_slice(&[0x5a, 0x41, 0x28, 0]);
+        normal
+    }
+
+    #[test]
+    fn another_write_into_the_copied_block_refuses_even_away_from_the_entry() {
+        let clean = startup(&[]);
+        assert!(matches!(
+            relocated(&clean, 0x600, 1),
+            Observation::Known(Relocation {
+                destination: 0x600,
+                ..
+            })
+        ));
+        // The fourth call clears RAM 0x610..0x620, inside the copied block but
+        // after the requested one-byte entry: the source is no longer verbatim.
+        let cleared = startup(&[(84, 0x610), (90, 0x620)]);
+        let result = relocated(&cleared, 0x600, 1);
+        assert!(matches!(result, Observation::Conflicting), "{result:?}");
+    }
+
+    #[test]
+    fn the_copy_range_spans_every_argument_load_and_the_call() {
+        let normal = startup(&[]);
+        // The first copy loads its helper pointer between the arguments and
+        // the call: ER0 at +14, ER1 +20, ER2 +26, ER4 +32, JSR @ER4 at +38.
+        let Observation::Known(first) = relocated(&normal, 4, 1) else {
+            panic!("first copy unresolved");
+        };
+        assert_eq!(first.copy, 0x2800 + 14..0x2800 + 40);
+        let Observation::Known(third) = relocated(&normal, 0x600, 1) else {
+            panic!("third copy unresolved");
+        };
+        assert_eq!(third.copy, 0x2800 + 62..0x2800 + 82);
+    }
+
+    #[test]
+    fn helper_operand_offsets_are_holes_in_every_c_startup_shape() {
+        for shape in super::super::boot_shapes::C_STARTUP {
+            for at in [COPY_HELPER_OPERAND, CLEAR_HELPER_OPERAND] {
+                assert!(shape.holes.contains(&(at, 4)));
+                assert_eq!(shape.bytes[at - 2], 0x7a);
+            }
+        }
+    }
 }

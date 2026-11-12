@@ -73,28 +73,60 @@ pub(super) fn suffix(bytes: &[u8], end: usize, mut register: u8) -> (usize, Doma
     }
     (at, Domain::Unresolved { register, addend })
 }
+/// Whether `start..end` is a chain of decoded instructions of the region.
+pub(super) fn decoded(anchors: &mut super::Anchors<'_>, start: usize, end: usize) -> bool {
+    let mut at = end;
+    while at > start {
+        match anchors.previous(at) {
+            Some(p) if p >= start => at = p,
+            _ => return false,
+        }
+    }
+    at == start
+}
 /// Trace each stored getter call back through at most eight known instructions.
-/// Suffixes never cross stored-region boundaries or skip calls/branches. Unknown
-/// definitions remain unresolved; callers must separately establish entry paths.
+/// Suffixes never cross stored-region boundaries, and each suffix instruction
+/// must lie on the region's decoded boundary chain (see the module limits in
+/// `startup::coverage`); operand bytes of a longer instruction leave the
+/// domain unresolved. Unknown definitions remain unresolved; callers must
+/// separately establish entry paths.
 pub fn discover(normal: &[u8]) -> Observation<Vec<Argument>> {
-    let refs = match super::references(normal) {
+    let (refs, regions) = match super::references_in(normal) {
         Observation::Known(r) => r,
         Observation::Unresolved(r) => return Observation::Unresolved(r),
         Observation::Conflicting => return Observation::Conflicting,
     };
-    let regions = crate::image::regions(normal).expect("references validated regions");
     let mut result = Vec::new();
+    let mut anchors: Vec<_> = regions
+        .stored
+        .iter()
+        .map(|r| super::Anchors::new(r, r.as_ptr() as usize - normal.as_ptr() as usize))
+        .collect();
     for call in refs.calls {
-        let region = regions
+        let (index, region) = regions
             .stored
             .iter()
-            .find(|r| {
+            .enumerate()
+            .find(|(_, r)| {
                 let start = r.as_ptr() as usize - normal.as_ptr() as usize;
                 call.offset >= start && call.offset < start + r.len()
             })
             .expect("stored reference");
         let base = region.as_ptr() as usize - normal.as_ptr() as usize;
-        let (start, domain) = suffix(region, call.offset - base, refs.argument_register);
+        let end = call.offset - base;
+        let (mut start, mut domain) = suffix(region, end, refs.argument_register);
+        // Every suffix instruction must be a decoded instruction, never the
+        // operand tail of a longer earlier one.
+        if !matches!(domain, Domain::Unresolved { .. }) && !decoded(&mut anchors[index], start, end)
+        {
+            (start, domain) = (
+                end,
+                Domain::Unresolved {
+                    register: refs.argument_register,
+                    addend: 0,
+                },
+            );
+        }
         result.push(Argument {
             start: base + start,
             call: call.offset,
@@ -121,6 +153,7 @@ mod tests {
         let start = 0x412000u32;
         raw[0x1004..0x1008].copy_from_slice(&start.to_be_bytes());
         raw[0x1008..0x100c].copy_from_slice(&(start + compressed.len() as u32).to_be_bytes());
+        raw[0x20fe..0x2100].copy_from_slice(&[0x54, 0x70]);
         raw[0x2100..0x2108].copy_from_slice(&[0x79, 0, 0, 0x9f, 0x5e, 0x41, 0x30, 0]);
         let regions = crate::image::regions(&raw).unwrap();
         assert_eq!(regions.expanded.len(), 1);
@@ -135,6 +168,28 @@ mod tests {
                 call: 0x2104,
                 domain: Domain::Constant(0x9f)
             }]
+        );
+        // MOV.W @H'54701900:32,R0 embeds an RTS-shaped word and ends in
+        // SUB.W R0,R0's bytes; neither is an instruction boundary.
+        raw[0x20fe..0x2104].copy_from_slice(&[0x6b, 0x20, 0x54, 0x70, 0x19, 0]);
+        let Observation::Known(found) = discover(&raw) else {
+            panic!("fixture")
+        };
+        assert!(
+            matches!(found[0].domain, Domain::Unresolved { .. }),
+            "{:?}",
+            found[0]
+        );
+        raw[0x20fe..0x2100].copy_from_slice(&[0x54, 0x70]);
+        // JSR @H'411900 ends in SUB.W R0,R0's bytes; R0 is the callee's result.
+        raw[0x2100..0x2104].copy_from_slice(&[0x5e, 0x41, 0x19, 0]);
+        let Observation::Known(found) = discover(&raw) else {
+            panic!("fixture")
+        };
+        assert!(
+            matches!(found[0].domain, Domain::Unresolved { .. }),
+            "{:?}",
+            found[0]
         );
     }
     #[test]

@@ -109,11 +109,13 @@ fn paired_header(normal: &[u8], kernel: &[u8]) -> Option<()> {
     (length == normal.len() && length <= 0x3c0000 && length & 3 == 0).then_some(())
 }
 
-/// Recheck the final native representation after the existing integrity stage.
-/// Discovery deliberately permits a stale checksum while edits are composed.
-/// Authentication/emission under the actual receiver remains a separate duty.
 impl ResidentValidation {
     /// Check the final paired header, length and native additive checksum.
+    ///
+    /// Recheck the final native representation after the existing integrity
+    /// stage. Discovery deliberately permits a stale checksum while edits are
+    /// composed. Authentication/emission under the actual receiver remains a
+    /// separate duty.
     pub fn final_integrity(&self, normal: &[u8], kernel: &[u8]) -> bool {
         if kernel.len() != 0x10000 || paired_header(normal, kernel).is_none() {
             return false;
@@ -132,6 +134,11 @@ fn overlap(a: &Range<usize>, b: &Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
 }
 
+/// Copied resident checksum routine entry validated by `copy_contract`.
+const CHECKSUM_ENTRY: u32 = 0x23e;
+/// Kernel rejection entry whose callers `kernel_census` validates.
+const REJECT_ENTRY: u32 = 0x400252;
+
 // Arguments are decoded from the complete exact warm-root shape, rather than
 // assuming an unavailable ROM memcpy. All writes below precede validation.
 fn copy_contract(kernel: &[u8]) -> Option<()> {
@@ -142,7 +149,7 @@ fn copy_contract(kernel: &[u8]) -> Option<()> {
     let checksum = destination.checked_add(0x10d2usize.checked_sub(source.start)?)?;
     if source != (0x1024..0x134a)
         || (destination..end) != (0x190..0x4b6)
-        || checksum != 0x23e
+        || checksum != CHECKSUM_ENTRY as usize
         || checksum.checked_add(0x1100 - 0x10d2)? > end
     {
         return None;
@@ -181,7 +188,11 @@ fn copy_contract(kernel: &[u8]) -> Option<()> {
 // checked by the unchanged closed_entries scanner.
 fn kernel_census(kernel: &[u8]) -> Option<()> {
     for (target, absolute, relative) in [
-        (0x400252u32, &[0x1c0, 0x1de][..], &[0x20e, 0x234, 0x23e][..]),
+        (
+            REJECT_ENTRY,
+            &[0x1c0, 0x1de][..],
+            &[0x20e, 0x234, 0x23e][..],
+        ),
         (0x400466, &[0xa14, 0x5638][..], &[][..]),
         (0x400478, &[0xa1a, 0x563e][..], &[][..]),
     ] {
@@ -327,8 +338,8 @@ pub fn discover(normal: &[u8], kernel: &[u8]) -> Option<(Certificate, ResidentVa
         identity_spans,
         normal_spans: certificate.protected.clone(),
         image_length_field: 0x14,
-        checksum_entry: 0x23e,
-        reject_entry: 0x400252,
+        checksum_entry: CHECKSUM_ENTRY,
+        reject_entry: REJECT_ENTRY,
         conditional_state: (0x144, 5),
     };
     Some((certificate, resident))

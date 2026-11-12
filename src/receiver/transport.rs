@@ -30,6 +30,7 @@ const BODY_DEST_OFFSET: u32 = FRONT_LEN as u32;
 
 /// How the installed loader expects a kernel to arrive.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum KernelReceive {
     /// One linear stream to the Kernel buffer from offset zero.
     Linear,
@@ -62,14 +63,24 @@ pub fn detect(kernel_image: &[u8]) -> KernelReceive {
 }
 
 /// A receive plan could not be built for the detected transport.
+///
+/// ```compile_fail,E0004
+/// use pioneer_optical::receiver::transport::LayoutError;
+/// fn f(e: LayoutError) -> u8 {
+///     match e {
+///         LayoutError::KernelLayout => 0,
+///     }
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PlanError {
+#[non_exhaustive]
+pub enum LayoutError {
     /// The loader needs the two-region kernel transport but the kernel wire
     /// image is not the expected `0x11200`-byte front-key layout.
     KernelLayout,
 }
 
-impl core::fmt::Display for PlanError {
+impl core::fmt::Display for LayoutError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::KernelLayout => f.write_str(
@@ -78,7 +89,7 @@ impl core::fmt::Display for PlanError {
         }
     }
 }
-impl std::error::Error for PlanError {}
+impl std::error::Error for LayoutError {}
 
 /// Build the ordered receive plan into `storage`, returning the filled view.
 ///
@@ -89,7 +100,7 @@ pub fn plan<'a>(
     normal_wire: &'a [u8],
     receive: KernelReceive,
     storage: &'a mut [Segment<'a>],
-) -> Result<Plan<'a>, PlanError> {
+) -> Result<Plan<'a>, LayoutError> {
     let mut n = 0;
     if let Some(wire) = kernel_wire {
         match receive {
@@ -99,7 +110,7 @@ pub fn plan<'a>(
             }
             KernelReceive::FrontKeyTwoRegion => {
                 if wire.len() != WIRE_LEN {
-                    return Err(PlanError::KernelLayout);
+                    return Err(LayoutError::KernelLayout);
                 }
                 let (front, body) = wire.split_at(FRONT_LEN);
                 // Keep the wire layout intact in the receiver's staging area.

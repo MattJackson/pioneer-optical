@@ -4,6 +4,7 @@ use crate::envelope::{Envelope, Update};
 
 /// Why an intermediate image is needed. This does not select an executor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BridgeKind {
     /// Temporary target marker accepted by the installed receiver.
     ReceiverMarker,

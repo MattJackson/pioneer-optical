@@ -66,6 +66,15 @@ pub struct BoundSelection {
     pub layout: crate::image::layout::ParameterLayout,
 }
 
+fn stored_image(normal: &[u8], regions: &[&[u8]]) -> alloc::vec::Vec<u8> {
+    let mut stored = alloc::vec![0xff; normal.len()];
+    for region in regions {
+        let start = region.as_ptr() as usize - normal.as_ptr() as usize;
+        stored[start..start + region.len()].copy_from_slice(region);
+    }
+    stored
+}
+
 /// Establish an accepted startup selection from its native comparison.
 /// Missing, malformed, conflicting or unbound code yields no known selection.
 /// Only stored code is considered; compressed payload bytes are not code.
@@ -75,12 +84,16 @@ pub fn bound_selection(normal: &[u8]) -> crate::image::layout::Observation<Bound
     let Some(regions) = crate::image::regions(normal) else {
         return Observation::Unresolved(Unresolved::ReaderNotRecognized);
     };
-    let mut stored = alloc::vec![0xff; normal.len()];
-    for region in regions.stored {
-        let start = region.as_ptr() as usize - normal.as_ptr() as usize;
-        stored[start..start + region.len()].copy_from_slice(region);
-    }
-    let requirement = match discover(&stored) {
+    // Without COMP streams the single stored region is the image itself.
+    let copy;
+    let stored = match regions.stored.as_slice() {
+        [region] if region.len() == normal.len() => normal,
+        _ => {
+            copy = stored_image(normal, &regions.stored);
+            &copy
+        }
+    };
+    let requirement = match discover(stored) {
         Ok(Some(requirement)) if requirement.parameter == 0x9f => requirement,
         Err(_) => return Observation::Conflicting,
         _ => return Observation::Unresolved(Unresolved::ReaderNotRecognized),
@@ -145,7 +158,8 @@ pub struct Requirement {
     pub argument_register: u8,
 }
 
-/// More than one recognizable comparison exists; automatic selection is unsafe.
+/// More than one recognizable comparison exists, or the bounded analysis of
+/// a crafted image was exhausted; automatic selection is unsafe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ambiguous;
 
@@ -171,35 +185,56 @@ fn address(bytes: &[u8]) -> usize {
     u32::from_be_bytes([0, bytes[0], bytes[1], bytes[2]]) as usize
 }
 
+/// Path evaluations allowed for one image's loader-flag analysis. Exhausting
+/// it leaves the comparison unresolved; it never proves a missing call.
+const MAX_LOADER_FLAG_PATHS: usize = 1 << 16;
+
+/// Whether every path of `tail` loads the argument and calls the loader-flag
+/// wrapper. Exhausted work is a `false` (unrecognized) gate.
 pub(crate) fn calls_loader_flag(tail: &[u8], normal: &[u8]) -> bool {
+    calls_loader_flag_within(tail, normal, &mut { MAX_LOADER_FLAG_PATHS }).unwrap_or(false)
+}
+
+/// `None` once `remaining` path evaluations are spent.
+fn calls_loader_flag_within(tail: &[u8], normal: &[u8], remaining: &mut usize) -> Option<bool> {
     // path() is a pure function of (at, argument, budget) for a fixed tail and
     // Normal, so memoizing on that key keeps every decision identical while
     // bounding work by the number of distinct states.
     type Memo = alloc::collections::BTreeMap<(usize, bool, usize), bool>;
+    struct Walk<'a> {
+        memo: Memo,
+        remaining: &'a mut usize,
+        exhausted: bool,
+    }
     fn path(
         tail: &[u8],
         normal: &[u8],
-        memo: &mut Memo,
+        memo: &mut Walk<'_>,
         at: usize,
         argument: bool,
         budget: usize,
     ) -> bool {
+        if *memo.remaining == 0 {
+            memo.exhausted = true;
+            return false;
+        }
+        *memo.remaining -= 1;
         #[cfg(test)]
         tests::PATH_CALLS.with(|c| c.set(c.get() + 1));
         if budget == 0 {
             return false;
         }
-        if let Some(&known) = memo.get(&(at, argument, budget)) {
+        if let Some(&known) = memo.memo.get(&(at, argument, budget)) {
             return known;
         }
         let result = step(tail, normal, memo, at, argument, budget);
-        memo.insert((at, argument, budget), result);
+        memo.memo.insert((at, argument, budget), result);
         result
     }
     fn step(
         tail: &[u8],
         normal: &[u8],
-        memo: &mut Memo,
+        memo: &mut Walk<'_>,
         at: usize,
         argument: bool,
         budget: usize,
@@ -259,7 +294,13 @@ pub(crate) fn calls_loader_flag(tail: &[u8], normal: &[u8]) -> bool {
             budget - 1,
         )
     }
-    path(tail, normal, &mut Memo::new(), 0, false, 64)
+    let mut walk = Walk {
+        memo: Memo::new(),
+        remaining,
+        exhausted: false,
+    };
+    let result = path(tail, normal, &mut walk, 0, false, 64);
+    (!walk.exhausted).then_some(result)
 }
 
 // Full mismatch arm of the audited conditional gate. FE23 skips this arm;
@@ -308,6 +349,8 @@ fn conditional_loader_flag(tail: &[u8], normal: &[u8]) -> bool {
 /// should be made from this result alone.
 pub fn discover(normal: &[u8]) -> Result<Option<Requirement>, Ambiguous> {
     let mut result = None;
+    // One bound for the whole image: crafted code may repeat candidates.
+    let mut remaining = MAX_LOADER_FLAG_PATHS;
     for p in (0..normal.len().saturating_sub(13)).step_by(2) {
         let w = &normal[p..];
         if w[0] != 0x79 || w[1] > 1 {
@@ -344,7 +387,10 @@ pub fn discover(normal: &[u8]) -> Result<Option<Requirement>, Ambiguous> {
             && w[2..4] == [0, 0x9f]
             && cmp[2..4] != [0xfe, 0x09]
             && conditional_loader_flag(tail, normal);
-        if !calls_loader_flag(tail, normal) && !conditional {
+        // Exhausted work cannot select or exclude a comparison: unresolved.
+        let loader_flag =
+            calls_loader_flag_within(tail, normal, &mut remaining).ok_or(Ambiguous)?;
+        if !loader_flag && !conditional {
             continue;
         }
         let candidate = Requirement {
@@ -415,6 +461,30 @@ mod tests {
         assert_eq!((r.parameter, r.required), (0x9f, 0xfe24));
         let calls = PATH_CALLS.with(Cell::get);
         assert!(calls < 1_000, "{calls} path evaluations");
+    }
+
+    #[test]
+    fn loader_flag_work_is_bounded_across_every_candidate() {
+        // Many recognized headers, each with a maximal tail that never
+        // reaches the loader-flag call: each candidate alone is cheap, but
+        // the image as a whole must not cost unbounded path evaluations.
+        let header = [
+            0x79, 0, 0, 0x9f, 0x5e, 0x41, 1, 0, 0x79, 0x20, 0xfe, 0x24, 0x47, 0x7e,
+        ];
+        let block = header.len() + 0x7e;
+        let mut b = std::vec![0; block * 2000 + 0x200];
+        for at in (0..2000).map(|i| i * block) {
+            b[at..at + header.len()].copy_from_slice(&header);
+        }
+        PATH_CALLS.with(|c| c.set(0));
+        let result = discover(&b);
+        let calls = PATH_CALLS.with(Cell::get);
+        assert!(
+            calls <= MAX_LOADER_FLAG_PATHS + 64,
+            "{calls} path evaluations"
+        );
+        // Exhausted work is unresolved, never an absence of the comparison.
+        assert_eq!(result, Err(Ambiguous));
     }
 
     fn fixture(register: u8, required: u16) -> std::vec::Vec<u8> {

@@ -195,7 +195,10 @@ pub fn discover_sat(normal: &[u8], kernel: Option<&[u8]>) -> Observation<Geometr
             });
         }
     }
-    if let Some(h8::Storage::StateHeaders { sequences, .. }) = h8::state(&native) {
+    let Ok(state) = h8::state(&native) else {
+        return Observation::Unresolved(Unresolved::AmbiguousReader);
+    };
+    if let Some(h8::Storage::StateHeaders { sequences, .. }) = state {
         if let (Some(a), Some(b)) = (
             sequences[0].checked_sub(0xfffe),
             sequences[1].checked_sub(0xfffe),
@@ -360,6 +363,24 @@ mod tests {
         pub(super) static CALLER_SCANS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
     }
     #[test]
+    fn ambiguous_state_header_selectors_are_not_absent_evidence() {
+        let (mut normal, kernel) = kernel_fixture();
+        h8::state_fixture(&mut normal, 0x800, 0x700, [0, 0]);
+        assert!(matches!(
+            discover_sat(&normal, Some(&kernel)),
+            Observation::Known(Geometry::NativeBanks {
+                bases: [0x7d0000, 0x7e0000],
+                stride: 0x10000,
+            })
+        ));
+        // A second, different called selector: which one runs is unproven.
+        h8::state_fixture(&mut normal, 0xa00, 0x704, [0x7dfff0, 0x7efff0]);
+        assert!(matches!(
+            discover_sat(&normal, Some(&kernel)),
+            Observation::Unresolved(Unresolved::AmbiguousReader)
+        ));
+    }
+    #[test]
     fn contradictory_native_geometry_and_malformed_comp_are_rejected() {
         let (mut normal, kernel) = kernel_fixture();
         let consumer = decode("5d607a02005d51607a20005c00004604790a005c0fa06921");
@@ -367,6 +388,12 @@ mod tests {
         assert!(matches!(
             discover_sat(&normal, Some(&kernel)),
             Observation::Conflicting
+        ));
+        // A malformed COMP directory refuses an otherwise Known geometry.
+        let (mut normal, kernel) = kernel_fixture();
+        assert!(matches!(
+            discover_sat(&normal, Some(&kernel)),
+            Observation::Known(_)
         ));
         normal[0x1000..0x1004].copy_from_slice(b"COMP");
         assert!(!matches!(

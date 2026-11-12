@@ -5,10 +5,13 @@
 //! word-ID getter (`MOV.W #0xD9,R0; JSR.A getter`). This proof roots the startup
 //! path in the held Kernel: its reset vector and its unique acceptance gate, which
 //! transfers to the Normal entry. It then binds the entry prefix and main up to
-//! the anchor instruction by instruction, from a closed set of data writes and
-//! direct calls, with a direct `JSR.A` in the gate slot. Neither Normal nor the
+//! the anchor instruction by instruction: the entry prefix from memory
+//! initialization only, main from a closed set of data writes, flag reads and
+//! tests, interrupt enable and direct calls whose only branch is a `JEQ` over
+//! exactly one `JSR.A`, with a direct `JSR.A` in the gate slot. Neither Normal nor the
 //! Kernel may hold an immediate 0x00D9 index load or a native word getter.
 //! Callees are not executed, the same standard as the H8 empty-slot proof.
+use super::m32c::{le24, D9_INDEX};
 use super::shape_matches as matches;
 
 const KERNEL_BASE: u32 = 0xffc000;
@@ -38,8 +41,10 @@ const ANCHOR: (&[u8], &[(usize, usize)]) = (
     ],
     &[(2, 6), (15, 4), (20, 3)],
 );
-/// Native index load of the startup word into the getter argument register.
-const D9_INDEX: &[u8] = &[0x05, 0xd9, 0x00];
+/// Proof limits: entry-prefix steps before its `JSR.A` main, and main-prefix
+/// steps before the anchor. A longer prefix is unproven, never assumed bound.
+const ENTRY_STEPS: usize = 64;
+const MAIN_STEPS: usize = 96;
 
 /// Anchored coordinates of the proof; evidence only.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,10 +58,6 @@ pub(super) struct Absence {
     pub slot_target: u32,
     pub task: u32,
     pub create: u32,
-}
-
-fn le24(b: &[u8]) -> u32 {
-    u32::from_le_bytes([b[0], b[1], b[2], 0])
 }
 
 fn in_normal(normal: &[u8], address: u32) -> Option<usize> {
@@ -109,16 +110,21 @@ pub(super) fn absent(normal: &[u8], kernel: Option<&[u8]>) -> Option<Absence> {
     kernel.get(header_at..header_at.checked_add(16)?)?;
     let entry = le24(&kernel[gate + 68..]);
     let mut at = in_normal(normal, entry)?;
-    for _ in 0..64 {
+    for _ in 0..ENTRY_STEPS {
         if normal.get(at) == Some(&0xcd) {
             break;
         }
         at += entry_step(normal.get(at..)?)?;
     }
+    // An exhausted walk never reached the call to main; another instruction's
+    // operand bytes are not main's address.
+    if normal.get(at) != Some(&0xcd) {
+        return None;
+    }
     let main = le24(normal.get(at + 1..at + 4)?);
     let mut at = in_normal(normal, main)?;
     let mut slot = None;
-    for _ in 0..96 {
+    for _ in 0..MAIN_STEPS {
         if matches(normal, at, ANCHOR.0, ANCHOR.1) {
             break;
         }
@@ -289,6 +295,19 @@ pub(crate) mod tests {
         }
         let mut n = normal();
         n[0x12 + ENTRY.len() - 1] = 0xff;
+        assert_eq!(absent(&n, Some(&kernel())), None);
+    }
+
+    #[test]
+    fn an_entry_walk_that_never_reaches_jsr_a_is_not_bound() {
+        // The full bound of memory-initialization steps, then JSR.A main.
+        let mut n = normal();
+        n[0x12..0x12 + 64].fill(0x02);
+        n[0x12 + 64..0x12 + 68].copy_from_slice(&[0xcd, 0x00, 0x13, 0xf8]);
+        assert_eq!(absent(&n, Some(&kernel())).map(|a| a.main), Some(0xf81300));
+        // One more step exhausts the bound on a MOV.B:Z whose following bytes
+        // spell main's address; no call to main was reached.
+        n[0x12 + 64..0x12 + 68].copy_from_slice(&[0x02, 0x00, 0x13, 0xf8]);
         assert_eq!(absent(&n, Some(&kernel())), None);
     }
 

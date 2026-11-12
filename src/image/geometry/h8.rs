@@ -301,13 +301,18 @@ pub fn discover(normal: &[u8]) -> Option<Requirement> {
     matches.next().is_none().then_some(result)
 }
 
-pub(super) fn state(normal: &[u8]) -> Option<Storage> {
+pub(super) fn state(normal: &[u8]) -> Result<Option<Storage>, ()> {
     legacy::state_selector(normal, BASE)
 }
 
 #[cfg(test)]
 pub(super) fn fixture(normal: &mut [u8]) {
     legacy::fixture(normal);
+}
+
+#[cfg(test)]
+pub(super) fn state_fixture(normal: &mut [u8], at: usize, caller: usize, status: [u32; 2]) {
+    legacy::state_fixture(normal, at, caller, status);
 }
 
 #[cfg(test)]

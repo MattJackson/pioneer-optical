@@ -49,7 +49,7 @@ pub(super) fn ep(kernel: &[u8]) -> Observation<u32> {
     unique(values)
 }
 fn signature(normal: &[u8]) -> bool {
-    normal.windows(20).enumerate().step_by(2).any(|(_, b)| {
+    normal.windows(20).step_by(2).any(|b| {
         let load = u16::from_le_bytes([b[0], b[1]]);
         let byte_reg = (load >> 11) & 31;
         if load & 0x7ff != 0x201 || byte_reg == 0 {
@@ -79,16 +79,14 @@ pub fn native(normal: &[u8], kernel: Option<&[u8]>) -> Observation<HostSignature
     let Some(kernel) = kernel else {
         return Observation::Unresolved(Unresolved::ResidentCodeRequired(0));
     };
+    // ep() yields `upper << 16`, so these offsets cannot overflow.
     match ep(kernel) {
-        Observation::Known(base) => match base.checked_add(0xd5) {
-            Some(_) => Observation::Known(HostSignature {
-                coordinate: base + 0xd2,
-                signature_low: base + 0xd2,
-                signature_high: base + 0xd3,
-                initial_one: [base + 0xd4, base + 0xd5],
-            }),
-            None => Observation::Unresolved(Unresolved::TruncatedEvidence),
-        },
+        Observation::Known(base) => Observation::Known(HostSignature {
+            coordinate: base + 0xd2,
+            signature_low: base + 0xd2,
+            signature_high: base + 0xd3,
+            initial_one: [base + 0xd4, base + 0xd5],
+        }),
         Observation::Unresolved(reason) => Observation::Unresolved(reason),
         Observation::Conflicting => Observation::Conflicting,
     }

@@ -1,15 +1,18 @@
-//! Bound unchanged startup comparisons with read-only live-word prerequisites.
+//! Bound unchanged startup comparisons. An equal fixed gate needs a read-only
+//! live-word prerequisite; a differing fixed gate keeps the image and sets the
+//! target's own word on the drive (`word_writes`) in the first stage's settings
+//! transaction; a differing conditional gate refuses.
 use super::{h8_conditional, ID};
 use crate::{
     compatibility::Error,
-    filters::{prerequisites::Word, Integrity, Operation, Preparation, Transition},
+    filters::{prerequisites::Word, Finding, Integrity, Operation, Preparation, Transition},
     image::layout::{self, H8ReaderComponent, Observation},
     startup::{self, BoundSelection},
 };
 use alloc::{boxed::Box, string::String, vec, vec::Vec};
 use core::ops::Range;
 use h8_asm::{
-    isa::{decode_insn, encode_insn, Ea, Operand, Reg},
+    isa::{decode_insn, Ea, Operand, Reg},
     Mode, Target,
 };
 
@@ -126,31 +129,16 @@ impl Gate {
         })
     }
 
-    fn emit(&self, normal: &[u8], required: u16) -> Result<Vec<u8>, Error> {
-        // FE09 must continue through its predicate, never become the equal
-        // branch of a conditional gate after an operand correction.
-        if self.conditional.is_some() && required == 0xfe09 {
+    fn admits_unchanged(&self) -> Result<(), Error> {
+        // FE09 must continue through its predicate, never be the equal branch
+        // of a conditional gate. `h8_conditional::discover` already declines
+        // that shape, so this restates its invariant rather than adding a rule.
+        if self.conditional.is_some()
+            && self.bound.requirement.required == h8_conditional::ALTERNATIVE
+        {
             return Err(Error::Unsupported);
         }
-        let mut instruction = decode_insn(
-            &normal[self.comparison.clone()],
-            Target::H8S2000,
-            Mode::Advanced,
-        )
-        .map_err(|_| Error::Representation)?
-        .insn;
-        instruction.operands[0] = Operand::Immediate {
-            value: u32::from(required),
-            bits: 16,
-        };
-        let encoded = encode_insn(instruction, Target::H8S2000, Mode::Advanced)
-            .map_err(|_| Error::Representation)?;
-        if encoded.len() != self.comparison.len() {
-            return Err(Error::Representation);
-        }
-        let mut changed = normal.to_vec();
-        changed[self.comparison.clone()].copy_from_slice(&encoded);
-        Ok(changed)
+        Ok(())
     }
 }
 
@@ -158,42 +146,45 @@ impl Gate {
 /// edit. An independently bound preservation certificate is still enforced.
 pub(super) fn plan_absent(
     transition: &Transition<'_, '_>,
+    finding: &Finding,
 ) -> Result<Option<Box<dyn Operation>>, Error> {
     if transition.installed.sat.is_none() {
         return Err(Error::UnresolvedIdentity);
     }
-    Ok(PreservationOperation::bind(transition)?.map(|op| Box::new(op) as Box<dyn Operation>))
+    Ok(PreservationOperation::bind(transition, finding)?
+        .map(|op| Box::new(op) as Box<dyn Operation>))
 }
 
 /// `installed_absent` is the installed side's bounded gate-absent proof. With
 /// it, a failed read-only target-word fallback is a definite refusal: B checks
 /// a word A's firmware never maintains, it cannot be verified through a
-/// differing or non-Normal reader, and writing it is a retained-data write.
+/// differing or non-Normal reader, and a word is written only for a bound
+/// installed comparison.
+/// `finding` is the target's assessment, reported unchanged.
 pub(super) fn plan(
     transition: &Transition<'_, '_>,
     installed_absent: bool,
+    finding: &Finding,
 ) -> Result<Option<Box<dyn Operation>>, Error> {
     let installed = transition.installed.firmware;
     let target = transition.target.firmware;
     if transition.installed.sat.is_none() {
         return Err(Error::UnresolvedIdentity);
     }
-    if Gate::bind(target.normal).is_err() {
-        if let Some(operation) = PreservationOperation::bind(transition)? {
+    let gate = Gate::bind(target.normal);
+    if gate.is_err() {
+        if let Some(operation) = PreservationOperation::bind(transition, finding)? {
             return Ok(Some(Box::new(operation)));
         }
+        // Exact component preservation proves no new startup requirement even
+        // if this architecture's comparison is not recognized. This is not an
+        // absence proof and supplies no guessed live word.
+        if installed.normal == target.normal && installed.kernel == target.kernel {
+            return Ok(None);
+        }
     }
-    // Exact component preservation proves no new startup requirement even if
-    // this architecture's comparison is not recognized. This is not an absence
-    // proof and supplies no guessed live word.
-    if installed.normal == target.normal
-        && installed.kernel == target.kernel
-        && Gate::bind(target.normal).is_err()
-    {
-        return Ok(None);
-    }
-    let gate = Gate::bind(target.normal)?;
-    let required = match startup::bound_selection(installed.normal) {
+    let gate = gate?;
+    let installed_word = match startup::bound_selection(installed.normal) {
         Observation::Known(donor) => {
             if donor.layout != gate.bound.layout {
                 return Err(Error::Incompatible);
@@ -229,14 +220,11 @@ pub(super) fn plan(
     // conditional gate too: its primary word is accepted unconditionally (the
     // predicate only gates the alternative), and the CMP operand is never
     // rewritten here, so the conditional predicate is preserved intact.
-    let sets_word = required != gate.bound.requirement.required;
+    // `admits_unchanged` still refuses the one unsafe shape (a conditional gate
+    // whose primary word is the equal-branch alternative).
     let required = gate.bound.requirement.required;
-    let changed = gate.emit(target.normal, required)?;
-    let corrected = Gate::bind(&changed)?;
-    if corrected.bound.requirement.required != required || corrected.conditional != gate.conditional
-    {
-        return Err(Error::VerificationFailed);
-    }
+    let sets_word = installed_word != required;
+    gate.admits_unchanged()?;
     Ok(Some(Box::new(StartupOperation {
         hardware: target.hardware.into(),
         normal: target.normal.to_vec(),
@@ -244,6 +232,7 @@ pub(super) fn plan(
         gate,
         required,
         sets_word,
+        finding: finding.clone(),
     })))
 }
 
@@ -258,9 +247,10 @@ struct PreservationOperation {
     normal: Vec<u8>,
     kernel: Option<Vec<u8>>,
     certificate: startup::coverage::preservation::Certificate,
+    finding: Finding,
 }
 impl PreservationOperation {
-    fn bind(transition: &Transition<'_, '_>) -> Result<Option<Self>, Error> {
+    fn bind(transition: &Transition<'_, '_>, finding: &Finding) -> Result<Option<Self>, Error> {
         let source = transition.installed.firmware;
         let target = transition.target.firmware;
         let Observation::Known(installed_reader) = layout::discover_h8_reader(source.normal, None)
@@ -300,6 +290,7 @@ impl PreservationOperation {
             normal: target.normal.to_vec(),
             kernel: target.kernel.map(<[u8]>::to_vec),
             certificate,
+            finding: finding.clone(),
         }))
     }
     fn bound(&self, context: &Preparation<'_>) -> Result<(), Error> {
@@ -330,6 +321,9 @@ impl Operation for PreservationOperation {
     fn filter_id(&self) -> &'static str {
         ID
     }
+    fn description(&self) -> Option<crate::compatibility::Correction> {
+        Some(unchanged(&self.finding))
+    }
     fn prepare(&self, context: &Preparation<'_>) -> Result<Option<Vec<u8>>, Error> {
         self.verify(context, &self.normal)?;
         Ok(None)
@@ -357,6 +351,16 @@ struct StartupOperation {
     required: u16,
     /// The drive's word differs and is set to `required` before transfer.
     sets_word: bool,
+    finding: Finding,
+}
+
+/// The target comparison is never rewritten: its finding is unchanged.
+fn unchanged(finding: &Finding) -> crate::compatibility::Correction {
+    crate::compatibility::Correction::Registered {
+        filter: ID,
+        from: finding.clone(),
+        to: finding.clone(),
+    }
 }
 impl core::fmt::Debug for StartupOperation {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -377,7 +381,8 @@ impl StartupOperation {
     }
     fn bound(&self, context: &Preparation<'_>) -> Result<(), Error> {
         // Enforce the planning restriction again at prepare/final verification;
-        // a stale or constructed operation cannot authorize a CMP rewrite.
+        // a stale or constructed operation cannot write a drive word other
+        // than the target's own bound requirement.
         if self.required != self.gate.bound.requirement.required {
             return Err(Error::Unsupported);
         }
@@ -443,6 +448,9 @@ impl Operation for StartupOperation {
         }
         vec![self.word()]
     }
+    fn description(&self) -> Option<crate::compatibility::Correction> {
+        Some(unchanged(&self.finding))
+    }
     fn word_writes(&self) -> Vec<Word> {
         if self.sets_word {
             vec![self.word()]
@@ -454,23 +462,17 @@ impl Operation for StartupOperation {
         Some(crate::filters::be32_normal_integrity())
     }
     fn prepare(&self, context: &Preparation<'_>) -> Result<Option<Vec<u8>>, Error> {
-        self.bound(context)?;
-        let changed = self.gate.emit(&self.normal, self.required)?;
-        self.verify(context, &changed)?;
-        if changed == self.normal {
-            Ok(None)
-        } else {
-            Ok(Some(changed))
-        }
+        self.verify(context, &self.normal)?;
+        Ok(None)
     }
     fn verify(&self, context: &Preparation<'_>, normal: &[u8]) -> Result<(), Error> {
         self.bound(context)?;
         if normal.len() != self.normal.len() {
             return Err(Error::VerificationFailed);
         }
-        let expected = self.gate.emit(&self.normal, self.required)?;
+        self.gate.admits_unchanged()?;
         for span in &self.gate.protected {
-            if normal.get(span.clone()) != expected.get(span.clone()) {
+            if normal.get(span.clone()) != self.normal.get(span.clone()) {
                 return Err(Error::VerificationFailed);
             }
         }
@@ -610,6 +612,35 @@ mod tests {
     }
 
     #[test]
+    fn startup_operations_report_the_target_comparison_as_unchanged() {
+        // The generic description would claim the target adopts the installed
+        // finding; these operations never change the comparison.
+        use crate::compatibility::Correction;
+        let mut no_gate = fixture(0xfe24, 0);
+        no_gate[0x80..0x94].fill(0xff);
+        for (installed, target) in [
+            (fixture(0xfe24, 0), fixture(0xfe25, 0)),
+            (no_gate, fixture(0xfe24, 0)),
+        ] {
+            let finding = super::super::inspect(&context(&target)).finding;
+            assert_ne!(
+                finding,
+                super::super::inspect(&context(&installed)).finding,
+                "fixture must distinguish the directions"
+            );
+            let operation = operation(&installed, &target).unwrap().unwrap();
+            assert_eq!(
+                operation.description(),
+                Some(Correction::Registered {
+                    filter: ID,
+                    from: finding.clone(),
+                    to: finding,
+                })
+            );
+        }
+    }
+
+    #[test]
     fn operation_and_final_comparison_cannot_bypass_unchanged_operand_restriction() {
         let target = fixture(0xfe24, 0);
         let prepared = preparation(&target);
@@ -621,7 +652,7 @@ mod tests {
             Err(Error::VerificationFailed)
         ));
         // Even a stale/preconstructed operation carrying a different desired word
-        // must refuse before encoding or final-output verification can approve it.
+        // must refuse before preparation or final-output verification can approve it.
         let forged = StartupOperation {
             hardware: "SAT 8000".into(),
             normal: target.clone(),
@@ -629,6 +660,7 @@ mod tests {
             gate: Gate::bind(&target).unwrap(),
             required: 0xfe25,
             sets_word: false,
+            finding: Finding::Unresolved("forged".into()),
         };
         assert!(matches!(forged.prepare(&prepared), Err(Error::Unsupported)));
         assert!(matches!(
@@ -840,8 +872,8 @@ mod tests {
         // service; it must remain unchanged, not be mistaken for another gate.
         let mut target = fixture(0xfe13, 0);
         target[0x8c..0xa4].copy_from_slice(&[
-            0x47, 0x16, 0x0c, 0xee, 0x47, 0x06, 0xf8, 1, 0x5e, 0x41, 0x60, 0x10, 0xf8, 1, 0x5e, 0x41,
-            0x60, 0, 0x18, 0x88, 0x5e, 0x41, 0x61, 0,
+            0x47, 0x16, 0x0c, 0xee, 0x47, 0x06, 0xf8, 1, 0x5e, 0x41, 0x60, 0x10, 0xf8, 1, 0x5e,
+            0x41, 0x60, 0, 0x18, 0x88, 0x5e, 0x41, 0x61, 0,
         ]);
         target[0x6010..0x6016].copy_from_slice(&[0x5e, 0x40, 0x0a, 0x14, 0x54, 0x70]);
         target[0x6100..0x6106].copy_from_slice(&[0x01, 0x10, 0x6d, 0xf4, 0x0c, 0x8c]);

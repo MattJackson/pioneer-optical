@@ -5,8 +5,32 @@
 //! it requires the held Kernel and either the audited startup function with an
 //! empty or dead-read gate slot, or no Normal loader-flag service and no 0x009F
 //! getter read at all. Every Kernel 0x009F load must be the audited byte store.
+//!
+//! # Stated assumptions and model boundary
+//!
+//! The Kernel byte-store proof relies on the Renesas H8S C ABI: a called
+//! routine preserves ER4-ER6 (callee-saved). Calls between the ER4 load and
+//! the `JSR @ER4` site are therefore not decoded for ER4 effects. This
+//! differs from `coverage::boot`, which binds an indirect call target only
+//! from an immediately preceding load and assumes no callee-saved ABI. That
+//! proof follows a call chain through arbitrary, possibly non-compiled stubs
+//! whose register contract it must establish itself, whereas this proof
+//! matches one compiler-generated routine shape whose callees are ordinary
+//! C functions.
+//!
+//! These compatibility proofs are sound for compiler-generated vendor code
+//! shapes and refuse shapes they do not recognise. They are not a defence
+//! against deliberately crafted firmware, which can damage a drive directly
+//! once flashed whatever any proof says. Outside the model, and not detected:
+//! entries into the Kernel routine from computed jumps (`JMP @ERn` or pointers
+//! built from 16-bit halves), cross-image transfers (Normal code calling into
+//! the Kernel), and references that land in the middle of an instruction of a
+//! neighbouring routine whose decode treats those bytes as an operand.
 use crate::image::layout::{self, H8ReaderComponent, Observation, Unresolved};
-use alloc::vec::Vec;
+use alloc::{borrow::Cow, vec::Vec};
+
+/// Kernel load base: resident CPU addresses are this plus the byte offset.
+const KERNEL_BASE: u32 = 0x400000;
 
 /// Stable `NotApplicable` proof tag for a proven-absent startup word gate.
 pub const GATE_ABSENT: u16 = 1;
@@ -37,22 +61,41 @@ pub struct Miss {
     pub loader_flag_wrappers: Vec<u32>,
 }
 
-fn stored(body: &[u8]) -> Option<Vec<u8>> {
+/// Stored bytes with COMP spans erased to 0xFF; borrowed when nothing is erased.
+fn stored(body: &[u8]) -> Option<Cow<'_, [u8]>> {
     let regions = crate::image::regions(body)?;
+    if let [only] = regions.stored.as_slice() {
+        if only.len() == body.len() {
+            return Some(Cow::Borrowed(body));
+        }
+    }
     let mut stored = alloc::vec![0xff; body.len()];
     for region in regions.stored {
         let start = region.as_ptr() as usize - body.as_ptr() as usize;
         stored[start..start + region.len()].copy_from_slice(region);
     }
-    Some(stored)
+    Some(Cow::Owned(stored))
+}
+
+/// CPU target of a relative BSR.B/BSR.W at `call`.
+fn relative_call(stored: &[u8], call: usize) -> Option<i64> {
+    let pc = super::BASE as i64 + call as i64;
+    match stored.get(call..)? {
+        [0x55, delta, ..] => Some(pc + 2 + i64::from(*delta as i8)),
+        [0x5c, 0, a, b, ..] => Some(pc + 4 + i64::from(i16::from_be_bytes([*a, *b]))),
+        _ => None,
+    }
 }
 
 /// Describe why stored Normal code has no recognized 0x009F comparison.
 /// `None` when stored regions are unavailable or a 0x009F comparison (or a
 /// conflict) was recognized, so the miss is elsewhere.
 pub fn inspect(normal: &[u8], kernel: Option<&[u8]>) -> Option<Miss> {
-    let stored = stored(normal)?;
-    let other_parameter = match super::discover(&stored) {
+    miss(normal, &stored(normal)?, kernel)
+}
+
+fn miss(normal: &[u8], stored: &[u8], kernel: Option<&[u8]>) -> Option<Miss> {
+    let other_parameter = match super::discover(stored) {
         Ok(None) => None,
         Ok(Some(r)) if r.parameter != 0x9f => Some(r),
         _ => return None,
@@ -78,8 +121,10 @@ pub fn inspect(normal: &[u8], kernel: Option<&[u8]>) -> Option<Miss> {
         let Some((entry, register)) = entry else {
             continue;
         };
+        // Every explicit call form: absolute/indirect, and relative BSR.
         if w[..4] == [0x79, register, 0, 0x9f]
-            && super::getter_call(&stored, at).is_some_and(|(g, _)| g == entry as usize)
+            && (super::getter_call(stored, at).is_some_and(|(g, _)| g == entry as usize)
+                || relative_call(stored, at + 4) == Some(i64::from(entry)))
         {
             reads.push(super::BASE as u32 + at as u32);
         }
@@ -185,6 +230,12 @@ fn target(bytes: &[u8], base: u32) -> Option<usize> {
 
 fn uses_register_4(insn: &h8_asm::isa::Insn) -> bool {
     use h8_asm::isa::{Ea, Operand, Reg};
+    // Implicit operands the decoder does not list: EEPMOV.B/W counts down
+    // R4L/R4 and advances ER5/ER6. Other H8S block/MAC/TAS forms decode their
+    // registers explicitly.
+    if insn.mnemonic == "EEPMOV" {
+        return true;
+    }
     let reg = |r: &Reg| matches!(r, Reg::Byte(4 | 12) | Reg::Word(4 | 12) | Reg::Long(4));
     let ea = |e: &Ea| match e {
         Ea::Indirect(r)
@@ -206,13 +257,83 @@ fn uses_register_4(insn: &h8_asm::isa::Insn) -> bool {
     })
 }
 
+/// Decoded instruction starts: length, successors and instruction.
+type Routine = alloc::collections::BTreeMap<usize, (usize, Vec<usize>, h8_asm::isa::Insn)>;
+
+/// Complete local control flow of one Kernel routine from `entry`: decoded
+/// instruction starts with their lengths and successors. Calls continue at
+/// their return address. Unresolved, indirect or non-returning control,
+/// overlapping decodes or more than 4096 instructions refuse.
+fn kernel_routine(kernel: &[u8], entry: usize) -> Option<Routine> {
+    use h8_asm::{
+        isa::{decode_insn, Ea, Operand},
+        Mode, Target,
+    };
+    let mut nodes = alloc::collections::BTreeMap::new();
+    let mut pending = alloc::vec![entry];
+    while let Some(pc) = pending.pop() {
+        if nodes.contains_key(&pc) {
+            continue;
+        }
+        if nodes.len() >= 4096 || pc & 1 != 0 {
+            return None;
+        }
+        let decoded = decode_insn(kernel.get(pc..)?, Target::H8S2000, Mode::Advanced).ok()?;
+        let next = pc.checked_add(decoded.len)?;
+        if decoded.len == 0 || next > kernel.len() {
+            return None;
+        }
+        let insn = decoded.insn;
+        let mut successors = Vec::new();
+        match insn.mnemonic {
+            "RTS" => {}
+            "JSR" | "BSR" => successors.push(next),
+            "JMP" => {
+                let Operand::Address(Ea::Absolute { value, .. }) = insn.operands[0] else {
+                    return None;
+                };
+                successors.push(target(&value.to_be_bytes()[1..], KERNEL_BASE)?);
+            }
+            name => match insn.operands.first() {
+                Some(Operand::Address(Ea::PcRelative { value, .. })) => {
+                    if !name.starts_with('B') {
+                        return None;
+                    }
+                    if name != "BRN" {
+                        successors.push(next.checked_add_signed(*value as isize)?);
+                    }
+                    if name != "BRA" {
+                        successors.push(next);
+                    }
+                }
+                _ if matches!(name, "RTE" | "TRAPA" | "SLEEP") => return None,
+                _ => successors.push(next),
+            },
+        }
+        pending.extend(successors.iter().copied());
+        nodes.insert(pc, (decoded.len, successors, insn));
+    }
+    // Overlapping decodes mean some path executes another path's operands.
+    let mut end = 0;
+    for (&pc, (len, ..)) in &nodes {
+        if pc < end {
+            return None;
+        }
+        end = pc + len;
+    }
+    Some(nodes)
+}
+
 // One Kernel 0x009F load: MOV.B @(d,ER7),R2L; MOV.W #9F,R1; MOV.L ERn,ER0;
-// JSR @ER4, where ER4 was loaded with the byte-store routine and every
-// straight-line instruction since that load leaves register 4 untouched
-// (other than JSR @ER4 calls; callees preserve ER4-ER6 by convention).
+// JSR @ER4, where ER4 holds the byte-store routine. Proven on the complete
+// control flow of the enclosing routine (entry: the 01 00 6D F3 prologue after
+// the nearest preceding RTS): the ER4 load is on every path from the entry to
+// the JSR @ER4, nothing on a path from the load to it touches register 4
+// (other than JSR @ER4 calls; callees preserve ER4-ER6 per the Renesas H8S C
+// ABI, a stated assumption in the module documentation), and no
+// direct reference from outside the routine enters any instruction that can
+// reach the call without passing the load.
 fn kernel_byte_store(kernel: &[u8], at: usize) -> bool {
-    use h8_asm::{isa::decode_insn, Mode, Target};
-    const BASE: u32 = 0x400000;
     let site = |b: &[u8]| b[..2] == [0x6e, 0x7a] && b[4..8] == [0x79, 1, 0, 0x9f];
     let call = |b: &[u8]| b[8] == 0x0f && matches!(b[9], 0xb0 | 0xe0) && b[10..12] == [0x5d, 0x40];
     let Some(bytes) = at.checked_sub(4).and_then(|s| kernel.get(s..s + 12)) else {
@@ -228,29 +349,138 @@ fn kernel_byte_store(kernel: &[u8], at: usize) -> bool {
     else {
         return false;
     };
-    let Some(routine) = target(&kernel[load + 3..load + 6], BASE) else {
+    let Some(routine) = target(&kernel[load + 3..load + 6], KERNEL_BASE) else {
         return false;
     };
     if kernel[load + 2] != 0
         || !masked(kernel, routine, BYTE_STORE.0, BYTE_STORE.1)
-        || !target(&kernel[routine + 25..routine + 28], BASE)
+        || !target(&kernel[routine + 25..routine + 28], KERNEL_BASE)
             .is_some_and(|store| masked(kernel, store, STORE.0, STORE.1))
     {
         return false;
     }
-    let mut p = load + 6;
-    while p < at + 8 {
-        let Ok(decoded) = decode_insn(&kernel[p..], Target::H8S2000, Mode::Advanced) else {
-            return false;
-        };
-        let insn = decoded.insn;
-        let call_er4 = insn.mnemonic == "JSR" && kernel[p..p + 2] == [0x5d, 0x40];
-        if !call_er4 && (uses_register_4(&insn) || matches!(insn.mnemonic, "RTS" | "RTE" | "JMP")) {
-            return false;
-        }
-        p += decoded.len;
+    kernel_dominated_store(kernel, load, at + 6).unwrap_or_default()
+}
+
+fn kernel_dominated_store(kernel: &[u8], load: usize, call: usize) -> Option<bool> {
+    use alloc::collections::{BTreeMap, BTreeSet};
+    let entry = (load.saturating_sub(0x2000)..load)
+        .step_by(2)
+        .rev()
+        .find(|&p| p % 2 == load % 2 && kernel[p..p + 2] == [0x54, 0x70])?
+        + 2;
+    if kernel.get(entry..entry + 4)? != [1, 0, 0x6d, 0xf3] {
+        return Some(false);
     }
-    p == at + 8
+    let nodes = kernel_routine(kernel, entry)?;
+    if !nodes.contains_key(&load) || !nodes.contains_key(&call) {
+        return Some(false);
+    }
+    let mut predecessors: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (&pc, (_, successors, _)) in &nodes {
+        for &s in successors {
+            predecessors.entry(s).or_default().push(pc);
+        }
+    }
+    // Dominance: the call is unreachable from the entry once the load is cut.
+    let mut seen = BTreeSet::new();
+    let mut todo = alloc::vec![entry];
+    while let Some(pc) = todo.pop() {
+        if pc == load || !seen.insert(pc) {
+            continue;
+        }
+        if pc == call {
+            return Some(false);
+        }
+        todo.extend(nodes.get(&pc).map_or(&[][..], |n| n.1.as_slice()));
+    }
+    // Instructions on some load-to-call path (not re-passing the load).
+    let mut forward = BTreeSet::new();
+    let mut todo: Vec<usize> = nodes[&load].1.clone();
+    while let Some(pc) = todo.pop() {
+        if pc == load || !forward.insert(pc) {
+            continue;
+        }
+        todo.extend(nodes.get(&pc).map_or(&[][..], |n| n.1.as_slice()));
+    }
+    let mut backward = BTreeSet::new();
+    let mut todo = alloc::vec![call];
+    while let Some(pc) = todo.pop() {
+        if pc == load || !backward.insert(pc) {
+            continue;
+        }
+        todo.extend(predecessors.get(&pc).map_or(&[][..], Vec::as_slice));
+    }
+    for pc in forward.intersection(&backward) {
+        let insn = &nodes[pc].2;
+        let call_er4 = insn.mnemonic == "JSR" && kernel[*pc..*pc + 2] == [0x5d, 0x40];
+        if !call_er4 && uses_register_4(insn) {
+            return Some(false);
+        }
+    }
+    // `backward` holds every instruction reaching the call without the load:
+    // a direct entry into one of them from outside the routine bypasses it.
+    let interior = |target: usize| backward.contains(&target);
+    for at in (0..kernel.len()).step_by(2) {
+        // The routine's own references are its decoded edges above.
+        if nodes
+            .range(..=at)
+            .next_back()
+            .is_some_and(|(&pc, n)| at < pc + n.0)
+        {
+            continue;
+        }
+        let pc = |len: usize, delta: isize| (at + len).checked_add_signed(delta);
+        let entered = match &kernel[at..] {
+            [0x5e | 0x5a, a, b, c, ..] => target(&[*a, *b, *c], KERNEL_BASE),
+            [0, 0x40, a, b, ..] => target(&[0x40, *a, *b], KERNEL_BASE),
+            [0x40..=0x4f | 0x55, delta, ..] => pc(2, *delta as i8 as isize),
+            [0x58, cond, a, b, ..] if cond & 15 == 0 => {
+                pc(4, i16::from_be_bytes([*a, *b]) as isize)
+            }
+            [0x5c, 0, a, b, ..] => pc(4, i16::from_be_bytes([*a, *b]) as isize),
+            _ => None,
+        };
+        if entered.is_some_and(interior) && !neighbour_operand(kernel, at) {
+            return Some(false);
+        }
+    }
+    Some(true)
+}
+
+/// Exact native saved-register routine entries after an RTS (the same forms
+/// `cache_flow` accepts): MOV.L ER3,@-ER7; STM (ER4-ER6); STM (ER4-ER5).
+const NEIGHBOUR_PROLOGUES: [[u8; 4]; 3] = [
+    [1, 0, 0x6d, 0xf3],
+    [1, 0x20, 0x6d, 0xf4],
+    [1, 0x10, 0x6d, 0xf4],
+];
+
+/// A raw byte hit at `at` is no instruction only when it lies strictly inside
+/// an operand of a neighbouring routine that starts with an exact native
+/// prologue after an RTS and decodes completely by bounded control flow.
+fn neighbour_operand(kernel: &[u8], at: usize) -> bool {
+    let Some(rts) = (at.saturating_sub(0x2000)..at)
+        .step_by(2)
+        .rev()
+        .find(|&p| p % 2 == at % 2 && kernel[p..p + 2] == [0x54, 0x70])
+    else {
+        return false;
+    };
+    let entry = rts + 2;
+    if !kernel
+        .get(entry..entry + 4)
+        .is_some_and(|head| NEIGHBOUR_PROLOGUES.iter().any(|p| head == p))
+    {
+        return false;
+    }
+    let Some(nodes) = kernel_routine(kernel, entry) else {
+        return false;
+    };
+    nodes
+        .range(..at)
+        .next_back()
+        .is_some_and(|(&pc, n)| pc < at && at < pc + n.0)
 }
 
 /// Prove that the target Normal and its held Kernel have no fixed 0x009F
@@ -260,7 +490,8 @@ fn kernel_byte_store(kernel: &[u8], at: usize) -> bool {
 /// generation audited without the 0x400A00 Kernel service table.
 pub fn absent(normal: &[u8], kernel: Option<&[u8]>, sat1: bool) -> Option<Absence> {
     let kernel = kernel?;
-    let miss = inspect(normal, Some(kernel))?;
+    let stored_normal = stored(normal)?;
+    let miss = miss(normal, &stored_normal, Some(kernel))?;
     let Getter::Bound(component, getter, register) = miss.getter else {
         return None;
     };
@@ -274,15 +505,15 @@ pub fn absent(normal: &[u8], kernel: Option<&[u8]>, sat1: bool) -> Option<Absenc
             if !kernel_byte_store(&kernel, at) {
                 return None;
             }
-            kernel_stores.push(0x400000 + at as u32);
+            kernel_stores.push(KERNEL_BASE + at as u32);
         }
     }
-    let normal = stored(normal)?;
+    let normal = &*stored_normal;
     let anchors: Vec<usize> = (0..normal.len())
         .step_by(2)
         .filter(|&at| {
-            masked(&normal, at, ANCHOR_ER1.0, ANCHOR_ER1.1)
-                || masked(&normal, at, ANCHOR_ER2.0, ANCHOR_ER2.1)
+            masked(normal, at, ANCHOR_ER1.0, ANCHOR_ER1.1)
+                || masked(normal, at, ANCHOR_ER2.0, ANCHOR_ER2.1)
         })
         .collect();
     let base = super::BASE as u32;
@@ -296,13 +527,19 @@ pub fn absent(normal: &[u8], kernel: Option<&[u8]>, sat1: bool) -> Option<Absenc
                 (getter >> 8) as u8,
                 getter as u8,
             ];
-            let basis = if miss.reads.is_empty() && slot[8] == 0x5e && slot[8..] != call {
+            // Empty: exactly three JSRs, none to the getter, so the slot
+            // itself loads no index (a 0x9F load passed to a wrapper is a read).
+            let basis = if miss.reads.is_empty()
+                && slot
+                    .chunks_exact(4)
+                    .all(|jsr| jsr[0] == 0x5e && jsr != call)
+            {
                 Basis::EmptySlot
             } else if slot[4..6] == [0x79, register]
                 && slot[8..] == call
                 && normal[at + 1] == 1
                 && target(&normal[at + 15..at + 18], base)
-                    .is_some_and(|callee| masked(&normal, callee, R0_OVERWRITE.0, R0_OVERWRITE.1))
+                    .is_some_and(|callee| masked(normal, callee, R0_OVERWRITE.0, R0_OVERWRITE.1))
             {
                 let read = base + at as u32 - 8;
                 let word = u16::from_be_bytes([slot[6], slot[7]]);
@@ -321,8 +558,11 @@ pub fn absent(normal: &[u8], kernel: Option<&[u8]>, sat1: bool) -> Option<Absenc
             (basis, Some(base + at as u32))
         }
         [] => {
+            // JSR/JMP @aa:24 or any aligned 32-bit literal (pointer or
+            // MOV.L #imm immediate) naming the service is a reference.
             let service = (0..normal.len().saturating_sub(3)).step_by(2).any(|at| {
-                matches!(normal[at], 0x5e | 0x5a) && normal[at + 1..at + 4] == [0x40, 0x0a, 0x1a]
+                matches!(normal[at], 0 | 0x5e | 0x5a)
+                    && normal[at + 1..at + 4] == [0x40, 0x0a, 0x1a]
             });
             if !sat1 || service || !miss.reads.is_empty() {
                 return None;
@@ -401,8 +641,11 @@ pub(crate) mod tests {
         let mut kernel = alloc::vec![0xff; 0x4000];
         kernel[0x1000..0x1000 + KERNEL_ROUTINE.len()].copy_from_slice(KERNEL_ROUTINE);
         kernel[0x1100..0x1100 + KERNEL_STORE.len()].copy_from_slice(KERNEL_STORE);
+        // Enclosing routine: RTS of the previous one, then its prologue.
+        kernel[0x1ffa..0x2000].copy_from_slice(&[0x54, 0x70, 1, 0, 0x6d, 0xf3]);
         kernel[0x2000..0x2006].copy_from_slice(&[0x7a, 4, 0, 0x40, 0x10, 0]);
         kernel[0x2006..0x2006 + KERNEL_SITE.len()].copy_from_slice(KERNEL_SITE);
+        kernel[0x2020..0x2022].copy_from_slice(&[0x54, 0x70]);
         kernel
     }
 
@@ -576,5 +819,148 @@ pub(crate) mod tests {
         ]);
         gated[0x1800..0x1806].copy_from_slice(&[0x5e, 0x40, 0x0a, 0x1a, 0x54, 0x70]);
         assert_eq!(inspect(&gated, None), None);
+    }
+
+    #[test]
+    fn slot_index_load_into_a_non_getter_call_is_not_an_empty_slot() {
+        // JSR; MOV.W #9F,R0; JSR wrapper: the slot passes 0x009F onward.
+        let mut normal = empty_slot_normal();
+        normal[0x104..0x108].copy_from_slice(&[0x79, 0, 0, 0x9f]);
+        assert_eq!(absent(&normal, Some(&kernel()), false), None);
+    }
+
+    #[test]
+    fn relative_getter_calls_are_reads() {
+        let mut normal = empty_slot_normal();
+        // MOV.W #9F,R0; BSR.W getter (0x410088 + 0xf78 = 0x411000).
+        normal[0x80..0x88].copy_from_slice(&[0x79, 0, 0, 0x9f, 0x5c, 0, 0x0f, 0x78]);
+        assert_eq!(inspect(&normal, None).unwrap().reads, alloc::vec![0x410080]);
+        assert_eq!(absent(&normal, Some(&kernel()), false), None);
+        // BSR.B form, with the getter in reach.
+        let mut near = self::normal();
+        near[0xf80..0xf86].copy_from_slice(&[0x79, 0, 0, 0x9f, 0x55, 0x7a]);
+        assert_eq!(inspect(&near, None).unwrap().reads, alloc::vec![0x410f80]);
+        assert_eq!(absent(&near, Some(&kernel()), true), None);
+    }
+
+    #[test]
+    fn branch_between_er4_load_and_site_is_not_straight_line() {
+        let normal = normal();
+        let mut kernel = kernel();
+        // BRA past the site directly after the ER4 load.
+        kernel.copy_within(0x2006..0x2012, 0x2008);
+        kernel[0x2006..0x2008].copy_from_slice(&[0x40, 0x0c]);
+        assert_eq!(absent(&normal, Some(&kernel), true), None);
+        // An arm join inside the range (BRA to the site start) still holds.
+        kernel[0x2007] = 0;
+        assert!(absent(&normal, Some(&kernel), true).is_some());
+    }
+
+    #[test]
+    fn branch_into_an_instruction_operand_is_not_straight_line() {
+        let normal = normal();
+        let mut kernel = kernel();
+        // ER4 load; BRA +2; MOV.W #0x0B74,R0; site. The BRA lands on the
+        // immediate 0B 74 = INC.L #1,ER4, which is never decoded.
+        kernel.copy_within(0x2006..0x2012, 0x200c);
+        kernel[0x2006..0x200c].copy_from_slice(&[0x40, 0x02, 0x79, 0x00, 0x0b, 0x74]);
+        assert_eq!(absent(&normal, Some(&kernel), true), None);
+        // The same BRA to the MOV's own start still holds.
+        kernel[0x2007] = 0;
+        assert!(absent(&normal, Some(&kernel), true).is_some());
+    }
+
+    #[test]
+    fn branch_into_the_er4_load_operand_is_not_straight_line() {
+        let normal = normal();
+        let mut kernel = kernel();
+        // Byte-store routine at 0x0B74: the load MOV.L #0x400B74,ER4 ends in
+        // 0B 74 (INC.L #1,ER4). A backward BNE -4 lands on that operand.
+        kernel[0xb74..0xb74 + KERNEL_ROUTINE.len()].copy_from_slice(KERNEL_ROUTINE);
+        kernel[0x2004..0x2006].copy_from_slice(&[0x0b, 0x74]);
+        kernel.copy_within(0x2006..0x2012, 0x2008);
+        kernel[0x2006..0x2008].copy_from_slice(&[0x46, 0xfc]);
+        assert_eq!(absent(&normal, Some(&kernel), true), None);
+        // A backward branch to the load instruction itself still holds.
+        kernel[0x2007] = 0xf8;
+        assert!(absent(&normal, Some(&kernel), true).is_some());
+    }
+
+    #[test]
+    fn er4_load_straddled_by_a_preceding_instruction_is_not_executed() {
+        let normal = normal();
+        let mut kernel = kernel();
+        // Prologue, then 7A 00 = MOV.L #imm32,ER0 swallowing the load's first
+        // four bytes: the ER4 load is never decoded or executed.
+        kernel[0x1ff8..0x2000].copy_from_slice(&[0x54, 0x70, 1, 0, 0x6d, 0xf3, 0x7a, 0]);
+        assert_eq!(absent(&normal, Some(&kernel), true), None);
+    }
+
+    #[test]
+    fn branch_from_before_the_er4_load_into_the_range_skips_it() {
+        let normal = normal();
+        let mut kernel = kernel();
+        // Prologue, then BRA to the site start, skipping the ER4 load.
+        kernel[0x1ff8..0x2000].copy_from_slice(&[0x54, 0x70, 1, 0, 0x6d, 0xf3, 0x40, 0x06]);
+        assert_eq!(absent(&normal, Some(&kernel), true), None);
+    }
+
+    #[test]
+    fn back_edge_after_the_site_that_writes_er4_refuses() {
+        let normal = normal();
+        let mut kernel = kernel();
+        // After JSR @ER4: INC.L #1,ER4; BNE back to the site start.
+        kernel[0x2012..0x2016].copy_from_slice(&[0x0b, 0x74, 0x46, 0xf0]);
+        assert_eq!(absent(&normal, Some(&kernel), true), None);
+    }
+
+    #[test]
+    fn neighbour_operand_bytes_are_not_branches_but_its_branches_are() {
+        let normal = normal();
+        let mut kernel = kernel();
+        // Neighbouring routine: prologue; MOV.L #0x580000FC,ER0; RTS. Its
+        // operand bytes 58 00 00 FC read raw as BRA.W to the site start.
+        kernel[0x1efe..0x1f0c].copy_from_slice(&[
+            0x54, 0x70, 1, 0, 0x6d, 0xf3, 0x7a, 0, 0x58, 0, 0, 0xfc, 0x54, 0x70,
+        ]);
+        assert!(absent(&normal, Some(&kernel), true).is_some());
+        // The same bytes as a decoded BRA.W of that neighbour enter the routine.
+        kernel[0x1f04..0x1f0a].copy_from_slice(&[0x58, 0, 0x00, 0xfe, 0x54, 0x70]);
+        assert_eq!(absent(&normal, Some(&kernel), true), None);
+        // An STM (ER4-ER6) neighbour, as in the SAT 8D30 Kernel, is decoded.
+        let mut stm = self::kernel();
+        stm[0x1efe..0x1f0c].copy_from_slice(&[
+            0x54, 0x70, 1, 0x20, 0x6d, 0xf4, 0x7a, 0, 0x58, 0, 0, 0xfc, 0x54, 0x70,
+        ]);
+        assert!(absent(&normal, Some(&stm), true).is_some());
+        // A neighbour without an exact native prologue is not decoded: refuse.
+        let mut other = self::kernel();
+        other[0x1efe..0x1f0c].copy_from_slice(&[
+            0x54, 0x70, 1, 0x30, 0x6d, 0xf4, 0x7a, 0, 0x58, 0, 0, 0xfc, 0x54, 0x70,
+        ]);
+        assert_eq!(absent(&normal, Some(&other), true), None);
+    }
+
+    #[test]
+    fn eepmov_between_er4_load_and_site_writes_r4() {
+        let normal = normal();
+        let mut kernel = kernel();
+        // RTS; prologue; MOV.L #0x401000,ER4; EEPMOV.W; NOP x3; site at 0x2006.
+        kernel[0x1ff0..0x2006].copy_from_slice(&[
+            0x54, 0x70, 1, 0, 0x6d, 0xf3, 0x7a, 4, 0, 0x40, 0x10, 0, 0x7b, 0xd4, 0x59, 0x8f, 0, 0,
+            0, 0, 0, 0,
+        ]);
+        assert_eq!(absent(&normal, Some(&kernel), true), None);
+        // Control: the same layout with NOPs in place of EEPMOV holds.
+        kernel[0x1ffc..0x2000].fill(0);
+        assert!(absent(&normal, Some(&kernel), true).is_some());
+    }
+
+    #[test]
+    fn literal_service_address_defeats_the_no_service_proof() {
+        let mut normal = normal();
+        // MOV.L #0x400A1A,ER1; JSR @ER1.
+        normal[0x200..0x208].copy_from_slice(&[0x7a, 1, 0, 0x40, 0x0a, 0x1a, 0x5d, 0x10]);
+        assert_eq!(absent(&normal, Some(&kernel()), true), None);
     }
 }

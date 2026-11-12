@@ -10,7 +10,7 @@
 //! are not admission. This owner is Operational, not Hardware: it never joins
 //! the family identity key; it gates the directed pair.
 use super::{Assessment, Comparison, Context, Filter, Finding, Role, Value};
-use crate::startup::bank::{self, Addresses, Storage};
+use crate::startup::bank::{Addresses, Storage};
 use crate::startup::capacity::Evidence;
 use alloc::string::ToString;
 
@@ -30,7 +30,7 @@ static RULES: super::Rules = super::Rules {
     correction: "Never corrected. The discriminator relation must be proved, or the directed pair refuses with code pioneer.startup.capacity_relation_unproved.",
     policies: &[super::Policy {
         domains: &[],
-        text: "A capacity-dependent contract relates only with an unchanged complete pair, an address expression independent of the discriminator, or the same discriminator over identical address cases: its query and its decision match exactly, and only link layout and side calls that cannot touch the query's hardware may differ. The proof is derived from the two images with h8-asm (no live query), so the offline and online compares are equal and the proof can only under-admit. Fixed, collapsed, or non-capacity contracts need no discriminator proof here and defer to the bank/geometry owner.",
+        text: "A capacity-dependent contract relates only with an unchanged complete pair, an address expression independent of the discriminator, or the same discriminator over identical address cases: its query and its decision match exactly, and only link layout and side calls that cannot touch the query's hardware may differ. The proof is derived from the two images with h8-asm (no live query), so the offline and online compares are equal and the proof can only under-admit. Fixed, collapsed, or non-capacity contracts need no discriminator proof here and defer to the bank/geometry owner; a recognized capacity guard whose address calculation is unresolved stays Unresolved.",
     }],
 };
 
@@ -46,20 +46,29 @@ impl Filter for Capacity {
     }
     fn inspect(&self, context: &Context<'_>) -> Assessment {
         let firmware = context.firmware;
+        let (evidence, banks) = Evidence::discover(firmware.normal, firmware.kernel);
         // The discriminator relation applies only to a versioned capacity
         // contract whose two address cases differ; everything else (fixed,
         // collapsed, state-header, kernel-sequence, or no contract) needs no
         // discriminator proof and the bank/geometry owner compares it.
         let needs_proof = matches!(
-            bank::analyze_pair(firmware.normal, firmware.kernel),
+            banks.storage,
             Some(Storage::Versioned(contract))
                 if matches!(
                     contract.addresses,
                     Addresses::Capacity { when_one, otherwise } if when_one != otherwise
                 )
         );
+        // A recognized capacity guard whose address calculation is unresolved
+        // is missing evidence, not proof that no discriminator selects banks.
+        if banks.capacity_guard && banks.capacity_query.is_none() {
+            return Assessment::unresolved(
+                ID,
+                Role::Operational,
+                "A versioned capacity guard is present but its persistent-bank address calculation is unresolved",
+            );
+        }
         if needs_proof {
-            let evidence = Evidence::discover(firmware.normal, firmware.kernel);
             Assessment::known(
                 ID,
                 Role::Operational,
@@ -88,10 +97,11 @@ impl Filter for Capacity {
         match (&installed.finding, &target.finding) {
             (Finding::Conflicting(_), _) | (_, Finding::Conflicting(_)) => Comparison::Conflicting,
             (Finding::Unresolved(_), _) | (_, Finding::Unresolved(_)) => Comparison::Unresolved,
-            (
-                Finding::NotApplicable { proof: a, .. },
-                Finding::NotApplicable { proof: b, .. },
-            ) if a == b => Comparison::Match,
+            (Finding::NotApplicable { proof: a, .. }, Finding::NotApplicable { proof: b, .. })
+                if a == b =>
+            {
+                Comparison::Match
+            }
             (Finding::Known(Value::Bytes(a)), Finding::Known(Value::Bytes(b))) => {
                 match (Evidence::decode(a), Evidence::decode(b)) {
                     (Some(installed), Some(target)) if installed.relates(target) => {
@@ -136,7 +146,10 @@ mod tests {
         // Two non-capacity images defer (Match): the bank/geometry owner decides.
         let mut other = fixed.clone();
         other[0] ^= 1;
-        assert_eq!(FILTER.compare(&a, &inspect(&other, None)), Comparison::Match);
+        assert_eq!(
+            FILTER.compare(&a, &inspect(&other, None)),
+            Comparison::Match
+        );
     }
 
     #[test]
@@ -160,6 +173,38 @@ mod tests {
             FILTER.compare(&no_kernel, &no_kernel),
             Comparison::Different
         );
+    }
+
+    #[test]
+    fn a_capacity_guard_with_an_unresolved_address_calculation_is_unresolved() {
+        let mut normal = bank::versioned_fixture(0xfedc_4321, [0xfffa, 0x1_fffa]);
+        // Break the base calculation's MOV.L #end,ER1: the guard is still
+        // recognized, but its persistent-bank addresses are not.
+        normal[0x1404..0x1406].copy_from_slice(&[0, 0]);
+        assert!(bank::discover(&normal).is_some());
+        assert_eq!(bank::analyze_pair(&normal, None), None);
+        let a = inspect(&normal, None);
+        assert!(
+            matches!(a.finding, Finding::Unresolved(_)),
+            "{:?}",
+            a.finding
+        );
+        assert_eq!(FILTER.compare(&a, &a), Comparison::Unresolved);
+    }
+
+    #[test]
+    fn two_capacity_guards_are_unresolved_not_absent() {
+        let mut normal = bank::versioned_fixture(0xfedc_4321, [0xfffa, 0x1_fffa]);
+        let copy = normal[0x1000..0x1092].to_vec();
+        normal[0x2000..0x2092].copy_from_slice(&copy);
+        assert_eq!(bank::discover(&normal), None);
+        let a = inspect(&normal, None);
+        assert!(
+            matches!(a.finding, Finding::Unresolved(_)),
+            "{:?}",
+            a.finding
+        );
+        assert_eq!(FILTER.compare(&a, &a), Comparison::Unresolved);
     }
 
     #[test]

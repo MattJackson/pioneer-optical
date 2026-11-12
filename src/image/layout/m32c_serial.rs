@@ -13,6 +13,13 @@ fn u24(bytes: &[u8]) -> u32 {
     u32::from_le_bytes([bytes[0], bytes[1], bytes[2], 0])
 }
 
+/// Whether any traced serial protocol routine is present, bound or not.
+pub(crate) fn serial_present(body: &[u8]) -> bool {
+    [WORD_READ, WORD_WRITE, WRITE_ENABLE, WRITE_DISABLE]
+        .iter()
+        .any(|pattern| body.windows(pattern.len()).any(|b| b == *pattern))
+}
+
 /// Recognize a native M32C serial mechanical-parameter reader.
 ///
 /// `normal_base` is the CPU load address of `body`, established by the component
@@ -71,11 +78,11 @@ pub fn discover_m32c_serial(body: &[u8], normal_base: u32) -> Observation<Parame
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use alloc::vec;
 
-    fn fixture() -> Vec<u8> {
+    pub(crate) fn fixture() -> Vec<u8> {
         let mut b = vec![0; 512];
         for (at, bytes) in [
             (0, WORD_READ),

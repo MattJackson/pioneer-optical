@@ -200,14 +200,28 @@ fn record_format_and_missing_kernel_differences_refuse() {
         plan(&source, &Context::new(fw(&forty, &k))),
         Err(Error::Incompatible)
     );
-    let other_address = variant(&n);
-    let mut unrelated = other_address.clone();
+    // An unrelated byte alone keeps the layout and is not refused.
+    let mut unrelated = n.clone();
     unrelated[0x9000] ^= 1;
     fix(&mut unrelated);
-    assert_eq!(
-        plan(&source, &Context::new(fw(&unrelated, &k))),
-        Err(Error::Incompatible)
-    );
+    assert_eq!(plan(&source, &Context::new(fw(&unrelated, &k))), Ok(false));
+    // A Normal whose reader is Kernel-resident, supplied without its Kernel.
+    let mut resident = n.clone();
+    resident[0x1000..0x3000].fill(0xff);
+    resident[0x8000..0x8018].copy_from_slice(&[
+        0x79, 0, 0, 0xa4, 0x5e, 0x40, 1, 0, 0x6f, 0xf0, 0, 4, 0x79, 0, 0, 0xa5, 0x5e, 0x40, 1, 0,
+        0x6f, 0xf0, 0, 6,
+    ]);
+    fix(&mut resident);
+    let missing = Context::new(Firmware {
+        kernel: None,
+        ..fw(&resident, &k)
+    });
+    assert!(matches!(
+        FILTER.inspect(&missing).finding,
+        Finding::Unresolved(_)
+    ));
+    assert_eq!(plan(&source, &missing), Err(Error::UnresolvedIdentity));
 }
 
 #[test]

@@ -29,10 +29,11 @@ pub struct Checks {
 impl Checks {
     /// Inspect decoded components without device I/O or selecting writes.
     pub fn discover(normal: &[u8], kernel: Option<&[u8]>) -> Self {
+        let (capacity, banks) = capacity::Evidence::discover(normal, kernel);
         Self {
             word: super::analyze(normal),
-            banks: bank::analyze_pair(normal, kernel),
-            capacity: capacity::Evidence::discover(normal, kernel),
+            banks: banks.storage,
+            capacity,
         }
     }
     /// Stable reporting order, shared by planning and catalogue consumers.
@@ -103,6 +104,7 @@ impl Plan {
 
 /// A startup requirement prevented preparing the complete set of checks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     /// The target has conflicting native word comparisons.
     AmbiguousWord,
@@ -135,7 +137,7 @@ impl std::error::Error for Error {
 impl crate::CodedError for Error {
     fn code(&self) -> &'static str {
         match self {
-            Self::AmbiguousWord => "pioneer.preparation.ambiguous_startup",
+            Self::AmbiguousWord => "pioneer.prepare.ambiguous_startup",
             Self::Banks(e) => e.code(),
             Self::CapacityRelationUnproved => "pioneer.startup.capacity_relation_unproved",
         }
@@ -215,7 +217,7 @@ mod error_api_tests {
         use std::error::Error as _;
         let ambiguous = Error::AmbiguousWord;
         assert!(ambiguous.to_string().contains("ambiguous"));
-        assert_eq!(ambiguous.code(), "pioneer.preparation.ambiguous_startup");
+        assert_eq!(ambiguous.code(), "pioneer.prepare.ambiguous_startup");
         assert!(ambiguous.source().is_none());
         for cause in [bank::Error::UnknownInstalled, bank::Error::UnknownTarget] {
             let error = Error::Banks(cause);

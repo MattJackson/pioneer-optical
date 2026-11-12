@@ -1,4 +1,5 @@
-//! Export hardware fingerprint evidence from a local hoard as JSON.
+//! Export each hoard package's matrix family, registered filter assessments,
+//! UHD flag and decode basis as JSON.
 use pioneer_optical::{envelope::Envelope, image};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, path::Path};

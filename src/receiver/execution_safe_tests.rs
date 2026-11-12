@@ -56,6 +56,9 @@ struct State {
     fail_write: Option<usize>,
     loader: bool,
     stay_loader: bool,
+    loader_after_identities: Option<usize>,
+    identities: usize,
+    parameter_write_entries: Vec<usize>,
     descriptor_reads: usize,
     change_descriptor_at: Option<usize>,
     wrong_target: Option<usize>,
@@ -138,6 +141,8 @@ impl Transport for Port {
                     s.parameter = u16::from_be_bytes(bytes.try_into().unwrap());
                     let value = s.parameter;
                     s.parameter_writes.push(value);
+                    let entries = s.entries;
+                    s.parameter_write_entries.push(entries);
                 } else if command == cdb::enter_update() {
                     s.entries += 1;
                     s.loader = true;
@@ -198,6 +203,10 @@ impl Transport for Port {
                         bytes[..len].copy_from_slice(&inquiry[..len]);
                     } else {
                         bytes.copy_from_slice(&vendor[..bytes.len()]);
+                        s.identities += 1;
+                        if s.loader_after_identities == Some(s.identities) {
+                            s.loader = true;
+                        }
                     }
                 } else if command[0] == 0x3c {
                     let address = u32::from_be_bytes([0, command[3], command[4], command[5]]);
@@ -1713,4 +1722,512 @@ fn a_correction_word_write_after_the_first_stage_refuses_before_any_write() {
     assert!(!error.write_started());
     assert_eq!(state.borrow().writes, 0);
     assert!(state.borrow().parameter_writes.is_empty());
+}
+
+#[test]
+fn a_marker_route_writes_the_shared_correction_word_once_before_the_first_transfer() {
+    // prepare_inner gives the marker intermediate and the target the same
+    // corrected settings; only the first applies them.
+    let (plan, state) = setup(true);
+    let mut stages = plan.stages().to_vec();
+    assert_eq!(stages.len(), 2);
+    assert_eq!(stages[0].normal_image(), stages[1].normal_image());
+    for stage in &mut stages {
+        with_word_write(stage, 0xfe34);
+    }
+    let outcome = execute_with(&stages, &state, ExecutionMode::Flash).unwrap();
+    assert_eq!(outcome.completed_stages, 2);
+    assert_eq!(state.borrow().parameter_writes, [0xfe34]);
+    assert_eq!(state.borrow().parameter_write_entries, [0]);
+    assert_eq!(state.borrow().parameter, 0xfe34);
+}
+
+#[test]
+fn a_correction_word_write_refuses_when_the_receiver_turns_out_to_be_a_loader() {
+    // Even if preflight would observe the running receiver and the stage's
+    // own identity read then reports the loader, the corrected firmware is
+    // never transferred without its word: Recovery refuses the write.
+    let (plan, state) = setup(false);
+    let mut stages = plan.stages().to_vec();
+    assert_eq!(stages.len(), 1);
+    with_word_write(&mut stages[0], 0xfe34);
+    state.borrow_mut().loader_after_identities = Some(1);
+    let error = execute_with(&stages, &state, ExecutionMode::Recovery).unwrap_err();
+    assert!(!error.write_started(), "{error}");
+    assert_eq!(state.borrow().writes, 0);
+    assert_eq!(state.borrow().entries, 0);
+    assert!(state.borrow().parameter_writes.is_empty());
+}
+
+#[test]
+fn a_flash_word_write_refuses_when_the_stage_bind_finds_a_loader() {
+    // Preflight binds the running receiver; the drive then reports the
+    // loader at the stage's own bind. Flash never accepts a loader there, so
+    // the corrected firmware is never transferred without its word.
+    let (plan, state) = setup(false);
+    let mut stages = plan.stages().to_vec();
+    assert_eq!(stages.len(), 1);
+    with_word_write(&mut stages[0], 0xfe34);
+    state.borrow_mut().loader_after_identities = Some(1);
+    let error = execute_with(&stages, &state, ExecutionMode::Flash).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            ExecutionError::IdentityMismatch { target: false, .. }
+        ),
+        "{error}"
+    );
+    assert!(!error.write_started(), "{error}");
+    assert_eq!(state.borrow().identities, 2);
+    assert_eq!(state.borrow().writes, 0);
+    assert_eq!(state.borrow().entries, 0);
+    assert!(state.borrow().parameter_writes.is_empty());
+}
+
+#[test]
+fn check_plan_refuses_marker_route_word_writes_that_differ_from_stage_zero() {
+    // A marker intermediate reuses stage 0's settings transaction, so its
+    // later stage may only repeat stage 0's exact writes.
+    for (first, second) in [(None, Some(0xfe34)), (Some(0xfe34), Some(0xfe35))] {
+        let (mut plan, state) = setup(true);
+        assert_eq!(plan.stages().len(), 2);
+        if let Some(value) = first {
+            with_word_write(&mut plan.stages[0], value);
+        }
+        if let Some(value) = second {
+            with_word_write(&mut plan.stages[1], value);
+        }
+        let error = plan.check_plan(ExecutionMode::Flash).unwrap_err();
+        assert_eq!(error.reason(), PlanReason::StartupWordPlacement);
+        assert!(run(&plan, &state, ExecutionMode::Flash).is_err());
+        assert_eq!(state.borrow().identities, 0);
+        assert_eq!(state.borrow().writes, 0);
+    }
+}
+
+#[test]
+fn word_write_refusals_precede_the_live_requirement_reads() {
+    use crate::filters::prerequisites::{OwnedWord, Word};
+    // A Recovery word write and a misplaced handoff word write both refuse
+    // before the read-only requirement preflight binds the receiver.
+    for (handoff, mode) in [
+        (false, ExecutionMode::Recovery),
+        (true, ExecutionMode::Flash),
+    ] {
+        let (plan, state) = if handoff {
+            setup_handoff_bridge(false)
+        } else {
+            setup(false)
+        };
+        let mut stages = plan.stages().to_vec();
+        let last = stages.last_mut().unwrap();
+        last.settings = last.settings.clone().with_correction(Some(
+            crate::compatibility::PreparedCorrection::native(
+                last.normal.image.clone(),
+                &[],
+                vec![OwnedWord {
+                    filter: "phase",
+                    word: Word {
+                        parameter: 0x28f,
+                        value: 1,
+                    },
+                }],
+                vec![OwnedWord {
+                    filter: "startup-prerequisite",
+                    word: Word {
+                        parameter: 0x9f,
+                        value: 0xfe34,
+                    },
+                }],
+            ),
+        ));
+        let error = execute_with(&stages, &state, mode).unwrap_err();
+        assert!(
+            matches!(&error, ExecutionError::BeforeWrite(source)
+                if matches!(source.as_ref(), ExecutionError::Plan(_))),
+            "{error}"
+        );
+        assert_eq!(state.borrow().identities, 0, "{error}");
+        assert_eq!(state.borrow().prerequisite_reads, 0);
+        assert_eq!(state.borrow().writes, 0);
+    }
+}
+
+#[test]
+fn a_failed_correction_word_write_rolls_back_before_any_firmware_write() {
+    let (plan, state) = setup(false);
+    let mut stages = plan.stages().to_vec();
+    with_word_write(&mut stages[0], 0xfe34);
+    state.borrow_mut().fail_write = Some(1);
+    let error = execute_with(&stages, &state, ExecutionMode::Flash).unwrap_err();
+    assert!(!error.firmware_write_started(), "{error}");
+    assert_eq!(state.borrow().entries, 0);
+    assert_eq!(state.borrow().finishes, 0);
+    assert_eq!(state.borrow().parameter, 0xfe24);
+    assert!(matches!(
+        &error,
+        ExecutionError::Startup(source)
+            if matches!(source.as_ref(), crate::startup::migration::Error::Change { .. })
+    ));
+}
+
+#[test]
+fn a_correction_word_write_is_rolled_back_when_the_stage_stops_before_transfer() {
+    let (plan, state) = setup(false);
+    let mut stages = plan.stages().to_vec();
+    with_word_write(&mut stages[0], 0xfe34);
+    // Preflight, stage binding, then the transfer binding inside the
+    // settings transaction: refuse the third host check.
+    let mut clock = Clock {
+        deny_check: Some(3),
+        ..Clock::default()
+    };
+    let error = execute_stages(
+        &stages,
+        FlashTransport {
+            reads: &mut Port(state.clone()),
+            writes: &mut Port(state.clone()),
+        },
+        &mut clock,
+        ExecutionMode::Flash,
+    )
+    .unwrap_err();
+    assert!(!error.firmware_write_started(), "{error}");
+    assert_eq!(state.borrow().entries, 0);
+    assert_eq!(state.borrow().parameter_writes, [0xfe34, 0xfe24]);
+    assert_eq!(state.borrow().parameter, 0xfe24);
+}
+
+#[test]
+fn a_correction_word_write_refuses_in_recovery_even_on_a_running_receiver() {
+    // Recovery plans from caller-supplied Current evidence; the word write is
+    // normal-mode Flash only, so refuse before any I/O.
+    let (plan, state) = setup(false);
+    let mut stages = plan.stages().to_vec();
+    with_word_write(&mut stages[0], 0xfe34);
+    let error = execute_with(&stages, &state, ExecutionMode::Recovery).unwrap_err();
+    assert!(!error.write_started(), "{error}");
+    assert_eq!(state.borrow().writes, 0);
+    assert_eq!(state.borrow().identities, 0);
+    assert!(state.borrow().parameter_writes.is_empty());
+}
+
+#[test]
+fn a_prerequisite_mismatch_names_the_word_in_hex() {
+    use crate::filters::prerequisites::{CheckError, OwnedWord, Word};
+    let error: ExecutionError<&'static str> = ExecutionError::Prerequisite(CheckError::Mismatch {
+        required: OwnedWord {
+            filter: "phase",
+            word: Word {
+                parameter: 0x28f,
+                value: 1,
+            },
+        },
+        actual: 0,
+    });
+    assert_eq!(
+        error.to_string(),
+        "read-only correction prerequisite: phase requires word 0x28f == 0x0001; the drive holds 0x0000"
+    );
+}
+
+#[test]
+fn check_plan_admits_a_marker_route_with_a_shared_stage_zero_word_write() {
+    let (mut plan, _) = setup(true);
+    assert_eq!(plan.stages().len(), 2);
+    assert_eq!(
+        plan.stages()[0].bridge(),
+        Some(crate::receiver::BridgeKind::ReceiverMarker)
+    );
+    for stage in &mut plan.stages {
+        with_word_write(stage, 0xfe34);
+    }
+    assert_eq!(plan.check_plan(ExecutionMode::Flash), Ok(()));
+}
+
+#[test]
+fn check_plan_refuses_a_handoff_route_word_write_outside_stage_zero_in_every_mode() {
+    let (mut plan, state) = setup_handoff_bridge(false);
+    assert!(plan.stages().len() > 1);
+    assert_eq!(
+        plan.stages()[0].bridge(),
+        Some(crate::receiver::BridgeKind::KernelHandoff)
+    );
+    with_word_write(&mut plan.stages[0], 0xfe34);
+    with_word_write(plan.stages.last_mut().unwrap(), 0xfe35);
+    for mode in [ExecutionMode::Flash, ExecutionMode::Recovery] {
+        let error = plan.check_plan(mode).unwrap_err();
+        assert_eq!(
+            error.detail(),
+            "a startup word write must precede the first transfer"
+        );
+        assert_eq!(crate::CodedError::code(&error), "pioneer.execute.plan");
+        // The executor reports the same refusal before any device I/O.
+        let executed = plan
+            .execute(
+                FlashTransport {
+                    reads: &mut Port(state.clone()),
+                    writes: &mut Port(state.clone()),
+                },
+                &mut Clock::default(),
+                mode,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(&executed, ExecutionError::BeforeWrite(source)
+                if matches!(source.as_ref(), ExecutionError::Plan(reason) if *reason == error.detail())),
+            "{executed}"
+        );
+        assert_eq!(state.borrow().identities, 0);
+        assert_eq!(state.borrow().writes, 0);
+    }
+}
+
+#[test]
+fn check_plan_refuses_any_word_write_in_recovery() {
+    let (mut plan, _) = setup(false);
+    with_word_write(&mut plan.stages[0], 0xfe34);
+    assert_eq!(plan.check_plan(ExecutionMode::Flash), Ok(()));
+    assert_eq!(
+        plan.check_plan(ExecutionMode::Recovery)
+            .unwrap_err()
+            .detail(),
+        "a startup word write is not performed in Recovery mode"
+    );
+}
+
+#[test]
+fn check_plan_refuses_an_empty_plan() {
+    let (mut plan, _) = setup(false);
+    plan.stages.clear();
+    for mode in [ExecutionMode::Flash, ExecutionMode::Recovery] {
+        assert_eq!(
+            plan.check_plan(mode).unwrap_err().detail(),
+            "empty update sequence"
+        );
+    }
+}
+
+#[test]
+fn check_plan_admits_a_plan_without_word_writes_in_recovery() {
+    for restore in [false, true] {
+        let (plan, _) = setup(restore);
+        assert!(plan
+            .stages()
+            .iter()
+            .all(|stage| stage.settings().word_writes().is_empty()));
+        assert_eq!(plan.check_plan(ExecutionMode::Recovery), Ok(()));
+        assert_eq!(plan.check_plan(ExecutionMode::Flash), Ok(()));
+    }
+}
+
+#[test]
+fn check_plan_refuses_conflicting_read_only_requirements() {
+    use crate::filters::prerequisites::{OwnedWord, Word};
+    let (mut plan, _) = setup(true);
+    for (index, stage) in plan.stages.iter_mut().enumerate() {
+        stage.settings = stage.settings.clone().with_correction(Some(
+            crate::compatibility::PreparedCorrection::native(
+                stage.normal.image.clone(),
+                &[],
+                vec![OwnedWord {
+                    filter: "phase",
+                    word: Word {
+                        parameter: 0x28f,
+                        value: index as u16,
+                    },
+                }],
+                Vec::new(),
+            ),
+        ));
+    }
+    assert_eq!(
+        plan.check_plan(ExecutionMode::Flash).unwrap_err().detail(),
+        "invalid or conflicting read-only requirements"
+    );
+}
+
+fn normal_only() -> PreparedNormal {
+    let installed = fixture(false, 1);
+    Receiver::from_installed(&installed)
+        .unwrap()
+        .prepare_normal(installed.normal_transfer())
+        .unwrap()
+}
+
+fn with_requirements(stage: &mut PreparedStage, words: &[(u16, u16)]) {
+    use crate::filters::prerequisites::{OwnedWord, Word};
+    stage.settings = stage.settings.clone().with_correction(Some(
+        crate::compatibility::PreparedCorrection::native(
+            stage.normal.image.clone(),
+            &[],
+            words
+                .iter()
+                .map(|&(parameter, value)| OwnedWord {
+                    filter: "phase",
+                    word: Word { parameter, value },
+                })
+                .collect(),
+            Vec::new(),
+        ),
+    ));
+}
+
+/// The Normal-only executor reports `error` before any device I/O.
+fn assert_normal_only_refuses_before_io(plan: &PreparedNormal, error: PlanError) {
+    let (_, state) = setup(false);
+    let executed = plan
+        .flash(
+            FlashTransport {
+                reads: &mut Port(state.clone()),
+                writes: &mut Port(state.clone()),
+            },
+            &mut Clock::default(),
+        )
+        .unwrap_err();
+    let reason = match &executed {
+        ExecutionError::Plan(reason) => *reason,
+        ExecutionError::BeforeWrite(source) => match source.as_ref() {
+            ExecutionError::Plan(reason) => *reason,
+            other => panic!("{other}"),
+        },
+        other => panic!("{other}"),
+    };
+    assert_eq!(reason, error.detail());
+    assert_eq!(crate::CodedError::code(&executed), "pioneer.execute.plan");
+    let s = state.borrow();
+    assert_eq!(s.identities, 0);
+    assert_eq!(s.writes, 0);
+    assert_eq!(s.prerequisite_reads, 0);
+    assert_eq!(s.descriptor_reads, 0);
+}
+
+#[test]
+fn normal_only_check_plan_admits_a_plain_plan_in_every_mode() {
+    let plan = normal_only();
+    assert!(plan.settings().word_writes().is_empty());
+    for mode in [ExecutionMode::Flash, ExecutionMode::Recovery] {
+        assert_eq!(plan.check_plan(mode), Ok(()));
+    }
+    let (_, state) = setup(false);
+    assert!(plan
+        .flash(
+            FlashTransport {
+                reads: &mut Port(state.clone()),
+                writes: &mut Port(state.clone()),
+            },
+            &mut Clock::default(),
+        )
+        .is_ok());
+}
+
+#[test]
+fn normal_only_check_plan_refuses_a_word_write_only_in_recovery() {
+    let mut plan = normal_only();
+    with_word_write(&mut plan.stage, 0xfe34);
+    assert_eq!(plan.check_plan(ExecutionMode::Flash), Ok(()));
+    let error = plan.check_plan(ExecutionMode::Recovery).unwrap_err();
+    assert_eq!(
+        error.detail(),
+        "a startup word write is not performed in Recovery mode"
+    );
+    assert_eq!(crate::CodedError::code(&error), "pioneer.execute.plan");
+}
+
+#[test]
+fn normal_only_check_plan_refuses_missing_installed_kernel_evidence() {
+    let mut plan = normal_only();
+    plan.stage.receiver.installed_kernel = None;
+    for mode in [ExecutionMode::Flash, ExecutionMode::Recovery] {
+        let error = plan.check_plan(mode).unwrap_err();
+        assert_eq!(error.detail(), "installed Kernel evidence unavailable");
+        assert_eq!(crate::CodedError::code(&error), "pioneer.execute.plan");
+    }
+    assert_normal_only_refuses_before_io(&plan, plan.check_plan(ExecutionMode::Flash).unwrap_err());
+}
+
+#[test]
+fn normal_only_check_plan_refuses_invalid_or_conflicting_read_only_requirements() {
+    for words in [&[(0x28f, 0), (0x28f, 1)][..], &[(0x400, 0)][..]] {
+        let mut plan = normal_only();
+        with_requirements(&mut plan.stage, words);
+        for mode in [ExecutionMode::Flash, ExecutionMode::Recovery] {
+            assert_eq!(
+                plan.check_plan(mode).unwrap_err().detail(),
+                "invalid or conflicting read-only requirements",
+                "{words:?}"
+            );
+        }
+        assert_normal_only_refuses_before_io(
+            &plan,
+            plan.check_plan(ExecutionMode::Flash).unwrap_err(),
+        );
+    }
+}
+
+#[test]
+fn normal_only_check_plan_refuses_a_settings_write_over_a_read_only_requirement() {
+    let mut plan = normal_only();
+    plan.stage.settings = crate::settings::update::Plan::target(
+        Some(crate::startup::Setting {
+            parameter: 0x9f,
+            value: 1,
+            explicit: true,
+        }),
+        false,
+    );
+    with_requirements(&mut plan.stage, &[(0x9f, 1)]);
+    let error = plan.check_plan(ExecutionMode::Flash).unwrap_err();
+    assert_eq!(
+        error.detail(),
+        "settings write overlaps a read-only requirement"
+    );
+    assert_normal_only_refuses_before_io(&plan, error);
+}
+
+#[test]
+fn plan_error_reason_names_the_refusing_rule() {
+    use crate::receiver::PlanReason;
+    let (mut empty, _) = setup(false);
+    empty.stages.clear();
+    let (mut handoff, _) = setup_handoff_bridge(false);
+    with_word_write(&mut handoff.stages[0], 0xfe34);
+    with_word_write(handoff.stages.last_mut().unwrap(), 0xfe35);
+    let (mut recovery, _) = setup(false);
+    with_word_write(&mut recovery.stages[0], 0xfe34);
+    let mut requirements = normal_only();
+    with_requirements(&mut requirements.stage, &[(0x28f, 0), (0x28f, 1)]);
+    // A transfer refusal is a transfer refusal whatever the settings carry.
+    let mut transfer = normal_only();
+    with_requirements(&mut transfer.stage, &[(0x28f, 1)]);
+    transfer.stage.receiver.installed_kernel = None;
+    for (error, kind) in [
+        (empty.check_plan(ExecutionMode::Flash), PlanReason::Empty),
+        (
+            handoff.check_plan(ExecutionMode::Flash),
+            PlanReason::StartupWordPlacement,
+        ),
+        (
+            recovery.check_plan(ExecutionMode::Recovery),
+            PlanReason::StartupWordInRecovery,
+        ),
+        (
+            requirements.check_plan(ExecutionMode::Flash),
+            PlanReason::Requirements,
+        ),
+        (
+            transfer.check_plan(ExecutionMode::Flash),
+            PlanReason::Transfer,
+        ),
+    ] {
+        let error = error.unwrap_err();
+        assert_eq!(error.reason(), kind, "{error}");
+        assert_eq!(crate::CodedError::code(&error), "pioneer.execute.plan");
+        // `kind()` is the host category, as on every other error.
+        assert_eq!(
+            crate::CodedError::kind(&error),
+            crate::error_codes::kind_for_code("pioneer.execute.plan")
+        );
+    }
+    assert_eq!(recovery.check_plan(ExecutionMode::Flash), Ok(()));
 }

@@ -29,6 +29,9 @@ static RULES: super::Rules = super::Rules {
     ],
 };
 const ID: &str = "host-interface-setup";
+/// ATAPI packet-device reset signature (cylinder high EBh, low 14h) that every
+/// recognized ATA host program writes; part of each ATA host contract value.
+const ATAPI_SIGNATURE: u16 = 0xeb14;
 
 fn signature(tag: u16, host: peripheral::HostSignature) -> Value {
     Value::Variant(
@@ -38,7 +41,7 @@ fn signature(tag: u16, host: peripheral::HostSignature) -> Value {
             Value::U32(host.signature_low),
             Value::U32(host.signature_high),
             Value::Sequence(host.initial_one.into_iter().map(Value::U32).collect()),
-            Value::U16(0xeb14),
+            Value::U16(ATAPI_SIGNATURE),
         ],
     )
 }

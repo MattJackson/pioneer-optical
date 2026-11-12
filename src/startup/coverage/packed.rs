@@ -29,7 +29,7 @@ pub struct Block {
 /// A changed or unknown caller is preserved, never treated as excluding 0x009F.
 /// Does not prove absence of computed aliases or incoming edges into the prologue.
 pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
-    let refs = match super::references(normal) {
+    let (refs, regions) = match super::references_in(normal) {
         Observation::Known(r) => r,
         Observation::Unresolved(r) => return Observation::Unresolved(r),
         Observation::Conflicting => return Observation::Conflicting,
@@ -37,7 +37,6 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Block>> {
     if refs.argument_register != 0 {
         return Observation::Unresolved(Unresolved::ReaderNotRecognized);
     }
-    let regions = crate::image::regions(normal).expect("stored references");
     let mut blocks = Vec::new();
     for call in refs.calls.iter().filter(|c| c.kind == CallKind::Absolute) {
         let Some(at) = call.offset.checked_sub(6) else {

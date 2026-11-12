@@ -2,7 +2,7 @@
 //! observations; caller, helper, pointer, queue and boot proofs remain separate.
 use super::{CallKind, References};
 use crate::image::layout::{Observation, Unresolved};
-use alloc::vec::Vec;
+use alloc::{collections::BTreeSet, vec::Vec};
 
 /// Audited consumer block, retaining distinctions needed by later coverage checks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -114,23 +114,25 @@ impl Shape {
 /// Recognize direct consumer blocks against the exact proven getter.
 /// Uncovered calls are retained. No startup setting is selected by this API.
 pub fn discover(normal: &[u8]) -> Observation<Evidence> {
-    match super::references(normal) {
-        Observation::Known(references) => bind(normal, &references),
+    match super::references_in(normal) {
+        Observation::Known((references, regions)) => bind(normal, &references, &regions),
         Observation::Unresolved(reason) => Observation::Unresolved(reason),
         Observation::Conflicting => Observation::Conflicting,
     }
 }
-fn bind(normal: &[u8], references: &References) -> Observation<Evidence> {
+fn bind(
+    normal: &[u8],
+    references: &References,
+    regions: &crate::image::Regions<'_>,
+) -> Observation<Evidence> {
     if references.argument_register != 0 {
         return Observation::Unresolved(Unresolved::ReaderNotRecognized);
     }
-    let Some(regions) = crate::image::regions(normal) else {
-        return Observation::Unresolved(Unresolved::ReaderNotRecognized);
-    };
     let mut evidence = Evidence {
         blocks: Vec::new(),
         uncovered: Vec::new(),
     };
+    let mut seen = BTreeSet::new();
     for call in references
         .calls
         .iter()
@@ -142,11 +144,13 @@ fn bind(normal: &[u8], references: &References) -> Observation<Evidence> {
                 let Some(at) = call.offset.checked_sub(relative) else {
                     continue;
                 };
-                let stored = regions.stored.iter().any(|r| {
-                    let start = r.as_ptr() as usize - normal.as_ptr() as usize;
-                    at >= start && at.saturating_add(shape.bytes.len()) <= start + r.len()
-                });
-                if !stored || !shape.matches(normal, at, references.getter) {
+                // The byte match is cheap and rejects nearly every candidate.
+                if !shape.matches(normal, at, references.getter)
+                    || !regions.stored.iter().any(|r| {
+                        let start = r.as_ptr() as usize - normal.as_ptr() as usize;
+                        at >= start && at.saturating_add(shape.bytes.len()) <= start + r.len()
+                    })
+                {
                     continue;
                 }
                 let block = Block {
@@ -161,7 +165,7 @@ fn bind(normal: &[u8], references: &References) -> Observation<Evidence> {
             }
         }
         if let Some(block) = matched {
-            if !evidence.blocks.contains(&block) {
+            if seen.insert((block.offset, block.kind, block.calls.clone())) {
                 evidence.blocks.push(block);
             }
         } else {

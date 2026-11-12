@@ -17,23 +17,33 @@ class SourceProof(unittest.TestCase):
             with self.subTest(paths=paths), patch.object(proof, 'command', return_value=paths):
                 self.assertEqual(proof.same_package_source('qa'), expected)
 
-    def test_rename_into_github_is_a_package_change(self):
+    def test_shipped_ci_script_is_package_source(self):
+        with patch.object(proof, 'command', return_value='.github/scripts/check-features.py'):
+            self.assertFalse(proof.same_package_source('qa'))
+        with patch.object(proof, 'command', return_value='.github/scripts/verify-source.py'):
+            self.assertTrue(proof.same_package_source('qa'))
+
+    def test_diff_is_requested_without_rename_detection(self):
+        with patch.object(proof, 'command', return_value='') as run:
+            proof.same_package_source('qa')
+        self.assertIn('--no-renames', run.call_args.args)
+
+    def test_rename_into_github_dir_is_a_package_change(self):
         def git(*args):
-            subprocess.run(('git', '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', *args), check=True, capture_output=True)
-        cwd = os.getcwd()
-        with tempfile.TemporaryDirectory() as root:
+            subprocess.check_call(('git', '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', *args), cwd=repo, stdout=subprocess.DEVNULL)
+        with tempfile.TemporaryDirectory() as repo:
+            (Path(repo) / 'src').mkdir()
+            (Path(repo) / 'src/x.rs').write_text('fn main() {}\n' * 20)
+            git('init', '-q')
+            git('add', '.')
+            git('commit', '-q', '-m', 'base')
+            (Path(repo) / '.github').mkdir()
+            git('mv', 'src/x.rs', '.github/x.rs')
+            git('commit', '-q', '-m', 'rename')
+            cwd = os.getcwd()
+            os.chdir(repo)
             try:
-                os.chdir(root)
-                git('init', '-q')
-                os.mkdir('src')
-                Path('src/x.rs').write_text('fn a() {}\nfn b() {}\nfn c() {}\n')
-                git('add', '.')
-                git('commit', '-q', '-m', 'base')
-                base = proof.command('git', 'rev-parse', 'HEAD')
-                os.mkdir('.github')
-                git('mv', 'src/x.rs', '.github/x.rs')
-                git('commit', '-q', '-m', 'move')
-                self.assertFalse(proof.same_package_source(base))
+                self.assertFalse(proof.same_package_source('HEAD~1'))
             finally:
                 os.chdir(cwd)
 

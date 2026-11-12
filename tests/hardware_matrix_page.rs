@@ -286,3 +286,25 @@ fn malformed_route_exports_are_refused() {
     }
     assert!(page::check_routes(&json!({"routes": []})).is_ok());
 }
+
+#[test]
+fn a_normal_without_a_digest_is_refused_instead_of_merged() {
+    // Packages are deduplicated by Normal digest; two packages without one
+    // must not collapse onto the same empty key.
+    let root =
+        std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("matrix-index-without-digest");
+    std::fs::create_dir_all(root.join("index")).unwrap();
+    let normal = |path: &str| {
+        json!({"family": "pioneer", "path": path,
+               "components": [{"role": "normal", "member": "n.enc"}]})
+    };
+    std::fs::write(
+        root.join("index/packages.json"),
+        json!({"packages": [normal("a.tar"), normal("b.tar")]}).to_string(),
+    )
+    .unwrap();
+    let error = page::hoard_packages(&root)
+        .map(|(p, _)| p.len())
+        .unwrap_err();
+    assert!(error.contains("a.tar"), "{error}");
+}

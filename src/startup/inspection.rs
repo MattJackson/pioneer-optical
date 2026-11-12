@@ -214,17 +214,11 @@ pub fn inspect(normal: &[u8], kernel: Option<&[u8]>) -> Inspection {
         Observation::Conflicting => RequirementObservation::Conflicting,
         Observation::Unresolved(_) => RequirementObservation::NoSupportedComparison,
     };
-    let (preservation, sink_failure) =
-        if let Some(certificate) = preservation::discover_pair(normal, kernel) {
-            (Some(ScopedPreservation { certificate }), None)
-        } else {
-            let failure = sinks::diagnose(normal)
-                .err()
-                .unwrap_or(sinks::Failure::Unsupported {
-                    stage: sinks::Stage::KernelAliases,
-                });
-            (None, Some(failure))
-        };
+    // The refusal is the one the tried profile produced, not a rerun.
+    let (preservation, sink_failure) = match preservation::diagnose_pair(normal, kernel) {
+        Ok(certificate) => (Some(ScopedPreservation { certificate }), None),
+        Err(failure) => (None, Some(failure)),
+    };
     let mut obligations = assessment::assess(normal).obligations;
     if let ReaderEvidenceState::Resident { .. } = &reader {
         // Normal-only assessment cannot erase a positively bound resident reader.
@@ -348,6 +342,21 @@ mod tests {
             result.requirement(),
             RequirementObservation::Conflicting
         ));
+    }
+
+    #[test]
+    fn sink_refusal_is_reported_from_the_single_discovery_run() {
+        let normal = [0xff; 64];
+        let kernel = [0xff; 64];
+        sinks::tests::DISCOVERIES.with(|c| c.set(0));
+        let result = inspect(&normal, Some(&kernel));
+        assert_eq!(
+            result.sink_failure(),
+            Some(&sinks::Failure::Unsupported {
+                stage: sinks::Stage::Reader
+            })
+        );
+        assert_eq!(sinks::tests::DISCOVERIES.with(|c| c.get()), 1);
     }
 
     #[test]

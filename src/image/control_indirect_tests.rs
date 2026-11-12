@@ -155,11 +155,10 @@ fn indirect_and_keyed_entry_are_ambiguous() {
 }
 
 #[test]
+#[ignore = "set PIONEER_L12SH_CAPTURE and PIONEER_L13SH_CAPTURE to Kernel+Normal captures"]
 fn supplied_l12sh_and_l13sh_captures_when_configured() {
     for name in ["PIONEER_L12SH_CAPTURE", "PIONEER_L13SH_CAPTURE"] {
-        let Some(path) = std::env::var_os(name) else {
-            continue;
-        };
+        let path = std::env::var_os(name).expect(name);
         let bytes = std::fs::read(path).unwrap();
         let (kernel, normal) = bytes.split_at(KERNEL_LEN);
         assert_eq!(

@@ -2,7 +2,7 @@
 //! bound helper/caller contracts; it does not establish boot reachability.
 use super::{cache_flow, cache_helpers, cache_rom, r1_pair};
 use crate::image::layout::Observation;
-use alloc::vec::Vec;
+use alloc::{collections::BTreeMap, vec::Vec};
 /// How a local accessor index set was established.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
@@ -37,6 +37,22 @@ pub struct Evidence {
     /// Direct accessor references without a native function boundary.
     pub uncovered: Vec<cache_flow::Reference>,
 }
+/// First item (in discovery order) whose reads include each call offset, so
+/// each call costs one lookup rather than a scan of every helper.
+fn by_read<T>(items: &[T], reads: impl Fn(&T) -> &[usize]) -> BTreeMap<usize, &T> {
+    let mut map = BTreeMap::new();
+    for item in items {
+        for &read in reads(item) {
+            map.entry(read).or_insert(item);
+        }
+    }
+    map
+}
+fn lookup<'a, T>(reads: &BTreeMap<usize, &'a T>, offset: usize) -> Option<&'a T> {
+    #[cfg(test)]
+    tests::PROBES.with(|c| c.set(c.get() + 1));
+    reads.get(&offset).copied()
+}
 fn known<T>(observation: Observation<T>) -> Result<T, Observation<Evidence>> {
     match observation {
         Observation::Known(v) => Ok(v),
@@ -64,6 +80,9 @@ pub fn discover(normal: &[u8]) -> Observation<Evidence> {
         Ok(v) => v,
         Err(e) => return e,
     };
+    let r0_reads = by_read(&r0, |h| &h.reads);
+    let rom_reads = by_read(&rom, |h| &h.reads);
+    let r1_reads = by_read(&r1, |h| &h.reads);
     let mut result = Evidence {
         calls: Vec::new(),
         initialization_dependencies: Vec::new(),
@@ -84,7 +103,7 @@ pub fn discover(normal: &[u8]) -> Observation<Evidence> {
                     Source::Unresolved
                 };
                 if indices.is_none() {
-                    if let Some(h) = r0.iter().find(|h| h.reads.contains(&call.offset)) {
+                    if let Some(h) = lookup(&r0_reads, call.offset) {
                         if !h.callers.is_empty() && h.other_references.is_empty() {
                             let p = h.reads.iter().position(|&v| v == call.offset).unwrap();
                             indices = h
@@ -97,7 +116,7 @@ pub fn discover(normal: &[u8]) -> Observation<Evidence> {
                             }
                         }
                     }
-                    if let Some(h) = rom.iter().find(|h| h.reads.contains(&call.offset)) {
+                    if let Some(h) = lookup(&rom_reads, call.offset) {
                         if !h.callers.is_empty() && h.other_references.is_empty() {
                             let second = h.reads[1] == call.offset;
                             let mut values = Vec::new();
@@ -125,13 +144,15 @@ pub fn discover(normal: &[u8]) -> Observation<Evidence> {
                             }
                         }
                     }
-                    if let Some(h) = r1.iter().find(|h| h.reads.contains(&call.offset)) {
+                    if let Some(h) = lookup(&r1_reads, call.offset) {
                         if !h.callers.is_empty() && h.other_references.is_empty() {
                             let p = usize::from(h.reads[1] == call.offset);
                             indices = h.callers.iter().map(|c| c.indices.map(|v| v[p])).collect();
                             if indices.is_some() {
                                 source = Source::R1Pair;
-                                result.initialization_dependencies.extend(h.external_calls);
+                                result
+                                    .initialization_dependencies
+                                    .extend(h.external_calls.iter().copied());
                             }
                         }
                     }
@@ -152,4 +173,35 @@ pub fn discover(normal: &[u8]) -> Observation<Evidence> {
     result.initialization_dependencies.sort_unstable();
     result.initialization_dependencies.dedup();
     Observation::Known(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::cell::Cell;
+    std::thread_local! {
+        pub(super) static PROBES: Cell<usize> = const { Cell::new(0) };
+    }
+    #[test]
+    fn helper_lookup_is_not_quadratic_in_calls() {
+        let mut raw = super::super::cache_helpers::tests::byte_helper_fixture(5);
+        let body = raw[0x3ffe..0x4026].to_vec();
+        let n = 40;
+        for k in 1..n {
+            let at = 0x4800 + k * 0x40;
+            raw[at..at + body.len()].copy_from_slice(&body);
+        }
+        PROBES.with(|c| c.set(0));
+        let Observation::Known(found) = discover(&raw) else {
+            panic!("fixture")
+        };
+        let helper_reads = found
+            .calls
+            .iter()
+            .filter(|c| c.offset >= 0x4800 || c.offset == 0x4006)
+            .count();
+        assert_eq!(helper_reads, n);
+        let probes = PROBES.with(Cell::get);
+        assert!(probes <= 4 * n, "{probes} helper probes for {n} calls");
+    }
 }

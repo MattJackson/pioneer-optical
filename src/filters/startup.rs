@@ -23,11 +23,17 @@ pub(super) struct Span {
 
 /// Whether `body` holds `shape` at `at`, ignoring relocatable operand ranges.
 fn shape_matches(body: &[u8], at: usize, shape: &[u8], operands: &[(usize, usize)]) -> bool {
-    let Some(bytes) = at.checked_add(shape.len()).and_then(|end| body.get(at..end)) else {
+    let Some(bytes) = at
+        .checked_add(shape.len())
+        .and_then(|end| body.get(at..end))
+    else {
         return false;
     };
     bytes.iter().zip(shape).enumerate().all(|(i, (a, b))| {
-        a == b || operands.iter().any(|&(start, len)| (start..start + len).contains(&i))
+        a == b
+            || operands
+                .iter()
+                .any(|&(start, len)| (start..start + len).contains(&i))
     })
 }
 
@@ -49,7 +55,7 @@ static RULES: super::Rules = super::Rules {
         },
         super::Policy {
             domains: &[super::identity::Domain::Sat1, super::identity::Domain::H8Sat],
-            text: "Startup gate absent (Not applicable, proof 1): the exact Kernel must be held; every Kernel 0x009F load must be the audited buffer byte store; the Normal getter must be bound with no recognized 0x009F comparison; and either the audited startup function is bound by its unique handler-install anchor with a gate slot that holds no 0x009F read, or only one getter read whose R0 result the next callee overwrites, or, for SAT1 only, stored Normal neither calls nor wraps loader-flag service 0x400A1A and passes 0x009F to no getter call. A gate-absent target never checks the word, so it needs no live-word prerequisite and no edit, whatever the installed side; independent preservation certificates still bind. A gate-absent installed side with a gated target takes exactly the unresolved-installed fallback; where that fallback does not apply (no Normal-owned installed reader, or reader layouts differ) it refuses as incompatible: B checks a word that A's firmware never maintains, the word cannot be verified through a differing reader layout, and writing it would be a retained-data write. Two gate-absent images match. A missing Kernel or any other shape stays unresolved.",
+            text: "Startup gate absent (Not applicable, proof 1): the exact Kernel must be held; every Kernel 0x009F load must be the audited buffer byte store; the Normal getter must be bound with no recognized 0x009F comparison; and either the audited startup function is bound by its unique handler-install anchor with a gate slot that holds no 0x009F read, or only one getter read whose R0 result the next callee overwrites, or, for SAT1 only, stored Normal neither calls nor wraps loader-flag service 0x400A1A and passes 0x009F to no getter call. A gate-absent target never checks the word, so it needs no live-word prerequisite and no edit, whatever the installed side; independent preservation certificates still bind. A gate-absent installed side with a gated target takes exactly the unresolved-installed fallback; where that fallback does not apply (no Normal-owned installed reader, or reader layouts differ) it refuses as incompatible: B checks a word that A's firmware never maintains, the word cannot be verified through a differing reader layout, and a startup word is written only for a bound installed comparison. Two gate-absent images match. A missing Kernel or any other shape stays unresolved.",
         },
         super::Policy {
             domains: &[super::identity::Domain::Sat1, super::identity::Domain::H8Sat],
@@ -61,7 +67,7 @@ static RULES: super::Rules = super::Rules {
         },
         super::Policy {
             domains: &[super::identity::Domain::Ata],
-            text: "M32C startup gate absent (Not applicable, proof 1): the exact 16 KiB Kernel must be held with reset vector 0xFFC000 and one acceptance gate (reset-cleared RAM flag 0x3000, word sum of 0x1000..0x2000 and 0xF80010..0xFFC000, 16-byte header) whose transfer is the Normal entry; the entry prefix may hold only memory initialization before its JSR.A to main; main must reach its OS task-install anchor through data writes and direct calls only, with a direct JSR.A in the gate slot; and neither Normal nor Kernel may hold an immediate 0x00D9 index load or a native word-ID getter. Callees are not executed. A gate-absent target needs no word and no edit, whatever the installed side. A gate-absent installed side with a 0x00D9 target refuses as incompatible: B checks a word that A's firmware never maintains, ATA has no read-only live-word prerequisite to verify it, and writing it would be a retained-data write. Two gate-absent images match. A missing Kernel or any other shape stays unresolved.",
+            text: "M32C startup gate absent (Not applicable, proof 1): the exact 16 KiB Kernel must be held with reset vector 0xFFC000 and one acceptance gate (reset-cleared RAM flag 0x3000, word sum of 0x1000..0x2000 and 0xF80010..0xFFC000, 16-byte header) whose transfer is the Normal entry; the entry prefix may hold only memory initialization before its JSR.A to main; main must reach its OS task-install anchor through data writes, register saves, flag operations and direct calls only, whose one branch is a JEQ over exactly one following JSR.A, with a direct JSR.A in the gate slot; and neither Normal nor Kernel may hold an immediate 0x00D9 index load or a native word-ID getter. Callees are not executed. A gate-absent target needs no word and no edit, whatever the installed side. A gate-absent installed side with a 0x00D9 target refuses as incompatible: B checks a word that A's firmware never maintains, ATA has no read-only live-word prerequisite to verify it, and writing it would be a retained-data write. Two gate-absent images match. A missing Kernel or any other shape stays unresolved.",
         },
         super::Policy {
             domains: &[super::identity::Domain::Scsi],
@@ -111,7 +117,7 @@ fn h8_absence(absence: &crate::startup::unbound::Absence) -> alloc::string::Stri
 
 /// Anchored M32C proof that the target has no native 0x00D9 startup gate.
 fn m32c_absence(a: &m32c_absent::Absence) -> alloc::string::String {
-    format!("startup-gate-absent: no native M32C word 0x00D9 startup comparison in Normal or the held Kernel. Held Kernel reset vector 0xffc000 and its unique acceptance gate at {:#x} (reset-cleared RAM flag 0x3000, word sum of 0x1000..0x2000 and 0xf80010..0xffc000, 16-byte header against {:#x}) transfer to Normal entry {:#x}; the entry prefix holds only memory initialization before JSR.A main {:#x}; main reaches its OS task-install anchor at {:#x} (task {:#x}, Kernel service {:#x}) through data writes and direct calls only, and its gate slot at {:#x} is JSR.A {:#x}, not a D9 gate; neither Normal nor the held Kernel holds an immediate 0x00D9 index load or a native word-ID getter. The target never checks the word; Kernel checksum/header acceptance is boot integrity, a separate obligation", a.kernel_gate, a.header, a.entry, a.main, a.anchor, a.task, a.create, a.slot, a.slot_target)
+    format!("startup-gate-absent: no native M32C word 0x00D9 startup comparison in Normal or the held Kernel. Held Kernel reset vector 0xffc000 and its unique acceptance gate at {:#x} (reset-cleared RAM flag 0x3000, word sum of 0x1000..0x2000 and 0xf80010..0xffc000, 16-byte header against {:#x}) transfer to Normal entry {:#x}; the entry prefix holds only memory initialization before JSR.A main {:#x}; main reaches its OS task-install anchor at {:#x} (task {:#x}, Kernel service {:#x}) through data writes, register saves, flag operations and direct calls only (its one branch a JEQ over exactly one following JSR.A), and its gate slot at {:#x} is JSR.A {:#x}, not a D9 gate; neither Normal nor the held Kernel holds an immediate 0x00D9 index load or a native word-ID getter. The target never checks the word; Kernel checksum/header acceptance is boot integrity, a separate obligation", a.kernel_gate, a.header, a.entry, a.main, a.anchor, a.task, a.create, a.slot, a.slot_target)
 }
 
 fn h8_miss(miss: &crate::startup::unbound::Miss, kernel: bool) -> alloc::string::String {
@@ -126,12 +132,14 @@ fn h8_miss(miss: &crate::startup::unbound::Miss, kernel: bool) -> alloc::string:
         Getter::Unbound(reason) => format!("getter unresolved: {reason:?}"),
         Getter::Conflicting => "getter candidates conflict".into(),
     };
-    let other = miss.other_parameter.map_or(alloc::string::String::new(), |r| {
-        format!(
-            "; a loader-flag comparison of word {:#06x} at {:#x} is not the startup word",
-            r.parameter, r.check_address
-        )
-    });
+    let other = miss
+        .other_parameter
+        .map_or(alloc::string::String::new(), |r| {
+            format!(
+                "; a loader-flag comparison of word {:#06x} at {:#x} is not the startup word",
+                r.parameter, r.check_address
+            )
+        });
     let list = |at: &[u32]| {
         at.iter()
             .map(|a| format!("{a:#x}"))
@@ -173,17 +181,29 @@ pub fn inspect(context: &Context<'_>) -> Assessment {
     if context.sat.is_some() {
         return match crate::startup::bound_selection(context.firmware.normal) {
             Observation::Known(bound) => {
-                let (value,evidence) = h8_value(&bound, context.firmware.normal);
+                let (value, evidence) = h8_value(&bound, context.firmware.normal);
                 Assessment::known(ID, Role::Operational, value, evidence)
             }
-            Observation::Conflicting => Assessment::conflicting(ID, Role::Operational, "Native H8 startup comparisons conflict"),
+            Observation::Conflicting => Assessment::conflicting(
+                ID,
+                Role::Operational,
+                "Native H8 startup comparisons conflict",
+            ),
             Observation::Unresolved(reason) => {
-                if let Some(absence) = crate::startup::unbound::absent(context.firmware.normal, context.firmware.kernel, super::identity::Domain::from_hardware(context.firmware.hardware) == Some(super::identity::Domain::Sat1)) {
+                if let Some(absence) = crate::startup::unbound::absent(
+                    context.firmware.normal,
+                    context.firmware.kernel,
+                    super::identity::Domain::from_hardware(context.firmware.hardware)
+                        == Some(super::identity::Domain::Sat1),
+                ) {
                     let evidence = h8_absence(&absence);
                     return Assessment {
                         id: ID,
                         role: Role::Operational,
-                        finding: Finding::NotApplicable { proof: crate::startup::unbound::GATE_ABSENT, evidence: evidence.clone() },
+                        finding: Finding::NotApplicable {
+                            proof: crate::startup::unbound::GATE_ABSENT,
+                            evidence: evidence.clone(),
+                        },
                         evidence,
                     };
                 }
@@ -348,9 +368,9 @@ impl Filter for Startup {
         };
         if transition.target.sat.is_some() {
             if absent(target) {
-                return correction::plan_absent(transition);
+                return correction::plan_absent(transition, &target.finding);
             }
-            return correction::plan(transition, absent(installed));
+            return correction::plan(transition, absent(installed), &target.finding);
         }
         if absent(target) {
             return Ok(None);
@@ -537,7 +557,10 @@ mod tests {
         let target = sat(&absent, Some(&kernel));
         assert!(matches!(
             inspect(&target).finding,
-            Finding::NotApplicable { proof: GATE_ABSENT, .. }
+            Finding::NotApplicable {
+                proof: GATE_ABSENT,
+                ..
+            }
         ));
         let gated = gated();
         let unresolved = alloc::vec![0xffu8; 0x4000];
@@ -607,7 +630,10 @@ mod tests {
         let installed = sat(&absent, Some(&kernel));
         assert!(matches!(
             inspect(&installed).finding,
-            Finding::NotApplicable { proof: GATE_ABSENT, .. }
+            Finding::NotApplicable {
+                proof: GATE_ABSENT,
+                ..
+            }
         ));
         // Both sides are known: B checks a word A never maintains, through a
         // differing reader layout, so the refusal is final.
@@ -617,7 +643,10 @@ mod tests {
         ));
         // The same Normal without its Kernel is genuinely unresolved.
         let unresolved = sat(&absent, None);
-        assert!(matches!(inspect(&unresolved).finding, Finding::Unresolved(_)));
+        assert!(matches!(
+            inspect(&unresolved).finding,
+            Finding::Unresolved(_)
+        ));
         assert!(matches!(
             plan_between(&unresolved, &target),
             Err(Error::UnresolvedIdentity)
@@ -631,7 +660,9 @@ mod tests {
         // Equal layouts keep the read-only target-word fallback unchanged.
         let same = gated_on_layout(0);
         let same = sat(&same, Some(&kernel));
-        assert!(matches!(plan_between(&installed, &same), Ok(Some(op)) if !op.required_words().is_empty()));
+        assert!(
+            matches!(plan_between(&installed, &same), Ok(Some(op)) if !op.required_words().is_empty())
+        );
     }
 
     fn ata<'a>(normal: &'a [u8], kernel: Option<&'a [u8]>) -> Context<'a> {
@@ -807,9 +838,11 @@ mod corpus {
     #[test]
     #[ignore = "requires PIONEER_REGISTRY_STARTUP_AUDIT and PIONEER_STARTUP_CORPUS"]
     fn all_722_existing_native_startup_and_initialization_facts_are_reported() {
-        let audit = std::path::PathBuf::from(std::env::var("PIONEER_REGISTRY_STARTUP_AUDIT").unwrap());
+        let audit =
+            std::path::PathBuf::from(std::env::var("PIONEER_REGISTRY_STARTUP_AUDIT").unwrap());
         let corpus = std::path::PathBuf::from(std::env::var("PIONEER_STARTUP_CORPUS").unwrap());
-        let data: serde_json::Value = serde_json::from_slice(&std::fs::read(audit).unwrap()).unwrap();
+        let data: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(audit).unwrap()).unwrap();
         let rows = data["components"].as_array().unwrap();
         let mut init_counts = [0usize; 3];
         let mut startup_counts = [0usize; 3];

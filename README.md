@@ -135,15 +135,18 @@ independent required filters and are never corrected or migrated. See
 Phase and startup use the same filter-owned plan, prepare and verify pipeline.
 Each owner supplies its native image edits and read-only prerequisites. The
 shared runner composes disjoint edits, repairs image integrity once, and verifies
-all owners against the resulting image. Startup corrects a bound Normal
-comparison to preserve the installed accepted word, including its conditional
-predicate; missing evidence never selects a neutral `0xFFFF` value.
+all owners against the resulting image. Startup keeps a bound Normal
+comparison unchanged; a differing fixed comparison sets the target's own
+startup word on the drive instead, and a differing conditional one refuses.
+Missing evidence never selects a neutral `0xFFFF` value.
 
 `PreparedUpdate::flash` uses one stage executor with live receiver binding,
 read-only prerequisite checks, transfer and verification at each transition.
 `prepare_normal` uses the same executor without a Kernel transfer. The full
-sequence is validated before its first mutation. No separate persistent
-settings, NVRAM, calibration or bank migration is part of image correction.
+sequence is validated before its first mutation. That startup word is written
+once, in the first stage's settings transaction (read, write, verify,
+rollback), in normal mode under Flash, before the first transfer. No other
+persistent settings, NVRAM, calibration or bank migration is part of correction.
 
 Each receiver exposes `startup_checks()`: the native parameter comparisons and
 persistent bank requirements recovered from its Kernel and Normal. Preparation
@@ -170,6 +173,19 @@ recovery path.
 `ExecutionRuntime` and `FlashTransport`. Its executable does not access hardware.
 Low-level `drive::Session` and methods ending in `_unchecked` are protocol
 primitives and do not supply the complete update procedure.
+
+`PreparedUpdate::check_plan(mode)` and `PreparedNormal::check_plan(mode)` run,
+without device I/O, the plan-level part of the executor's preflight
+(stage transfer layouts, read-only requirement consistency, startup-word write
+placement, and the Recovery refusal of word writes); `execute` and `flash` run
+the same check first (Normal-only execution always uses `ExecutionMode::Flash`).
+Call it before backup or consent instead of re-deriving these rules; `Ok` still
+leaves the live receiver and requirement checks, and each settings
+transaction's own entry validation, to execution. A refusal's
+`PlanError::reason()` returns a `PlanReason` naming the rule (`Transfer`,
+`Requirements`, `StartupWordPlacement`, `StartupWordInRecovery`, `Empty`) for
+host guidance; `detail()` is diagnostic English only, and `kind()` is the
+`CodedError` category as on every other error.
 
 Before execution, the host must capture a backup, obtain the required consent,
 check tray conditions, and ensure both transports address the same physical

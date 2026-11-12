@@ -57,11 +57,14 @@ V850 retain their architecture-specific output/checksum requirements.
 
 ## Startup correction
 
-The startup filter implements the same `Operation` contract as phase. For a
-bound H8 comparison, it corrects the target Normal to preserve the installed
-accepted word and retains the complete conditional predicate. It declares the
-live word as a read-only prerequisite. Preparation composes the image effect
-with other owners; verification rebinds the resulting native comparison.
+The startup filter implements the same `Operation` contract as phase. A bound
+H8 comparison is never rewritten; verification rebinds it unchanged, with its
+complete conditional predicate. An equal installed comparison declares the
+live word as a read-only prerequisite. A differing installed comparison against
+a fixed target gate declares a word write instead: the receiver sets the
+target's own word in the first stage's settings transaction, in normal mode,
+before the first transfer, with read, verify and rollback. A differing value
+against a conditional target gate refuses.
 
 Exact component preservation needs no comparison rewrite. For a missing fixed
 comparison, a startup-owned verify-only operation can certify preservation of
@@ -73,8 +76,8 @@ never authorizes a neutral `0x009F = 0xFFFF` choice. Missing resident getters an
 ambiguous predicates remain refusals. Standalone historical selection APIs do
 not authorize receiver preparation to issue persistent parameter writes.
 
-The image-correction pipeline performs no separate settings, NVRAM, calibration
-or bank writes. Kernel bridges only retain their existing temporary image
+Apart from that startup word, the correction pipeline performs no settings,
+NVRAM, calibration or bank writes. Kernel bridges only retain their existing temporary image
 changes and restoration. Read-only prerequisites cannot be waived by a family
 override.
 

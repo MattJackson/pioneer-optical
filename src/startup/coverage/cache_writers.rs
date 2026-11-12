@@ -3,7 +3,7 @@
 //! absence of a matching block never establishes startup acceptance.
 use super::{cache, cache_flow::Reference};
 use crate::image::layout::Observation;
-use alloc::vec::Vec;
+use alloc::{collections::BTreeSet, vec::Vec};
 
 /// Semantics of a completely bound native cache address occurrence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -218,12 +218,11 @@ const SHAPES: &[Shape] = &[
 /// occurrences. Other computed aliases and accessor value consumers remain
 /// separate obligations even when every literal occurrence is classified.
 pub fn discover(normal: &[u8]) -> Observation<Vec<Evidence>> {
-    let blocks = match cache::discover(normal) {
+    let (blocks, regions) = match cache::discover_in(normal) {
         Observation::Known(v) => v,
         Observation::Unresolved(r) => return Observation::Unresolved(r),
         Observation::Conflicting => return Observation::Conflicting,
     };
-    let regions = crate::image::regions(normal).expect("cache regions checked");
     let mut result = Vec::new();
     for block in blocks {
         let mut writers = Vec::new();
@@ -256,13 +255,20 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Evidence>> {
             }
         }
         let mut aliases = Vec::new();
-        // The bulk graph was already matched by cache::discover. Its two RAM
-        // operand offsets are fixed by the register convention and loop length.
-        let bulk_operands: [usize; 2] = if block.getter_call - block.offset == 12 {
-            [28, 42]
-        } else {
-            [30, 44]
-        };
+        // The bulk graph was already matched by cache::discover; its RAM
+        // operands are those of the shape whose getter call it matched.
+        let bulk_operands: Vec<usize> = super::cache_shapes::SHAPES
+            .iter()
+            .filter(|s| s.call == block.getter_call - block.offset)
+            .flat_map(|s| s.ram)
+            .collect();
+        let accessor_literals: BTreeSet<usize> = block
+            .accessors
+            .iter()
+            .map(cache::Accessor::ram_literal)
+            .collect();
+        // Writers are in offset order and no longer than the longest shape.
+        let longest = SHAPES.iter().map(|s| s.bytes.len()).max().unwrap_or(0);
         for region in &regions.stored {
             let start = region.as_ptr() as usize - normal.as_ptr() as usize;
             for (local, bytes) in region.windows(3).enumerate() {
@@ -271,17 +277,21 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Evidence>> {
                     continue;
                 };
                 let at = start + local;
+                #[cfg(test)]
+                tests::PROBES.with(|c| c.set(c.get() + 1));
                 let kind = if bulk_operands.iter().any(|&p| at == block.offset + p + 1) {
                     Some(Kind::BulkStore)
-                } else if block
-                    .accessors
-                    .iter()
-                    .any(|a| at == a.offset + if a.argument_register == 0 { 11 } else { 9 })
-                {
+                } else if accessor_literals.contains(&at) {
                     Some(Kind::Accessor)
                 } else {
-                    writers
+                    let first = writers.partition_point(|w| w.offset + longest < at + 3);
+                    writers[first..]
                         .iter()
+                        .take_while(|w| w.offset <= at)
+                        .inspect(|_| {
+                            #[cfg(test)]
+                            tests::PROBES.with(|c| c.set(c.get() + 1));
+                        })
                         .find(|w| at >= w.offset && at + 3 <= w.end)
                         .and_then(|w| {
                             let shape = SHAPES
@@ -326,6 +336,41 @@ pub fn discover(normal: &[u8]) -> Observation<Vec<Evidence>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::cell::Cell;
+    std::thread_local! {
+        pub(super) static PROBES: Cell<usize> = const { Cell::new(0) };
+    }
+    #[test]
+    fn alias_classification_is_not_quadratic_in_accessors() {
+        let mut raw = alloc::vec![0xff; 0x8000];
+        crate::image::layout::install_test_layout(&mut raw, 0x1000);
+        let bulk = &super::super::cache_shapes::SHAPES[0];
+        raw[0x2000..0x2000 + bulk.bytes.len()].copy_from_slice(bulk.bytes);
+        raw[0x2000 + bulk.call + 1..0x2000 + bulk.call + 4].copy_from_slice(&[0x41, 0x10, 0]);
+        for p in bulk.ram {
+            raw[0x2000 + p..0x2000 + p + 4].copy_from_slice(&0xa01000u32.to_be_bytes());
+        }
+        let leaf = [
+            0x0c, 0x89, 0x1a, 0x80, 0x0c, 0x98, 0x78, 0, 0x6a, 0x28, 0, 0xa0, 0x10, 0, 0x54, 0x70,
+        ];
+        let n = 64;
+        for k in 0..n {
+            let at = 0x3000 + k * 0x10;
+            raw[at..at + leaf.len()].copy_from_slice(&leaf);
+        }
+        PROBES.with(|c| c.set(0));
+        let Observation::Known(found) = discover(&raw) else {
+            panic!("fixture")
+        };
+        let accessors = found[0]
+            .aliases
+            .iter()
+            .filter(|a| a.kind == Some(Kind::Accessor))
+            .count();
+        assert_eq!(accessors, n);
+        let probes = PROBES.with(Cell::get);
+        assert!(probes <= 4 * n, "{probes} accessor probes for {n} aliases");
+    }
     fn instantiated(shape: &Shape, at: usize, ram: u32) -> Vec<u8> {
         let mut bytes = shape.bytes.to_vec();
         for &(p, n, g) in shape.relocations {

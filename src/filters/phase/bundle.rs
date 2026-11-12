@@ -5,7 +5,7 @@
 //! the native phase detectors use to locate complete output and calibration
 //! programs without defaulting any unmatched element.
 //!
-//! The template constants and the `install` helper below exist only to
+//! The template constants below and the `tests::install` helper exist only to
 //! synthesize recognizable split-word Normal images for tests.
 
 use alloc::vec::Vec;

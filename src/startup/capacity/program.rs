@@ -19,9 +19,13 @@
 //! - The query (everything up to the last call that is not into Normal code)
 //!   is kept exactly, so the drive is asked the same question.
 //! - Calls into Normal code (such as a diagnostic log) may only follow the
-//!   query. Their argument setup may store only into the stack frame, and the
-//!   called code is fingerprinted the same way, may not store to a fixed
-//!   address outside the firmware's own data, and is identical in both builds.
+//!   query. Their argument setup may store only into the stack frame. The
+//!   called code is not compared (each call hashes as one side token);
+//!   instead each image's side closure is verified: it decodes completely,
+//!   makes no indirect call or jump, never calls a resident service the query
+//!   uses, and never names, as an address-sized immediate or absolute
+//!   operand, a page the query or the decision uses outside the firmware's
+//!   own code and data.
 //! - The decision after the last call is kept exactly, is straight-line or
 //!   forward-branching, and reads only registers it sets itself, so its result
 //!   depends only on the hardware bytes the query produced.
@@ -68,22 +72,19 @@ pub(super) fn digest(normal: &[u8], entry: u32) -> Option<[u8; 32]> {
         return None;
     };
     let source = normal.get(relocation.source.clone())?;
-    let mut ram = vec![0u8; relocation.destination as usize];
-    ram.extend_from_slice(source);
     let block = relocation.destination..relocation.destination.checked_add(source.len() as u32)?;
-    let sections = copied_checksum::data_sections(normal)?;
     let space = Space {
-        ram: &ram,
+        ram: source,
         block,
         normal,
-        sections: &sections,
+        sections: &relocation.sections,
     };
     space.digest(entry)
 }
 
 /// The addresses one discriminator can execute or name.
 struct Space<'a> {
-    /// RAM view holding the verbatim copied block at its destination.
+    /// The verbatim copied block; its first byte executes at `block.start`.
     ram: &'a [u8],
     block: Range<u32>,
     /// Decoded Normal, executing at `NORMAL_BASE`.
@@ -128,13 +129,10 @@ impl Space<'_> {
     /// Decode the contiguous routine entered at `at`, in executing addresses.
     fn decode(&self, at: u32, place: Place) -> Option<Vec<Insn>> {
         let (image, base) = match place {
-            Place::Block => (self.ram, 0),
+            Place::Block => (self.ram.get(..self.block.len())?, self.block.start),
             Place::Normal => (self.normal, NORMAL_BASE),
         };
         let span = routine(image, at.checked_sub(base)?)?;
-        if place == Place::Block && span.end > self.block.end as usize {
-            return None;
-        }
         let mut out = Vec::new();
         let mut offset = span.start;
         while offset < span.end {
@@ -149,6 +147,13 @@ impl Space<'_> {
     }
 
     fn digest(&self, entry: u32) -> Option<[u8; 32]> {
+        // The block is decoded at offsets from its destination, so those
+        // offsets keep the executing addresses' parity (H8S fetches only
+        // even addresses) only for an even destination, and the block must
+        // lie inside the 24-bit address space it executes in.
+        if self.block.start % 2 != 0 || self.block.end > 1 << 24 {
+            return None;
+        }
         if self.place(entry) != Some(Place::Block) {
             return None;
         }
@@ -177,7 +182,7 @@ impl Space<'_> {
                 let renamed = side.contains(&index);
                 let call = match call_target(insn) {
                     Call::None => None,
-                    Call::Indirect => return None,
+                    Call::Unsupported => return None,
                     Call::Direct(target) => Some(target),
                 };
                 if let Some(target) = call.filter(|&t| self.place(t) == Some(Place::Normal)) {
@@ -246,8 +251,15 @@ impl Space<'_> {
         };
         let mut seen = BTreeSet::from([entry]);
         let mut queue = VecDeque::from([entry]);
+        let mut bytes = 0usize;
         while let Some(at) = queue.pop_front() {
             let insns = self.decode(at, Place::Block)?;
+            // This closure is a subset of the one `digest` fingerprints, so
+            // the same caps refuse here before decoding any further routine.
+            bytes += insns.iter().map(|i| i.d.len).sum::<usize>();
+            if seen.len() > MAX_ROUTINES || bytes > MAX_BYTES {
+                return None;
+            }
             let side = if at == entry {
                 self.entry_side_segment(&insns)?
             } else {
@@ -345,7 +357,7 @@ impl Space<'_> {
             }
             for insn in &insns {
                 match call_target(insn) {
-                    Call::Indirect => return None,
+                    Call::Unsupported => return None,
                     Call::Direct(target) => {
                         match self.place(target) {
                             Some(Place::Normal) => {
@@ -415,9 +427,13 @@ fn fixed_constants(insn: &Insn) -> Vec<u32> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Call {
+    /// Not a call or jump.
     None,
+    /// `JSR @aa` or `BSR` to a known target.
     Direct(u32),
-    Indirect,
+    /// Any other `JSR`/`BSR`, and every `JMP` (including an absolute tail
+    /// jump): outside the proven shape, so the proof refuses.
+    Unsupported,
 }
 
 fn call_target(insn: &Insn) -> Call {
@@ -429,7 +445,7 @@ fn call_target(insn: &Insn) -> Call {
                 .wrapping_add(value as u32),
         ),
         // A tail jump to another routine is outside the proven shape.
-        ("JSR" | "BSR" | "JMP", _) => Call::Indirect,
+        ("JSR" | "BSR" | "JMP", _) => Call::Unsupported,
         _ => Call::None,
     }
 }
@@ -439,6 +455,9 @@ const BRANCHES: &[&str] = &[
     "BPL", "BMI", "BGE", "BLT", "BGT", "BLE",
 ];
 
+/// The target of a conditional or unconditional branch, `None` for any other
+/// instruction. A branch whose target is not PC-relative yields `u32::MAX`,
+/// which is never an instruction address in a decoded tail, so it refuses.
 fn branch_target(insn: &Insn) -> Option<u32> {
     if !BRANCHES.contains(&insn.d.insn.mnemonic) {
         return None;

@@ -112,7 +112,7 @@ mod tests {
                 .copied();
             assert_eq!(source, Some(cause));
             // Pre-write refusal: code and host category are unchanged.
-            assert_eq!(error.code(), "pioneer.preparation.patched_representation");
+            assert_eq!(error.code(), "pioneer.prepare.patched_representation");
             assert_eq!(error.kind(), crate::operation::IssueKind::InvalidFirmware);
         }
     }

@@ -3,6 +3,7 @@
 use super::sink_boundaries::OwnedBody;
 use alloc::{
     collections::{BTreeMap, BTreeSet},
+    rc::Rc,
     vec,
     vec::Vec,
 };
@@ -193,7 +194,8 @@ fn prologue(n: &[u8]) -> bool {
 struct Search<'a> {
     normal: &'a [u8],
     stored: Vec<Range<usize>>,
-    cache: BTreeMap<usize, Option<Body>>,
+    // Shared decoded bodies: a cache hit never copies the node list.
+    cache: BTreeMap<usize, Option<Rc<Body>>>,
     exhausted: bool,
 }
 impl Search<'_> {
@@ -204,7 +206,7 @@ impl Search<'_> {
                 .iter()
                 .any(|s| s.start <= span.start && span.end <= s.end)
     }
-    fn body(&mut self, entry: usize) -> Option<Body> {
+    fn body(&mut self, entry: usize) -> Option<Rc<Body>> {
         if let Some(b) = self.cache.get(&entry) {
             return b.clone();
         }
@@ -212,7 +214,7 @@ impl Search<'_> {
             self.exhausted = true;
             return None;
         }
-        let b = self.decode(entry);
+        let b = self.decode(entry).map(Rc::new);
         self.cache.insert(entry, b.clone());
         b
     }
@@ -349,7 +351,7 @@ impl Search<'_> {
         self.exhausted = true;
         None
     }
-    fn containing(&mut self, at: usize) -> Vec<Body> {
+    fn containing(&mut self, at: usize) -> Vec<Rc<Body>> {
         (at.saturating_sub(WINDOW) & !1..=at)
             .step_by(2)
             .filter(|&p| prologue(&self.normal[p..]))
@@ -372,19 +374,19 @@ impl Search<'_> {
 }
 struct WorkerLink {
     prefix: Body,
-    invoker: Body,
+    invoker: Rc<Body>,
     call_site: usize,
     method_at: usize,
     adjust_at: usize,
 }
 #[derive(Clone)]
 struct Child {
-    body: Body,
+    body: Rc<Body>,
     table: u32,
     vptr: i32,
     field: i32,
 }
-fn child(body: &Body) -> Vec<Child> {
+fn child(body: &Rc<Body>) -> Vec<Child> {
     let Some((parent, formal)) = body.formal(0) else {
         return Vec::new();
     };
@@ -417,7 +419,7 @@ fn child(body: &Body) -> Vec<Child> {
                     && body.path(pair[1].span.end, publication.span.start, &[parent, object])
                 {
                     out.push(Child {
-                        body: body.clone(),
+                        body: Rc::clone(body),
                         table,
                         vptr,
                         field,
@@ -738,6 +740,8 @@ pub(super) fn bind(normal: &[u8], kernel: &[u8], seed: usize) -> Option<Vec<Owne
         exhausted: false,
     };
     let mut matches = Vec::new();
+    let mut children_cache: Option<Vec<Child>> = None;
+    let mut pairs_cache: Option<BTreeMap<u32, Vec<usize>>> = None;
     let owners = s.containing(seed);
     for owner in owners {
         if !super::sink_boundaries::crosses(
@@ -772,53 +776,70 @@ pub(super) fn bind(normal: &[u8], kernel: &[u8], seed: usize) -> Option<Vec<Owne
                 // Restrict candidate decoding to an actual native allocation-result
                 // carrier followed by an immediate vptr store. This is only a
                 // search prefilter; the complete constructor/path is bound below.
-                let stores: Vec<_> = (0..normal.len().saturating_sub(11))
-                    .step_by(2)
-                    .filter(|&at| {
-                        if normal[at] != 0x7a
-                            || normal[at + 1] > 6
-                            || normal[at + 6..at + 9] != [1, 0, 0x6f]
-                            || normal[at + 9] & 0x80 == 0
-                            || normal[at + 9] & 7 != normal[at + 1]
-                        {
-                            return false;
-                        }
-                        let object = (normal[at + 9] >> 4) & 7;
-                        [2usize, 4].into_iter().any(|gap| {
-                            at.checked_sub(gap).is_some_and(|copy| {
-                                copy >= 4
-                                    && normal[copy..copy + 2] == [0x0f, 0x80 | object]
-                                    && normal[copy - 4] == 0x5e
-                                    && (gap == 2 || normal[copy + 2] == 0x47)
+                // It depends on the image alone, so it is built once per bind.
+                let children: &[Child] = match &children_cache {
+                    Some(children) => children,
+                    None => {
+                        let stores: Vec<_> = (0..normal.len().saturating_sub(11))
+                            .step_by(2)
+                            .filter(|&at| {
+                                if normal[at] != 0x7a
+                                    || normal[at + 1] > 6
+                                    || normal[at + 6..at + 9] != [1, 0, 0x6f]
+                                    || normal[at + 9] & 0x80 == 0
+                                    || normal[at + 9] & 7 != normal[at + 1]
+                                {
+                                    return false;
+                                }
+                                let object = (normal[at + 9] >> 4) & 7;
+                                [2usize, 4].into_iter().any(|gap| {
+                                    at.checked_sub(gap).is_some_and(|copy| {
+                                        copy >= 4
+                                            && normal[copy..copy + 2] == [0x0f, 0x80 | object]
+                                            && normal[copy - 4] == 0x5e
+                                            && (gap == 2 || normal[copy + 2] == 0x47)
+                                    })
+                                })
                             })
-                        })
-                    })
-                    .collect();
-                let mut children = Vec::new();
-                let mut seen = BTreeSet::new();
-                for at in stores {
-                    for body in s.containing(at) {
-                        if seen.insert(body.span().start) {
-                            children.extend(child(&body));
+                            .collect();
+                        let mut children = Vec::new();
+                        let mut seen = BTreeSet::new();
+                        for at in stores {
+                            for body in s.containing(at) {
+                                if seen.insert(body.span().start) {
+                                    children.extend(child(&body));
+                                }
+                            }
                         }
+                        children_cache.insert(children)
                     }
-                }
+                };
                 for c in children {
                     let child_address =
                         BASE.checked_add(u32::try_from(c.body.span().start).ok()?)?;
-                    for at in (0..normal.len().saturating_sub(7)).step_by(2) {
-                        if normal[at] != 0x5e
-                            || normal[at + 4] != 0x5e
-                            || u32::from_be_bytes([
-                                0,
-                                normal[at + 5],
-                                normal[at + 6],
-                                normal[at + 7],
-                            ]) != child_address
-                            || !s.contains(&(at..at + 8))
-                        {
-                            continue;
+                    // Stored getter/child call pairs, indexed once by child target.
+                    let pairs = pairs_cache.get_or_insert_with(|| {
+                        let mut pairs: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+                        for at in (0..normal.len().saturating_sub(7)).step_by(2) {
+                            if normal[at] == 0x5e
+                                && normal[at + 4] == 0x5e
+                                && s.contains(&(at..at + 8))
+                            {
+                                pairs
+                                    .entry(u32::from_be_bytes([
+                                        0,
+                                        normal[at + 5],
+                                        normal[at + 6],
+                                        normal[at + 7],
+                                    ]))
+                                    .or_default()
+                                    .push(at);
+                            }
                         }
+                        pairs
+                    });
+                    let sites = pairs.get(&child_address).map_or(&[][..], Vec::as_slice);
+                    for &at in sites {
                         let getter_address =
                             u32::from_be_bytes([0, normal[at + 1], normal[at + 2], normal[at + 3]]);
                         let Some(getter_at) = offset(getter_address, normal) else {
@@ -831,7 +852,7 @@ pub(super) fn bind(normal: &[u8], kernel: &[u8], seed: usize) -> Option<Vec<Owne
                             let Some(parent) = s.body(parent_at) else {
                                 continue;
                             };
-                            for (mut spans, mut edges) in parent_graph(&mut s, &parent, &c, &caller)
+                            for (mut spans, mut edges) in parent_graph(&mut s, &parent, c, &caller)
                             {
                                 spans.extend([
                                     owner.span(),

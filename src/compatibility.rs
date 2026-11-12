@@ -443,7 +443,7 @@ pub fn prepare_phase(
 ///     use compatibility::Error::*;
 ///     match e {
 ///         UnresolvedIdentity | Incompatible | PersistentLayoutOverlap { .. } | Unsupported => 0,
-///         Phase(_) | PersistentLayout(_) | VerificationFailed | ComponentMismatch => 1,
+///         Phase(_) | VerificationFailed | ComponentMismatch => 1,
 ///         Representation | Authentication => 2,
 ///     }
 /// }

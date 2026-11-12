@@ -275,12 +275,19 @@ pub fn inspect(context: &Context<'_>) -> Assessment {
                     p.opened.pin.address, p.opened.pin.bit, p.opened.arrival, p.opened.confirmation)),
             (_, _, Observation::Unresolved(_)) if matches!(slim, Some(Ok(_))) => {
                 let Some(Ok(slim)) = slim else { unreachable!() };
-                if !slim.closed.unbound.is_empty() || !slim.opened.unbound.is_empty() {
+                if slim.closed.followed || slim.opened.followed {
+                    let unbound = |p: &v850::Program| {
+                        if p.unbound.is_empty() {
+                            "none".into()
+                        } else {
+                            p.unbound.join("; ")
+                        }
+                    };
                     return Assessment::known(ID, Role::Hardware, v850_slim_value(&slim), format!(
                         "Fixed direct and one-helper-level peripheral bit I/O of the V850 slim-mechanism [LOADIN] state machine Normal+{:#x}..{:#x} and [LOADOUT] state machine Normal+{:#x}..{:#x} (bus-decoded Normal): closed {}; open {}. The direct inputs are the state machines' own tst1 reads; outputs are the fixed set1/clr1 levels driven by directly called helpers, followed exactly one level. Not bound and not part of the value: closed {}; open {}. RAM gates, evidence only: closed {:?}; open {:?}",
                         slim.closed.start, slim.closed.end, slim.opened.start, slim.opened.end,
                         v850_io_text(&slim.closed.io), v850_io_text(&slim.opened.io),
-                        slim.closed.unbound.join("; "), slim.opened.unbound.join("; "),
+                        unbound(&slim.closed), unbound(&slim.opened),
                         slim.closed.gates, slim.opened.gates));
                 }
                 Assessment::known(ID, Role::Hardware, v850_slim_value(&slim), format!(
@@ -533,6 +540,26 @@ mod tests {
             inspect(&context("ATA 0009", &arrival)).finding,
             Finding::Known(Value::Variant(6, _))
         ));
+    }
+    #[test]
+    fn v850_slim_evidence_names_a_followed_helper_level() {
+        // [LOADOUT] has only a direct input; its one helper drives the output
+        // and calls nothing further, so nothing is unbound.
+        let raw = v850::tests::with_helper(&[0xc0, 0x37, 0x12, 0xf4, 0x7f, 0x00]);
+        let stored = crate::image::layout::encode_v850_bus(&raw).unwrap();
+        let evidence = inspect(&context("ATA 0064", &stored)).evidence;
+        assert!(evidence.contains("one-helper-level"), "{evidence}");
+        assert!(
+            !evidence.contains("Called helpers are not followed"),
+            "{evidence}"
+        );
+        // Fully direct programs keep the direct-only text.
+        let stored = crate::image::layout::encode_v850_bus(&v850::tests::k15()).unwrap();
+        let evidence = inspect(&context("ATA 0064", &stored)).evidence;
+        assert!(
+            evidence.contains("Called helpers are not followed"),
+            "{evidence}"
+        );
     }
     #[test]
     fn physical_levels_encodings_and_roles_are_not_projected_away() {

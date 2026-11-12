@@ -9,8 +9,9 @@
 //! Every held package must be listed; every distinct Normal must be analyzed or
 //! reported as undecodable; family IDs must equal the update path's families;
 //! no family may cross a platform; unresolved images must carry their reasons;
-//! and no pair inside one matching family may be admitted with a phase
-//! correction unless its complete sled mechanism bundle is bound and identical.
+//! and planning every same-family pair whose as-is identities differ must not
+//! panic. Phase admission no longer depends on a mechanism bundle, so no
+//! further same-family admission invariant is checked here.
 #![cfg(feature = "envelope")]
 #[path = "../examples/hardware_matrix/page.rs"]
 mod page;
@@ -150,7 +151,7 @@ fn generated_matrix_holds_its_invariants_over_the_hoard() {
         }
     }
 
-    // Phase corrections inside a matching family need a bound, identical bundle.
+    // Plan every same-family pair whose as-is identities differ.
     let family: BTreeMap<&str, &str> = analyses
         .iter()
         .filter_map(|a| Some((a.component.as_str(), a.candidate.as_deref()?)))
@@ -162,7 +163,6 @@ fn generated_matrix_holds_its_invariants_over_the_hoard() {
         .filter(|(a, x, b, y)| x.as_is != y.as_is && family[a.as_str()] == family[b.as_str()])
         .collect();
     let next = std::sync::atomic::AtomicUsize::new(0);
-    let found = std::sync::Mutex::new(Vec::new());
     std::thread::scope(|scope| {
         for _ in 0..std::thread::available_parallelism().map_or(4, |n| n.get()) {
             scope.spawn(|| loop {
@@ -170,17 +170,11 @@ fn generated_matrix_holds_its_invariants_over_the_hoard() {
                 let Some((_a, x, _b, y)) = pairs.get(i) else {
                     break;
                 };
-                // Planning every same-family pair must not panic. Phase admission no
-                // longer depends on a mechanism bundle, so there is nothing further to check.
-                if pioneer_optical::compatibility::plan(x.firmware(), y.firmware()).is_err() {
-                    continue;
-                }
+                // Planning must not panic; either outcome is valid here.
+                let _ = pioneer_optical::compatibility::plan(x.firmware(), y.firmware());
             });
         }
     });
-    let mut found = found.into_inner().unwrap();
-    found.sort();
     eprintln!("{} same-family phase pairs planned", pairs.len());
-    mismatches.extend(found);
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }

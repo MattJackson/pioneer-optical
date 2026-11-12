@@ -169,26 +169,26 @@ impl CodedError for crate::receiver::PreparationError {
         match self {
             Self::Startup(error) => error.code(),
             Self::PhaseCorrection(error) => error.code(),
-            Self::UnresolvedStartup => "pioneer.preparation.unresolved_startup",
-            Self::AmbiguousStartup => "pioneer.preparation.ambiguous_startup",
-            Self::UnknownStartupAccess => "pioneer.preparation.unknown_startup_access",
-            Self::Target(..) => "pioneer.preparation.target",
-            Self::KernelHandoff(..) => "pioneer.preparation.kernel_handoff",
-            Self::MissingInstalledKernel => "pioneer.preparation.missing_installed_kernel",
+            Self::UnresolvedStartup => "pioneer.prepare.unresolved_startup",
+            Self::AmbiguousStartup => "pioneer.prepare.ambiguous_startup",
+            Self::UnknownStartupAccess => "pioneer.prepare.unknown_startup_access",
+            Self::Target(..) => "pioneer.prepare.target",
+            Self::KernelHandoff(..) => "pioneer.prepare.kernel_handoff",
+            Self::MissingInstalledKernel => "pioneer.prepare.missing_installed_kernel",
             Self::InstalledKernelRepresentation => {
-                "pioneer.preparation.installed_kernel_representation"
+                "pioneer.prepare.installed_kernel_representation"
             }
-            Self::Compatibility(..) => "pioneer.preparation.compatibility",
-            Self::UnknownInstalledKernel => "pioneer.preparation.unknown_installed_kernel",
-            Self::RejectedMarker => "pioneer.preparation.rejected_marker",
-            Self::UnsupportedFinalStage => "pioneer.preparation.unsupported_restoration",
-            Self::FinalStageEntry(..) => "pioneer.preparation.restoration_entry",
+            Self::Compatibility(..) => "pioneer.prepare.compatibility",
+            Self::UnknownInstalledKernel => "pioneer.prepare.unknown_installed_kernel",
+            Self::RejectedMarker => "pioneer.prepare.rejected_marker",
+            Self::UnsupportedFinalStage => "pioneer.prepare.unsupported_restoration",
+            Self::FinalStageEntry(..) => "pioneer.prepare.restoration_entry",
             // Same stage code as before; the signing cause is kept in source().
             Self::PatchedRepresentation | Self::PatchedSigning(..) => {
-                "pioneer.preparation.patched_representation"
+                "pioneer.prepare.patched_representation"
             }
-            Self::UnsupportedDialect => "pioneer.preparation.unsupported_dialect",
-            Self::UnsupportedTransport => "pioneer.preparation.unsupported_transport",
+            Self::UnsupportedDialect => "pioneer.prepare.unsupported_dialect",
+            Self::UnsupportedTransport => "pioneer.prepare.unsupported_transport",
         }
     }
 }
@@ -297,7 +297,7 @@ impl CodedError for crate::protocol::Incomplete {
 }
 
 #[cfg(all(feature = "envelope", feature = "drive"))]
-impl CodedError for crate::receiver::transport::PlanError {
+impl CodedError for crate::receiver::transport::LayoutError {
     fn code(&self) -> &'static str {
         match self {
             Self::KernelLayout => "pioneer.transport.kernel_layout",

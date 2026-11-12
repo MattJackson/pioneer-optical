@@ -99,15 +99,15 @@ pub(super) fn closed(normal: &[u8], kernel: &[u8], profile: &Profile) -> bool {
     for bytes in regions.stored {
         let start = bytes.as_ptr() as usize - normal.as_ptr() as usize;
         let skip = start & 1;
-        references(
-            &bytes[skip..],
-            0x410000 + (start + skip) as u32,
-            |at, target| {
-                if contains(&all, target) {
-                    found.push((start + skip + at, target));
-                }
-            },
-        );
+        // An empty stored region can begin at an odd offset.
+        let Some(aligned) = bytes.get(skip..) else {
+            continue;
+        };
+        references(aligned, 0x410000 + (start + skip) as u32, |at, target| {
+            if contains(&all, target) {
+                found.push((start + skip + at, target));
+            }
+        });
     }
     if found != profile.references {
         return false;
@@ -244,6 +244,16 @@ pub(super) fn complete_owner(normal: &[u8], owner: &Owner, profile: &Profile) ->
         && !instructions.windows(2).any(|w| w[0].end > w[1].start)
 }
 
+/// Held byte flags of the predicate state; every access must be byte-wide.
+const FLAGS: [u32; 3] = [0x140, 0x142, 0x144];
+
+/// Whether an absolute access of `width` bytes at `value` overlaps a held flag.
+fn overlaps_flag(value: u32, width: u32) -> bool {
+    FLAGS
+        .iter()
+        .any(|&f| value <= f && f < value.saturating_add(width))
+}
+
 /// Absolute byte references are a census, not absence of computed-address stores.
 pub(super) fn flags(normal: &[u8], profile: &Profile) -> bool {
     let Some(regions) = crate::image::regions(normal) else {
@@ -274,10 +284,7 @@ pub(super) fn flags(normal: &[u8], profile: &Profile) -> bool {
             };
             for op in d.insn.operands {
                 if let Operand::Address(Ea::Absolute { value, .. }) = op {
-                    if [0x140u32, 0x142, 0x144]
-                        .iter()
-                        .any(|&f| value <= f && f < value.saturating_add(width))
-                    {
+                    if overlaps_flag(value, width) {
                         if width != 1 {
                             return false;
                         }
@@ -301,12 +308,51 @@ pub(super) fn no_wide_flags(kernel: &[u8]) -> bool {
             _ => continue,
         };
         if d.insn.operands.iter().any(|op| {
-            matches!(op,
-            Operand::Address(Ea::Absolute {value,..})
-            if [0x140u32,0x142,0x144].iter().any(|f| value<=f && *f<value.saturating_add(width)))
+            matches!(op, Operand::Address(Ea::Absolute { value, .. }) if overlaps_flag(*value, width))
         }) {
             return false;
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A COMP stream ending at an odd image end leaves an empty stored region
+    /// at an odd offset.
+    fn odd_empty_tail() -> Vec<u8> {
+        let mut seed = 0u8;
+        let compressed = loop {
+            let data: Vec<u8> = (0..64u8).map(|i| i.wrapping_mul(7) ^ seed).collect();
+            let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&data, 6);
+            if compressed.len() % 2 == 1 {
+                break (data.len(), compressed);
+            }
+            seed += 1;
+        };
+        let (expanded, compressed) = compressed;
+        let mut raw = alloc::vec![0xff; 0x2004 + compressed.len()];
+        raw[0x1000..0x1004].copy_from_slice(b"COMP");
+        let start = 0x412000u32;
+        raw[0x1004..0x1008].copy_from_slice(&start.to_be_bytes());
+        raw[0x1008..0x100c].copy_from_slice(&(start + compressed.len() as u32).to_be_bytes());
+        raw[0x2000..0x2004].copy_from_slice(&(expanded as u32).to_be_bytes());
+        raw[0x2004..].copy_from_slice(&compressed);
+        raw
+    }
+
+    #[test]
+    fn empty_odd_stored_region_is_not_sliced_past_its_end() {
+        let raw = odd_empty_tail();
+        let regions = crate::image::regions(&raw).expect("valid COMP");
+        let last = regions.stored.last().unwrap();
+        assert!(last.is_empty());
+        assert_eq!((last.as_ptr() as usize - raw.as_ptr() as usize) & 1, 1);
+        for profile in super::super::legacy_shapes::PROFILES {
+            assert!(!closed(&raw, &[], profile));
+            assert!(!flags(&raw, profile));
+        }
+    }
 }

@@ -1,15 +1,10 @@
 //! Persistent parameter layout recognition and comparison; never corrected.
-use super::{
-    Assessment, Comparison, Context, Filter, Operation, Role, Transition,
-    Value,
-};
+use super::{Assessment, Comparison, Context, Filter, Operation, Role, Transition, Value};
 use crate::{
     compatibility::Error,
-    image::{
-        layout::{
-            self, AddressBasis, HeaderTest, Observation, ParameterLayout, SerialSelection,
-            Unresolved, WordEncoding,
-        },
+    image::layout::{
+        self, AddressBasis, HeaderTest, Observation, ParameterLayout, SerialSelection, Unresolved,
+        WordEncoding,
     },
 };
 use alloc::{boxed::Box, format, string::String, vec, vec::Vec};

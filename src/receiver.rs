@@ -9,6 +9,7 @@ use crate::envelope::Envelope;
 use crate::image::{receiver_control_with_kernel, Family, ReceiverControl};
 use crate::{cdb, ComponentKind};
 
+pub mod normal_transfer;
 mod preparation;
 pub use preparation::PreparationError;
 mod stages;

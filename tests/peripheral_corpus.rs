@@ -1,5 +1,6 @@
 //! ATA native interfaces against the independently disassembled audit.
 #![cfg(feature = "image")]
+#![cfg(feature = "internals")]
 use pioneer_optical::image::{
     layout::Observation,
     peripheral::{self, Interface},

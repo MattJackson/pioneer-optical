@@ -1,6 +1,6 @@
 //! OEM-derived placement regression tests. No drive I/O and no bundled firmware.
 //! Run with PIONEER_OEM_CORPUS pointing at the extracted, hash-named envelopes.
-#![cfg(all(feature = "envelope", feature = "drive"))]
+#![cfg(all(feature = "envelope", feature = "drive", feature = "internals"))]
 
 use pioneer_optical::{
     drive::{execute_plan, Data, Segment, Transport, UpdateOptions, UpdateRuntime},

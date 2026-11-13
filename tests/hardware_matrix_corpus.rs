@@ -13,6 +13,7 @@
 //! panic. Phase admission no longer depends on a mechanism bundle, so no
 //! further same-family admission invariant is checked here.
 #![cfg(feature = "envelope")]
+#![cfg(feature = "internals")]
 #[path = "../examples/hardware_matrix/page.rs"]
 mod page;
 

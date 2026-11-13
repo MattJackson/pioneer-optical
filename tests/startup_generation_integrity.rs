@@ -1,5 +1,6 @@
 //! Final paired generation checks are distinct from structural sink discovery.
 #![cfg(feature = "envelope")]
+#![cfg(feature = "internals")]
 
 use pioneer_optical::{
     compatibility::{Error, Firmware},

@@ -1,5 +1,6 @@
 //! Focused typed evidence checks; private native inputs stay outside the repository.
 #![cfg(feature = "envelope")]
+#![cfg(feature = "internals")]
 use pioneer_optical::startup::{
     self,
     coverage::sinks,

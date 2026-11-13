@@ -1,5 +1,6 @@
 //! Native phase proof and byte-exact bidirectional correction checks.
 #![cfg(feature = "image")]
+#![cfg(feature = "internals")]
 use pioneer_optical::image::{
     layout::Observation,
     phase::{correct_normal, correct_pair, discover_pair, Assignment, CorrectionError},

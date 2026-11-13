@@ -27,6 +27,50 @@ pub use update::{
     UpdateError, UpdateOptions, UpdateRuntime, UpdateTransfer,
 };
 
+/// Typed live device information and settings over the same transport.
+pub use crate::device::{
+    Device, DvdRegion, Error as DeviceError, PureRead, QuietDrive, Readable, Snapshot, Writable,
+    WriteOutcome,
+};
+/// The `Device::info` snapshot: INQUIRY, mechanism, configuration and media.
+pub mod info {
+    pub use crate::device::info::*;
+}
+/// Vendor drive settings (quiet drive, PureRead, DVD region) and their codec.
+pub mod settings {
+    pub use crate::device::settings::*;
+}
+/// Bounded diagnostic read surfaces for a drive dump.
+pub mod diagnostic {
+    pub use crate::diagnostic::*;
+}
+/// Factory production data from the parameters read.
+pub mod production {
+    pub use crate::production::*;
+}
+/// The DVD region state returned by REPORT KEY.
+pub mod region {
+    pub use crate::rpc::*;
+}
+/// Vendor identity response parsing into protocol evidence.
+pub use crate::protocol::{Evidence, Response, State as ProtocolState};
+
+/// Firmware-derived diagnostic logging switches.
+#[cfg(feature = "image")]
+pub use crate::logging::{
+    discover as discover_logging, set_logging_persistent, set_logging_ram, LoggingLayout,
+};
+
+/// Execution of a prepared update ([`crate::prepare`]) on the live drive.
+#[cfg(feature = "envelope")]
+pub use crate::receiver::{
+    ExecutionError, ExecutionMode, ExecutionRuntime, FlashError, FlashOutcome, FlashRuntime,
+    FlashStage, FlashTransport, PlanError, PlanReason,
+};
+/// The startup settings transaction's failure and rollback outcome.
+#[cfg(feature = "envelope")]
+pub use crate::startup::migration::{Error as StartupError, Rollback};
+
 /// The control buffer carried by [`cdb::enter_update`] and [`cdb::finish`].
 pub type Control = [u8; CONTROL_LEN as usize];
 
@@ -63,7 +107,7 @@ pub trait Transport {
 pub enum Error<E> {
     /// The transport failed.
     Transport(E),
-    /// The drive refused with `05/24/00` (see [`crate::sense::is_locked`]).
+    /// The drive refused with `05/24/00` (see [`crate::cdb::sense::is_locked`]).
     Locked,
     /// The drive returned fewer bytes than required.
     Short {
@@ -117,7 +161,7 @@ impl<E: core::fmt::Debug> core::fmt::Display for Error<E> {
 /// Execute `cdb`, mapping a `05/24/00` refusal to [`Error::Locked`].
 fn exec<T: Transport>(t: &mut T, cdb: &[u8], data: Data<'_>) -> Result<usize, Error<T::Error>> {
     t.exec(cdb, data).map_err(|e| match t.sense() {
-        Some((k, a, q)) if crate::sense::is_locked(k, a, q) => Error::Locked,
+        Some((k, a, q)) if crate::cdb::sense::is_locked(k, a, q) => Error::Locked,
         _ => Error::Transport(e),
     })
 }
@@ -305,7 +349,7 @@ impl<T: Transport> Session<'_, T> {
 }
 
 /// Enter the update session with `control`. On [`DriveClass::Dvr`] the
-/// [`crate::dvr`] handshake runs first.
+/// [`crate::cdb::dvr`] handshake runs first.
 pub fn enter_update<'a, T: Transport>(
     t: &'a mut T,
     class: DriveClass,
@@ -315,7 +359,7 @@ pub fn enter_update<'a, T: Transport>(
         exec(t, &cdb::dvr_arm(), Data::None)?;
         let mut challenge = [0; DVR_CHALLENGE_LEN as usize];
         read(t, &cdb::dvr_challenge(), &mut challenge, 4)?;
-        let response = crate::dvr::solve(&challenge).ok_or(Error::Challenge)?;
+        let response = crate::cdb::dvr::solve(&challenge).ok_or(Error::Challenge)?;
         write(t, &cdb::dvr_response(), &response)?;
     }
     write(t, &cdb::enter_update(), control)?;

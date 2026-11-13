@@ -5,6 +5,7 @@
 //! `PIONEER_UPDATE_SNAPSHOTS=1 cargo test --all-features --test hardware_matrix_page`
 //! and review the diff.
 #![cfg(feature = "envelope")]
+#![cfg(feature = "internals")]
 #[path = "../examples/hardware_matrix/page.rs"]
 mod page;
 

@@ -1,5 +1,6 @@
 //! Independent native geometry extraction against the audited SAT matrix.
 #![cfg(feature = "image")]
+#![cfg(feature = "internals")]
 use pioneer_optical::image::{
     geometry::{discover_sat, Geometry},
     layout::Observation,

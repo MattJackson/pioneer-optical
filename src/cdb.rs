@@ -197,7 +197,7 @@ pub fn dvr_challenge() -> [u8; 10] {
 }
 
 /// `3B 01 F2 00 00 00 00 01 00 00` — write the DVR response
-/// ([`DVR_RESPONSE_LEN`] bytes, from [`crate::dvr::solve`]).
+/// ([`DVR_RESPONSE_LEN`] bytes, from [`crate::cdb::dvr::solve`]).
 pub fn dvr_response() -> [u8; 10] {
     vendor(
         WRITE_BUFFER,
@@ -211,3 +211,94 @@ pub fn dvr_response() -> [u8; 10] {
 #[cfg(test)]
 #[path = "cdb_tests.rs"]
 mod tests;
+
+/// The challenge-response handshake that precedes update entry on
+/// [`crate::DriveClass::Dvr`] drives.
+///
+/// Sequence: [`dvr_arm`], read the challenge with [`dvr_challenge`],
+/// [`solve`](dvr::solve) it, write the response with [`dvr_response`].
+pub mod dvr {
+    use crate::cdb::{DVR_CHALLENGE_LEN, DVR_RESPONSE_LEN};
+
+    /// Advance the challenge generator; return its output byte.
+    fn step(state: &mut u32) -> u8 {
+        *state = state.wrapping_mul(0x41C6_4E6D).wrapping_add(0x3039);
+        (*state >> 16) as u8
+    }
+
+    /// Solve a challenge: the response payload for [`crate::cdb::dvr_response`],
+    /// or `None` if `challenge` is shorter than four bytes or not a valid
+    /// challenge.
+    pub fn solve(challenge: &[u8]) -> Option<[u8; DVR_RESPONSE_LEN as usize]> {
+        let head = challenge.get(..4)?;
+        let seed = (0u32..=0xFFFF).find(|&v| {
+            let mut s = v;
+            head.iter().all(|&b| step(&mut s) == b)
+        })?;
+        let mut s = seed;
+        for _ in 0..DVR_CHALLENGE_LEN {
+            step(&mut s);
+        }
+        Some([!step(&mut s); DVR_RESPONSE_LEN as usize])
+    }
+
+    #[cfg(test)]
+    pub(crate) fn challenge(seed: u16) -> [u8; DVR_CHALLENGE_LEN as usize] {
+        let mut s = seed as u32;
+        let mut out = [0; DVR_CHALLENGE_LEN as usize];
+        out.iter_mut().for_each(|b| *b = step(&mut s));
+        out
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn solves_a_generated_challenge() {
+            let r = super::solve(&super::challenge(0x1234)).unwrap();
+            assert!(r.iter().all(|&b| b == r[0]));
+            // The response depends on the challenge.
+            let other = super::solve(&super::challenge(0x4321)).unwrap();
+            assert_ne!(r[0], other[0]);
+            assert_eq!(super::solve(&[1, 2]), None);
+            // Exact responses (independently computed LCG).
+            assert_eq!(r, [0x55; crate::cdb::DVR_RESPONSE_LEN as usize]);
+            assert_eq!(other, [0xb9; crate::cdb::DVR_RESPONSE_LEN as usize]);
+        }
+
+        #[test]
+        fn generator_outputs_exact_bytes() {
+            // state 1 -> 0x41C67EA6 -> high-half low byte 0xC6.
+            assert_eq!(super::challenge(1)[0], 0xC6);
+            let mut s = 0u32;
+            assert_eq!(super::step(&mut s), 0);
+            assert_eq!(s, 0x3039);
+            let mut s = 1u32;
+            assert_eq!(super::step(&mut s), 0xC6);
+            assert_eq!(s, 0x41C6_7EA6);
+        }
+
+        #[test]
+        fn rejects_a_non_challenge() {
+            // A genuine challenge with a corrupted head matches no seed.
+            let mut c = super::challenge(0x1234);
+            for b in c.iter_mut().take(4) {
+                *b ^= 0xFF;
+            }
+            assert_eq!(super::solve(&c), None);
+        }
+    }
+}
+
+/// Classification of the sense data returned with a refused vendor command.
+pub mod sense {
+    /// Sense key `ILLEGAL REQUEST`.
+    pub const ILLEGAL_REQUEST: u8 = 0x05;
+    /// Additional sense `INVALID FIELD IN CDB` (ASC `24`, ASCQ `00`).
+    pub const INVALID_FIELD_IN_CDB: (u8, u8) = (0x24, 0x00);
+
+    /// `true` for `05/24/00`: the command needs a drive state that is not
+    /// active, or is unsupported on this drive.
+    pub fn is_locked(key: u8, asc: u8, ascq: u8) -> bool {
+        key == ILLEGAL_REQUEST && (asc, ascq) == INVALID_FIELD_IN_CDB
+    }
+}

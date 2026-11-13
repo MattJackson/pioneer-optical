@@ -1,5 +1,6 @@
 //! Exact held-image phase mapping, separate from cross-interface or flash admission.
 #![cfg(feature = "envelope")]
+#![cfg(feature = "internals")]
 
 use pioneer_optical::{
     compatibility::{Correction, Error, Firmware},

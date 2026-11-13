@@ -1,26 +1,22 @@
-//! Pioneer optical drive (BD/DVD) vendor protocol: command encoding, response
-//! decoding, firmware image analysis and the firmware envelope codec.
+//! Pioneer optical drive (BD/DVD) firmware and vendor protocol, as pure byte
+//! transforms plus command sequences over a caller-supplied transport.
 //!
-//! The crate root is `no_std`, allocation-free and dependency-free:
+//! The public API is five modules:
 //!
-//! - [`cdb`] — the vendor command descriptor blocks, as byte constructors.
-//! - [`Identity`] — the decoded INQUIRY and vendor identity responses.
-//! - [`ComponentKind`] and [`Role`] — which firmware component is meant.
-//! - [`dvr`] — the challenge solver for the DVR update handshake.
-//! - [`sense`] — classification of the vendor refusal sense.
+//! - [`envelope`] — the codec: load, header, repack, sign/verify and encode a
+//!   firmware envelope or a Kernel+Normal update (`envelope` feature).
+//! - [`classify`] — pair verdicts and their vocabulary (families, required
+//!   words, why two firmwares differ); never materializes an image.
+//! - [`prepare`] — materialize a corrected update against the installed
+//!   receiver into an opaque plan that yields the exact byte streams to write.
+//! - [`cdb`] — the vendor command descriptor blocks, as byte constructors, the
+//!   DVR handshake solver and refusal-sense classification. `no_std`.
+//! - [`drive`] — identify, read, capture, dump and update sequences over a
+//!   caller-supplied [`drive::Transport`] (`drive` feature).
 //!
-//! Optional features add:
-//!
-//! - `drive` — `drive`: the command sequences (identify, protected memory
-//!   read, update session) over a caller-supplied `drive::Transport`.
-//! - `image` — `image`: hardware family, UHD capability and Kernel ABI
-//!   analysis of decoded firmware bodies. Uses the shared H8 decoder, `std`,
-//!   `alloc` and a zlib inflater.
-//!   Also enables `ident`: plaintext banner parsing and recovery of the
-//!   embedded OEM identity string from captured images.
-//! - `envelope` — `envelope`: decode, repack, build and sign firmware
-//!   envelopes; the decoded image feeds `image`. Implies `image` and `std`.
-//! - `std` — links the standard library (implied by `envelope`).
+//! The crate root carries only shared vocabulary: [`Identity`], [`Role`],
+//! [`ComponentKind`], [`DriveClass`], [`CodedError`] and the lifecycle
+//! observations [`IssueKind`], [`Phase`], [`Component`] and [`Progress`].
 //!
 //! ## Drive state
 //!
@@ -31,72 +27,91 @@
 //!   [`cdb::READ_CEILING`]. Read-only.
 //! - **update session** — entered by [`cdb::enter_update`]. Accepts Kernel and
 //!   Normal chunk writes ([`cdb::transfer`]) and the [`cdb::finish`] commit. DVR
-//!   generations require the [`dvr`] handshake before entry.
+//!   generations require the [`cdb::dvr`] handshake before entry.
 //!
 //! Neither state enables the other.
 #![cfg_attr(not(feature = "std"), no_std)]
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-#[cfg(feature = "analysis")]
-pub mod analysis;
+// ---- Public API: exactly five modules -------------------------------------
+//
+// - [`envelope`]: the codec (load, header, repack, sign/verify, encode).
+// - [`classify`]: pair verdicts and their vocabulary; no materialization.
+// - [`prepare`]: materialize a corrected update into an opaque plan that
+//   yields the exact byte streams to write.
+// - [`cdb`]: vendor command bytes; no transport.
+// - [`drive`]: command sequences over a caller-supplied transport.
+//
+// Everything else is crate-private. The non-default `internals` feature
+// exposes the analysis modules to this crate's own corpus tests and research
+// examples only; applications must not enable it.
 
-#[cfg(any(feature = "image", feature = "envelope"))]
-extern crate alloc;
-
-#[cfg(any(feature = "image", feature = "envelope"))]
-mod comp;
-
-#[cfg(any(feature = "analysis", feature = "firmware-info"))]
-mod comp_runtime;
-
-#[cfg(feature = "image")]
-mod comp_streams;
-
-mod error_codes;
-/// Common lifecycle observations for generic firmware applications.
-pub mod operation;
-pub use error_codes::CodedError;
-
-#[cfg(feature = "firmware-info")]
-pub mod firmware;
-
-mod product_identity;
-pub use product_identity::ProductIdentity;
+macro_rules! internal {
+    ($($(#[$meta:meta])* mod $name:ident;)*) => {$(
+        $(#[$meta])*
+        #[cfg(feature = "internals")]
+        #[doc(hidden)]
+        pub mod $name;
+        $(#[$meta])*
+        #[cfg(not(feature = "internals"))]
+        pub(crate) mod $name;
+    )*};
+}
 
 pub mod cdb;
-/// Firmware compatibility planner and component-bound correction plans.
-#[cfg(feature = "image")]
-pub mod compatibility;
-/// Typed live device information and settings over a caller-owned transport.
-#[cfg(feature = "drive")]
-pub mod device;
-/// Bounded diagnostic read surfaces.
-pub mod diagnostic;
+#[cfg(feature = "envelope")]
+pub mod classify;
 #[cfg(feature = "drive")]
 pub mod drive;
 #[cfg(feature = "envelope")]
 pub mod envelope;
-/// Registered native filters, their observations and correction owners.
-#[cfg(feature = "image")]
-pub mod filters;
-#[cfg(feature = "image")]
-pub mod ident;
-#[cfg(feature = "image")]
-pub mod image;
-/// Firmware-derived diagnostic logging.
-#[cfg(feature = "image")]
-pub mod logging;
-/// Factory production data from the parameters read.
-pub mod production;
-pub mod protocol;
 #[cfg(feature = "envelope")]
-pub mod receiver;
-pub mod rpc;
-pub mod settings;
-/// Read-only discovery of persistent startup prerequisites in Normal firmware.
+pub mod prepare;
+
+#[cfg(any(feature = "image", feature = "envelope"))]
+extern crate alloc;
+
+mod checksum;
+#[cfg(any(feature = "image", feature = "envelope"))]
+mod comp;
+#[cfg(feature = "analysis")]
+mod comp_runtime;
 #[cfg(feature = "image")]
-pub mod startup;
+mod comp_streams;
+mod error_codes;
+mod product_identity;
+
+internal! {
+    #[cfg(feature = "analysis")]
+    mod analysis;
+    #[cfg(feature = "image")]
+    mod compatibility;
+    #[cfg(feature = "drive")]
+    mod device;
+    mod diagnostic;
+    #[cfg(feature = "image")]
+    mod filters;
+    #[cfg(feature = "image")]
+    mod ident;
+    #[cfg(feature = "image")]
+    mod image;
+    #[cfg(feature = "image")]
+    mod logging;
+    mod operation;
+    mod production;
+    mod protocol;
+    #[cfg(feature = "envelope")]
+    mod receiver;
+    mod rpc;
+    mod settings;
+    #[cfg(feature = "image")]
+    mod startup;
+}
+
+pub use error_codes::CodedError;
+pub use operation::{Component, IssueKind, Phase, Progress};
+pub use product_identity::ProductIdentity;
 
 /// Length of a standard INQUIRY response header, in bytes.
 pub const INQUIRY_LEN: usize = 36;
@@ -185,7 +200,7 @@ impl TryFrom<ComponentKind> for Role {
 pub enum DriveClass {
     /// BD generations: [`cdb::enter_update`] enters the update session directly.
     Bd,
-    /// DVR generations: the [`dvr`] handshake precedes [`cdb::enter_update`].
+    /// DVR generations: the [`cdb::dvr`] handshake precedes [`cdb::enter_update`].
     Dvr,
 }
 
@@ -299,97 +314,6 @@ impl Identity {
         } else {
             None
         }
-    }
-}
-
-/// The challenge-response handshake that precedes update entry on
-/// [`DriveClass::Dvr`] drives.
-///
-/// Sequence: [`cdb::dvr_arm`], read the challenge with [`cdb::dvr_challenge`],
-/// [`solve`](crate::dvr::solve) it, write the response with [`cdb::dvr_response`].
-pub mod dvr {
-    use crate::cdb::{DVR_CHALLENGE_LEN, DVR_RESPONSE_LEN};
-
-    /// Advance the challenge generator; return its output byte.
-    fn step(state: &mut u32) -> u8 {
-        *state = state.wrapping_mul(0x41C6_4E6D).wrapping_add(0x3039);
-        (*state >> 16) as u8
-    }
-
-    /// Solve a challenge: the response payload for [`crate::cdb::dvr_response`],
-    /// or `None` if `challenge` is shorter than four bytes or not a valid
-    /// challenge.
-    pub fn solve(challenge: &[u8]) -> Option<[u8; DVR_RESPONSE_LEN as usize]> {
-        let head = challenge.get(..4)?;
-        let seed = (0u32..=0xFFFF).find(|&v| {
-            let mut s = v;
-            head.iter().all(|&b| step(&mut s) == b)
-        })?;
-        let mut s = seed;
-        for _ in 0..DVR_CHALLENGE_LEN {
-            step(&mut s);
-        }
-        Some([!step(&mut s); DVR_RESPONSE_LEN as usize])
-    }
-
-    #[cfg(test)]
-    pub(crate) fn challenge(seed: u16) -> [u8; DVR_CHALLENGE_LEN as usize] {
-        let mut s = seed as u32;
-        let mut out = [0; DVR_CHALLENGE_LEN as usize];
-        out.iter_mut().for_each(|b| *b = step(&mut s));
-        out
-    }
-
-    #[cfg(test)]
-    mod tests {
-        #[test]
-        fn solves_a_generated_challenge() {
-            let r = super::solve(&super::challenge(0x1234)).unwrap();
-            assert!(r.iter().all(|&b| b == r[0]));
-            // The response depends on the challenge.
-            let other = super::solve(&super::challenge(0x4321)).unwrap();
-            assert_ne!(r[0], other[0]);
-            assert_eq!(super::solve(&[1, 2]), None);
-            // Exact responses (independently computed LCG).
-            assert_eq!(r, [0x55; crate::cdb::DVR_RESPONSE_LEN as usize]);
-            assert_eq!(other, [0xb9; crate::cdb::DVR_RESPONSE_LEN as usize]);
-        }
-
-        #[test]
-        fn generator_outputs_exact_bytes() {
-            // state 1 -> 0x41C67EA6 -> high-half low byte 0xC6.
-            assert_eq!(super::challenge(1)[0], 0xC6);
-            let mut s = 0u32;
-            assert_eq!(super::step(&mut s), 0);
-            assert_eq!(s, 0x3039);
-            let mut s = 1u32;
-            assert_eq!(super::step(&mut s), 0xC6);
-            assert_eq!(s, 0x41C6_7EA6);
-        }
-
-        #[test]
-        fn rejects_a_non_challenge() {
-            // A genuine challenge with a corrupted head matches no seed.
-            let mut c = super::challenge(0x1234);
-            for b in c.iter_mut().take(4) {
-                *b ^= 0xFF;
-            }
-            assert_eq!(super::solve(&c), None);
-        }
-    }
-}
-
-/// Classification of the sense data returned with a refused vendor command.
-pub mod sense {
-    /// Sense key `ILLEGAL REQUEST`.
-    pub const ILLEGAL_REQUEST: u8 = 0x05;
-    /// Additional sense `INVALID FIELD IN CDB` (ASC `24`, ASCQ `00`).
-    pub const INVALID_FIELD_IN_CDB: (u8, u8) = (0x24, 0x00);
-
-    /// `true` for `05/24/00`: the command needs a drive state that is not
-    /// active, or is unsupported on this drive.
-    pub fn is_locked(key: u8, asc: u8, ascq: u8) -> bool {
-        key == ILLEGAL_REQUEST && (asc, ascq) == INVALID_FIELD_IN_CDB
     }
 }
 

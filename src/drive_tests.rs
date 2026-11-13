@@ -109,7 +109,7 @@ fn dropped_session_sends_nothing() {
 #[test]
 fn dvr_handshake_precedes_entry() {
     let control = [0; CONTROL_LEN as usize];
-    let challenge = crate::dvr::challenge(0x1234);
+    let challenge = crate::cdb::dvr::challenge(0x1234);
     let mut m = Mock {
         responses: std::vec![challenge.to_vec()],
         ..Mock::default()
@@ -124,17 +124,17 @@ fn dvr_handshake_precedes_entry() {
             (cdb::enter_update().to_vec(), '>'),
         ]
     );
-    assert_eq!(m.calls[2].2, crate::dvr::solve(&challenge).unwrap());
+    assert_eq!(m.calls[2].2, crate::cdb::dvr::solve(&challenge).unwrap());
 }
 
 #[test]
 fn dvr_unsolvable_challenge_refuses_before_entry() {
     let control = [0; CONTROL_LEN as usize];
-    let mut challenge = crate::dvr::challenge(0x1234);
+    let mut challenge = crate::cdb::dvr::challenge(0x1234);
     for b in &mut challenge[..4] {
         *b ^= 0xFF;
     }
-    assert!(crate::dvr::solve(&challenge).is_none());
+    assert!(crate::cdb::dvr::solve(&challenge).is_none());
     let mut m = Mock {
         responses: std::vec![challenge.to_vec()],
         ..Mock::default()

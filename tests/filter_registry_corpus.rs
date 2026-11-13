@@ -1,5 +1,6 @@
 //! Optional native registry parity replay; firmware remains outside the crate.
 #![cfg(feature = "envelope")]
+#![cfg(feature = "internals")]
 use pioneer_optical::{compatibility::Firmware, filters};
 use std::path::PathBuf;
 

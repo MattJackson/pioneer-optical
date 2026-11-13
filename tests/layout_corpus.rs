@@ -1,5 +1,6 @@
 //! Optional local native-layout corpus checks. Firmware is not redistributed.
 #![cfg(feature = "image")]
+#![cfg(feature = "internals")]
 
 use pioneer_optical::image::layout::{
     discover_h8, discover_h8_component, discover_m32c_records, discover_m32c_serial,

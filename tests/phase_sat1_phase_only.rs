@@ -1,5 +1,6 @@
 //! Target-only mapping over captured OEM byte and split output programs.
 #![cfg(feature = "envelope")]
+#![cfg(feature = "internals")]
 use pioneer_optical::filters::phase::native::{
     self, sat1::phase_only, Assignment, CorrectionError,
 };

@@ -1,5 +1,6 @@
 //! Optional corpus validation without distributing firmware fixtures.
 #![cfg(feature = "analysis")]
+#![cfg(feature = "internals")]
 use pioneer_optical::{analysis::Options, envelope::Envelope};
 use std::path::Path;
 

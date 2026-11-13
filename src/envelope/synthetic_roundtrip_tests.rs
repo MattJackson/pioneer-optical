@@ -1717,19 +1717,6 @@ fn rebuild_last_comp_rounds_up_to_the_next_0x100_for_every_residue() {
 }
 
 #[test]
-#[cfg(feature = "firmware-info")]
-fn non_uhd_layout_inspection_derives_comp_base_without_claiming_free_ram() {
-    for base in [0x410000, 0x420000] {
-        let image = comp_image(base, &[(vec![0x11; 300], 6), (vec![0x22; 300], 6)]);
-        let layout = crate::firmware::layout::inspect(&image).unwrap();
-        assert!(!layout.is_uhd);
-        assert_eq!(layout.image_base, Some(base));
-        assert!(layout.structural_gaps.is_empty());
-        assert!(layout.global_canaries.is_empty());
-    }
-}
-
-#[test]
 fn rec_kernel_capture_round_trips_without_oem_seed() {
     let mut kernel = front_kernel();
     kernel[0x1000..0x1008].copy_from_slice(b"REC 8C00");

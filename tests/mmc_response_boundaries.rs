@@ -1,7 +1,7 @@
 //! MMC wire-format invariants: lengths are declared by the device, not the
 //! host's allocation, and flags cannot change adjacent fields.
 #![cfg(feature = "drive")]
-use pioneer_optical::device::info::{Feature, Inquiry, Mechanical};
+use pioneer_optical::drive::info::{Feature, Inquiry, Mechanical};
 
 #[test]
 fn inquiry_honors_declared_length_and_retains_identification() {

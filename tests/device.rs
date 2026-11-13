@@ -1,7 +1,6 @@
 #![cfg(feature = "drive")]
-use pioneer_optical::{
-    device::{info::*, settings::*, Device, Error, WriteOutcome},
-    drive::{Data, Transport},
+use pioneer_optical::drive::{
+    info::*, settings::*, Data, Device, DeviceError as Error, Transport, WriteOutcome,
 };
 use std::collections::VecDeque;
 

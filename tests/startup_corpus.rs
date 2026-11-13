@@ -1,5 +1,6 @@
 //! Startup selections checked against the independently traced native gates.
 #![cfg(feature = "image")]
+#![cfg(feature = "internals")]
 use pioneer_optical::startup;
 
 #[test]

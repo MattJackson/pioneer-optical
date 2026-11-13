@@ -1,5 +1,6 @@
 //! Register projections compared with the independent native audit.
 #![cfg(feature = "image")]
+#![cfg(feature = "internals")]
 use pioneer_optical::image::{
     layout::Observation,
     registers::{self, Startup},

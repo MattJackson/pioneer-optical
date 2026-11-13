@@ -1,4 +1,5 @@
 #![cfg(feature = "envelope")]
+#![cfg(feature = "internals")]
 use pioneer_optical::startup::bank;
 use sha2::{Digest, Sha256};
 

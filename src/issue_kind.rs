@@ -70,8 +70,6 @@ pub(crate) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         | "pioneer.flash.unsupported_transport"
         | "pioneer.drive.unknown_class"
         | "pioneer.execute.plan"
-        | "pioneer.firmware.unsupported"
-        | "pioneer.firmware.limit"
         | "pioneer.analysis.resource_limit"
         | "pioneer.layout.no_comp_directory"
         | "pioneer.layout.runtime_ownership_unproven"
@@ -164,11 +162,7 @@ pub(crate) fn kind_for_code(code: &str) -> crate::operation::IssueKind {
         | "pioneer.identity.incomplete_identity"
         | "pioneer.identity.ambiguous"
         | "pioneer.envelope.self_verification"
-        | "pioneer.transfer.invalid_span"
-        | "pioneer.firmware.ambiguous"
-        | "pioneer.firmware.malformed"
-        | "pioneer.firmware.out_of_range"
-        | "pioneer.firmware.instruction" => IssueKind::InvalidFirmware,
+        | "pioneer.transfer.invalid_span" => IssueKind::InvalidFirmware,
         "pioneer.receiver.family_mismatch"
         | "pioneer.compatibility.incompatible"
         | "pioneer.compatibility.persistent_layout_overlap" => IssueKind::HardwareMismatch,
@@ -239,8 +233,6 @@ mod tests {
             include_str!("compatibility.rs"),
             include_str!("compatibility/kernel.rs"),
             include_str!("compatibility/startup.rs"),
-            include_str!("firmware.rs"),
-            include_str!("firmware/error.rs"),
             include_str!("analysis/mod.rs"),
         ] {
             for code in source.split('"').filter(|s| {

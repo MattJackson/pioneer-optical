@@ -1,5 +1,6 @@
 //! Native Startup refusal and scoped preservation through the actual owner.
 #![cfg(feature = "envelope")]
+#![cfg(feature = "internals")]
 use pioneer_optical::{
     compatibility::Firmware,
     filters::{self, Context, Filter, Preparation, Transition},

@@ -385,11 +385,7 @@ pub struct Integrity {
 pub fn be32_normal_integrity() -> Integrity {
     fn repair(context: &Preparation<'_>, image: &[u8]) -> Result<Vec<u8>, Error> {
         let original = context.target.normal;
-        let sum = |bytes: &[u8]| {
-            bytes.chunks_exact(4).fold(0u32, |sum, word| {
-                sum.wrapping_add(u32::from_be_bytes(word.try_into().expect("four bytes")))
-            })
-        };
+        let sum = crate::checksum::be32_sum;
         if original.len() < 24
             || original.len() % 4 != 0
             || image.len() != original.len()

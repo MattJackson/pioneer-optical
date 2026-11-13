@@ -1,5 +1,6 @@
 //! Execute the held OEM divider instructions against independent Rust results.
 #![cfg(feature = "envelope")]
+#![cfg(feature = "internals")]
 use h8_asm::{
     isa::{decode_insn, Ea, Insn, Operand as O, Reg},
     Mode, Target,

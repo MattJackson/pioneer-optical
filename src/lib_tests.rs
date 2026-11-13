@@ -93,11 +93,11 @@ fn class_requires_a_known_product_family() {
 
 #[test]
 fn locked_sense_needs_key_and_code() {
-    assert!(sense::is_locked(0x05, 0x24, 0x00));
-    assert!(!sense::is_locked(0x05, 0x24, 0x01));
-    assert!(!sense::is_locked(0x05, 0x25, 0x00));
-    assert!(!sense::is_locked(0x02, 0x24, 0x00));
-    assert!(!sense::is_locked(0x00, 0x00, 0x00));
+    assert!(crate::cdb::sense::is_locked(0x05, 0x24, 0x00));
+    assert!(!crate::cdb::sense::is_locked(0x05, 0x24, 0x01));
+    assert!(!crate::cdb::sense::is_locked(0x05, 0x25, 0x00));
+    assert!(!crate::cdb::sense::is_locked(0x02, 0x24, 0x00));
+    assert!(!crate::cdb::sense::is_locked(0x00, 0x00, 0x00));
 }
 
 #[cfg(feature = "std")]

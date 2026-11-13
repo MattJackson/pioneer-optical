@@ -1,5 +1,6 @@
 //! Exact pair profiles through the full filter composition path.
 #![cfg(feature = "envelope")]
+#![cfg(feature = "internals")]
 
 use pioneer_optical::{
     compatibility::{Error, Firmware},

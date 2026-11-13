@@ -1,5 +1,6 @@
 //! Execute complete OEM SAT1 commands, selectors and output code, including Kernel leaves.
 #![cfg(feature = "envelope")]
+#![cfg(feature = "internals")]
 use h8_asm::{
     isa::{decode_insn, Ea, Operand as O, Reg, Size},
     Mode, Target,

@@ -1,4 +1,5 @@
 #![cfg(feature = "envelope")]
+#![cfg(feature = "internals")]
 use pioneer_optical::filters::phase::native::sat1;
 #[test]
 #[ignore = "requires PIONEER_SAT1_CORPUS; exact two native SAT1 graphs"]

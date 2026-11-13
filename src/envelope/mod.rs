@@ -14,6 +14,18 @@
     clippy::chunks_exact_to_as_chunks
 )]
 
+/// The whole-image BE32 checksum every decoded Pioneer image satisfies.
+pub use crate::checksum::{be32_sum as checksum, be32_sum_zero as checksum_ok};
+/// Plaintext banner recognition and recovery of the embedded OEM identity.
+pub use crate::ident::{embedded_envelope_id, parse_banner, Banner, IdentError, BANNER_MAGIC};
+/// Kernel load address and body length shared by every Pioneer Kernel.
+pub use crate::image::{Abi, KERNEL_BASE, KERNEL_LEN};
+/// Structured, read-only analysis of a loaded envelope (`analysis` feature).
+#[cfg(feature = "analysis")]
+pub mod analysis {
+    pub use crate::analysis::*;
+}
+
 use crate::comp::COMP_OFFSET;
 use crate::{ComponentKind, DriveClass};
 use serde::Serialize;
@@ -1042,15 +1054,7 @@ fn transformed_plane_layout(data: &[u8], file_type: ComponentKind) -> Option<Sel
     ))
 }
 
-fn be32_sum_zero(image: &[u8]) -> bool {
-    image.len() % 4 == 0 && be32_sum(image) == 0
-}
-
-fn be32_sum(image: &[u8]) -> u32 {
-    image.chunks_exact(4).fold(0u32, |sum, word| {
-        sum.wrapping_add(u32::from_be_bytes(word.try_into().unwrap()))
-    })
-}
+use crate::checksum::{be32_sum, be32_sum_zero};
 
 // Older 64 KiB Kernel framing, established across nine ATA0006/7/8
 // envelopes. Recognize the bytes, not the model. This is transport decoding;
@@ -1331,17 +1335,17 @@ impl DecodedEnvelope {
         )
     }
 
-    /// True when the decoded image is UHD-capable; see [`crate::image::is_uhd`].
+    /// True when the decoded image is UHD-capable.
     pub fn is_uhd(&self) -> bool {
         crate::image::is_uhd(&self.image)
     }
 
-    /// Kernel ABI a decoded Normal requires; see [`crate::image::required_abi`].
+    /// Kernel ABI a decoded Normal requires.
     pub fn required_abi(&self) -> Option<crate::image::Abi> {
         crate::image::required_abi(&self.image)
     }
 
-    /// Kernel ABI a decoded Kernel provides; see [`crate::image::provided_abi`].
+    /// Kernel ABI a decoded Kernel provides.
     pub fn provided_abi(&self) -> Option<crate::image::Abi> {
         crate::image::provided_abi(&self.image)
     }

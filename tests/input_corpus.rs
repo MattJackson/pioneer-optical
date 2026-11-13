@@ -1,5 +1,6 @@
 //! Role-bound SAT8 physical predicates against the independent native audit.
 #![cfg(feature = "image")]
+#![cfg(feature = "internals")]
 use pioneer_optical::image::{
     inputs::{discover, Encoding, Term},
     layout::Observation,

@@ -1,8 +1,8 @@
 //! Compiled host integration example. Running this example does not access a drive.
 use pioneer_optical::{
-    drive::Transport,
+    drive::{ExecutionRuntime, FlashOutcome, FlashTransport, Transport},
     envelope::Update,
-    receiver::{ExecutionRuntime, FlashOutcome, FlashTransport, Receiver},
+    prepare::Receiver,
 };
 
 /// Execute after the host has backed up the drive, obtained consent and ensured

@@ -1,5 +1,6 @@
 //! IRQ/input values and retained observations against the independent audit.
 #![cfg(feature = "image")]
+#![cfg(feature = "internals")]
 use pioneer_optical::image::{
     irq::{discover, Value},
     layout::Observation,

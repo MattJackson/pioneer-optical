@@ -68,7 +68,6 @@ and protocol bounds determine which addresses are meaningful.
 | `image` | Decoded firmware families, ABI and startup requirements | `std` |
 | `envelope` | Load, decode, repack, build and sign envelopes; prepare updates | `std`; includes `image` |
 | `analysis` | Bounded single-envelope region and metadata analysis | `std`; includes `envelope` |
-| `firmware-info` | H8 memory layout, callback and ABI inspection | `std`; includes `image` |
 | `std` | Standard-library error integration without firmware features | `std` |
 
 `drive` also provides `device::Device` for typed live information and settings.

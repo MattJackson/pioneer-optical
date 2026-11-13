@@ -1,4 +1,4 @@
-use pioneer_optical::protocol::{Evidence, State};
+use pioneer_optical::drive::{Evidence, ProtocolState as State};
 fn inquiry() -> [u8; 36] {
     let mut b = [b' '; 36];
     b[0] = 5;
@@ -105,7 +105,7 @@ fn unknown_platform_is_evidence_without_writer_permission() {
 
 #[test]
 fn shared_response_preserves_metadata_and_matches_without_platform_allowlist() {
-    use pioneer_optical::protocol::Response;
+    use pioneer_optical::drive::Response;
     for hardware in [
         b"SAT 8591",
         b"REC 8C00",

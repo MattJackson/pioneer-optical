@@ -241,7 +241,7 @@ impl FieldDiff {
     }
 }
 
-/// Structured, field-by-field comparison of two candidate identity [`Key`]s.
+/// Structured, field-by-field comparison of two candidate identity keys.
 ///
 /// Every owner identifier in the union of both keys is classified; the two
 /// family fingerprints and whether the platform domains agree are retained so a

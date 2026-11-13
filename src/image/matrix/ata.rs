@@ -1,5 +1,6 @@
 //! ATA identity assembled from independently recognized native consumers.
-use super::{geometry, layout, Observation, ParameterLayout};
+use crate::image::layout::{Observation, ParameterLayout};
+use crate::image::{geometry, layout};
 use crate::image::peripheral;
 
 /// Architecture-specific native input contract, never a cross-architecture bit.

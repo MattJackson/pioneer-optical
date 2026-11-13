@@ -957,7 +957,7 @@ fn handoff_bridge_signs_unsigned_capture_without_accepting_invalid_signatures() 
 
 #[test]
 fn native_phase_preparation_is_bidirectional_for_full_and_normal_only_updates() {
-    use crate::image::phase::{correct_normal, Assignment};
+    use crate::filters::phase::native::{correct_normal, Assignment};
     let direct = update_with_bound_startup(false, 1, 0x12, true);
     let swapped_image = correct_normal(&direct.normal().image, Assignment::Swapped).unwrap();
     let mut bytes = direct.normal().repack(&swapped_image).unwrap();
@@ -1197,7 +1197,8 @@ fn startup_selection_uses_exact_architecture_and_never_gives_ata_or_scsi_h8_acti
 
 #[test]
 fn family_override_does_not_admit_unproved_startup_across_layouts() {
-    use crate::image::{layout, phase};
+    use crate::filters::phase::native as phase;
+    use crate::image::layout;
     fn file(base: &Update, image: &[u8]) -> Update {
         let mut key = [0; 20];
         key[19] = 5;

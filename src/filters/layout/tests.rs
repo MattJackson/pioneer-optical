@@ -1,6 +1,6 @@
 use super::*;
 use crate::filters::Finding;
-use crate::image::phase;
+use crate::filters::phase::native as phase;
 use crate::{
     compatibility::Firmware,
     image::layout::{LogicalDomain, RecordRegion},

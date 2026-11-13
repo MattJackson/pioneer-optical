@@ -81,7 +81,7 @@ fn identity_partitions_platforms_and_documents_it() {
 }
 
 fn split_word(bound: bool) -> (Vec<u8>, Vec<u8>) {
-    let mut direct = crate::image::phase::tests::fixture(false);
+    let mut direct = crate::filters::phase::native::tests::fixture(false);
     direct.resize(0x400, 0xff);
     if bound {
         bundle::tests::install(
@@ -93,7 +93,7 @@ fn split_word(bound: bool) -> (Vec<u8>, Vec<u8>) {
         );
     }
     let mirrored = if bound {
-        let mut raw = crate::image::phase::tests::fixture(false);
+        let mut raw = crate::filters::phase::native::tests::fixture(false);
         raw.resize(0x400, 0xff);
         bundle::tests::install(
             &mut raw,

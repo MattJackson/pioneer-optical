@@ -25,14 +25,7 @@ pub(crate) mod placement;
 use crate::image::layout::{Observation, Unresolved};
 use alloc::vec::Vec;
 
-/// Assignment of the two source words to the two output channels.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Assignment {
-    /// Source word zero goes to the first output channel.
-    Direct,
-    /// Source word zero goes to the second output channel.
-    Swapped,
-}
+pub use crate::image::phase::{Assignment, CorrectionError};
 
 /// Proven paired native output functions and their correction operands.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -390,19 +383,6 @@ pub fn discover_pair(normal: &[u8]) -> Observation<PairedPhase> {
         functions: [a.start, b.start],
         operands: [a.operands, b.operands],
     })
-}
-
-/// A Normal-only phase correction could not be established.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum CorrectionError {
-    /// A complete unambiguous binding with an execution-preserving correction
-    /// is unavailable. A program can remain observable without such a correction.
-    Unresolved,
-    /// Normal header, declared length or additive checksum is invalid.
-    InvalidNormal,
-    /// The corrected bytes did not reproduce the requested native assignment.
-    VerificationFailed,
 }
 
 /// Correct a copy of decoded Normal to the requested paired phase assignment.

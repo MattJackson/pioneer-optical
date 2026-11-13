@@ -16,7 +16,7 @@ mod representation;
 pub(crate) use representation::rebuild_normal;
 
 use crate::filters::family::{discover, Key};
-use crate::image::phase;
+use crate::filters::phase::native as phase;
 use alloc::vec::Vec;
 
 // Prepared native firmware changes share one receiver handoff.

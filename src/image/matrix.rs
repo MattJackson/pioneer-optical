@@ -2,11 +2,6 @@
 //!
 //! Family identity and correction eligibility are separate: a normalized key
 //! never authorizes a write, a phase patch, or an unsupported storage conversion.
-use super::{
-    geometry, inputs, irq,
-    layout::{self, Observation, ParameterLayout},
-    phase, registers,
-};
 
 mod ata;
 pub use ata::{AtaEvidence, AtaInput};
@@ -27,7 +22,7 @@ pub(crate) fn install_test_contract(body: &mut [u8], variant: u8) {
         }
     }
     body[0x800..0xc00].copy_from_slice(&input[..0x400]);
-    body[0xd00..0xf00].copy_from_slice(&super::phase::tests::fixture(false));
+    body[0xd00..0xf00].copy_from_slice(&crate::filters::phase::native::tests::fixture(false));
     crate::filters::phase::bundle::tests::install(
         body,
         0xc00,
@@ -75,43 +70,6 @@ impl SatPlatform {
     }
 }
 
-/// Full per-image SAT observations, including evidence outside the identity key.
-#[derive(Clone, Debug)]
-pub struct SatEvidence {
-    /// Envelope-derived platform partition.
-    pub platform: SatPlatform,
-    /// Persistent bank geometry; distinct from parameter record layout.
-    pub geometry: Observation<geometry::Geometry>,
-    /// Required primary parameter layout on every SAT platform.
-    pub layout: Observation<ParameterLayout>,
-    /// Startup initialization program: the SAT1 value, evidence elsewhere.
-    pub startup: Observation<registers::Startup>,
-    /// Role-bound physical input predicates; the SAT8/SAT9 initialization value.
-    pub inputs: Observation<inputs::Predicates>,
-    /// Host register projection and full supporting writes.
-    pub host: Observation<registers::MaskedWrites>,
-    /// Interrupt/input projection plus all supporting observations.
-    pub irq: irq::Evidence,
-    /// Source assignment and native interface.
-    pub phase: Observation<phase::Phase>,
-}
-
-impl SatEvidence {
-    /// Extract observations from decoded Normal and its associated decoded Kernel.
-    /// Caller-supplied platform must come from structured firmware metadata.
-    pub fn discover(platform: SatPlatform, normal: &[u8], kernel: Option<&[u8]>) -> Self {
-        Self {
-            platform,
-            geometry: geometry::discover_sat(normal, kernel),
-            layout: layout::discover_h8(normal, kernel),
-            startup: registers::startup(normal),
-            inputs: inputs::discover(normal),
-            host: registers::host(normal),
-            irq: irq::discover(normal),
-            phase: phase::discover(normal),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

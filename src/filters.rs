@@ -49,7 +49,8 @@
 //! See `Filter::plan` and the shared runner for the enforcing pair decisions.
 
 use crate::compatibility::{Error, Firmware};
-use crate::image::matrix::{AtaEvidence, SatEvidence, SatPlatform};
+use crate::image::matrix::{AtaEvidence, SatPlatform};
+use crate::image::layout::Observation;
 use alloc::{boxed::Box, string::String, vec::Vec};
 
 /// Read-only device prerequisites owned by correction operations.
@@ -269,6 +270,44 @@ pub struct ParameterAction {
     pub selected: crate::startup::Setting,
     /// Native finding retained separately from any explicit selection policy.
     pub assessment: Assessment,
+}
+
+/// Full per-image SAT observations, including evidence outside the identity key.
+#[derive(Clone, Debug)]
+pub struct SatEvidence {
+    /// Envelope-derived platform partition.
+    pub platform: SatPlatform,
+    /// Persistent bank geometry; distinct from parameter record layout.
+    pub geometry: Observation<crate::image::geometry::Geometry>,
+    /// Required primary parameter layout on every SAT platform.
+    pub layout: Observation<crate::image::layout::ParameterLayout>,
+    /// Startup initialization program: the SAT1 value, evidence elsewhere.
+    pub startup: Observation<crate::image::registers::Startup>,
+    /// Role-bound physical input predicates; the SAT8/SAT9 initialization value.
+    pub inputs: Observation<crate::image::inputs::Predicates>,
+    /// Host register projection and full supporting writes.
+    pub host: Observation<crate::image::registers::MaskedWrites>,
+    /// Interrupt/input projection plus all supporting observations.
+    pub irq: crate::image::irq::Evidence,
+    /// Source assignment and native interface.
+    pub phase: Observation<crate::filters::phase::native::Phase>,
+}
+
+impl SatEvidence {
+    /// Extract observations from decoded Normal and its associated decoded Kernel.
+    /// Caller-supplied platform must come from structured firmware metadata.
+    pub fn discover(platform: SatPlatform, normal: &[u8], kernel: Option<&[u8]>) -> Self {
+        Self {
+            platform,
+            geometry: crate::image::geometry::discover_sat(normal, kernel),
+            layout: crate::image::layout::discover_h8(normal, kernel),
+            startup: crate::image::registers::startup(normal),
+            inputs: crate::image::inputs::discover(normal),
+            host: crate::image::registers::host(normal),
+            irq: crate::image::irq::discover(normal),
+            phase: crate::filters::phase::native::discover(normal),
+        }
+    }
 }
 
 /// Native observations cached once for all filter owners.

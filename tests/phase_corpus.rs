@@ -1,10 +1,10 @@
 //! Native phase proof and byte-exact bidirectional correction checks.
 #![cfg(feature = "image")]
 #![cfg(feature = "internals")]
-use pioneer_optical::image::{
-    layout::Observation,
-    phase::{correct_normal, correct_pair, discover_pair, Assignment, CorrectionError},
+use pioneer_optical::filters::phase::native::{
+    correct_normal, correct_pair, discover_pair, Assignment, CorrectionError,
 };
+use pioneer_optical::image::layout::Observation;
 
 #[test]
 #[ignore = "requires PIONEER_PHASE_AUDIT and PIONEER_NORMAL_CORPUS"]
@@ -110,7 +110,7 @@ fn paired_phase_corrections_round_trip_every_audited_image() {
 #[test]
 #[ignore = "requires PIONEER_PHASE_AUDIT and PIONEER_NORMAL_CORPUS"]
 fn all_sat_phase_assignments_match_native_audit() {
-    use pioneer_optical::image::phase::{discover, Interface};
+    use pioneer_optical::filters::phase::native::{discover, Interface};
     let audit = std::path::PathBuf::from(std::env::var("PIONEER_PHASE_AUDIT").unwrap());
     let corpus = std::path::PathBuf::from(std::env::var("PIONEER_NORMAL_CORPUS").unwrap());
     let manifest: serde_json::Value =
@@ -152,7 +152,7 @@ fn all_sat_phase_assignments_match_native_audit() {
 #[test]
 #[ignore = "requires PIONEER_LAYOUT_AUDIT, PIONEER_PHASE_AUDIT and PIONEER_NORMAL_CORPUS"]
 fn sat_recognizers_do_not_assign_phase_to_other_architectures() {
-    use pioneer_optical::image::phase::discover;
+    use pioneer_optical::filters::phase::native::discover;
     let audit = std::path::PathBuf::from(std::env::var("PIONEER_PHASE_AUDIT").unwrap());
     let layouts = std::path::PathBuf::from(std::env::var("PIONEER_LAYOUT_AUDIT").unwrap());
     let corpus = std::path::PathBuf::from(std::env::var("PIONEER_NORMAL_CORPUS").unwrap());
@@ -186,7 +186,7 @@ fn sat_recognizers_do_not_assign_phase_to_other_architectures() {
 #[test]
 #[ignore = "requires PIONEER_LAYOUT_AUDIT and PIONEER_NORMAL_CORPUS"]
 fn all_sat1_forms_match_independent_operand_and_checksum_oracles() {
-    use pioneer_optical::image::phase::{correct_legacy, discover, Interface, Phase};
+    use pioneer_optical::filters::phase::native::{correct_legacy, discover, Interface, Phase};
     use sha2::{Digest, Sha256};
     let audit = std::path::PathBuf::from(std::env::var("PIONEER_LAYOUT_AUDIT").unwrap());
     let corpus = std::path::PathBuf::from(std::env::var("PIONEER_NORMAL_CORPUS").unwrap());
@@ -314,7 +314,7 @@ fn sat1_original_files_follow_independent_operand_oracle_and_round_trip() {
     use pioneer_optical::{
         compatibility::{self, Firmware},
         envelope::{Envelope, Layout},
-        image::phase::{correct_legacy, discover},
+        filters::phase::native::{correct_legacy, discover},
     };
     let audit = std::path::PathBuf::from(std::env::var("PIONEER_LAYOUT_AUDIT").unwrap());
     let files = audit.join("sat1-envelope-corpus");
@@ -475,7 +475,7 @@ fn sat1_original_files_follow_independent_operand_oracle_and_round_trip() {
                         assert_eq!(sum(&corrected.image), 0);
                         assert_eq!(
                             discover(&corrected.image).compare(&Observation::Known(
-                                pioneer_optical::image::phase::Phase {
+                                pioneer_optical::filters::phase::native::Phase {
                                     assignment: target,
                                     interface: before.interface
                                 }

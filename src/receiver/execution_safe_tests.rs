@@ -954,7 +954,7 @@ fn workflow_repack(pair: &Update, mut kernel: Vec<u8>, mut normal: Vec<u8>) -> U
 #[test]
 fn native_phase_correction_executes_without_parameter_writes() {
     use crate::compatibility::Correction;
-    use crate::image::phase::{correct_normal, Assignment};
+    use crate::filters::phase::native::{correct_normal, Assignment};
     let source = startup_fixture(false, 1);
     let swapped = correct_normal(&source.normal().image, Assignment::Swapped).unwrap();
     let target = workflow_repack(&source, source.kernel().image.clone(), swapped);

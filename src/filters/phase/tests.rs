@@ -5,7 +5,7 @@ fn fixture() -> Vec<u8> {
 }
 /// Coil functions plus every other bound mechanism element.
 fn bundled(convention: bundle::tests::Convention) -> Vec<u8> {
-    let mut raw = crate::image::phase::tests::fixture(false);
+    let mut raw = crate::filters::phase::native::tests::fixture(false);
     raw.resize(0x500, 0xff);
     bundle::tests::install(&mut raw, 0x200, 0x380, [32, 160], convention);
     raw
@@ -334,7 +334,7 @@ fn coil_only_difference_with_identical_bundle_round_trips_byte_exact() {
 
 #[test]
 fn phase_mapping_does_not_require_an_unrelated_bundle_proof() {
-    let mut raw = crate::image::phase::tests::fixture(false);
+    let mut raw = crate::filters::phase::native::tests::fixture(false);
     raw.resize(0x500, 0xff);
     let raw = complete(raw);
     let swapped = complete(native::correct_pair(&raw, native::Assignment::Swapped).unwrap());

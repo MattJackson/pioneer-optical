@@ -3,10 +3,160 @@
 //! Pairwise comparison belongs to consumers of these facts. Unrecognized data is
 //! retained, never silently discarded or interpreted as executable code.
 
-mod metadata;
+mod metadata {
+    //! Narrow metadata exclusions for established decoded component layouts.
+    use super::Region;
+    use crate::envelope::{Envelope, Layout};
+    use std::ops::Range;
+
+    const DESCRIPTOR: Range<usize> = 0..16;
+    const NORMAL_CHECKSUM: Range<usize> = 16..20;
+    const DESTINATION: Range<usize> = 24..40;
+    const KERNEL_ID: Range<usize> = 0x1000..0x1020;
+    const KERNEL_CHECKSUM: Range<usize> = 0x1020..0x1024;
+
+    pub(super) fn identify(envelope: &Envelope, regions: &mut [Region<'_>]) {
+        let image = &envelope.image;
+        let mut ranges = Vec::new();
+        match envelope.info().layout {
+            Layout::Normal | Layout::NormalReverse | Layout::NormalScaledKey
+                if image.starts_with(b"PIONEER ") =>
+            {
+                if image
+                    .get(DESCRIPTOR)
+                    .is_some_and(|s| s.iter().all(u8::is_ascii))
+                {
+                    ranges.push(DESCRIPTOR);
+                }
+                // These keyed layouts validate the decoded additive checksum.
+                ranges.push(NORMAL_CHECKSUM);
+                if image.get(DESTINATION).is_some_and(|s| {
+                    s.starts_with(b"ID") && s.iter().all(|b| b.is_ascii_alphanumeric() || *b == b' ')
+                }) {
+                    ranges.push(DESTINATION);
+                }
+            }
+            Layout::KernelFront | Layout::KernelDerived => {
+                if image.get(KERNEL_ID).is_some_and(|s| {
+                    s.starts_with(envelope.info().hardware_version.as_bytes())
+                        && s.iter().all(|b| b.is_ascii_alphanumeric() || *b == b' ')
+                }) {
+                    ranges.push(KERNEL_ID);
+                }
+                ranges.push(KERNEL_CHECKSUM);
+            }
+            _ => {}
+        }
+        for region in regions {
+            if region.stream.is_some() {
+                continue;
+            }
+            for range in &ranges {
+                let start = range.start.max(region.stored.start);
+                let end = range.end.min(region.stored.end);
+                if start < end {
+                    region
+                        .metadata
+                        .push(start - region.stored.start..end - region.stored.start);
+                }
+            }
+        }
+    }
+}
 mod references;
-mod runtime;
-mod tables;
+mod runtime {
+    //! Apply shared COMP loader facts to the analysis report.
+    use super::Region;
+
+    pub(super) fn identify(image: &[u8], base: u32, regions: &mut [Region<'_>]) -> Result<(), usize> {
+        let sizes: Vec<_> = regions
+            .iter()
+            .filter_map(|r| r.stream.map(|i| (i, r.size)))
+            .collect();
+        for destination in crate::comp_runtime::discover(image, base, &sizes)? {
+            for region in regions
+                .iter_mut()
+                .filter(|r| r.stream == Some(destination.stream))
+            {
+                region.address = Some(destination.address);
+                region.address_source = Some(destination.evidence.clone());
+            }
+        }
+        Ok(())
+    }
+}
+mod tables {
+    //! Structural table views. Recognition does not assign undocumented semantics.
+    use serde::Serialize;
+    use std::ops::Range;
+
+    const MIN_RECORDS: usize = 4;
+    const MIN_WIDTH: usize = 4;
+    const MAX_WIDTH: usize = 64;
+    const MAX_RECORDS: usize = 4096;
+
+    /// A fixed-width, zero-padded ASCII record.
+    #[derive(Clone, Debug, Serialize)]
+    pub struct Record {
+        /// Original ordinal, preserved even if a client sorts the display.
+        pub index: usize,
+        /// Byte range relative to the containing logical region.
+        pub range: Range<usize>,
+        /// Printable value, excluding only terminating zero bytes.
+        pub value: String,
+    }
+    /// A structurally recognized table, without guessed field meanings.
+    #[derive(Clone, Debug, Serialize)]
+    pub struct Table {
+        /// Parser format identifier.
+        pub format: &'static str,
+        /// Table byte range relative to its logical region.
+        pub range: Range<usize>,
+        /// Fixed record width, including zero padding.
+        pub record_width: usize,
+        /// All validated records in source order.
+        pub records: Vec<Record>,
+    }
+
+    // Recognize only an anchored leading run. Do not scan arbitrary instructions
+    // for strings and then label their surroundings as strategy records.
+    pub(super) fn inspect(bytes: &[u8]) -> Vec<Table> {
+        let mut candidates = Vec::new();
+        for width in MIN_WIDTH..=MAX_WIDTH {
+            let mut records = Vec::new();
+            for (index, record) in bytes.chunks_exact(width).take(MAX_RECORDS).enumerate() {
+                let Some(end) = record.iter().position(|&b| b == 0) else {
+                    break;
+                };
+                if end < 3
+                    || !record[..end].iter().all(|&b| (b' '..=b'~').contains(&b))
+                    || !record[end..].iter().all(|&b| b == 0)
+                    || !record[..end].iter().any(u8::is_ascii_alphanumeric)
+                {
+                    break;
+                }
+                records.push(Record {
+                    index,
+                    range: index * width..(index + 1) * width,
+                    value: String::from_utf8_lossy(&record[..end]).into_owned(),
+                });
+            }
+            if records.len() >= MIN_RECORDS {
+                candidates.push(Table {
+                    format: "ascii.fixed_width.zero_padded.v1",
+                    range: 0..records.len() * width,
+                    record_width: width,
+                    records,
+                });
+            }
+        }
+        if candidates.len() == 1 {
+            candidates
+        } else {
+            Vec::new()
+        }
+    }
+}
 pub use references::Reference;
 pub use tables::{Record, Table};
 

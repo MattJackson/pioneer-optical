@@ -37,10 +37,193 @@ pub use clone::{
     clone_kernel, clone_kernel_image, kernel_content_mask, kernel_equality, kernel_fill_seed,
     kernel_image_equality, KernelIdentity,
 };
-mod comparison;
+mod comparison {
+    //! Exact decoded-byte comparison, separate from envelope naming and transport.
+    use super::Envelope;
+
+    /// Exact comparison; no identity, checksum, fill or compressed bytes are masked.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum ByteComparison {
+        /// Every byte and the lengths match.
+        Equal,
+        /// First differing byte, or the end of the shorter matching prefix.
+        Different {
+            /// Offset relative to these slices.
+            offset: usize,
+            /// Expected decoded length.
+            expected_len: usize,
+            /// Observed decoded length.
+            observed_len: usize,
+        },
+    }
+
+    /// Compare complete images or equally bounded readback chunks.
+    /// Callers must account for unavailable/short reads separately; a matching
+    /// partial slice does not establish that the complete image was read.
+    pub fn compare_bytes(expected: &[u8], observed: &[u8]) -> ByteComparison {
+        let offset = expected
+            .iter()
+            .zip(observed)
+            .position(|(a, b)| a != b)
+            .or_else(|| {
+                (expected.len() != observed.len()).then_some(expected.len().min(observed.len()))
+            });
+        match offset {
+            None => ByteComparison::Equal,
+            Some(offset) => ByteComparison::Different {
+                offset,
+                expected_len: expected.len(),
+                observed_len: observed.len(),
+            },
+        }
+    }
+
+    /// Independent differences: a renamed envelope can contain identical firmware.
+    /// This comparison establishes neither device compatibility nor OEM provenance.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct EnvelopeComparison {
+        /// Exact decoded bytes, including checksums and padding.
+        pub bytes: ByteComparison,
+        /// Vendor or model fields differ.
+        pub name_changed: bool,
+        /// Advertised revision differs.
+        pub revision_changed: bool,
+        /// Kernel versus Normal role differs.
+        pub component_changed: bool,
+        /// Advertised hardware differs.
+        pub hardware_changed: bool,
+        /// Advertised destination/Kernel tag differs.
+        pub destination_changed: bool,
+    }
+    impl Envelope {
+        /// Compare decoded contents and envelope identity without conflating them.
+        /// Signatures and transfer encoding are not installed firmware contents.
+        pub fn compare(&self, other: &Self) -> EnvelopeComparison {
+            let a = self.info();
+            let b = other.info();
+            EnvelopeComparison {
+                bytes: compare_bytes(&self.image, &other.image),
+                name_changed: a.vendor != b.vendor || a.model != b.model,
+                revision_changed: a.revision != b.revision,
+                component_changed: a.kind != b.kind,
+                hardware_changed: a.hardware_version != b.hardware_version,
+                destination_changed: a.kernel_version != b.kernel_version
+                    || self.header_info().destination != other.header_info().destination,
+            }
+        }
+    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        fn missing_tail_and_changed_byte_are_not_equal() {
+            assert_eq!(compare_bytes(b"abc", b"abc"), ByteComparison::Equal);
+            assert_eq!(
+                compare_bytes(b"abc", b"ab"),
+                ByteComparison::Different {
+                    offset: 2,
+                    expected_len: 3,
+                    observed_len: 2
+                }
+            );
+            assert_eq!(
+                compare_bytes(b"abc", b"axc"),
+                ByteComparison::Different {
+                    offset: 1,
+                    expected_len: 3,
+                    observed_len: 3
+                }
+            );
+        }
+    }
+}
 pub use comparison::{compare_bytes, ByteComparison, EnvelopeComparison};
 mod codecs;
-mod decode_error;
+mod decode_error {
+    //! Typed failures from automatic envelope recognition.
+
+    /// Why an envelope could not be loaded. No variant implies drive compatibility.
+    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+    #[non_exhaustive]
+    pub enum DecodeError {
+        /// The literal header is absent, truncated or lacks a component kind.
+        InvalidHeader,
+        /// No supported codec recognizes the file structure.
+        UnsupportedLayout,
+        /// Multiple non-equivalent codecs or payload positions recognize the file.
+        AmbiguousLayout,
+        /// A recognized payload cannot be decoded consistently with its metadata.
+        InvalidPayload,
+        /// The supplied Kernel does not prove a unique decoding policy for this Normal.
+        ReceiverPolicy {
+            /// Detected Kernel envelope layout.
+            kernel_layout: super::Layout,
+            /// Detected Normal envelope layout.
+            normal_layout: super::Layout,
+        },
+        /// The stored payload is not a whole number of codec words.
+        PayloadAlignment {
+            /// Recognized codec.
+            layout: super::Layout,
+            /// Required word size in bytes.
+            alignment: usize,
+            /// Actual payload size in bytes.
+            actual: usize,
+        },
+        /// The envelope's stored checksum does not match its payload.
+        ChecksumMismatch {
+            /// Recognized codec.
+            layout: super::Layout,
+            /// File offset of the checksum word.
+            checksum_offset: usize,
+            /// Checksum stored in the envelope.
+            stored: u32,
+            /// Checksum calculated from the payload.
+            calculated: u32,
+        },
+        /// A decoded format-defined additive checksum is not zero.
+        DecodedChecksum {
+            /// Recognized codec.
+            layout: super::Layout,
+            /// Additive checksum word width in bits.
+            word_bits: u8,
+            /// Observed wrapping sum; zero was required.
+            sum: u32,
+        },
+        /// A recognized payload declares a different size from the decoded bytes.
+        PayloadLengthMismatch {
+            /// Codec that recognized the envelope.
+            layout: super::Layout,
+            /// Start of the encoded payload in the input file.
+            payload_offset: usize,
+            /// Size recorded by the payload header, in bytes.
+            declared: usize,
+            /// Number of decoded bytes actually available.
+            actual: usize,
+        },
+    }
+    impl core::fmt::Display for DecodeError {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            match self {
+                Self::InvalidHeader => f.write_str("invalid firmware envelope header"),
+                Self::UnsupportedLayout => f.write_str("unsupported firmware envelope layout"),
+                Self::AmbiguousLayout => f.write_str("ambiguous firmware envelope layout"),
+                Self::InvalidPayload => f.write_str("invalid firmware envelope payload"),
+                Self::ReceiverPolicy { kernel_layout, normal_layout } => write!(f,
+                    "Kernel {kernel_layout} does not establish a unique receiver decoding policy for Normal {normal_layout}"),
+                Self::PayloadAlignment { layout, alignment, actual } => write!(f,
+                    "firmware envelope {layout} payload size {actual:#x} is not aligned to {alignment} bytes"),
+                Self::ChecksumMismatch { layout, checksum_offset, stored, calculated } => write!(f,
+                    "firmware envelope {layout} checksum at file offset {checksum_offset:#x}: stored {stored:#010x}, calculated {calculated:#010x}"),
+                Self::DecodedChecksum { layout, word_bits, sum } => write!(f,
+                    "firmware envelope {layout} decoded {word_bits}-bit checksum is {sum:#x}; expected zero"),
+                Self::PayloadLengthMismatch { layout, payload_offset, declared, actual } => write!(f,
+                    "firmware envelope {layout:?} payload at file offset {payload_offset:#x} declares {declared:#x} bytes, but decoded {actual:#x} bytes"),
+            }
+        }
+    }
+    impl std::error::Error for DecodeError {}
+}
 pub use decode_error::DecodeError;
 mod error;
 mod normal_layout;
@@ -430,7 +613,95 @@ fn comp_layout(image: &[u8]) -> Option<(u32, Vec<crate::comp_streams::Stream>)> 
         .flatten()
 }
 
-mod streams;
+mod streams {
+    //! Rich codec reports built from shared bounded COMP decoding.
+    use super::{sha, uniform_ranges, CompStream, CompStreamInfo};
+    pub(crate) use crate::comp_streams::StreamError;
+    use std::io::Write;
+
+    #[cfg(test)]
+    thread_local! {
+        pub(crate) static RICH_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    pub(crate) fn read(
+        image: &[u8],
+        total_limit: usize,
+        proceed: &mut dyn FnMut() -> bool,
+    ) -> Result<Option<(u32, Vec<CompStream>)>, StreamError> {
+        #[cfg(test)]
+        RICH_READS.with(|count| count.set(count.get() + 1));
+        let Some((base, streams)) = crate::comp_streams::read(image, total_limit, proceed)? else {
+            return Ok(None);
+        };
+        let streams = streams
+            .into_iter()
+            .map(|stream| {
+                if !proceed() {
+                    return Err(StreamError::Cancelled);
+                }
+                let compressed = &image
+                    [stream.image_offset + 4..stream.image_offset + 4 + stream.compressed_size];
+                let mut encoder =
+                    flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(6));
+                let recompresses_exactly = encoder.write_all(&stream.expanded).is_ok()
+                    && encoder.finish().is_ok_and(|rebuilt| rebuilt == compressed);
+                let report = CompStream {
+                    info: CompStreamInfo {
+                        address_start: stream.address_start,
+                        address_end: stream.address_end,
+                        image_offset: stream.image_offset,
+                        compressed_size: stream.compressed_size,
+                        expanded_size: stream.expanded.len(),
+                        expanded_sha256: sha(&stream.expanded),
+                        expanded_uniform_ranges: uniform_ranges(&stream.expanded, 256),
+                        recompresses_exactly,
+                    },
+                    expanded: stream.expanded,
+                };
+                if !proceed() {
+                    return Err(StreamError::Cancelled);
+                }
+                Ok(report)
+            })
+            .collect::<Result<Vec<_>, StreamError>>()?;
+        Ok(Some((base, streams)))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn cancellation_is_checked_again_before_rich_stream_reporting() {
+            let mut encoder =
+                flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+            encoder.write_all(&[0x5a; 32]).unwrap();
+            let compressed = encoder.finish().unwrap();
+            let mut image = vec![0xff; 0x2200];
+            image[0x1000..0x1004].copy_from_slice(b"COMP");
+            image[0x1004..0x1008].copy_from_slice(&0x412000u32.to_be_bytes());
+            image[0x1008..0x100c]
+                .copy_from_slice(&(0x412000 + compressed.len() as u32).to_be_bytes());
+            image[0x2000..0x2004].copy_from_slice(&32u32.to_be_bytes());
+            image[0x2004..0x2004 + compressed.len()].copy_from_slice(&compressed);
+            let mut decoding_checks = 0;
+            assert!(crate::comp_streams::read(&image, 1024, &mut || {
+                decoding_checks += 1;
+                true
+            })
+            .unwrap()
+            .is_some());
+            let mut calls = 0;
+            let result = read(&image, 1024, &mut || {
+                calls += 1;
+                calls <= decoding_checks
+            });
+            assert!(matches!(result, Err(StreamError::Cancelled)));
+            assert_eq!(calls, decoding_checks + 1);
+        }
+    }
+}
 #[cfg(all(test, feature = "analysis"))]
 pub(crate) use streams::read as inspect_streams;
 #[cfg(feature = "analysis")]
@@ -1765,7 +2036,98 @@ mod rom_tests;
 #[cfg(test)]
 mod transfer_tests;
 
-mod inspection;
+mod inspection {
+    //! Envelope facts and recognizable reconstruction placeholders, not OEM provenance.
+    use super::{
+        builder::NORMAL_SIGNATURE_RANGE, header_info, signature, ComponentKind, Envelope,
+        HeaderInfo, Layout,
+    };
+
+    /// A combination of fields emitted by reconstruction without original metadata.
+    /// Matching does not prove who produced a file; non-matching does not prove OEM origin.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[non_exhaustive]
+    pub enum ReconstructionPlaceholder {
+        /// Zero encoding seed and an entirely zero Normal signature block.
+        Normal,
+        /// Zero encoding seed, revision `0000`, and date `00/00/00`.
+        Kernel,
+    }
+
+    /// Signature presence and mathematical verification, without a trust assertion.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[non_exhaustive]
+    pub enum SignatureStatus {
+        /// The recognized signature slot contains only zero bytes.
+        Absent,
+        /// Verification result for a nonzero signature slot.
+        Present(signature::SignatureCheck),
+        /// This layout has no supported signature interpretation.
+        Unsupported,
+    }
+
+    impl Envelope {
+        /// Parsed envelope header fields, including revision, date and destination.
+        pub fn header(&self) -> Option<HeaderInfo> {
+            header_info(&self.header)
+        }
+
+        /// Original encoding key bytes. Empty for layouts without a key.
+        /// A raw OEM key need not have a recoverable LCG seed.
+        pub fn encoding_key(&self) -> &[u8] {
+            &self.key
+        }
+
+        /// Recognized Normal ECDSA slot; other layouts return `None`.
+        pub fn signature_bytes(&self) -> Option<&[u8]> {
+            if matches!(self.info.layout, Layout::Normal | Layout::NormalReverse) {
+                self.prefix.get(
+                    NORMAL_SIGNATURE_RANGE.start - super::HEADER_LEN
+                        ..NORMAL_SIGNATURE_RANGE.end - super::HEADER_LEN,
+                )
+            } else {
+                None
+            }
+        }
+
+        /// Check the signature against the current decoded image, including caller edits.
+        /// Verification reconstructs the encrypted envelope and may allocate its full size.
+        /// A valid signature does not establish OEM provenance or receiver acceptance.
+        pub fn signature_status(&self) -> SignatureStatus {
+            let Some(bytes) = self.signature_bytes() else {
+                return SignatureStatus::Unsupported;
+            };
+            if bytes.iter().all(|&byte| byte == 0) {
+                return SignatureStatus::Absent;
+            }
+            SignatureStatus::Present(
+                self.repack(&self.image)
+                    .map_or(signature::SignatureCheck::Unsupported, |data| {
+                        signature::verify_normal_signature(&data)
+                    }),
+            )
+        }
+
+        /// Recognize reconstruction placeholder combinations, without classifying OEM origin.
+        /// Seed zero alone is not a placeholder. A missing seed is not seed zero.
+        pub fn reconstruction_placeholder(&self) -> Option<ReconstructionPlaceholder> {
+            if self.encoding_seed() != Some(0) {
+                return None;
+            }
+            match self.info.kind {
+                ComponentKind::Normal if self.signature_bytes()?.iter().all(|&byte| byte == 0) => {
+                    Some(ReconstructionPlaceholder::Normal)
+                }
+                ComponentKind::Kernel => {
+                    let header = self.header()?;
+                    (header.revision == "0000" && header.generated_date == "00/00/00")
+                        .then_some(ReconstructionPlaceholder::Kernel)
+                }
+                _ => None,
+            }
+        }
+    }
+}
 pub use inspection::{ReconstructionPlaceholder, SignatureStatus};
 
 #[cfg(test)]

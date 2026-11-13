@@ -10,14 +10,70 @@ mod abi;
 mod control;
 pub(crate) mod edits;
 pub mod geometry;
-pub(crate) mod h8;
+pub(crate) mod h8 {
+    //! H8S decoding through the shared instruction library.
+    use h8_asm::{isa::decode_insn, Mode, Target};
+
+    /// Instruction length, or one word for resynchronization after unrecognized data.
+    #[cfg(any(test, feature = "envelope"))]
+    pub(crate) fn ilen(bytes: &[u8], offset: usize) -> usize {
+        bytes
+            .get(offset..)
+            .and_then(|code| decode_insn(code, Target::H8S2000, Mode::Advanced).ok())
+            .map_or(2, |decoded| decoded.len)
+    }
+
+    /// `(valid(bytes, offset), ilen(bytes, offset))` from a single decode.
+    pub(crate) fn decode(bytes: &[u8], offset: usize) -> (bool, usize) {
+        match bytes
+            .get(offset..)
+            .map(|code| decode_insn(code, Target::H8S2000, Mode::Advanced))
+        {
+            Some(Ok(decoded)) => (true, decoded.len),
+            _ => (false, 2),
+        }
+    }
+
+    /// Whether a complete, defined H8S instruction starts at this offset.
+    #[cfg(test)]
+    pub(crate) fn valid(bytes: &[u8], offset: usize) -> bool {
+        bytes
+            .get(offset..)
+            .is_some_and(|code| decode_insn(code, Target::H8S2000, Mode::Advanced).is_ok())
+    }
+}
 mod handoff;
 pub mod inputs;
 pub mod irq;
 pub mod layout;
 pub mod matrix;
 pub mod peripheral;
-pub mod phase;
+pub mod phase {
+    //! Phase vocabulary shared by the native recognizers in [`super::peripheral`]
+    //! and the phase owner in `crate::filters::phase`, which re-exports it.
+
+    /// Assignment of the two source words to the two output channels.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Assignment {
+        /// Source word zero goes to the first output channel.
+        Direct,
+        /// Source word zero goes to the second output channel.
+        Swapped,
+    }
+
+    /// A Normal-only phase correction could not be established.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[non_exhaustive]
+    pub enum CorrectionError {
+        /// A complete unambiguous binding with an execution-preserving correction
+        /// is unavailable. A program can remain observable without such a correction.
+        Unresolved,
+        /// Normal header, declared length or additive checksum is invalid.
+        InvalidNormal,
+        /// The corrected bytes did not reproduce the requested native assignment.
+        VerificationFailed,
+    }
+}
 mod receiver;
 pub mod registers;
 pub use abi::{provided_abi, required_abi, Abi};

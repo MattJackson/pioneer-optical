@@ -3,11 +3,328 @@
 use super::{DecodeError, HeaderInfo, Layout, SelectedLayout};
 mod boot_key;
 mod boot_key_m7900;
-mod checksum;
-mod kernel;
+mod checksum {
+    //! Sparse checksum wrapper; the enclosed bytes retain their stored representation.
+
+    use super::{DecodeError, EnvelopeCodec, HeaderInfo, Layout, SelectedLayout};
+    use crate::ComponentKind;
+
+    const HEADER_END: usize = 0x200;
+    const CHECKSUM: usize = 0x8000;
+    const PAYLOAD: usize = 0x10000;
+    const WORD: usize = 4;
+    const ERASED: u8 = 0xff;
+
+    pub(super) struct Sparse;
+
+    impl EnvelopeCodec for Sparse {
+        fn layout(&self) -> Layout {
+            Layout::SparseChecksum
+        }
+
+        fn detect(&self, data: &[u8], header: &HeaderInfo) -> Option<SelectedLayout> {
+            if !matches!(
+                header.kind,
+                Some(ComponentKind::Kernel | ComponentKind::Normal)
+            ) || data.len() <= PAYLOAD
+                || !data[HEADER_END..CHECKSUM].iter().all(|&b| b == ERASED)
+                || !data[CHECKSUM + WORD..PAYLOAD].iter().all(|&b| b == ERASED)
+            {
+                return None;
+            }
+            Some((self.layout(), PAYLOAD, data.len(), Vec::new(), Vec::new()))
+        }
+
+        fn validate(&self, data: &[u8]) -> Result<(), DecodeError> {
+            let payload = data.get(PAYLOAD..).ok_or(DecodeError::InvalidPayload)?;
+            if payload.len() % WORD != 0 {
+                return Err(DecodeError::PayloadAlignment {
+                    layout: self.layout(),
+                    alignment: WORD,
+                    actual: payload.len(),
+                });
+            }
+            let stored = data
+                .get(CHECKSUM..CHECKSUM + WORD)
+                .and_then(|word| word.try_into().ok())
+                .map(u32::from_le_bytes)
+                .ok_or(DecodeError::InvalidPayload)?;
+            let calculated = checksum(payload);
+            if stored != calculated {
+                return Err(DecodeError::ChecksumMismatch {
+                    layout: self.layout(),
+                    checksum_offset: CHECKSUM,
+                    stored,
+                    calculated,
+                });
+            }
+            Ok(())
+        }
+
+        fn transform(&self, bytes: &[u8], _: &[u8], _: bool, _: &[u32]) -> Option<Vec<u8>> {
+            (bytes.len() % WORD == 0).then(|| bytes.to_vec())
+        }
+
+        fn finish_repack(&self, data: &mut [u8]) -> Option<()> {
+            let value = checksum(data.get(PAYLOAD..)?);
+            data.get_mut(CHECKSUM..CHECKSUM + WORD)?
+                .copy_from_slice(&value.to_le_bytes());
+            Some(())
+        }
+    }
+
+    fn checksum(payload: &[u8]) -> u32 {
+        payload.chunks_exact(WORD).fold(0u32, |sum, word| {
+            sum.wrapping_sub(u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
+        })
+    }
+}
+mod kernel {
+    use super::super::{
+        jump_seed, legacy_le_kernel, make_key, recover_seed, transform, HeaderInfo, Layout,
+        SelectedLayout,
+    };
+    use super::EnvelopeCodec;
+    use crate::ComponentKind;
+
+    const HEADER: usize = 0x200;
+    const KEY: usize = 0x1000;
+    const BODY: usize = 0x10000;
+    const FRONT_BODY: usize = HEADER + KEY;
+    const END: usize = FRONT_BODY + BODY;
+    const ID_SAMPLE_END: usize = KEY + 0x40;
+    const SEED_SAMPLE: usize = 16;
+
+    pub(super) struct Front;
+    impl EnvelopeCodec for Front {
+        fn decoded_checksum(&self, image: &[u8]) -> Option<u32> {
+            Some(super::super::be32_sum(image))
+        }
+        fn kernel_transfer(&self, envelope: &super::super::DecodedEnvelope) -> Option<Vec<u8>> {
+            front_key_transfer(envelope)
+        }
+        fn layout(&self) -> Layout {
+            Layout::KernelFront
+        }
+        fn detect(&self, data: &[u8], header: &HeaderInfo) -> Option<SelectedLayout> {
+            if header.kind != Some(ComponentKind::Kernel) || data.len() < END {
+                return None;
+            }
+            let key = &data[HEADER..FRONT_BODY];
+            let sample = transform(&data[FRONT_BODY..FRONT_BODY + ID_SAMPLE_END], key, false)?;
+            crate::protocol::valid_hardware_field(&sample[KEY..KEY + 8]).then(|| {
+                (
+                    self.layout(),
+                    FRONT_BODY,
+                    END,
+                    key.to_vec(),
+                    data[END..].to_vec(),
+                )
+            })
+        }
+    }
+
+    pub(super) struct Derived;
+    impl EnvelopeCodec for Derived {
+        fn decoded_checksum(&self, image: &[u8]) -> Option<u32> {
+            Some(super::super::be32_sum(image))
+        }
+        fn kernel_transfer(&self, envelope: &super::super::DecodedEnvelope) -> Option<Vec<u8>> {
+            front_key_transfer(envelope)
+        }
+        fn layout(&self) -> Layout {
+            Layout::KernelDerived
+        }
+        fn detect(&self, data: &[u8], header: &HeaderInfo) -> Option<SelectedLayout> {
+            if header.kind != Some(ComponentKind::Kernel) || data.len() < END {
+                return None;
+            }
+            let state = recover_seed(&data[data.len() - SEED_SAMPLE..])?;
+            let seed = jump_seed(state, data.len() - HEADER - SEED_SAMPLE + KEY, true);
+            let key = make_key(seed, KEY);
+            let sample = transform(&data[HEADER..HEADER + ID_SAMPLE_END], &key, false)?;
+            crate::protocol::valid_hardware_field(&sample[KEY..KEY + 8]).then(|| {
+                (
+                    self.layout(),
+                    HEADER,
+                    HEADER + BODY,
+                    key,
+                    data[HEADER + BODY..].to_vec(),
+                )
+            })
+        }
+    }
+
+    pub(super) struct Legacy;
+    impl EnvelopeCodec for Legacy {
+        fn layout(&self) -> Layout {
+            Layout::KernelLegacyLe
+        }
+        fn detect(&self, data: &[u8], header: &HeaderInfo) -> Option<SelectedLayout> {
+            if header.kind != Some(ComponentKind::Kernel) {
+                return None;
+            }
+            legacy_le_kernel(data)
+        }
+    }
+
+    // File framing and receiver framing are different representations. Both modern
+    // file codecs provide the same front-key receiver image without an OEM profile.
+    fn front_key_transfer(envelope: &super::super::DecodedEnvelope) -> Option<Vec<u8>> {
+        if envelope.image.len() != BODY
+            || envelope.key.len() != KEY
+            || !super::super::be32_sum_zero(&envelope.image)
+        {
+            return None;
+        }
+        let file = envelope.repack(&envelope.image)?;
+        if file.len() != END {
+            return None;
+        }
+        let mut wire = Vec::with_capacity(END);
+        wire.extend_from_slice(&file[..HEADER]);
+        wire.extend_from_slice(&envelope.key);
+        wire.extend(transform(&envelope.image, &envelope.key, true)?);
+        Some(wire)
+    }
+}
 mod normal;
-mod plain;
-mod rom;
+mod plain {
+    use super::super::{
+        has_plain_image_layout, plane_lcg_xor, transformed_plane_layout, HeaderInfo, Layout,
+        SelectedLayout, HEADER_LEN, PLANE_XOR_OFFSET,
+    };
+    use super::EnvelopeCodec;
+    use crate::ComponentKind;
+
+    pub(super) struct Plain;
+    impl EnvelopeCodec for Plain {
+        fn layout(&self) -> Layout {
+            Layout::Plain
+        }
+        fn detect(&self, data: &[u8], header: &HeaderInfo) -> Option<SelectedLayout> {
+            if !matches!(
+                header.kind,
+                Some(ComponentKind::Normal | ComponentKind::Plane)
+            ) || !has_plain_image_layout(data)
+            {
+                return None;
+            }
+            Some((
+                self.layout(),
+                HEADER_LEN,
+                data.len(),
+                Vec::new(),
+                Vec::new(),
+            ))
+        }
+        fn transform(&self, bytes: &[u8], _: &[u8], _: bool, _: &[u32]) -> Option<Vec<u8>> {
+            Some(bytes.to_vec())
+        }
+    }
+    pub(super) struct Whitened;
+    impl EnvelopeCodec for Whitened {
+        fn layout(&self) -> Layout {
+            Layout::TransformedPlane
+        }
+        fn detect(&self, data: &[u8], header: &HeaderInfo) -> Option<SelectedLayout> {
+            transformed_plane_layout(data, header.kind?)
+        }
+        fn transform(&self, bytes: &[u8], _: &[u8], _: bool, _: &[u32]) -> Option<Vec<u8>> {
+            let split = PLANE_XOR_OFFSET - HEADER_LEN;
+            let mut output = bytes.get(..split)?.to_vec();
+            output.extend(plane_lcg_xor(bytes.get(split..)?));
+            Some(output)
+        }
+    }
+}
+mod rom {
+    //! Direct boot ROM storage, identified by its reset vector and matching ROM tags.
+
+    use super::{EnvelopeCodec, HeaderInfo, Layout, SelectedLayout};
+    use crate::ComponentKind;
+
+    const HEADER_END: usize = 0x200;
+    const ROM_END: usize = 0x10000;
+    const CONTAINER_SIZE: usize = 0x100000;
+    const VECTOR32: usize = ROM_END - 4;
+    const VECTOR16: usize = ROM_END - 2;
+    const ROM_BANK: u32 = 0xff0000;
+    const BLOCK_ALIGNMENT: usize = 0x100;
+    const TAG_WIDTH: usize = 8;
+    const VECTOR16_COUNT: usize = 4;
+    const ERASED: u8 = 0xff;
+
+    pub(super) struct KernelRom;
+
+    impl EnvelopeCodec for KernelRom {
+        fn layout(&self) -> Layout {
+            Layout::KernelRom
+        }
+
+        fn detect(&self, data: &[u8], header: &HeaderInfo) -> Option<SelectedLayout> {
+            if header.kind != Some(ComponentKind::Kernel)
+                || data.len() != CONTAINER_SIZE
+                || !data[ROM_END..].iter().all(|&byte| byte == ERASED)
+            {
+                return None;
+            }
+            let start = HEADER_END
+                + data[HEADER_END..ROM_END]
+                    .iter()
+                    .position(|&b| b != ERASED)?;
+            if start % BLOCK_ALIGNMENT != 0 || start >= VECTOR32 {
+                return None;
+            }
+            let vector = u32::from_le_bytes(data[VECTOR32..ROM_END].try_into().ok()?);
+            let entry = if (ROM_BANK..ROM_BANK + ROM_END as u32).contains(&vector) {
+                (vector - ROM_BANK) as usize
+            } else {
+                if !data[ROM_END - VECTOR16_COUNT * 2..ROM_END]
+                    .chunks_exact(2)
+                    .all(|word| {
+                        let address = u16::from_le_bytes([word[0], word[1]]) as usize;
+                        (start..VECTOR32).contains(&address)
+                    })
+                {
+                    return None;
+                }
+                u16::from_le_bytes(data[VECTOR16..ROM_END].try_into().ok()?) as usize
+            };
+            if !(start..VECTOR32).contains(&entry)
+                || data.get(entry..entry + 2)?.iter().all(|&b| b == ERASED)
+                || !matching_tags(&data[start..VECTOR32], header)
+            {
+                return None;
+            }
+            Some((
+                self.layout(),
+                start,
+                ROM_END,
+                Vec::new(),
+                data[ROM_END..].to_vec(),
+            ))
+        }
+
+        fn transform(&self, bytes: &[u8], _: &[u8], _: bool, _: &[u32]) -> Option<Vec<u8>> {
+            Some(bytes.to_vec())
+        }
+    }
+
+    fn matching_tags(rom: &[u8], header: &HeaderInfo) -> bool {
+        if header.hardware_version.len() != TAG_WIDTH
+            || header.kernel_version.is_empty()
+            || header.kernel_version.len() > TAG_WIDTH
+        {
+            return false;
+        }
+        let mut tag = [b' '; TAG_WIDTH * 2];
+        tag[..TAG_WIDTH].copy_from_slice(header.hardware_version.as_bytes());
+        tag[TAG_WIDTH..TAG_WIDTH + header.kernel_version.len()]
+            .copy_from_slice(header.kernel_version.as_bytes());
+        rom.windows(tag.len()).any(|window| window == tag)
+    }
+}
 mod tail_key;
 
 pub(super) trait EnvelopeCodec: Sync {

@@ -1,5 +1,6 @@
 // Generated from complete native R1 pair/initializer/constructor evidence.
 use super::r1_pair::Pattern;
+#[rustfmt::skip]
 pub(super) const PAIR: Pattern = Pattern {
     bytes: &[
         0x6d, 0xf3, 0x01, 0x20, 0x6d, 0xf4, 0x0f, 0xa5, 0x0d, 0x13, 0x0f, 0x86, 0x5e, 0x00, 0x00,
@@ -11,6 +12,7 @@ pub(super) const PAIR: Pattern = Pattern {
     ],
     masks: &[(13, 3), (21, 3), (29, 3), (37, 3)],
 };
+#[rustfmt::skip]
 pub(super) const INITIALIZER: Pattern = Pattern {
     bytes: &[
         0x01, 0x00, 0x6d, 0xf3, 0x7a, 0x03, 0x00, 0x00, 0x00, 0x00, 0x6b, 0x20, 0x00, 0x00, 0x00,
@@ -19,6 +21,7 @@ pub(super) const INITIALIZER: Pattern = Pattern {
     ],
     masks: &[(6, 4), (12, 4), (24, 4), (31, 3)],
 };
+#[rustfmt::skip]
 pub(super) const CONSTRUCTOR: Pattern = Pattern {
     bytes: &[
         0x01, 0x00, 0x6d, 0xf3, 0x01, 0x20, 0x6d, 0xf4, 0x0f, 0x84, 0x46, 0x0e, 0x1a, 0x80, 0xf8,
@@ -37,21 +40,11 @@ pub(super) const CONSTRUCTOR: Pattern = Pattern {
         0x00, 0x6d, 0x73, 0x54, 0x70,
     ],
     masks: &[
-        (17, 3),
-        (28, 4),
-        (38, 4),
-        (46, 4),
-        (60, 4),
-        (78, 4),
-        (94, 4),
-        (110, 4),
-        (124, 4),
-        (136, 4),
-        (148, 4),
-        (160, 4),
-        (179, 3),
+        (17, 3), (28, 4), (38, 4), (46, 4), (60, 4), (78, 4), (94, 4), (110, 4), (124, 4), (136, 4),
+        (148, 4), (160, 4), (179, 3),
     ],
 };
+#[rustfmt::skip]
 pub(super) const FILL: &[u8] = &[
     0x6d, 0xf3, 0x0f, 0xa2, 0x47, 0x28, 0x0a, 0xa0, 0x73, 0x08, 0x47, 0x06, 0x6c, 0x89, 0x1b, 0x72,
     0x47, 0x1c, 0x0c, 0x91, 0x0d, 0x19, 0x0d, 0x23, 0x11, 0x72, 0x47, 0x08, 0x01, 0x00, 0x6d, 0x81,

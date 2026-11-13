@@ -73,7 +73,7 @@ fn identity_partitions_platforms_and_documents_it() {
     }
     let mut body = alloc::vec![0xff; 0x2000];
     crate::image::matrix::install_test_contract(&mut body, 0x12);
-    let family = |hardware| crate::image::family_with_context(&body, hardware, None);
+    let family = |hardware| crate::filters::family::family_with_context(&body, hardware, None);
     assert!(family("SAT 8600").is_some());
     assert_eq!(family("SAT 8600"), family("SAT 8801"));
     assert_eq!(family("SAT 8600"), family("SAT 9600"));
@@ -235,9 +235,9 @@ fn matching_family_normalizes_supported_phase_mapping() {
         native::Assignment::Swapped,
     )
     .unwrap();
-    let family = |body: &[u8]| crate::image::family_with_context(body, "SAT 8600", None);
+    let family = |body: &[u8]| crate::filters::family::family_with_context(body, "SAT 8600", None);
     let as_is = |body: &[u8]| {
-        crate::image::matrix::discover("SAT 8600", body, None)
+        crate::filters::family::discover("SAT 8600", body, None)
             .unwrap()
             .as_is
     };

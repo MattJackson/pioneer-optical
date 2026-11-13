@@ -1305,36 +1305,6 @@ impl DecodedEnvelope {
         )
     }
 
-    /// Audited matrix family of this Normal, using its structured hardware tag.
-    /// Returns None when required evidence resides in an associated Kernel;
-    /// use [`Self::family_with_kernel`] for that case. Kernels have no family.
-    pub fn family(&self) -> Option<crate::image::Family> {
-        if self.info.kind != ComponentKind::Normal {
-            return None;
-        }
-        crate::image::family_with_context(&self.image, &self.info.hardware_version, None)
-    }
-
-    /// Matrix family with the exact associated Kernel. Both component kinds,
-    /// hardware tags and Kernel-version tags must agree before resident evidence
-    /// can participate. Header agreement alone does not prove a live capture.
-    pub fn family_with_kernel(&self, kernel: &Self) -> Option<crate::image::Family> {
-        if self.info.kind != ComponentKind::Normal
-            || kernel.info.kind != ComponentKind::Kernel
-            || self.info.hardware_version.is_empty()
-            || self.info.hardware_version != kernel.info.hardware_version
-            || self.info.kernel_version.is_empty()
-            || self.info.kernel_version != kernel.info.kernel_version
-        {
-            return None;
-        }
-        crate::image::family_with_context(
-            &self.image,
-            &self.info.hardware_version,
-            Some(&kernel.image),
-        )
-    }
-
     /// True when the decoded image is UHD-capable.
     pub fn is_uhd(&self) -> bool {
         crate::image::is_uhd(&self.image)

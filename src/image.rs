@@ -42,37 +42,11 @@ pub const KERNEL_BASE: u32 = 0x40_0000;
 /// Size of a Kernel body, in bytes.
 pub const KERNEL_LEN: usize = 0x1_0000;
 
-/// Typed matrix scheme used by context-aware, Envelope and receiver identities.
-pub const MATRIX_FAMILY_SCHEME: &str = "pioneer.hardware.v7";
-
 /// Code fragment present in every UHD-capable body and no other.
 const SIG0: [u8; 24] = [
     0x5E, 0x40, 0x83, 0xB8, 0x7A, 0x00, 0x41, 0x00, 0x03, 0x89, 0x01, 0x00, 0x6F, 0xE0, 0x00, 0xC4,
     0x01, 0x00, 0x69, 0xE3, 0x5E, 0x40, 0x87, 0xD0,
 ];
-
-/// Opaque digest of a registered-filter identity (scheme
-/// [`MATRIX_FAMILY_SCHEME`]). Matching families establish platform evidence
-/// only; correction and transfer admission remain separate.
-///
-/// The value is an opaque hash; only equality and the hex [`Display`] form are
-/// meaningful.
-///
-/// [`Display`]: core::fmt::Display
-#[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Family(u64);
-
-impl core::fmt::Display for Family {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{:x}", self.0)
-    }
-}
-
-impl core::fmt::Debug for Family {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "Family({:x})", self.0)
-    }
-}
 
 /// FNV-1a 64-bit hash of a byte slice.
 fn fnv1a(bytes: &[u8]) -> u64 {
@@ -163,21 +137,6 @@ pub(crate) fn aligned_code_region<'a>(region: &'a [u8], body: &[u8]) -> &'a [u8]
         0
     };
     region.get(skip..).unwrap_or_default()
-}
-
-/// Matrix hardware family used for matching, from structured platform metadata
-/// and native code. Every required filter, including persistent layout, must be
-/// known. Supply the exact associated Kernel for resident readers and V850 base
-/// bindings.
-///
-/// The family is the registered candidate key: it is built only from facts no
-/// owner corrects (each owner projects away exactly what it may correct, e.g.
-/// the split-word phase assignment). Family equality never authorizes a write;
-/// every remaining difference must still pass its owner's correction proofs, or
-/// the pair is refused at that step. The as-is identity stays available through
-/// [`matrix::discover`] for display and post-correction verification.
-pub fn family_with_context(body: &[u8], hardware: &str, kernel: Option<&[u8]>) -> Option<Family> {
-    matrix::discover(hardware, body, kernel)?.candidate.family()
 }
 
 /// Whether the body is UHD-capable.

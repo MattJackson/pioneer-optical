@@ -123,10 +123,10 @@ fn synthetic_inventory_uses_positive_preservation_without_live_words() {
     normal[..8].copy_from_slice(b"PIONEER ");
     word(&mut normal, 20, IMAGE_LEN as u32);
     crate::image::matrix::install_test_contract(&mut normal, 0x12);
-    let family = crate::image::family_with_context(&normal, "SAT 8A10", None).unwrap();
+    let family = crate::filters::family::family_with_context(&normal, "SAT 8A10", None).unwrap();
     install(&mut normal);
     assert_eq!(
-        crate::image::family_with_context(&normal, "SAT 8A10", None),
+        crate::filters::family::family_with_context(&normal, "SAT 8A10", None),
         Some(family)
     );
     assert_eq!(

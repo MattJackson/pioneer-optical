@@ -898,7 +898,7 @@ pub fn data(
             "crate": format!("pioneer-optical {}", source.crate_version),
             "revision": source.revision,
             "hoard": source.hoard,
-            "scheme": pioneer_optical::image::MATRIX_FAMILY_SCHEME,
+            "scheme": pioneer_optical::filters::family::MATRIX_FAMILY_SCHEME,
         },
         "identity": {"partition": identity::PARTITION, "rules": identity::RULES},
         "platforms": platform_list.iter().map(|(p, n)| json!({"id": p, "images": n})).collect::<Vec<_>>(),

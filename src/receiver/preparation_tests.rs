@@ -1265,7 +1265,7 @@ fn family_override_does_not_admit_unproved_startup_across_layouts() {
     let shifted = phase::correct_normal(&shifted, phase::Assignment::Swapped).unwrap();
     let target = file(&base, &shifted);
     let candidate = |pair: &Update| {
-        crate::image::matrix::discover(
+        crate::filters::family::discover(
             &pair.normal().info().hardware_version,
             &pair.normal().image,
             Some(&pair.kernel().image),

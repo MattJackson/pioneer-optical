@@ -6,7 +6,8 @@
 use alloc::sync::Arc;
 
 use crate::envelope::Envelope;
-use crate::image::{receiver_control_with_kernel, Family, ReceiverControl};
+use crate::filters::family::Family;
+use crate::image::{receiver_control_with_kernel, ReceiverControl};
 use crate::{cdb, ComponentKind};
 
 pub mod normal_transfer;

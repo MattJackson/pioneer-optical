@@ -52,9 +52,10 @@ fn generated_matrix_holds_its_invariants_over_the_hoard() {
             .candidate
             .as_deref()
             .map(|c| u64::from_str_radix(c, 16).unwrap());
-        let number =
-            |f: pioneer_optical::image::Family| u64::from_str_radix(&f.to_string(), 16).unwrap();
-        let family = pioneer_optical::image::family_with_context(
+        let number = |f: pioneer_optical::filters::family::Family| {
+            u64::from_str_radix(&f.to_string(), 16).unwrap()
+        };
+        let family = pioneer_optical::filters::family::family_with_context(
             &decoded.normal.image,
             &analysis.hardware,
             kernel.map(|k| k.image.as_slice()),

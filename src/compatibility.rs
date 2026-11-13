@@ -15,7 +15,7 @@ mod representation;
 #[cfg(feature = "envelope")]
 pub(crate) use representation::rebuild_normal;
 
-use crate::image::matrix::{discover, Key};
+use crate::filters::family::{discover, Key};
 use crate::image::phase;
 use alloc::vec::Vec;
 

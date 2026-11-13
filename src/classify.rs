@@ -9,7 +9,7 @@
 pub use crate::receiver::Error;
 
 /// Hardware family fingerprint and the scheme it is computed under.
-pub use crate::image::{Family, MATRIX_FAMILY_SCHEME};
+pub use crate::filters::family::{Family, MATRIX_FAMILY_SCHEME};
 
 /// Kernel handoff and receiver-generation facts that decide a route's class.
 pub use crate::image::{kernel_marker_policy, KernelHandoffError, KernelMarkerPolicy};

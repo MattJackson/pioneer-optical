@@ -1,7 +1,7 @@
 //! Complete component preparation. This module performs no device I/O.
 
 use super::{apply_kernel_policy, builder, header_info, DecodeError, Envelope};
-use crate::{image, ComponentKind};
+use crate::ComponentKind;
 
 /// Identity field that must agree within a complete firmware pair.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -271,10 +271,6 @@ impl Update {
     /// Normal decoded using the target Kernel's receiver policy.
     pub fn normal(&self) -> &Envelope {
         &self.normal
-    }
-    /// Hardware family derived from the decoded Normal, when recognized.
-    pub fn family(&self) -> Option<image::Family> {
-        self.normal.family_with_kernel(&self.kernel)
     }
     /// Front-key Kernel representation; receiver routing is still required.
     pub fn kernel_transfer(&self) -> &[u8] {

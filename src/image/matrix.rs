@@ -11,62 +11,6 @@ use super::{
 mod ata;
 pub use ata::{AtaEvidence, AtaInput};
 
-/// An established typed family identity: the complete registered identity,
-/// whose structured-header domain keeps platforms apart.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Key {
-    /// Complete version-seven identity supplied by the shared filter registry.
-    Registered(crate::filters::identity::Key),
-}
-impl Key {
-    /// Versioned binary identity; never serializes presentation text.
-    pub fn canonical_bytes(&self) -> Option<alloc::vec::Vec<u8>> {
-        match self {
-            Self::Registered(k) => Some(k.canonical_bytes()),
-        }
-    }
-    /// Opaque digest of the canonical identity.
-    pub fn family(&self) -> Option<super::Family> {
-        match self {
-            Self::Registered(k) => Some(super::Family(k.fingerprint())),
-        }
-    }
-}
-/// Both established identities. Candidate equality alone does not authorize any
-/// write: the necessary phase/startup corrections and receiver gates remain separate.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Identity {
-    /// Identity without applying corrections.
-    pub as_is: Key,
-    /// Identity after each registered owner's explicitly supported projection.
-    pub candidate: Key,
-}
-
-/// Discover typed identity using the hardware tag from structured firmware or
-/// drive metadata, decoded Normal, and its exact associated Kernel when needed.
-/// Does not guess a platform from a model name or substitute another Kernel.
-/// ATA architecture/load base must be established by complete native consumers.
-/// Unsupported tags, missing required fields and conflicting keys return None.
-pub fn discover(hardware: &str, normal: &[u8], kernel: Option<&[u8]>) -> Option<Identity> {
-    discover_in(&crate::filters::Context::new(
-        crate::compatibility::Firmware {
-            hardware,
-            normal,
-            kernel,
-        },
-    ))
-}
-
-/// [`discover`] over an already inspected context, so one native inspection
-/// can also supply the registered filter results.
-pub(crate) fn discover_in(context: &crate::filters::Context<'_>) -> Option<Identity> {
-    let identity = crate::filters::identity::discover(context)?;
-    Some(Identity {
-        as_is: Key::Registered(identity.as_is),
-        candidate: Key::Registered(identity.candidate),
-    })
-}
-
 /// Complete independently recognized native contracts for envelope/receiver tests.
 #[cfg(test)]
 pub(crate) fn install_test_contract(body: &mut [u8], variant: u8) {
@@ -105,14 +49,6 @@ pub(crate) fn install_test_contract(body: &mut [u8], variant: u8) {
         "{:?}",
         context.filters()
     );
-}
-
-/// Registered-filter family of a synthetic contract from [`install_test_contract`].
-#[cfg(all(test, feature = "envelope"))]
-pub(crate) fn test_family(variant: u8) -> super::Family {
-    let mut body = alloc::vec![0xff; 0x2000];
-    install_test_contract(&mut body, variant);
-    super::family_with_context(&body, "SAT 8600", None).expect("registered identity")
 }
 
 /// SAT platform partition supplied by the firmware envelope's hardware tag.
@@ -186,29 +122,29 @@ mod tests {
             "SAT 1000", "SAT 8000", "SAT 9000", "REC 8900", "REC 8C00", "ATA 0005", "SCSI0001",
             "BDR-UD04", "SAT 8xxx", "",
         ] {
-            assert!(discover(hardware, &[], None).is_none());
-            assert!(super::super::family_with_context(&[], hardware, None).is_none());
+            assert!(crate::filters::family::discover(hardware, &[], None).is_none());
+            assert!(crate::filters::family::family_with_context(&[], hardware, None).is_none());
         }
     }
     #[test]
     fn recorder_family_requires_every_native_contract_and_retains_differences() {
         let mut body = alloc::vec![0xff; 0x2000];
         install_test_contract(&mut body, 0x20);
-        let sat = discover("SAT 8900", &body, None).unwrap();
+        let sat = crate::filters::family::discover("SAT 8900", &body, None).unwrap();
         for hardware in ["REC 8900", "REC 8C00"] {
-            let rec = discover(hardware, &body, None).unwrap();
+            let rec = crate::filters::family::discover(hardware, &body, None).unwrap();
             assert_eq!(rec.as_is, sat.as_is);
             assert_eq!(rec.candidate, sat.candidate);
         }
         let mut different = body.clone();
         install_test_contract(&mut different, 0);
         assert_ne!(
-            discover("REC 8900", &body, None).unwrap().candidate,
-            discover("REC 8C00", &different, None).unwrap().candidate
+            crate::filters::family::discover("REC 8900", &body, None).unwrap().candidate,
+            crate::filters::family::discover("REC 8C00", &different, None).unwrap().candidate
         );
         // A valid REC tag cannot supply the missing host-interface contract.
         body[0x710..0x716].fill(0xff);
-        assert!(discover("REC 8900", &body, None).is_none());
+        assert!(crate::filters::family::discover("REC 8900", &body, None).is_none());
     }
 
     #[test]

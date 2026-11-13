@@ -314,10 +314,7 @@ fn sat1_original_files_follow_independent_operand_oracle_and_round_trip() {
     use pioneer_optical::{
         compatibility::{self, Firmware},
         envelope::{Envelope, Layout},
-        image::{
-            matrix,
-            phase::{correct_legacy, discover},
-        },
+        image::phase::{correct_legacy, discover},
     };
     let audit = std::path::PathBuf::from(std::env::var("PIONEER_LAYOUT_AUDIT").unwrap());
     let files = audit.join("sat1-envelope-corpus");
@@ -441,7 +438,7 @@ fn sat1_original_files_follow_independent_operand_oracle_and_round_trip() {
                                 normal: &original.image,
                                 kernel: None,
                             };
-                            if matrix::discover(hardware, &original.image, None).is_none() {
+                            if pioneer_optical::filters::family::discover(hardware, &original.image, None).is_none() {
                                 assert!(matches!(
                                     compatibility::plan(installed, destination),
                                     Err(compatibility::Error::UnresolvedIdentity)
@@ -508,7 +505,7 @@ fn sat1_original_files_follow_independent_operand_oracle_and_round_trip() {
                             normal: &original.image,
                             kernel: kernel_image,
                         };
-                        if matrix::discover(hardware, &original.image, kernel_image).is_none() {
+                        if pioneer_optical::filters::family::discover(hardware, &original.image, kernel_image).is_none() {
                             assert!(
                                 kernel.is_none(),
                                 "{component}: unexpected unresolved identity with exact Kernel"

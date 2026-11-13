@@ -232,14 +232,14 @@ impl Envelope {
         let family = || {
             context
                 .as_ref()
-                .and_then(crate::image::matrix::discover_in)
+                .and_then(crate::filters::family::discover_in)
                 .and_then(|identity| identity.candidate.family())
                 .map(|f| f.to_string())
         };
         let mut result = FirmwareAnalysis {
             identity: Identity {
                 family: None,
-                family_scheme: crate::image::MATRIX_FAMILY_SCHEME,
+                family_scheme: crate::filters::family::MATRIX_FAMILY_SCHEME,
                 model: info.model.clone(),
                 component: info.kind.to_string(),
                 revision: info.revision.clone(),

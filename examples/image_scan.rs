@@ -13,8 +13,9 @@ fn main() {
     for path in args {
         match std::fs::read(&path) {
             Ok(body) => {
-                let family = image::family_with_context(&body, &hardware, None)
-                    .map_or("none".into(), |f| f.to_string());
+                let family =
+                    pioneer_optical::filters::family::family_with_context(&body, &hardware, None)
+                        .map_or("none".into(), |f| f.to_string());
                 println!("{path}\t{family}\t{}", image::is_uhd(&body));
             }
             Err(e) => eprintln!("{path}: {e}"),

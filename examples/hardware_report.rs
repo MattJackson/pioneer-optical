@@ -68,7 +68,7 @@ fn main() {
                 }
                 let family = k.as_ref().map_or_else(|| decoded.family(), |k| decoded.family_with_kernel(k));
                 let filters = pioneer_optical::compatibility::Firmware { hardware: &decoded.info().hardware_version, normal: &decoded.image, kernel: k.as_ref().map(|k| k.image.as_slice()) }.filters();
-                Ok(json!({"family_scheme":image::MATRIX_FAMILY_SCHEME,"family":family.map(|f|f.to_string()),"filters":filters,"uhd":image::is_uhd(&decoded.image),"decode_basis":if k.is_some(){"paired Kernel"}else{"standalone Normal"}}))
+                Ok(json!({"family_scheme":pioneer_optical::filters::family::MATRIX_FAMILY_SCHEME,"family":family.map(|f|f.to_string()),"filters":filters,"uhd":image::is_uhd(&decoded.image),"decode_basis":if k.is_some(){"paired Kernel"}else{"standalone Normal"}}))
             })();
             match result { Ok(v) => v, Err(e) => json!({"error":e}) }
         });

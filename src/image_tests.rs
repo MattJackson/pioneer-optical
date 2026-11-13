@@ -7,7 +7,7 @@ fn empty_bodies_are_not_uhd() {
 
 #[test]
 fn family_displays_lowercase_hex() {
-    assert_eq!(format!("{}", Family(0xABCD_1234)), "abcd1234");
+    assert_eq!(format!("{}", crate::filters::family::Family::from_raw(0xABCD_1234)), "abcd1234");
 }
 
 #[test]
@@ -167,7 +167,7 @@ fn is_uhd_exact_length_signature() {
 
 #[test]
 fn family_debug_format() {
-    assert_eq!(alloc::format!("{:?}", Family(0xabc)), "Family(abc)");
+    assert_eq!(alloc::format!("{:?}", crate::filters::family::Family::from_raw(0xabc)), "Family(abc)");
 }
 
 #[test]

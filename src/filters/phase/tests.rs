@@ -145,7 +145,7 @@ fn detected_mismatch_survives_missing_checksum_and_unrelated_family_evidence() {
     assert_eq!(FILTER.compare(&a, &b), Comparison::Different);
     // Missing layout/host/loading evidence is not a prerequisite for detecting
     // phase; the original raw fixture deliberately has no valid Normal header.
-    assert!(crate::image::matrix::discover("SAT 8000", &raw, None).is_none());
+    assert!(crate::filters::family::discover("SAT 8000", &raw, None).is_none());
     let operation = FILTER
         .plan(
             &Transition {

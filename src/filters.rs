@@ -582,6 +582,7 @@ register_filters!(
 mod composition;
 
 /// Canonical identity derived automatically from the complete registry.
+pub mod family;
 pub mod identity;
 /// Generic comparison, immutable decisions and atomic correction composition.
 pub mod runner;

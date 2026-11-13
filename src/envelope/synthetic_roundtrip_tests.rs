@@ -1646,7 +1646,7 @@ fn envelope_matrix_family_requires_native_filters_and_consistent_kernel_context(
     let mut image = normal_image(0x2000);
     crate::image::matrix::install_test_contract(&mut image, 0x20);
     let normal = decoded_with("SAT 8A10", "ID40", &image);
-    let expected = crate::image::family_with_context(&image, "SAT 8A10", None).unwrap();
+    let expected = crate::filters::family::family_with_context(&image, "SAT 8A10", None).unwrap();
     assert_eq!(normal.family(), Some(expected));
     let mut kernel = decoded_with("SAT 8A10", "ID40", &image);
     kernel.info.kind = ComponentKind::Kernel;

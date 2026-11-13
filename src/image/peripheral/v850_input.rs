@@ -249,3 +249,28 @@ mod tests {
         assert!(matches!(native(&first), Observation::Conflicting));
     }
 }
+
+#[cfg(test)]
+mod table_tests {
+    /// Canonical digest of every shape: bytes, each relocation, diagnostic
+    /// offset and algorithm. Pins the table across representation changes.
+    #[test]
+    fn shape_table_is_unchanged() {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        for s in super::shapes::SHAPES {
+            h.update((s.bytes.len() as u64).to_le_bytes());
+            h.update(s.bytes);
+            h.update((s.relocations.len() as u64).to_le_bytes());
+            for r in s.relocations {
+                h.update((r.at as u64).to_le_bytes());
+                h.update([r.kind as u8]);
+                h.update(r.prior.map_or(u64::MAX, |p| p as u64).to_le_bytes());
+                h.update(r.delta.to_le_bytes());
+            }
+            h.update((s.diagnostic as u64).to_le_bytes());
+            h.update([s.algorithm as u8]);
+        }
+        assert_eq!(format!("{:x}", h.finalize()), "d07cd29a93f0087dbe118597b2cdc71aee495c29f6a9c3eba6159df1891609cb");
+    }
+}

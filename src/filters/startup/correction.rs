@@ -195,7 +195,7 @@ impl Operation for UnsetOperation {
     fn filter_id(&self) -> &'static str {
         ID
     }
-    fn description(&self) -> Option<crate::compatibility::Correction> {
+    fn description(&self) -> Option<crate::filters::Correction> {
         Some(unchanged(&self.finding))
     }
     fn word_writes(&self) -> Vec<Word> {
@@ -403,7 +403,7 @@ impl Operation for PreservationOperation {
     fn filter_id(&self) -> &'static str {
         ID
     }
-    fn description(&self) -> Option<crate::compatibility::Correction> {
+    fn description(&self) -> Option<crate::filters::Correction> {
         Some(unchanged(&self.finding))
     }
     fn prepare(&self, context: &Preparation<'_>) -> Result<Option<Vec<u8>>, Error> {
@@ -438,8 +438,8 @@ struct StartupOperation {
 }
 
 /// The target comparison is never rewritten: its finding is unchanged.
-fn unchanged(finding: &Finding) -> crate::compatibility::Correction {
-    crate::compatibility::Correction::Registered {
+fn unchanged(finding: &Finding) -> crate::filters::Correction {
+    crate::filters::Correction::Registered {
         filter: ID,
         from: finding.clone(),
         to: finding.clone(),
@@ -525,7 +525,7 @@ impl Operation for StartupOperation {
     fn filter_id(&self) -> &'static str {
         ID
     }
-    fn description(&self) -> Option<crate::compatibility::Correction> {
+    fn description(&self) -> Option<crate::filters::Correction> {
         Some(unchanged(&self.finding))
     }
     fn word_writes(&self) -> Vec<Word> {
@@ -683,7 +683,7 @@ mod tests {
     fn startup_operations_report_the_target_comparison_as_unchanged() {
         // The generic description would claim the target adopts the installed
         // finding; these operations never change the comparison.
-        use crate::compatibility::Correction;
+        use crate::filters::Correction;
         let mut no_gate = fixture(0xfe24, 0);
         no_gate[0x80..0x94].fill(0xff);
         for (installed, target) in [

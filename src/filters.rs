@@ -48,7 +48,8 @@
 //! Kernel changes; pair plumbing alone adds no native Kernel correction.
 //! See `Filter::plan` and the shared runner for the enforcing pair decisions.
 
-use crate::compatibility::{Error, Firmware};
+mod contract;
+pub use contract::{Correction, Error, Firmware};
 use crate::image::matrix::{AtaEvidence, SatPlatform};
 use crate::image::layout::Observation;
 use alloc::{boxed::Box, string::String, vec::Vec};

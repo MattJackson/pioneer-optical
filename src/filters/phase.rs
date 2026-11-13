@@ -11,7 +11,7 @@ use super::{
     Assessment, Comparison, Context, Filter, Finding, Integrity, Operation, Preparation, Role,
     Transition, Value,
 };
-use crate::compatibility::{Error, Firmware};
+use crate::filters::{Error, Firmware};
 use crate::image::{
     layout::{self, Observation, Unresolved},
     peripheral,
@@ -467,8 +467,8 @@ impl Operation for PhaseOperation {
     fn filter_id(&self) -> &'static str {
         "phase"
     }
-    fn description(&self) -> Option<crate::compatibility::Correction> {
-        Some(crate::compatibility::Correction::Phase {
+    fn description(&self) -> Option<crate::filters::Correction> {
+        Some(crate::filters::Correction::Phase {
             from: self.from.assignment,
             to: self.required.assignment,
         })

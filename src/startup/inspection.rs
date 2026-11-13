@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn conditional_observation_retains_fixed_value_and_canonical_predicate() {
-        use crate::compatibility::Firmware;
+        use crate::filters::Firmware;
         use crate::filters::{self, Context};
         let normal = crate::startup::h8_conditional::tests::fixture(0x1000, 0x4000, 0x5000);
         let context = Context::new(Firmware {

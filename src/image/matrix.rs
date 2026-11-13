@@ -34,7 +34,7 @@ pub(crate) fn install_test_contract(body: &mut [u8], variant: u8) {
     // An actual required IRQ field carries the synthetic family's distinction.
     body[0x700..0x706].copy_from_slice(&[0xf8, variant, 0x6a, 0x88, 0xff, 0xc5]);
     body[0x710..0x716].copy_from_slice(&[0xf8, 0, 0x6a, 0x88, 0xfe, 0x94]);
-    let context = crate::filters::Context::new(crate::compatibility::Firmware {
+    let context = crate::filters::Context::new(crate::filters::Firmware {
         hardware: "SAT 8600",
         normal: body,
         kernel: None,

@@ -330,7 +330,7 @@ impl Filter for Initialization {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compatibility::Firmware;
+    use crate::filters::Firmware;
     fn context<'a>(hardware: &'static str, normal: &'a [u8]) -> Context<'a> {
         Context::new(Firmware {
             hardware,

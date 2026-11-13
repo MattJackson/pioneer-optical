@@ -1,6 +1,6 @@
 use super::super::{Comparison, Finding};
 use super::*;
-use crate::compatibility::Firmware;
+use crate::filters::Firmware;
 
 fn consumer() -> Vec<u8> {
     let mut n = vec![0xff; 0x1000];
@@ -114,6 +114,6 @@ fn geometry_detection_does_not_claim_a_geometry_correction() {
             &a,
             &b
         ),
-        Err(crate::compatibility::Error::Incompatible)
+        Err(crate::filters::Error::Incompatible)
     ));
 }

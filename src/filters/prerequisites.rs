@@ -1,7 +1,7 @@
 //! Shared device-word conditions and writes for filter-owned correction
 //! operations. Reads and writes are collected separately and stay disjoint.
 use super::Operation;
-use crate::compatibility::Error;
+use crate::filters::Error;
 use alloc::vec::Vec;
 
 /// A device word named by a correction: a required existing value from

@@ -188,7 +188,7 @@ fn odd_calls_and_relocated_internal_jumps_are_rejected() {
 
 #[test]
 fn byte_pair_correction_uses_native_programs_across_platform_labels() {
-    use crate::compatibility::Firmware;
+    use crate::filters::Firmware;
     use crate::filters::{phase::FILTER, Context, Filter, Transition};
     for t in templates::TEMPLATES
         .iter()

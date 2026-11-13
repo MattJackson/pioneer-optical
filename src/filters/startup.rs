@@ -264,7 +264,7 @@ fn native_h8(context: &Context<'_>) -> bool {
 /// Normal delegates persistent-word reads to a Kernel-resident getter that was
 /// not supplied (BDR-202 1.06/1.07, BDC-202 8.07: 0x404622). The startup word
 /// cannot be bound, so no action, including neutral 0xFFFF, is selected.
-fn resident_reader_missing(firmware: crate::compatibility::Firmware<'_>) -> bool {
+fn resident_reader_missing(firmware: crate::filters::Firmware<'_>) -> bool {
     matches!(
         crate::image::layout::discover_h8_reader(firmware.normal, firmware.kernel),
         Observation::Unresolved(crate::image::layout::Unresolved::ResidentCodeRequired(_))
@@ -407,7 +407,7 @@ impl Filter for Startup {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compatibility::Firmware;
+    use crate::filters::Firmware;
     #[test]
     fn kernel_resident_getter_without_its_kernel_is_unresolved() {
         // Normal delegating persistent reads (A4/A5) to Kernel 0x400100.
@@ -828,7 +828,7 @@ mod tests {
 mod corpus {
     // Optional replay of every held image in the existing startup/init audit.
     use super::*;
-    use crate::compatibility::Firmware;
+    use crate::filters::Firmware;
     use alloc::collections::BTreeMap;
 
     #[test]

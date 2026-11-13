@@ -389,7 +389,7 @@ mod tests {
     }
     #[test]
     fn phase_owner_treats_an_undecodable_kernel_as_missing_resident_code() {
-        use crate::compatibility::Firmware;
+        use crate::filters::Firmware;
         let mut native = fixture();
         native.resize(8192, 0xff);
         let normal = crate::image::layout::encode_v850_bus(&native).unwrap();

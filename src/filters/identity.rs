@@ -337,12 +337,12 @@ pub fn candidate_key_diff(
     a: (&str, &[u8], Option<&[u8]>),
     b: (&str, &[u8], Option<&[u8]>),
 ) -> Option<KeyDiff> {
-    let identity_a = discover(&Context::new(crate::compatibility::Firmware {
+    let identity_a = discover(&Context::new(crate::filters::Firmware {
         hardware: a.0,
         normal: a.1,
         kernel: a.2,
     }))?;
-    let identity_b = discover(&Context::new(crate::compatibility::Firmware {
+    let identity_b = discover(&Context::new(crate::filters::Firmware {
         hardware: b.0,
         normal: b.1,
         kernel: b.2,
@@ -356,7 +356,7 @@ pub fn candidate_key_diff(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compatibility::Firmware;
+    use crate::filters::Firmware;
 
     struct Fake {
         id: &'static str,

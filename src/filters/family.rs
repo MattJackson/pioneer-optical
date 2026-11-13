@@ -72,7 +72,7 @@ pub struct Identity {
 /// Unsupported tags, missing required fields and conflicting keys return None.
 pub fn discover(hardware: &str, normal: &[u8], kernel: Option<&[u8]>) -> Option<Identity> {
     discover_in(&crate::filters::Context::new(
-        crate::compatibility::Firmware {
+        crate::filters::Firmware {
             hardware,
             normal,
             kernel,

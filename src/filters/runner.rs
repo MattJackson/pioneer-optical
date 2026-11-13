@@ -3,7 +3,7 @@ use super::{
     Assessment, Comparison, Context, Filter, Finding, Integrity, Operation, Preparation,
     PreparedComponents, Role, Transition,
 };
-use crate::compatibility::{Error, Firmware};
+use crate::filters::{Error, Firmware};
 use alloc::{boxed::Box, collections::BTreeSet, vec::Vec};
 
 /// Admission policy for the independent hardware-family gate.

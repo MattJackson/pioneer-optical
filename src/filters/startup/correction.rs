@@ -162,7 +162,8 @@ pub(super) fn plan_absent(
     }
     let preservation = PreservationOperation::bind(transition, finding)?
         .map(|op| Box::new(op) as Box<dyn Operation>);
-    let Observation::Known(installed) = startup::bound_selection(transition.installed.firmware.normal)
+    let Observation::Known(installed) =
+        startup::bound_selection(transition.installed.firmware.normal)
     else {
         return Ok(preservation);
     };
@@ -205,7 +206,12 @@ impl Operation for UnsetOperation {
         self.inner.as_ref().and_then(|op| op.integrity())
     }
     fn prepare(&self, context: &Preparation<'_>) -> Result<Option<Vec<u8>>, Error> {
-        bound_target(context, &self.hardware, &self.normal, self.kernel.as_deref())?;
+        bound_target(
+            context,
+            &self.hardware,
+            &self.normal,
+            self.kernel.as_deref(),
+        )?;
         match &self.inner {
             Some(op) => op.prepare(context),
             None => Ok(None),
@@ -215,7 +221,12 @@ impl Operation for UnsetOperation {
         if self.word.value != UNSET {
             return Err(Error::Unsupported);
         }
-        bound_target(context, &self.hardware, &self.normal, self.kernel.as_deref())?;
+        bound_target(
+            context,
+            &self.hardware,
+            &self.normal,
+            self.kernel.as_deref(),
+        )?;
         match &self.inner {
             Some(op) => op.verify(context, normal),
             None => Ok(()),
@@ -396,7 +407,12 @@ impl PreservationOperation {
         }))
     }
     fn bound(&self, context: &Preparation<'_>) -> Result<(), Error> {
-        bound_target(context, &self.hardware, &self.normal, self.kernel.as_deref())
+        bound_target(
+            context,
+            &self.hardware,
+            &self.normal,
+            self.kernel.as_deref(),
+        )
     }
 }
 impl Operation for PreservationOperation {

@@ -3,8 +3,8 @@
 //! This establishes a getter comparison and the rejection transfer's intent.
 //! It does not identify a write recipe or assert the behavior of the boot ROM.
 use super::Span;
-use crate::shape::matches;
 use crate::image::layout::{Observation, Unresolved};
+use crate::shape::matches;
 use alloc::vec::Vec;
 use shapes::*;
 

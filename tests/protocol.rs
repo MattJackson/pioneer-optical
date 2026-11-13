@@ -1,3 +1,4 @@
+#![cfg(feature = "drive")]
 use pioneer_optical::drive::{Evidence, ProtocolState as State};
 fn inquiry() -> [u8; 36] {
     let mut b = [b' '; 36];

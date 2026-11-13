@@ -2,8 +2,8 @@
 //! This is an operational requirement, not a hardware platform identity. The
 //! Kernel transfer is proved as an address; its implementation is outside scope.
 use super::Span;
-use crate::shape::matches;
 use crate::image::layout::{Observation, Unresolved};
+use crate::shape::matches;
 use shapes::*;
 
 const BASE: usize = 0x10000;

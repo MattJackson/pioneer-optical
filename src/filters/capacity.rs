@@ -125,8 +125,8 @@ impl Filter for Capacity {
 #[cfg(all(test, feature = "envelope"))]
 mod tests {
     use super::*;
-    use crate::filters::Firmware;
     use crate::filters::Context;
+    use crate::filters::Firmware;
     use crate::startup::bank;
 
     fn inspect(normal: &[u8], kernel: Option<&[u8]>) -> Assessment {

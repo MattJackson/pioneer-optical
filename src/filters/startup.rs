@@ -274,9 +274,7 @@ fn resident_reader_missing(firmware: crate::filters::Firmware<'_>) -> bool {
 /// Select the existing verified H8 word transaction for positively recognized
 /// native H8 firmware. ATA/SCSI return no H8 action; their native requirements
 /// remain separate and never inherit the H8 A0 write command.
-pub fn selection(
-    context: &Context<'_>,
-) -> Result<Option<crate::startup::selection::Plan>, Error> {
+pub fn selection(context: &Context<'_>) -> Result<Option<crate::startup::selection::Plan>, Error> {
     selection_with_policy(
         context,
         crate::startup::selection::StartupPolicy::NeutralSelection,

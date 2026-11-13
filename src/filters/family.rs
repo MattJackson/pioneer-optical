@@ -71,13 +71,11 @@ pub struct Identity {
 /// ATA architecture/load base must be established by complete native consumers.
 /// Unsupported tags, missing required fields and conflicting keys return None.
 pub fn discover(hardware: &str, normal: &[u8], kernel: Option<&[u8]>) -> Option<Identity> {
-    discover_in(&crate::filters::Context::new(
-        crate::filters::Firmware {
-            hardware,
-            normal,
-            kernel,
-        },
-    ))
+    discover_in(&crate::filters::Context::new(crate::filters::Firmware {
+        hardware,
+        normal,
+        kernel,
+    }))
 }
 
 /// [`discover`] over an already inspected context, so one native inspection
@@ -136,7 +134,6 @@ impl crate::envelope::Envelope {
             Some(&kernel.image),
         )
     }
-
 }
 
 #[cfg(feature = "envelope")]

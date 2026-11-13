@@ -12,7 +12,7 @@
 //! Kernel may hold an immediate 0x00D9 index load or a native word getter.
 //! Callees are not executed, the same standard as the H8 empty-slot proof.
 use super::m32c::{le24, D9_INDEX};
-use super::shape_matches as matches;
+use crate::shape::matches;
 
 const KERNEL_BASE: u32 = 0xffc000;
 const KERNEL_BYTES: usize = 0x4000;

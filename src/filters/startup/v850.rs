@@ -1,7 +1,8 @@
 //! Native eight-byte Kernel/Normal acceptance requirement, rooted in Normal entry.
 //! This is an operational requirement, not a hardware platform identity. The
 //! Kernel transfer is proved as an address; its implementation is outside scope.
-use super::{shape_matches as matches, Span};
+use super::Span;
+use crate::shape::matches;
 use crate::image::layout::{Observation, Unresolved};
 use shapes::*;
 

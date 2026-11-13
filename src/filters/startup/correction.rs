@@ -3,7 +3,8 @@
 //! holds the target's word, the target's word is set on the drive
 //! (`word_writes`) in the first stage's settings transaction. The live word is
 //! read only to snapshot it for restore; it is never a prerequisite.
-use super::{h8_conditional, ID};
+use super::ID;
+use crate::startup::h8_conditional;
 use crate::{
     compatibility::Error,
     filters::{prerequisites::Word, Finding, Integrity, Operation, Preparation, Transition},

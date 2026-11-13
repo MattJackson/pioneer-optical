@@ -81,6 +81,8 @@ mod comp_runtime;
 mod comp_streams;
 mod error_codes;
 mod product_identity;
+#[cfg(feature = "image")]
+mod shape;
 
 internal! {
     #[cfg(feature = "analysis")]

@@ -24,6 +24,8 @@ pub mod checks;
 
 /// Exact native facts retained when no 0x009F comparison is recognized.
 pub mod unbound;
+/// Conditional 0x009F gates: a primary word or a predicate-gated alternative.
+pub(crate) mod h8_conditional;
 
 /// The startup word of a unit that shipped with gate-less firmware. Writing it
 /// is a reset, never a boot requirement: no gate reads the word.

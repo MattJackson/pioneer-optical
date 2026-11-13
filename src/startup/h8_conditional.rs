@@ -128,7 +128,7 @@ fn be32(bytes: &[u8], at: usize) -> Option<u32> {
     ))
 }
 fn matches(code: &[u8], shape: &[u8], links: &[(usize, usize)]) -> bool {
-    code.len() == shape.len() && super::shape_matches(code, 0, shape, links)
+    code.len() == shape.len() && crate::shape::matches(code, 0, shape, links)
 }
 
 /// Recognize only stored Normal code. A miss leaves the independently proven

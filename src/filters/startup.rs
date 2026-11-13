@@ -7,7 +7,6 @@ use crate::{compatibility::Error, image::layout::Observation};
 use alloc::{boxed::Box, format, vec};
 
 mod correction;
-pub(crate) mod h8_conditional;
 mod m32c;
 mod m32c_absent;
 mod scsi;
@@ -19,22 +18,6 @@ pub(super) struct Span {
     pub offset: usize,
     pub bytes: usize,
     pub address: u32,
-}
-
-/// Whether `body` holds `shape` at `at`, ignoring relocatable operand ranges.
-fn shape_matches(body: &[u8], at: usize, shape: &[u8], operands: &[(usize, usize)]) -> bool {
-    let Some(bytes) = at
-        .checked_add(shape.len())
-        .and_then(|end| body.get(at..end))
-    else {
-        return false;
-    };
-    bytes.iter().zip(shape).enumerate().all(|(i, (a, b))| {
-        a == b
-            || operands
-                .iter()
-                .any(|&(start, len)| (start..start + len).contains(&i))
-    })
 }
 
 /// Operational startup prerequisite owner.
@@ -82,7 +65,7 @@ fn h8_value(
     normal: &[u8],
 ) -> (Value, alloc::string::String) {
     let requirement = bound.requirement;
-    if let Some(conditional) = h8_conditional::discover(normal, bound) {
+    if let Some(conditional) = crate::startup::h8_conditional::discover(normal, bound) {
         return (Value::Variant(2, vec![Value::U16(requirement.parameter), Value::U16(requirement.required),
             Value::U16(0xfe09), conditional.predicate_value()]),
             format!("Native {:#06x} is accepted unconditionally. FE09 additionally requires the complete bound predicate at {:#x} (gate {:#x}), range helper {:#x} and getter {:#x}; source spans {:?}. The fixed multiplication service is abstracted within the audited field assembly; arbitrary callee execution is not asserted", requirement.required, conditional.predicate, conditional.gate, conditional.range_helper, conditional.getter, conditional.source_spans));

@@ -52,7 +52,7 @@ pub enum ReaderEvidenceState {
 #[derive(Clone, Debug)]
 pub struct ConditionalComparison {
     fixed: BoundSelection,
-    predicate: crate::filters::startup::h8_conditional::Evidence,
+    predicate: crate::startup::h8_conditional::Evidence,
 }
 impl ConditionalComparison {
     /// Independently accepted comparison and complete reader binding.
@@ -204,7 +204,7 @@ pub fn inspect(normal: &[u8], kernel: Option<&[u8]>) -> Inspection {
     };
     let requirement = match super::bound_selection(normal) {
         Observation::Known(fixed) => {
-            match crate::filters::startup::h8_conditional::discover(normal, &fixed) {
+            match crate::startup::h8_conditional::discover(normal, &fixed) {
                 Some(predicate) => {
                     RequirementObservation::Conditional(ConditionalComparison { fixed, predicate })
                 }
@@ -300,7 +300,7 @@ mod tests {
     fn conditional_observation_retains_fixed_value_and_canonical_predicate() {
         use crate::compatibility::Firmware;
         use crate::filters::{self, Context};
-        let normal = filters::startup::h8_conditional::tests::fixture(0x1000, 0x4000, 0x5000);
+        let normal = crate::startup::h8_conditional::tests::fixture(0x1000, 0x4000, 0x5000);
         let context = Context::new(Firmware {
             hardware: "SAT 8800",
             normal: &normal,
@@ -313,7 +313,7 @@ mod tests {
         };
         assert_eq!(value.fixed().requirement.required, 0xfe23);
         assert_eq!(value.alternative(), 0xfe09);
-        let predicate = filters::startup::h8_conditional::discover(&normal, value.fixed()).unwrap();
+        let predicate = crate::startup::h8_conditional::discover(&normal, value.fixed()).unwrap();
         assert_eq!(value.predicate_value(), predicate.predicate_value());
         assert_eq!(filters::startup::inspect(&context), before);
         assert!(!result.rooted_obligations().is_empty());

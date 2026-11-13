@@ -899,7 +899,15 @@ fn check_word_writes(stages: &[PreparedStage], mode: ExecutionMode) -> Result<()
     }
     // Recovery plans from caller-supplied Current evidence and may meet a
     // loader; the word is set only by a Flash on the running receiver.
-    if writes_words(stages) && mode == ExecutionMode::Recovery {
+    // A startup-word reset (UNSET) is not a boot requirement; Recovery skips it.
+    let required = stages.iter().any(|stage| {
+        stage
+            .settings
+            .word_writes()
+            .iter()
+            .any(|write| write.word.value != crate::startup::UNSET_WORD)
+    });
+    if required && mode == ExecutionMode::Recovery {
         return Err(PlanError::new(
             PlanReason::StartupWordInRecovery,
             "a startup word write is not performed in Recovery mode",
@@ -915,7 +923,8 @@ fn preflight_word_writes<T: Transport, H: ExecutionRuntime<T::Error>>(
     runtime: &mut H,
     mode: ExecutionMode,
 ) -> Result<(), ExecutionError<T::Error>> {
-    if !writes_words(stages) {
+    // Recovery reaching here carries only skipped resets (see check_word_writes).
+    if !writes_words(stages) || mode == ExecutionMode::Recovery {
         return Ok(());
     }
     let (updating, _) = stages[0].bind_stage(reads, runtime, mode, FlashStage::at(0), None)?;
@@ -1020,11 +1029,13 @@ impl PreparedStage {
             return self.transfer_stage(io, runtime, false, recovery, stage, previous);
         }
         let (updating, _) = self.bind_stage(io.reads, runtime, mode, stage, previous)?;
+        // Recovery never writes the startup word: its resets are skipped.
+        let filtered = recovery.then(|| self.settings.without_unset_resets()).flatten();
+        let settings = filtered.as_ref().unwrap_or(&self.settings);
         // A loader is accepted only in Recovery, which preflight refuses for
         // correction word writes, so skipping settings here never drops one.
-        if !updating && apply_settings && !self.settings.entries().is_empty() {
-            return self
-                .settings
+        if !updating && apply_settings && !settings.entries().is_empty() {
+            return settings
                 .execute(io.writes, |writes| {
                     self.transfer_stage(
                         FlashTransport {

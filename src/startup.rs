@@ -25,6 +25,10 @@ pub mod checks;
 /// Exact native facts retained when no 0x009F comparison is recognized.
 pub mod unbound;
 
+/// The startup word of a unit that shipped with gate-less firmware. Writing it
+/// is a reset, never a boot requirement: no gate reads the word.
+pub(crate) const UNSET_WORD: u16 = 0xffff;
+
 /// Startup word selected for an update, not a saved historical value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Setting {

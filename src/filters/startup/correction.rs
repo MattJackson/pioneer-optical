@@ -145,7 +145,7 @@ impl Gate {
 
 /// The value of a startup word no gate has set: the state of a unit that
 /// shipped with gate-less firmware.
-pub(super) const UNSET: u16 = 0xffff;
+pub(super) const UNSET: u16 = crate::startup::UNSET_WORD;
 
 /// Target with a proven-absent fixed startup gate: no image edit. An
 /// independently bound preservation certificate is still enforced. Leaving a

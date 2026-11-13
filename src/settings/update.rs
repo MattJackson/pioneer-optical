@@ -187,6 +187,25 @@ impl Plan {
         }
         self
     }
+    /// This plan without its startup-word resets ([`crate::startup::UNSET_WORD`]),
+    /// or `None` when it has none. Recovery never writes the word; a reset is
+    /// not a boot requirement, so Recovery skips it instead of refusing.
+    pub(crate) fn without_unset_resets(&self) -> Option<Self> {
+        let unset = |entry: &Setting| {
+            matches!(entry.effect, Effect::ParameterWord { value, .. } if value == crate::startup::UNSET_WORD)
+        };
+        if !self.entries.iter().any(unset) {
+            return None;
+        }
+        let mut plan = self.clone();
+        plan.entries.retain(|entry| !unset(entry));
+        if let Some(correction) = plan.correction.as_mut() {
+            correction
+                .word_writes
+                .retain(|write| write.word.value != crate::startup::UNSET_WORD);
+        }
+        Some(plan)
+    }
     /// Words the native correction sets before transfer.
     pub fn word_writes(&self) -> &[crate::filters::prerequisites::OwnedWord] {
         self.correction
@@ -261,6 +280,35 @@ impl Plan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "envelope")]
+    #[test]
+    fn recovery_view_drops_only_startup_word_resets() {
+        use crate::filters::prerequisites::{OwnedWord, Word};
+        let write = |value| OwnedWord {
+            filter: "startup-prerequisite",
+            word: Word {
+                parameter: 0x9f,
+                value,
+            },
+        };
+        let plan = |writes: Vec<OwnedWord>| {
+            Plan::default().with_correction(Some(crate::compatibility::PreparedCorrection::native(
+                Vec::new(),
+                &[],
+                Vec::new(),
+                writes,
+            )))
+        };
+        // A reset is skipped: no entry, no declared write remains.
+        let reset = plan(vec![write(crate::startup::UNSET_WORD)]);
+        assert_eq!(reset.entries().len(), 1);
+        let view = reset.without_unset_resets().unwrap();
+        assert!(view.entries().is_empty() && view.word_writes().is_empty());
+        // A required word is untouched (Recovery refuses it separately).
+        let set = plan(vec![write(0xfe0a)]);
+        assert!(set.without_unset_resets().is_none());
+    }
 
     #[test]
     fn list_preserves_startup_policy_and_includes_temporary_adaptation() {

@@ -276,10 +276,10 @@ fn resident_reader_missing(firmware: crate::filters::Firmware<'_>) -> bool {
 /// remain separate and never inherit the H8 A0 write command.
 pub fn selection(
     context: &Context<'_>,
-) -> Result<Option<crate::compatibility::startup::Plan>, Error> {
+) -> Result<Option<crate::startup::selection::Plan>, Error> {
     selection_with_policy(
         context,
-        crate::compatibility::startup::StartupPolicy::NeutralSelection,
+        crate::startup::selection::StartupPolicy::NeutralSelection,
     )
 }
 /// Select a startup-word action with explicit policy provenance. This function
@@ -287,15 +287,15 @@ pub fn selection(
 /// evidence. Actual read/change/verify and rollback remain transaction-owned.
 pub fn selection_with_policy(
     context: &Context<'_>,
-    policy: crate::compatibility::startup::StartupPolicy,
-) -> Result<Option<crate::compatibility::startup::Plan>, Error> {
+    policy: crate::startup::selection::StartupPolicy,
+) -> Result<Option<crate::startup::selection::Plan>, Error> {
     if context.sat.is_none() {
         return Ok(None);
     }
     if !native_h8(context) || resident_reader_missing(context.firmware) {
         return Err(Error::UnresolvedIdentity);
     }
-    crate::compatibility::startup::plan_with_policy(context.firmware.normal, policy)
+    crate::startup::selection::plan_with_policy(context.firmware.normal, policy)
         .map(Some)
         .map_err(|_| Error::UnresolvedIdentity)
 }
@@ -460,11 +460,11 @@ mod tests {
         assert_eq!(plan.setting().value, 0xffff);
         assert!(matches!(
             plan.evidence(),
-            crate::compatibility::startup::Evidence::NeutralSelection { .. }
+            crate::startup::selection::Evidence::NeutralSelection { .. }
         ));
         assert!(selection_with_policy(
             &context,
-            crate::compatibility::startup::StartupPolicy::NativeEvidenceOnly
+            crate::startup::selection::StartupPolicy::NativeEvidenceOnly
         )
         .is_err());
         assert!(FILTER.parameters(&context).unwrap().is_empty());

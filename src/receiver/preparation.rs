@@ -228,7 +228,7 @@ impl Receiver {
     #[cfg(test)]
     fn startup_selection_for(
         context: &crate::filters::Context<'_>,
-    ) -> Result<Option<crate::compatibility::startup::Plan>, PreparationError> {
+    ) -> Result<Option<crate::startup::selection::Plan>, PreparationError> {
         crate::filters::startup::selection(context).map_err(|_| {
             match crate::filters::startup::inspect(context).finding {
                 crate::filters::Finding::Conflicting(_) => PreparationError::AmbiguousStartup,
@@ -241,7 +241,7 @@ impl Receiver {
     fn startup_plan_for(
         &self,
         firmware: crate::compatibility::Firmware<'_>,
-    ) -> Result<Option<crate::compatibility::startup::Plan>, PreparationError> {
+    ) -> Result<Option<crate::startup::selection::Plan>, PreparationError> {
         Self::startup_selection_for(&crate::filters::Context::new(firmware))
     }
 

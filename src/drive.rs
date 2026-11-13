@@ -61,6 +61,9 @@ pub use crate::logging::{
     discover as discover_logging, set_logging_persistent, set_logging_ram, LoggingLayout,
 };
 
+/// A filter-owned read-only prerequisite that was not met.
+#[cfg(feature = "envelope")]
+pub use crate::filters::prerequisites::CheckError as PrerequisiteError;
 /// Execution of a prepared update ([`crate::prepare`]) on the live drive.
 #[cfg(feature = "envelope")]
 pub use crate::receiver::{

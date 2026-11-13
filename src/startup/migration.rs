@@ -23,7 +23,7 @@ pub enum Rollback<E> {
 /// Stage-aware failure, retaining the original word only in this attempt.
 ///
 /// ```compile_fail,E0004
-/// use pioneer_optical::startup::migration::Error;
+/// use pioneer_optical::drive::StartupError as Error;
 /// fn f(e: Error<(), ()>) -> u8 {
 ///     match e {
 ///         Error::Preflight(_) => 0,

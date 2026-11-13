@@ -10,7 +10,7 @@ use crate::{DriveClass, Identity};
 /// Deliberate host policy for a prepared operation.
 ///
 /// ```compile_fail,E0004
-/// use pioneer_optical::receiver::ExecutionMode;
+/// use pioneer_optical::drive::ExecutionMode;
 /// fn f(mode: ExecutionMode) -> u8 {
 ///     match mode {
 ///         ExecutionMode::Flash => 0,
@@ -356,7 +356,7 @@ pub struct PlanError {
 /// Which plan-level rule a [`PlanError`] refuses, for host guidance.
 ///
 /// ```compile_fail,E0004
-/// use pioneer_optical::receiver::PlanReason;
+/// use pioneer_optical::drive::PlanReason;
 /// fn guidance(reason: PlanReason) -> &'static str {
 ///     match reason {
 ///         PlanReason::Empty => "empty",

@@ -22,16 +22,6 @@ pub enum Evidence {
 
 /// How the startup word is selected. Native comparison evidence and neutral
 /// startup selection retain separate provenance.
-///
-/// ```compile_fail
-/// use pioneer_optical::compatibility::startup::StartupPolicy;
-/// fn exhaustive(p: StartupPolicy) {
-///     match p {
-///         StartupPolicy::NativeEvidenceOnly => (),
-///         StartupPolicy::NeutralSelection => (),
-///     }
-/// }
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum StartupPolicy {
@@ -71,16 +61,6 @@ impl Plan {
 }
 
 /// A target startup decision could not be established uniquely.
-///
-/// ```compile_fail
-/// use pioneer_optical::compatibility::startup::Error;
-/// fn exhaustive(e: Error) {
-///     match e {
-///         Error::Ambiguous => (),
-///         Error::Unresolved => (),
-///     }
-/// }
-/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Error {

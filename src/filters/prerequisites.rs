@@ -66,7 +66,7 @@ fn collect_with<'a>(
 /// Why a read-only prerequisite was not met.
 ///
 /// ```compile_fail,E0004
-/// use pioneer_optical::filters::prerequisites::CheckError;
+/// use pioneer_optical::drive::PrerequisiteError as CheckError;
 /// fn f(e: CheckError<()>) -> u8 {
 ///     match e {
 ///         CheckError::Read(_) => 0,

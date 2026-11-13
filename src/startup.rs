@@ -26,6 +26,8 @@ pub mod checks;
 pub mod unbound;
 /// Conditional 0x009F gates: a primary word or a predicate-gated alternative.
 pub(crate) mod h8_conditional;
+/// Target startup selection and the evidence retained with that decision.
+pub mod selection;
 
 /// The startup word of a unit that shipped with gate-less firmware. Writing it
 /// is a reset, never a boot requirement: no gate reads the word.

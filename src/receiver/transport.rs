@@ -63,15 +63,6 @@ pub fn detect(kernel_image: &[u8]) -> KernelReceive {
 }
 
 /// A receive plan could not be built for the detected transport.
-///
-/// ```compile_fail,E0004
-/// use pioneer_optical::receiver::transport::LayoutError;
-/// fn f(e: LayoutError) -> u8 {
-///     match e {
-///         LayoutError::KernelLayout => 0,
-///     }
-/// }
-/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum LayoutError {

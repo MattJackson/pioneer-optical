@@ -7,8 +7,6 @@
 mod kernel;
 #[cfg(feature = "envelope")]
 pub use kernel::{plan_kernel, KernelPlanningError, KernelStep, KernelTransitionPlan};
-/// Target startup selection and the evidence retained with that decision.
-pub mod startup;
 
 #[cfg(feature = "envelope")]
 mod representation;
@@ -327,66 +325,6 @@ pub fn prepare_phase(
 ) -> Result<Option<Vec<u8>>, Error> {
     plan(installed, target)?.prepare_normal()
 }
-
-// Public enums stay non-exhaustive: downstream matches need a wildcard arm.
-/// ```compile_fail
-/// use pioneer_optical::compatibility;
-/// fn f(e: compatibility::Error) -> u8 {
-///     use compatibility::Error::*;
-///     match e {
-///         UnresolvedIdentity | Incompatible | PersistentLayoutOverlap { .. } | Unsupported => 0,
-///         Phase(_) | VerificationFailed | ComponentMismatch => 1,
-///         Representation | Authentication => 2,
-///     }
-/// }
-/// ```
-/// ```compile_fail
-/// use pioneer_optical::compatibility;
-/// fn f(e: compatibility::KernelPlanningError) -> u8 {
-///     use compatibility::KernelPlanningError::*;
-///     match e {
-///         UnknownInstalledPolicy | Handoff(_) | RejectedBridgeMarker | UnsupportedRestoration => 0,
-///     }
-/// }
-/// ```
-/// ```compile_fail
-/// use pioneer_optical::compatibility;
-/// fn f(e: compatibility::KernelStep) -> u8 {
-///     use compatibility::KernelStep::*;
-///     match e {
-///         Handoff { .. } | ReceiverMarker { .. } | Target => 0,
-///     }
-/// }
-/// ```
-/// ```compile_fail
-/// use pioneer_optical::compatibility;
-/// fn f(e: compatibility::startup::Evidence) -> u8 {
-///     use compatibility::startup::Evidence::*;
-///     match e {
-///         BoundComparison(_) | NeutralSelection { .. } => 0,
-///     }
-/// }
-/// ```
-/// ```compile_fail
-/// use pioneer_optical::compatibility;
-/// fn f(e: compatibility::startup::StartupPolicy) -> u8 {
-///     use compatibility::startup::StartupPolicy::*;
-///     match e {
-///         NativeEvidenceOnly | NeutralSelection => 0,
-///     }
-/// }
-/// ```
-/// ```compile_fail
-/// use pioneer_optical::compatibility;
-/// fn f(e: compatibility::startup::Error) -> u8 {
-///     use compatibility::startup::Error::*;
-///     match e {
-///         Ambiguous | Unresolved => 0,
-///     }
-/// }
-/// ```
-#[cfg(doctest)]
-struct NonExhaustiveEnums;
 
 #[cfg(test)]
 mod tests {

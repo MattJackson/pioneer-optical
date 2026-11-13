@@ -232,7 +232,7 @@ mod tests {
             include_str!("settings/update.rs"),
             include_str!("compatibility.rs"),
             include_str!("compatibility/kernel.rs"),
-            include_str!("compatibility/startup.rs"),
+            include_str!("startup/selection.rs"),
             include_str!("analysis/mod.rs"),
         ] {
             for code in source.split('"').filter(|s| {

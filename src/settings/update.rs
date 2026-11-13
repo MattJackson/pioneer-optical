@@ -59,19 +59,19 @@ pub struct Plan {
     entries: Vec<Setting>,
     filter_actions: Vec<crate::filters::ParameterAction>,
     correction: Option<crate::compatibility::CorrectionRequirements>,
-    startup: Option<crate::compatibility::startup::Plan>,
+    startup: Option<crate::startup::selection::Plan>,
     startup_checks_plan: Option<crate::startup::checks::Plan>,
 }
 impl Plan {
     #[cfg(test)]
     pub(crate) fn target(startup: Option<crate::startup::Setting>, restore: bool) -> Self {
         Self::from_startup(
-            startup.map(crate::compatibility::startup::Plan::fixture),
+            startup.map(crate::startup::selection::Plan::fixture),
             restore,
         )
     }
     pub(crate) fn from_startup(
-        startup: Option<crate::compatibility::startup::Plan>,
+        startup: Option<crate::startup::selection::Plan>,
         restore: bool,
     ) -> Self {
         let mut entries = Vec::new();
@@ -163,7 +163,7 @@ impl Plan {
         self.startup_checks_plan
     }
     /// Startup selection and the evidence used by the compatibility planner.
-    pub fn startup_selection(&self) -> Option<&crate::compatibility::startup::Plan> {
+    pub fn startup_selection(&self) -> Option<&crate::startup::selection::Plan> {
         self.startup.as_ref()
     }
     pub(crate) fn with_correction(

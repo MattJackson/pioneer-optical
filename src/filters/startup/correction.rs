@@ -1,7 +1,8 @@
-//! Bound unchanged startup comparisons. An equal fixed gate needs a read-only
-//! live-word prerequisite; a differing fixed gate keeps the image and sets the
-//! target's own word on the drive (`word_writes`) in the first stage's settings
-//! transaction; a differing conditional gate refuses.
+//! Bound unchanged startup comparisons. The target image is never rewritten:
+//! unless the installed firmware's own fixed gate already proves the drive
+//! holds the target's word, the target's word is set on the drive
+//! (`word_writes`) in the first stage's settings transaction. The live word is
+//! read only to snapshot it for restore; it is never a prerequisite.
 use super::{h8_conditional, ID};
 use crate::{
     compatibility::Error,
@@ -142,8 +143,15 @@ impl Gate {
     }
 }
 
-/// Target with a proven-absent fixed startup gate: no word prerequisite and no
-/// edit. An independently bound preservation certificate is still enforced.
+/// The value of a startup word no gate has set: the state of a unit that
+/// shipped with gate-less firmware.
+pub(super) const UNSET: u16 = 0xffff;
+
+/// Target with a proven-absent fixed startup gate: no image edit. An
+/// independently bound preservation certificate is still enforced. Leaving a
+/// gated installed firmware resets the word the installed gate relied on to
+/// [`UNSET`], so the drive ends as a unit that shipped with the target; from a
+/// gate-less installed firmware the word is left alone.
 pub(super) fn plan_absent(
     transition: &Transition<'_, '_>,
     finding: &Finding,
@@ -151,8 +159,97 @@ pub(super) fn plan_absent(
     if transition.installed.sat.is_none() {
         return Err(Error::UnresolvedIdentity);
     }
-    Ok(PreservationOperation::bind(transition, finding)?
-        .map(|op| Box::new(op) as Box<dyn Operation>))
+    let preservation = PreservationOperation::bind(transition, finding)?
+        .map(|op| Box::new(op) as Box<dyn Operation>);
+    let Observation::Known(installed) = startup::bound_selection(transition.installed.firmware.normal)
+    else {
+        return Ok(preservation);
+    };
+    let target = transition.target.firmware;
+    Ok(Some(Box::new(UnsetOperation {
+        inner: preservation,
+        word: Word {
+            parameter: installed.requirement.parameter,
+            value: UNSET,
+        },
+        hardware: target.hardware.into(),
+        normal: target.normal.to_vec(),
+        kernel: target.kernel.map(<[u8]>::to_vec),
+        finding: finding.clone(),
+    })))
+}
+
+/// Resets the installed gate's word for a proven gate-less target; image
+/// effects and checks are those of the optional preservation certificate.
+#[derive(Debug)]
+struct UnsetOperation {
+    inner: Option<Box<dyn Operation>>,
+    word: Word,
+    hardware: String,
+    normal: Vec<u8>,
+    kernel: Option<Vec<u8>>,
+    finding: Finding,
+}
+impl Operation for UnsetOperation {
+    fn filter_id(&self) -> &'static str {
+        ID
+    }
+    fn description(&self) -> Option<crate::compatibility::Correction> {
+        Some(unchanged(&self.finding))
+    }
+    fn word_writes(&self) -> Vec<Word> {
+        vec![self.word]
+    }
+    fn integrity(&self) -> Option<Integrity> {
+        self.inner.as_ref().and_then(|op| op.integrity())
+    }
+    fn prepare(&self, context: &Preparation<'_>) -> Result<Option<Vec<u8>>, Error> {
+        bound_target(context, &self.hardware, &self.normal, self.kernel.as_deref())?;
+        match &self.inner {
+            Some(op) => op.prepare(context),
+            None => Ok(None),
+        }
+    }
+    fn verify(&self, context: &Preparation<'_>, normal: &[u8]) -> Result<(), Error> {
+        if self.word.value != UNSET {
+            return Err(Error::Unsupported);
+        }
+        bound_target(context, &self.hardware, &self.normal, self.kernel.as_deref())?;
+        match &self.inner {
+            Some(op) => op.verify(context, normal),
+            None => Ok(()),
+        }
+    }
+}
+
+/// The operation was planned for exactly this target pair.
+fn bound_target(
+    context: &Preparation<'_>,
+    hardware: &str,
+    normal: &[u8],
+    kernel: Option<&[u8]>,
+) -> Result<(), Error> {
+    if context.target.hardware != hardware
+        || context.target.normal != normal
+        || context.target.kernel != kernel
+    {
+        return Err(Error::ComponentMismatch);
+    }
+    #[cfg(feature = "envelope")]
+    {
+        if context.normal.is_some_and(|image| {
+            image.image != normal
+                || image.info().kind != crate::ComponentKind::Normal
+                || image.info().hardware_version != hardware
+        }) || context.kernel.is_some_and(|image| {
+            Some(image.image.as_slice()) != kernel
+                || image.info().kind != crate::ComponentKind::Kernel
+                || image.info().hardware_version != hardware
+        }) {
+            return Err(Error::ComponentMismatch);
+        }
+    }
+    Ok(())
 }
 
 /// `installed_absent` is the installed side's bounded gate-absent proof. With
@@ -184,20 +281,25 @@ pub(super) fn plan(
         }
     }
     let gate = gate?;
-    let installed_word = match startup::bound_selection(installed.normal) {
+    let required = gate.bound.requirement.required;
+    // Whether the drive already holds `required`: only an installed FIXED gate
+    // proves it (the drive boots that firmware, so its word passes that gate).
+    // An installed conditional gate may be satisfied by its alternative word.
+    let proven_equal = match startup::bound_selection(installed.normal) {
         Observation::Known(donor) => {
             if donor.layout != gate.bound.layout {
                 return Err(Error::Incompatible);
             }
-            donor.requirement.required
+            donor.requirement.required == required
+                && Gate::bind(installed.normal).is_ok_and(|g| g.conditional.is_none())
         }
         Observation::Conflicting => return Err(Error::UnresolvedIdentity),
         Observation::Unresolved(_) => {
-            // A live read can establish the target's accepted branch without
-            // guessing what the installed image requires. Keep the entire
-            // target gate unchanged and require its already-stored value.
-            // Missing installed evidence stays unresolved; a proven-absent
-            // installed gate makes the same miss a definite refusal.
+            // The installed requirement is unknown, so the drive's word is not
+            // proven: set the target's own word. The installed Normal must still
+            // read the word through the same layout, or the write would not land
+            // where the target reads it. Missing installed evidence stays
+            // unresolved; a proven-absent installed gate makes it a refusal.
             let refusal = if installed_absent {
                 Error::Incompatible
             } else {
@@ -210,20 +312,19 @@ pub(super) fn plan(
             if reader.component != H8ReaderComponent::Normal || reader.layout != gate.bound.layout {
                 return Err(refusal);
             }
-            gate.bound.requirement.required
+            false
         }
     };
-    // A differing installed comparison is corrected on the drive, not in the
-    // image: the target gate stays unchanged and the startup word is set to the
-    // target's own primary value, the state of a unit that shipped with the
-    // target firmware, whose own writer keeps that value. This holds for a
-    // conditional gate too: its primary word is accepted unconditionally (the
-    // predicate only gates the alternative), and the CMP operand is never
-    // rewritten here, so the conditional predicate is preserved intact.
-    // `admits_unchanged` still refuses the one unsafe shape (a conditional gate
-    // whose primary word is the equal-branch alternative).
-    let required = gate.bound.requirement.required;
-    let sets_word = installed_word != required;
+    // An unproven word is corrected on the drive, not in the image: the target
+    // gate stays unchanged and the startup word is set to the target's own
+    // primary value, the state of a unit that shipped with the target firmware,
+    // whose own writer keeps that value. This holds for a conditional gate too:
+    // its primary word is accepted unconditionally (the predicate only gates
+    // the alternative), and the CMP operand is never rewritten here, so the
+    // conditional predicate is preserved intact. `admits_unchanged` still
+    // refuses the one unsafe shape (a conditional gate whose primary word is
+    // the equal-branch alternative).
+    let sets_word = !proven_equal;
     gate.admits_unchanged()?;
     Ok(Some(Box::new(StartupOperation {
         hardware: target.hardware.into(),
@@ -294,27 +395,7 @@ impl PreservationOperation {
         }))
     }
     fn bound(&self, context: &Preparation<'_>) -> Result<(), Error> {
-        if context.target.hardware != self.hardware
-            || context.target.normal != self.normal
-            || context.target.kernel != self.kernel.as_deref()
-        {
-            return Err(Error::ComponentMismatch);
-        }
-        #[cfg(feature = "envelope")]
-        {
-            if context.normal.is_some_and(|image| {
-                image.image != self.normal
-                    || image.info().kind != crate::ComponentKind::Normal
-                    || image.info().hardware_version != self.hardware
-            }) || context.kernel.is_some_and(|image| {
-                Some(image.image.as_slice()) != self.kernel.as_deref()
-                    || image.info().kind != crate::ComponentKind::Kernel
-                    || image.info().hardware_version != self.hardware
-            }) {
-                return Err(Error::ComponentMismatch);
-            }
-        }
-        Ok(())
+        bound_target(context, &self.hardware, &self.normal, self.kernel.as_deref())
     }
 }
 impl Operation for PreservationOperation {
@@ -349,7 +430,8 @@ struct StartupOperation {
     kernel: Option<Vec<u8>>,
     gate: Gate,
     required: u16,
-    /// The drive's word differs and is set to `required` before transfer.
+    /// The drive's word is not proven equal and is set to `required` before
+    /// transfer (the old value is snapshotted for restore).
     sets_word: bool,
     finding: Finding,
 }
@@ -442,12 +524,6 @@ impl Operation for StartupOperation {
     fn filter_id(&self) -> &'static str {
         ID
     }
-    fn required_words(&self) -> Vec<Word> {
-        if self.sets_word {
-            return Vec::new();
-        }
-        vec![self.word()]
-    }
     fn description(&self) -> Option<crate::compatibility::Correction> {
         Some(unchanged(&self.finding))
     }
@@ -537,19 +613,15 @@ mod tests {
     }
 
     #[test]
-    fn filter_preserves_unchanged_comparison_and_requires_live_word_read_only() {
+    fn filter_preserves_unchanged_comparison_and_needs_no_word_when_proven() {
         let mut installed = fixture(0xfe24, 0);
         installed[0x7000] ^= 1;
         let target = fixture(0xfe24, 0);
         let operation = operation(&installed, &target).unwrap().unwrap();
         assert_eq!(operation.filter_id(), "startup-prerequisite");
-        assert_eq!(
-            operation.required_words(),
-            [Word {
-                parameter: 0x9f,
-                value: 0xfe24
-            }]
-        );
+        // The installed fixed gate proves the drive's word: no read, no write.
+        assert!(operation.required_words().is_empty());
+        assert!(operation.word_writes().is_empty());
         assert!(super::super::FILTER
             .parameters(&context(&target))
             .unwrap()
@@ -573,16 +645,11 @@ mod tests {
     }
 
     #[test]
-    fn equal_gate_retains_read_only_requirement_without_an_image_effect() {
+    fn equal_fixed_gate_needs_no_word_and_no_image_effect() {
         let normal = fixture(0xfe24, 0);
         let operation = operation(&normal, &normal).unwrap().unwrap();
-        assert_eq!(
-            operation.required_words(),
-            [Word {
-                parameter: 0x9f,
-                value: 0xfe24
-            }]
-        );
+        assert!(operation.required_words().is_empty());
+        assert!(operation.word_writes().is_empty());
         assert!(operation.prepare(&preparation(&normal)).unwrap().is_none());
     }
 
@@ -674,14 +741,22 @@ mod tests {
         let normal = fixture(0xfe24, 0);
         let mut no_gate = normal.clone();
         no_gate[0x80..0x94].fill(0xff);
+        // An unproven installed word is set, never required: the live word is
+        // read only to snapshot it for restore.
         let condition = operation(&no_gate, &normal).unwrap().unwrap();
+        assert!(condition.required_words().is_empty());
         assert_eq!(
-            condition.required_words(),
+            condition.word_writes(),
             [Word {
                 parameter: 0x9f,
                 value: 0xfe24
             }]
         );
+        // An installed fixed gate with the same word proves the drive's word:
+        // nothing is read or written.
+        let proven = operation(&normal, &normal).unwrap().unwrap();
+        assert!(proven.required_words().is_empty());
+        assert!(proven.word_writes().is_empty());
         assert!(condition.prepare(&preparation(&normal)).unwrap().is_none());
         assert!(operation(&normal, &no_gate).is_err());
         assert!(operation(&no_gate, &no_gate).unwrap().is_none());
@@ -753,13 +828,8 @@ mod tests {
             ]);
             target[0x80..0x80 + code.len()].copy_from_slice(&code);
             let op = operation(&installed, &target).unwrap().unwrap();
-            assert_eq!(
-                op.required_words(),
-                [Word {
-                    parameter: 0x9f,
-                    value: 0xfe24
-                }]
-            );
+            assert!(op.required_words().is_empty());
+            assert!(op.word_writes().is_empty());
             assert!(op.prepare(&preparation(&target)).unwrap().is_none());
             op.verify(&preparation(&target), &target).unwrap();
         }

@@ -534,13 +534,9 @@ mod tests {
         assert!(unchanged.corrections().iter().all(|effect| matches!(
             effect, Correction::Registered { filter: "startup-prerequisite", from, to } if from == to
         )));
-        assert_eq!(
-            unchanged.required_words().unwrap()[0].word,
-            crate::filters::prerequisites::Word {
-                parameter: 0x9f,
-                value: 0xfe24
-            }
-        );
+        // The installed fixed gate proves the drive's word: none read or set.
+        assert!(unchanged.required_words().unwrap().is_empty());
+        assert!(unchanged.word_writes().unwrap().is_empty());
         assert_eq!(unchanged.prepare_normal(), Ok(None));
         let planned = plan(context(&direct), context(&swapped)).unwrap();
         assert!(planned.corrections().contains(&Correction::Phase {

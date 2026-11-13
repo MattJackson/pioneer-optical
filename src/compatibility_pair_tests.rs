@@ -211,7 +211,8 @@ fn public_native_normal_pair_and_prerequisite_only_paths_are_unchanged() {
     let swapped = phase::correct_normal(&direct, phase::Assignment::Swapped).unwrap();
     let unchanged = plan(firmware(&direct, None), firmware(&direct, None)).unwrap();
     assert_eq!(unchanged.prepare_decoded_components(), Ok(None));
-    assert!(!unchanged.required_words().unwrap().is_empty());
+    assert!(unchanged.required_words().unwrap().is_empty());
+    assert!(unchanged.word_writes().unwrap().is_empty());
     let plan = plan(firmware(&direct, None), firmware(&swapped, None)).unwrap();
     assert_eq!(
         plan.prepare_decoded_components(),

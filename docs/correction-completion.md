@@ -59,12 +59,21 @@ V850 retain their architecture-specific output/checksum requirements.
 
 The startup filter implements the same `Operation` contract as phase. A bound
 H8 comparison is never rewritten; verification rebinds it unchanged, with its
-complete conditional predicate. An equal installed comparison declares the
-live word as a read-only prerequisite. A differing installed comparison against
-a fixed target gate declares a word write instead: the receiver sets the
-target's own word in the first stage's settings transaction, in normal mode,
-before the first transfer, with read, verify and rollback. A differing value
-against a conditional target gate refuses.
+complete conditional predicate. The startup word is never a read-only
+prerequisite. When the installed firmware's own fixed comparison requires the
+target's value, the drive provably holds it and nothing is read or written.
+Otherwise (a differing installed comparison, an installed conditional gate, or
+an unresolved installed comparison read through the same layout) the operation
+declares a word write: the receiver sets the target's own primary word in the
+first stage's settings transaction, in normal mode, before the first transfer.
+The live word is read only to snapshot it; it is verified after the write and
+restored if the update fails before firmware is written. A conditional target
+gate is set to its primary word; its predicate is never rewritten.
+
+A target whose gate is proven absent (`GATE_ABSENT`) never reads the word. From
+a gated installed firmware the word is reset to `0xFFFF`, the state of a unit
+that shipped with gate-less firmware; from a gate-less installed firmware it is
+left alone.
 
 Exact component preservation needs no comparison rewrite. For a missing fixed
 comparison, a startup-owned verify-only operation can certify preservation of

@@ -47,7 +47,7 @@ static RULES: super::Rules = super::Rules {
     description: "Compares a bound startup gate or a separately proved preservation contract: unchanged H8 word 0x009F comparisons, ATA word 0x00D9, V850 Kernel identity, or SCSI checksum/header. Fixed and conditional predicates differ. No recognised comparison does not mean no requirement; reader, caller, cache, startup-path and automatic OEM writer-lifecycle evidence remain separate. Only the bounded H8 and M32C startup-gate-absent proofs establish that a target has no fixed 0x009F or native 0x00D9 gate.",
     role: super::Role::Operational,
     correctability: super::Correctability::Correctable,
-    correction: "H8 startup comparison operands remain unchanged, with a read-only live-word prerequisite for equal known comparisons or a supported unresolved-source target-word fallback. A differing fixed comparison keeps the target firmware unchanged and sets the drive's startup word to the target's own value in the startup settings transaction, before the first transfer and with the drive in normal mode; the original word is restored if the update fails before firmware is written. A differing comparison against a conditional target gate refuses. Separately bound non-comparison preservation and other platforms retain their independent native prerequisites. Only an unresolved or conflicting assessment, or a missing paired Kernel, leaves a pair unresolved; every other refusal is final and its reason is stated below.",
+    correction: "H8 startup comparison operands remain unchanged. Unless the installed firmware's own fixed comparison already proves the drive holds the target's word, the drive's startup word is set to the target's own value in the startup settings transaction, before the first transfer and with the drive in normal mode; the live word is read only to snapshot it, and the original word is restored if the update fails before firmware is written. A conditional target gate is set to its primary word; its predicate is never rewritten. Separately bound non-comparison preservation and other platforms retain their independent native prerequisites. Only an unresolved or conflicting assessment, or a missing paired Kernel, leaves a pair unresolved; every other refusal is final and its reason is stated below.",
     policies: &[
         super::Policy {
             domains: &[super::identity::Domain::Sat1, super::identity::Domain::H8Sat],
@@ -550,7 +550,7 @@ mod tests {
     }
 
     #[test]
-    fn gate_absent_target_needs_no_word_whatever_the_installed_side() {
+    fn gate_absent_target_resets_a_gated_word_and_leaves_gateless_alone() {
         use crate::startup::unbound::{tests, GATE_ABSENT};
         let absent = tests::empty_slot_normal();
         let kernel = tests::kernel();
@@ -564,7 +564,20 @@ mod tests {
         ));
         let gated = gated();
         let unresolved = alloc::vec![0xffu8; 0x4000];
-        for installed in [&gated, &unresolved, &absent] {
+        // Gate -> no gate: the word the installed gate relied on is unset.
+        let reset = plan_between(&sat(&gated, Some(&kernel)), &target)
+            .unwrap()
+            .unwrap();
+        assert!(reset.required_words().is_empty());
+        assert_eq!(
+            reset.word_writes(),
+            [super::super::prerequisites::Word {
+                parameter: 0x9f,
+                value: correction::UNSET
+            }]
+        );
+        // No gate -> no gate (or an unknown installed side): left alone.
+        for installed in [&unresolved, &absent] {
             let installed = sat(installed, Some(&kernel));
             assert!(matches!(plan_between(&installed, &target), Ok(None)));
         }
@@ -593,7 +606,7 @@ mod tests {
         ));
         // Same Normal-owned layout, unresolved (no Kernel held) vs gate-absent.
         let words = |installed: &Context<'_>| {
-            plan_between(installed, &target).map(|op| op.map(|op| op.required_words()))
+            plan_between(installed, &target).map(|op| op.map(|op| op.word_writes()))
         };
         let from_absent = words(&sat(&absent, Some(&kernel)));
         let from_unresolved = words(&sat(&absent, None));
@@ -657,11 +670,11 @@ mod tests {
             plan_between(&sat(&known, Some(&kernel)), &target),
             Err(Error::Incompatible)
         ));
-        // Equal layouts keep the read-only target-word fallback unchanged.
+        // Equal layouts set the target word (no read-only fallback).
         let same = gated_on_layout(0);
         let same = sat(&same, Some(&kernel));
         assert!(
-            matches!(plan_between(&installed, &same), Ok(Some(op)) if !op.required_words().is_empty())
+            matches!(plan_between(&installed, &same), Ok(Some(op)) if !op.word_writes().is_empty())
         );
     }
 

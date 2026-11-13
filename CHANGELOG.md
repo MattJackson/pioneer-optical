@@ -1,12 +1,68 @@
 # Changelog
 
+## [3.0.0] - unreleased
+
+The public API is five modules. Behaviour is unchanged except the startup
+word (below). The corpus oracles (`oracle/`) pin the codec, crossflash
+verdicts and prepared correction bytes over the real firmware corpus.
+
+- **Breaking: five public modules.** `envelope` (codec), `classify` (pair
+  verdict vocabulary), `prepare` (receiver and prepared plans), `cdb` (command
+  bytes) and `drive` (sequences over a caller transport). The crate root keeps
+  only shared vocabulary: `Identity`, `Role`, `ComponentKind`, `DriveClass`,
+  `CodedError`, `ProductIdentity`, `IssueKind`, `Phase`, `Component` and
+  `Progress`. Every other module is crate-private. The non-default `internals`
+  feature exposes them to this crate's corpus tests and research examples
+  only; applications must not enable it.
+
+  | 2.x path | 3.0 path |
+  | --- | --- |
+  | `receiver::{Receiver, PreparedUpdate, PreparedNormal, PreparedStage, BridgeKind, PreparationError}` | `prepare::…` |
+  | `receiver::{ExecutionMode, ExecutionRuntime, ExecutionError, FlashError, FlashOutcome, FlashRuntime, FlashStage, FlashTransport, PlanError, PlanReason}` | `drive::…` |
+  | `receiver::Error` | `classify::Error` |
+  | `image::{Family, MATRIX_FAMILY_SCHEME, kernel_marker_policy, KernelMarkerPolicy, KernelHandoffError}`, `image::matrix::SatPlatform` | `classify::…` |
+  | `filters::identity::{candidate_key_diff, KeyDiff, FieldDiff}`, `filters::prerequisites::{Word, OwnedWord}` | `classify::…` |
+  | `settings::update::{Plan, Effect, Key, Setting}`, `startup::Setting` | `prepare::{SettingsPlan, SettingEffect, SettingKey, SettingEntry, StartupSetting}` |
+  | `startup::migration::{Error, Rollback}` | `drive::{StartupError, Rollback}` |
+  | `device::*`, `device::info::*`, `device::settings::*` | `drive::*`, `drive::info::*`, `drive::settings::*` |
+  | `diagnostic::*`, `production::*`, `rpc::*` | `drive::diagnostic::*`, `drive::production::*`, `drive::region::*` |
+  | `protocol::{Response, Evidence, State}` | `drive::{Response, Evidence, ProtocolState}` |
+  | `logging::{discover, set_logging_ram, set_logging_persistent, LoggingLayout}` | `drive::{discover_logging, set_logging_ram, set_logging_persistent, LoggingLayout}` |
+  | `ident::{parse_banner, Banner, BANNER_MAGIC, embedded_envelope_id, IdentError}`, `image::{KERNEL_BASE, KERNEL_LEN, Abi}` | `envelope::…` |
+  | `analysis::*` | `envelope::analysis::*` |
+  | `operation::{IssueKind, Phase, Component, Progress}` | crate root |
+  | `dvr`, `sense` | `cdb::dvr`, `cdb::sense` |
+
+- **Startup word 0x9F is set, never required.** The live word is read only to
+  snapshot it for same-session restore. Gate to gate: the target's primary
+  word is written unless the installed firmware's own fixed gate already
+  requires it (then nothing is read or written). An installed conditional gate,
+  or an unresolved installed comparison read through the same layout, is set.
+  Gate to a proven gate-less target (`GATE_ABSENT`): the word is reset to
+  `0xFFFF`. No gate to no gate: left alone. Recovery never writes the word; it
+  skips a reset and refuses a required write. The startup operation no longer
+  declares read-only prerequisites, so those routes are `allowed`, not
+  `conditional`.
+- Add `classify::candidate_key_diff` (`KeyDiff`, `FieldDiff`): a field-by-field
+  explanation of why two firmwares land in different families.
+- Add `prepare::{normal_for_receiver, sign_for_receiver, is_unsigned,
+  NormalTransferError}`: keep, sign or re-encode a Normal transfer for the
+  Kernel that receives it (moved from the flasher).
+- Add `envelope::{checksum, checksum_ok}`: one BE32 whole-image checksum
+  replaces the inline copies.
+- Share the receiver's installed envelopes (`Arc`), so cloning a `Receiver`
+  per crossflash pair no longer copies about 1.9 MB. The catalogue scan drops
+  from about 1 s/pair to about 2.5 ms/pair, with identical verdicts.
+- Remove the `firmware` module and the `firmware-info` feature (H8 callback,
+  ABI and memory-layout inspection); no product path used them.
+
+## [2.0.0] - 2026-11-12
+
 - Align the public API with mediatek-optical (breaking; behaviour and refusals are unchanged). `receiver::PlanErrorKind` is now `receiver::PlanReason`; `PlanError::kind()` is now `PlanError::reason()` (returning `PlanReason`) and the English accessor `PlanError::reason()` is now `PlanError::detail()`, so `kind()` on a `PlanError` is the `CodedError` `IssueKind` as on every other error. `Receiver::detect` is now `Receiver::from_firmware` and `Receiver::detect_with_kernel` is now `Receiver::from_firmware_with_kernel` (file-derived, no device I/O); the old names remain as `#[deprecated]` forwarders. `receiver::transport::PlanError` is now `receiver::transport::LayoutError` (code `pioneer.transport.kernel_layout` unchanged), leaving `receiver::PlanError` as the only plan error.
 - Rename the preparation error-code group from `pioneer.preparation.*` to `pioneer.prepare.*` (for example `pioneer.prepare.target`, `pioneer.prepare.kernel_handoff`), matching the verb groups `execute`, `flash` and `prepare` and mediatek-optical's `mediatek.prepare.*`. This covers `PreparationError`, `startup::checks::Error::AmbiguousWord` and the `compatibility::KernelPlanningError` codes that share the group. Leaves and `IssueKind` categories are unchanged; hosts routing on the old strings must update them.
 - Mark public enums that may grow `#[non_exhaustive]`: the error enums `filters::prerequisites::CheckError`, `startup::migration::Error` (and its `Rollback`), `startup::checks::Error`, `startup::bank::Error`, `receiver::transport::LayoutError`, `image::KernelHandoffError`, `settings::CodecError`, `filters::phase::native::CorrectionError` and `filters::phase::native::{encoders, calibration, sat1, sources}::Error`, and `receiver::ExecutionMode`, `receiver::BridgeKind` and `receiver::transport::KernelReceive`. Exhaustive matches outside the crate need a wildcard arm; compile-fail doctests pin the execution-path ones.
 - Count a change to the packaged `.github/scripts/check-features.py` as a package change in CI change detection (`ci.yml` plan job and `verify-source.py`), as mediatek-optical does, and keep scanning older runs when a force-pushed run's commit can no longer be fetched.
 - Update `docs/sibling-api.md` to the shared sibling table (identical in both repositories): plan preflight, shared `operation`/`ProductIdentity` types, family gate, `read_memory` return conventions, live receiver binding and the error-code rule.
-
-## [2.0.0] - 2026-11-12
 
 - Introduce typed v7 family identity through one shared filter registry for every platform. Each filter owns recognition, comparison, correction and verification; new registrations automatically feed identity, compatibility, reporting and read-only correction prerequisites. Required unresolved evidence produces no identity.
 - Correct native direct/swapped phase output assignments while preserving the incoming firmware's DSP, waveform tables, calibration and motion behavior. SAT1 complete output grammars now join paired H8 output programs; architecture and output interface must match. Bind edits and verification to exact components and original codec authority. Cross-interface and unavailable receiver-context coverage remain incomplete; no universal conversion claim is made.

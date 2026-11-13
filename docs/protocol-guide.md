@@ -5,14 +5,14 @@ Detailed protocol surfaces, firmware evidence and scope for developers using
 
 ## Live device information and settings
 
-The `drive` feature also exposes `device::Device`, an allocation-free facade over
+The `drive` feature also exposes `drive::Device`, an allocation-free facade over
 an existing `Transport`. `info()` reads identity, mechanics and MMC descriptors;
 `settings()` reads one consistent vendor capability block; `snapshot()` retains
 independent results so an unsupported query never hides successful information.
 
 ```rust,ignore
-use pioneer_optical::device::{Device, QuietDrive, PureRead, DvdRegion};
-use pioneer_optical::device::settings::{Persistence, QuietMode, PureReadValue,
+use pioneer_optical::drive::{Device, QuietDrive, PureRead, DvdRegion};
+use pioneer_optical::drive::settings::{Persistence, QuietMode, PureReadValue,
     PureReadMode, Region, Persistent};
 
 let mut device = Device::new(&mut transport);
@@ -88,7 +88,7 @@ backup support. Capture geometry does not establish flash compatibility.
 
 Enable `drive` and `envelope` for complete update execution. Load the captured
 installed Kernel/Normal pair with `envelope::Update::load`, construct
-`receiver::Receiver::from_installed`, load the target pair, then call
+`prepare::Receiver::from_installed`, load the target pair, then call
 `Receiver::prepare` and `PreparedUpdate::flash`. Preparation performs no device
 I/O. Execution rebinds the live receiver before writes, migrates required startup
 settings, performs any temporary-Kernel/restoration passes, and confirms target

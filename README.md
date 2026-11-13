@@ -70,7 +70,7 @@ and protocol bounds determine which addresses are meaningful.
 | `analysis` | Bounded single-envelope region and metadata analysis | `std`; includes `envelope` |
 | `std` | Standard-library error integration without firmware features | `std` |
 
-`drive` also provides `device::Device` for typed live information and settings.
+`drive` also provides `drive::Device` for typed live information and settings.
 Unknown wire values and unavailable capabilities remain explicit; setters
 read support, validate, write once and read back. See the
 [protocol guide](docs/protocol-guide.md) for settings and persistence behavior.
@@ -102,12 +102,12 @@ Enable `drive` and `envelope`. Use the captured **installed** Kernel/Normal pair
 as receiver evidence, then prepare the target separately:
 
 ```rust,no_run
-use pioneer_optical::{envelope::Update, receiver::Receiver};
+use pioneer_optical::{envelope::Update, prepare::Receiver};
 
 pub fn prepare(
     current_kernel: &[u8], current_normal: &[u8],
     target_kernel: &[u8], target_normal: &[u8],
-) -> Result<pioneer_optical::receiver::PreparedUpdate, Box<dyn std::error::Error>> {
+) -> Result<pioneer_optical::prepare::PreparedUpdate, Box<dyn std::error::Error>> {
     let installed = Update::load(current_kernel, current_normal)?;
     let receiver = Receiver::from_installed(&installed)?;
     let target = Update::load(target_kernel, target_normal)?;
@@ -247,7 +247,7 @@ view. It retains original hardware identity when INQUIRY reports crossflashed
 firmware:
 
 ```rust
-use pioneer_optical::production::ProductCode;
+use pioneer_optical::drive::production::ProductCode;
 
 let code = ProductCode::parse("BDU-UD02ABC").unwrap();
 assert_eq!(code.prefix, "BDU");

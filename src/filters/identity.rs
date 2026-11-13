@@ -217,6 +217,142 @@ pub fn discover_with(context: &Context<'_>, registry: &[&dyn Filter]) -> Option<
     })
 }
 
+/// One field's classification in a candidate-identity comparison.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FieldDiff {
+    /// Both keys carry the same native value for this field.
+    Match,
+    /// Both keys carry this field, but with different native values.
+    Differ {
+        /// Value in the first (A) key.
+        a: NativeValue,
+        /// Value in the second (B) key.
+        b: NativeValue,
+    },
+    /// Only the first (A) key carries this field.
+    OnlyA(NativeValue),
+    /// Only the second (B) key carries this field.
+    OnlyB(NativeValue),
+}
+impl FieldDiff {
+    /// True unless both keys agree on this field.
+    pub fn differs(&self) -> bool {
+        !matches!(self, Self::Match)
+    }
+}
+
+/// Structured, field-by-field comparison of two candidate identity [`Key`]s.
+///
+/// Every owner identifier in the union of both keys is classified; the two
+/// family fingerprints and whether the platform domains agree are retained so a
+/// caller can explain exactly why two firmwares land in different families.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeyDiff {
+    /// Per-field classification, in canonical identifier order over the union.
+    pub fields: Vec<(&'static str, FieldDiff)>,
+    /// Family fingerprint of the first (A) candidate key.
+    pub fingerprint_a: u64,
+    /// Family fingerprint of the second (B) candidate key.
+    pub fingerprint_b: u64,
+    /// Platform domain of the first (A) key.
+    pub domain_a: Domain,
+    /// Platform domain of the second (B) key.
+    pub domain_b: Domain,
+    /// Whether both keys share the same platform partition.
+    pub domains_match: bool,
+}
+impl KeyDiff {
+    /// Owner identifiers whose fields are not an exact match, in canonical order.
+    pub fn distinguishing(&self) -> Vec<&'static str> {
+        self.fields
+            .iter()
+            .filter(|(_, diff)| diff.differs())
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    /// True when at least one field distinguishes the two candidate keys.
+    pub fn has_differences(&self) -> bool {
+        self.fields.iter().any(|(_, diff)| diff.differs())
+    }
+
+    /// Human-readable lines, one per field, e.g.
+    /// `capacity: DIFFER (a=Known(U8(2)) b=Known(U8(4)))`.
+    pub fn render_lines(&self) -> Vec<alloc::string::String> {
+        use alloc::format;
+        self.fields
+            .iter()
+            .map(|(id, diff)| match diff {
+                FieldDiff::Match => format!("{id}: MATCH"),
+                FieldDiff::Differ { a, b } => {
+                    format!("{id}: DIFFER (a={a:?} b={b:?})")
+                }
+                FieldDiff::OnlyA(value) => format!("{id}: ONLY-A ({value:?})"),
+                FieldDiff::OnlyB(value) => format!("{id}: ONLY-B ({value:?})"),
+            })
+            .collect()
+    }
+}
+
+/// Classify every field in the union of two candidate keys.
+fn diff_candidate_keys(a: &Key, b: &Key) -> KeyDiff {
+    let mut ids: BTreeSet<&'static str> = BTreeSet::new();
+    for entry in a.entries() {
+        ids.insert(entry.id);
+    }
+    for entry in b.entries() {
+        ids.insert(entry.id);
+    }
+    let mut fields = Vec::with_capacity(ids.len());
+    for id in ids {
+        let classification = match (a.value(id), b.value(id)) {
+            (Some(va), Some(vb)) if va == vb => FieldDiff::Match,
+            (Some(va), Some(vb)) => FieldDiff::Differ {
+                a: va.clone(),
+                b: vb.clone(),
+            },
+            (Some(va), None) => FieldDiff::OnlyA(va.clone()),
+            (None, Some(vb)) => FieldDiff::OnlyB(vb.clone()),
+            (None, None) => continue,
+        };
+        fields.push((id, classification));
+    }
+    KeyDiff {
+        fields,
+        fingerprint_a: a.fingerprint(),
+        fingerprint_b: b.fingerprint(),
+        domain_a: a.domain(),
+        domain_b: b.domain(),
+        domains_match: a.domain() == b.domain(),
+    }
+}
+
+/// Diff the **candidate** identities of two firmwares, each given as
+/// `(hardware, normal, kernel)`, so a caller can see exactly which per-filter
+/// hardware fields place them in different families.
+///
+/// Returns `None` when either firmware produces no identity (an unsupported
+/// tag, a missing required field or a conflicting native value).
+pub fn candidate_key_diff(
+    a: (&str, &[u8], Option<&[u8]>),
+    b: (&str, &[u8], Option<&[u8]>),
+) -> Option<KeyDiff> {
+    let identity_a = discover(&Context::new(crate::compatibility::Firmware {
+        hardware: a.0,
+        normal: a.1,
+        kernel: a.2,
+    }))?;
+    let identity_b = discover(&Context::new(crate::compatibility::Firmware {
+        hardware: b.0,
+        normal: b.1,
+        kernel: b.2,
+    }))?;
+    Some(diff_candidate_keys(
+        &identity_a.candidate,
+        &identity_b.candidate,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -529,5 +665,29 @@ mod tests {
                 "{hardware}"
             );
         }
+    }
+
+    #[test]
+    fn candidate_key_diff_isolates_a_family_split() {
+        // Two synthetic SAT8 contracts that differ only in one required native
+        // field land in different families; the diff must name that field and
+        // report nothing when a firmware is compared against itself.
+        let mut body_a = alloc::vec![0xff; 0x2000];
+        let mut body_b = alloc::vec![0xff; 0x2000];
+        crate::image::matrix::install_test_contract(&mut body_a, 1);
+        crate::image::matrix::install_test_contract(&mut body_b, 2);
+
+        let split =
+            candidate_key_diff(("SAT 8600", &body_a, None), ("SAT 8600", &body_b, None)).unwrap();
+        assert!(split.has_differences());
+        assert_ne!(split.fingerprint_a, split.fingerprint_b);
+        assert!(split.domains_match);
+        assert!(!split.distinguishing().is_empty());
+
+        let same =
+            candidate_key_diff(("SAT 8600", &body_a, None), ("SAT 8600", &body_a, None)).unwrap();
+        assert!(!same.has_differences());
+        assert!(same.distinguishing().is_empty());
+        assert_eq!(same.fingerprint_a, same.fingerprint_b);
     }
 }

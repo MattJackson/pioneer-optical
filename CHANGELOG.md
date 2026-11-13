@@ -1,6 +1,6 @@
 # Changelog
 
-## [3.0.0] - unreleased
+## [3.0.0] - 2026-11-13
 
 The public API is five modules. Behaviour is unchanged except the startup
 word (below). The corpus oracles (`oracle/`) pin the codec, crossflash

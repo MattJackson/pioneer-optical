@@ -2,8 +2,8 @@
 //! these are the facts a flasher, a `--why` explanation or a catalogue graph
 //! use to say whether, and why, firmware `B` may replace firmware `A`.
 //!
-//! The full admission decision runs through [`crate::prepare::Receiver`];
-//! its refusals are this module's [`Error`].
+//! The full admission decision runs through `crate::prepare::Receiver`;
+//! its refusals are this module's `Error`.
 
 /// A refused or unresolved compatibility decision.
 pub use crate::receiver::Error;

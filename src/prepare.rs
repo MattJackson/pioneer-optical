@@ -1,7 +1,7 @@
 //! Materialize a corrected update against the installed receiver.
 //!
-//! [`Receiver`] is built from the installed firmware (a pre-flash backup).
-//! [`Receiver::prepare`] / [`Receiver::prepare_normal`] run every admission
+//! `Receiver` is built from the installed firmware (a pre-flash backup).
+//! `Receiver::prepare` / `Receiver::prepare_normal` run every admission
 //! gate and return an opaque plan whose stages yield the exact byte streams
 //! to write and the settings transaction to run before the first transfer.
 

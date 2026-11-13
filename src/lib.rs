@@ -3,16 +3,16 @@
 //!
 //! The public API is five modules:
 //!
-//! - [`envelope`] — the codec: load, header, repack, sign/verify and encode a
+//! - `envelope` — the codec: load, header, repack, sign/verify and encode a
 //!   firmware envelope or a Kernel+Normal update (`envelope` feature).
-//! - [`classify`] — pair verdicts and their vocabulary (families, required
+//! - `classify` — pair verdicts and their vocabulary (families, required
 //!   words, why two firmwares differ); never materializes an image.
-//! - [`prepare`] — materialize a corrected update against the installed
+//! - `prepare` — materialize a corrected update against the installed
 //!   receiver into an opaque plan that yields the exact byte streams to write.
 //! - [`cdb`] — the vendor command descriptor blocks, as byte constructors, the
 //!   DVR handshake solver and refusal-sense classification. `no_std`.
-//! - [`drive`] — identify, read, capture, dump and update sequences over a
-//!   caller-supplied [`drive::Transport`] (`drive` feature).
+//! - `drive` — identify, read, capture, dump and update sequences over a
+//!   caller-supplied `drive::Transport` (`drive` feature).
 //!
 //! The crate root carries only shared vocabulary: [`Identity`], [`Role`],
 //! [`ComponentKind`], [`DriveClass`], [`CodedError`] and the lifecycle

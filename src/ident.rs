@@ -227,7 +227,7 @@ impl Identity {
     /// Recover the OEM-spaced envelope identity string embedded in the supplied
     /// firmware `images` (typically the captured Kernel and Normal), using this
     /// identity's [`vendor`](Identity::vendor) and [`product`](Identity::product).
-    /// See [`embedded_envelope_id`].
+    /// See `envelope::embedded_envelope_id`.
     pub fn embedded_envelope_id(&self, images: &[&[u8]]) -> Result<String, IdentError> {
         embedded_envelope_id(self.vendor(), self.product(), images)
     }

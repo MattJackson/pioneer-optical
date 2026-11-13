@@ -120,3 +120,7 @@ required-features = ["image"]
 opt-level = 2
 debug-assertions = true
 overflow-checks = true
+
+[[example]]
+name = "oracle"
+required-features = ["envelope"]

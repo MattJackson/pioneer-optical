@@ -36,7 +36,7 @@ fn all_audited_positive_startup_gates_select_an_accepted_word() {
             (0x9f, expected),
             "{component}"
         );
-        let plan = pioneer_optical::compatibility::startup::plan(&raw)
+        let plan = pioneer_optical::startup::selection::plan(&raw)
             .unwrap_or_else(|error| panic!("{component}: bound startup planning failed: {error}"));
         assert_eq!(
             (plan.setting().parameter, plan.setting().value),
@@ -44,7 +44,7 @@ fn all_audited_positive_startup_gates_select_an_accepted_word() {
         );
         assert!(matches!(
             plan.evidence(),
-            pioneer_optical::compatibility::startup::Evidence::BoundComparison(_)
+            pioneer_optical::startup::selection::Evidence::BoundComparison(_)
         ));
         let mut wrong_register = raw.clone();
         wrong_register[(bound.requirement.check_address - 0x410000) as usize + 1] ^= 1;
@@ -65,11 +65,11 @@ fn all_audited_positive_startup_gates_select_an_accepted_word() {
             "{component}: corrupt getter accepted"
         );
         assert!(
-            pioneer_optical::compatibility::startup::plan(&wrong_register).is_err(),
+            pioneer_optical::startup::selection::plan(&wrong_register).is_err(),
             "{component}: mismatched ABI authorized a startup write"
         );
         assert!(
-            pioneer_optical::compatibility::startup::plan(&corrupted).is_err(),
+            pioneer_optical::startup::selection::plan(&corrupted).is_err(),
             "{component}: corrupt getter authorized a startup write"
         );
         if result

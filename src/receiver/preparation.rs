@@ -1,5 +1,7 @@
 //! Immutable component preparation; no transport or device I/O.
 
+use alloc::sync::Arc;
+
 use super::{BridgeKind, Error, PreparedNormal, PreparedStage, PreparedUpdate, Receiver};
 use crate::envelope::{downgrade_patch, Envelope, Update, UpdateError, KERNEL_MARKER_OFFSET};
 
@@ -456,7 +458,7 @@ impl Receiver {
                         bridge_settings,
                         Some(BridgeKind::KernelHandoff),
                     )?);
-                    receiver.installed_kernel = Some(bridge.kernel().clone());
+                    receiver.installed_kernel = Some(Arc::new(bridge.kernel().clone()));
                     receiver.startup = crate::startup::checks::Checks::discover(
                         &bridge.normal().image,
                         Some(&bridge.kernel().image),

@@ -3,6 +3,8 @@
 //! Detection performs no device I/O. Entry control alone does not establish
 //! hardware compatibility, component acceptance, or a complete flash plan.
 
+use alloc::sync::Arc;
+
 use crate::envelope::Envelope;
 use crate::image::{receiver_control_with_kernel, Family, ReceiverControl};
 use crate::{cdb, ComponentKind};
@@ -104,8 +106,10 @@ pub struct Receiver {
     family: Option<Family>,
     startup: crate::startup::checks::Checks,
     kernel_policy: Option<crate::image::KernelMarkerPolicy>,
-    installed_kernel: Option<Envelope>,
-    installed_normal: Option<Envelope>,
+    // Arc-shared so per-pair `self.clone()` in preparation is a refcount bump,
+    // not a ~1MB Envelope copy (the whole-catalogue crossflash-scan hot path).
+    installed_kernel: Option<Arc<Envelope>>,
+    installed_normal: Option<Arc<Envelope>>,
     codec: &'static dyn ReceiverCodec,
 }
 
@@ -162,7 +166,7 @@ impl Receiver {
             Some(kernel) => normal.family_with_kernel(kernel),
             None => normal.family(),
         };
-        receiver.installed_normal = Some(normal.clone());
+        receiver.installed_normal = Some(Arc::new(normal.clone()));
         Ok(receiver)
     }
 
@@ -240,7 +244,7 @@ impl Receiver {
         }
         let mut receiver = Self::detect_components(normal, Some(kernel))?;
         receiver.kernel_policy = crate::image::kernel_marker_policy(&kernel.image);
-        receiver.installed_kernel = Some(kernel.clone());
+        receiver.installed_kernel = Some(Arc::new(kernel.clone()));
         Ok(receiver)
     }
 
@@ -258,7 +262,7 @@ impl Receiver {
     ///
     /// This is captured file evidence, not proof of the live drive's identity.
     pub fn installed_kernel(&self) -> Option<&Envelope> {
-        self.installed_kernel.as_ref()
+        self.installed_kernel.as_deref()
     }
 
     /// Require the target Normal to describe the same hardware family.
@@ -273,7 +277,7 @@ impl Receiver {
         }
         self.compare_family(target.family().or_else(|| {
             self.installed_kernel
-                .as_ref()
+                .as_deref()
                 .and_then(|k| target.family_with_kernel(k))
         }))
     }

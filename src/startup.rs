@@ -356,6 +356,14 @@ fn conditional_loader_flag(tail: &[u8], normal: &[u8]) -> bool {
 /// recognized sequence, not absence of a requirement. No write decision
 /// should be made from this result alone.
 pub fn discover(normal: &[u8]) -> Result<Option<Requirement>, Ambiguous> {
+    // A pure function of the Normal, inspected per pair by catalogue scans
+    // (receiver startup checks of every target): memoize per image.
+    static DISCOVERED: crate::memo::Table<Result<Option<Requirement>, Ambiguous>> =
+        crate::memo::Table::new();
+    *DISCOVERED.cached(crate::memo::key(&[Some(normal)]), || discover_uncached(normal))
+}
+
+fn discover_uncached(normal: &[u8]) -> Result<Option<Requirement>, Ambiguous> {
     let mut result = None;
     // One bound for the whole image: crafted code may repeat candidates.
     let mut remaining = MAX_LOADER_FLAG_PATHS;

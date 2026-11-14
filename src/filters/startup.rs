@@ -161,6 +161,17 @@ fn scsi_value(value: &scsi::Evidence) -> Value {
 
 /// Inspect native prerequisite facts without selecting a numeric value on a miss.
 pub fn inspect(context: &Context<'_>) -> Assessment {
+    // A pure function of the exact components the context was derived from.
+    // Pair planning re-inspects the same installed and target images (and
+    // `plan` re-checks both assessments), so memoize per image.
+    static INSPECTED: crate::memo::Table<Assessment> = crate::memo::Table::new();
+    match context.key {
+        Some(key) => Assessment::clone(&INSPECTED.cached(key, || inspect_uncached(context))),
+        None => inspect_uncached(context),
+    }
+}
+
+fn inspect_uncached(context: &Context<'_>) -> Assessment {
     if context.sat.is_some() {
         return match crate::startup::bound_selection(context.firmware.normal) {
             Observation::Known(bound) => {

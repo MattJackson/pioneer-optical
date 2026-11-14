@@ -28,7 +28,26 @@ fn same(retained: &[Option<Vec<u8>>], parts: &[Option<&[u8]>]) -> bool {
         && retained
             .iter()
             .zip(parts)
-            .all(|(kept, part)| kept.as_deref() == *part)
+            .all(|(kept, part)| match (kept.as_deref(), part) {
+                (Some(kept), Some(part)) => same_bytes(kept, part),
+                (None, None) => true,
+                _ => false,
+            })
+}
+
+/// Exact equality. Revisions of one firmware share long identical prefixes,
+/// so probe a few spread-out bytes before the full comparison: a differing
+/// sample proves inequality without scanning megabytes.
+fn same_bytes(kept: &[u8], part: &[u8]) -> bool {
+    const PROBES: usize = 64;
+    if kept.len() != part.len() {
+        return false;
+    }
+    let step = kept.len() / PROBES;
+    if step > 0 && (0..PROBES).any(|probe| kept[probe * step] != part[probe * step]) {
+        return false;
+    }
+    kept == part
 }
 
 /// Content key of optional byte parts, with presence and length framing.

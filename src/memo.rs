@@ -47,7 +47,24 @@ fn same_bytes(kept: &[u8], part: &[u8]) -> bool {
     if step > 0 && (0..PROBES).any(|probe| kept[probe * step] != part[probe * step]) {
         return false;
     }
-    kept == part
+    equal_words(kept, part)
+}
+
+/// Exact equality of equal-length slices, 64 bytes at a time as machine words.
+/// Slice `==` calls libc `memcmp`, which the static musl release build
+/// implements one byte at a time; this loop vectorizes on every target.
+fn equal_words(kept: &[u8], part: &[u8]) -> bool {
+    debug_assert_eq!(kept.len(), part.len());
+    let (blocks, kept_tail) = (kept.chunks_exact(64), kept.chunks_exact(64).remainder());
+    let part_tail = part.chunks_exact(64).remainder();
+    blocks.zip(part.chunks_exact(64)).all(|(a, b)| {
+        let mut diff = 0u64;
+        for (x, y) in a.chunks_exact(8).zip(b.chunks_exact(8)) {
+            diff |= u64::from_ne_bytes(x.try_into().expect("8-byte chunk"))
+                ^ u64::from_ne_bytes(y.try_into().expect("8-byte chunk"));
+        }
+        diff == 0
+    }) && kept_tail == part_tail
 }
 
 /// Content key of optional byte parts, with presence and length framing.
@@ -170,6 +187,21 @@ impl<V> Table<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn word_equality_matches_slice_equality() {
+        for len in [0usize, 1, 7, 8, 63, 64, 65, 127, 128, 1000] {
+            let a: Vec<u8> = (0..len).map(|i| (i * 31 % 251) as u8).collect();
+            assert!(equal_words(&a, &a.clone()));
+            for at in [0, len / 2, len.saturating_sub(1)] {
+                if at < len {
+                    let mut b = a.clone();
+                    b[at] ^= 0x80;
+                    assert!(!equal_words(&a, &b), "len {len} at {at}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn keys_frame_presence_and_length() {

@@ -281,11 +281,12 @@ impl Plan<'_> {
         self.check_registry(registry)?;
         let after_context = Context::new(final_pair);
         for decision in &self.decisions {
-            let owner = registry
+            let index = registry
                 .iter()
-                .find(|owner| owner.id() == decision.id)
+                .position(|owner| owner.id() == decision.id)
                 .ok_or(Error::VerificationFailed)?;
-            let after = owner.inspect(&after_context);
+            let owner = registry[index];
+            let after = after_context.inspect_in(registry, index);
             if after.id != decision.id || after.role != decision.target.role {
                 return Err(Error::VerificationFailed);
             }
@@ -341,13 +342,13 @@ pub fn evaluate_with<'a>(
     let mut ids = BTreeSet::new();
     let mut decisions = Vec::new();
     let transition = Transition { installed, target };
-    for owner in registry {
+    for (index, owner) in registry.iter().enumerate() {
         let id = owner.id();
         if id.is_empty() || !ids.insert(id) {
             return Err(Error::UnresolvedIdentity);
         }
-        let installed = owner.inspect(installed);
-        let target = owner.inspect(target);
+        let installed = installed.inspect_in(registry, index);
+        let target = target.inspect_in(registry, index);
         if installed.id != id || target.id != id {
             return Err(Error::UnresolvedIdentity);
         }

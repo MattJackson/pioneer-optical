@@ -471,10 +471,43 @@ impl<'a> Context<'a> {
     }
     /// Run every registered filter in stable registry order.
     pub fn filters(&self) -> Vec<Assessment> {
-        filters()
-            .iter()
-            .map(|filter| filter.inspect(self))
-            .collect()
+        match self.production_assessments() {
+            Some(all) => all.as_ref().clone(),
+            None => filters()
+                .iter()
+                .map(|filter| filter.inspect(self))
+                .collect(),
+        }
+    }
+
+    /// Every registered filter's assessment, in registry order. Each is a pure
+    /// function of the exact components this context was derived from, and
+    /// pair planning inspects the same installed and target images for every
+    /// pair, so the vector is memoized per image. `None` for a hand-built
+    /// context, whose results are never memoized.
+    fn production_assessments(&self) -> Option<std::sync::Arc<Vec<Assessment>>> {
+        static ASSESSED: crate::memo::Table<Vec<Assessment>> = crate::memo::Table::new();
+        let key = self.key?;
+        Some(ASSESSED.cached(key, || {
+            filters()
+                .iter()
+                .map(|filter| filter.inspect(self))
+                .collect()
+        }))
+    }
+
+    /// `registry[index].inspect(self)`; the per-image memo answers when
+    /// `registry` is the production registry itself.
+    pub(crate) fn inspect_in(&self, registry: &[&dyn Filter], index: usize) -> Assessment {
+        let production = filters();
+        if registry.len() == production.len()
+            && core::ptr::eq(registry.as_ptr().cast::<()>(), production.as_ptr().cast::<()>())
+        {
+            if let Some(all) = self.production_assessments() {
+                return all[index].clone();
+            }
+        }
+        registry[index].inspect(self)
     }
 }
 

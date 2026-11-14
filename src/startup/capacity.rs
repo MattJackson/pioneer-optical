@@ -48,6 +48,16 @@ impl Evidence {
     /// Discover the evidence, also returning the bank evidence from the same
     /// native scan so a caller need not repeat it.
     pub(crate) fn discover(normal: &[u8], kernel: Option<&[u8]>) -> (Self, super::bank::Banks) {
+        // A pure function of the two components, evaluated per pair by
+        // catalogue scans: memoize per image.
+        static EVIDENCE: crate::memo::Table<(Evidence, super::bank::Banks)> =
+            crate::memo::Table::new();
+        *EVIDENCE.cached(crate::memo::key(&[Some(normal), kernel]), || {
+            Self::discover_uncached(normal, kernel)
+        })
+    }
+
+    fn discover_uncached(normal: &[u8], kernel: Option<&[u8]>) -> (Self, super::bank::Banks) {
         // Run native bank discovery here: a caller-created descriptive enum
         // must never manufacture an address-independent execution witness.
         let banks = super::bank::analyze_banks(normal, kernel);

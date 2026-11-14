@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.0.1] - 2026-11-13
+
+Performance only; verdicts and prepared bytes are unchanged.
+
+- Per-image analysis is memoized. Native observations, family identity,
+  capacity evidence, phase assignment, sink diagnosis, COMP region decoding and
+  Normal signature checks are pure functions of the exact image bytes. A
+  catalogue-wide crossflash scan evaluates each image against hundreds of
+  others, and now analyses it once instead of once per pair. Keys are keyed
+  128-bit SipHash over length-framed inputs, with per-process random keys. A
+  per-thread cache confirms a repeated input by exact byte comparison instead
+  of rehashing it. Tables are bounded and keep entries that are reused.
+- freemkv-crossflash over the full catalogue (29,051 Pioneer pairs) went from
+  about 70 minutes to about 7 minutes on a loaded 18-core machine (about
+  2,240 CPU-seconds), producing an identical route graph. The freemkv corpus
+  oracle reproduces every verdict, correction and prepared-transfer digest
+  byte-for-byte.
+
 ## [3.0.0] - 2026-11-13
 
 The public API is five modules. Behaviour is unchanged except the startup

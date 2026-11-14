@@ -231,6 +231,12 @@ fn verifies(digest: &[u8], r: &BigUint, s: &BigUint, q: &Point, c: &Curve) -> bo
 /// Check the two signed ranges used by OEM Normal envelopes. `Invalid` means
 /// this curve is recognized but the signature is wrong for both ranges.
 pub fn verify_normal_signature(data: &[u8]) -> SignatureCheck {
+    // Pure over the envelope bytes; memoized for catalogue scans.
+    static VERIFIED: crate::memo::Table<SignatureCheck> = crate::memo::Table::new();
+    *VERIFIED.cached(crate::memo::key(&[Some(data)]), || verify_uncached(data))
+}
+
+fn verify_uncached(data: &[u8]) -> SignatureCheck {
     if data.len() < 0x10200 + 20
         || !super::is_envelope(data)
         || !super::header_info(data).is_some_and(|h| h.kind == Some(crate::ComponentKind::Normal))

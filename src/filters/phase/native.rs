@@ -874,6 +874,14 @@ pub fn correct_legacy(normal: &[u8], target: Assignment) -> Result<Vec<u8>, Corr
 /// Use `correct_legacy` for bounded legacy edits and `correct_pair` for paired forms.
 /// Conflicting positive evidence produces no assignment.
 pub fn discover(normal: &[u8]) -> Observation<Phase> {
+    // Pure over `normal`; SAT evidence and phase observation both ask for it.
+    static PHASE: crate::memo::Table<Observation<Phase>> = crate::memo::Table::new();
+    Observation::clone(&PHASE.cached(crate::memo::key(&[Some(normal)]), || {
+        discover_uncached(normal)
+    }))
+}
+
+fn discover_uncached(normal: &[u8]) -> Observation<Phase> {
     let Some(regions) = crate::image::regions(normal) else {
         return Observation::Unresolved(Unresolved::ReaderNotRecognized);
     };

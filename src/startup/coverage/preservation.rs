@@ -111,6 +111,19 @@ pub(crate) fn diagnose_pair(
     normal: &[u8],
     kernel: Option<&[u8]>,
 ) -> Result<Certificate, sinks::Failure> {
+    // Pure over the two components; correction binding and verification
+    // diagnose the same target pair repeatedly.
+    static DIAGNOSED: crate::memo::Table<Result<Certificate, sinks::Failure>> =
+        crate::memo::Table::new();
+    Result::clone(&DIAGNOSED.cached(crate::memo::key(&[Some(normal), kernel]), || {
+        diagnose_pair_uncached(normal, kernel)
+    }))
+}
+
+fn diagnose_pair_uncached(
+    normal: &[u8],
+    kernel: Option<&[u8]>,
+) -> Result<Certificate, sinks::Failure> {
     let aliases = sinks::Failure::Unsupported {
         stage: sinks::Stage::KernelAliases,
     };

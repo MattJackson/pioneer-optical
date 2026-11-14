@@ -80,6 +80,8 @@ mod comp_runtime;
 #[cfg(feature = "image")]
 mod comp_streams;
 mod error_codes;
+#[cfg(feature = "image")]
+mod memo;
 mod product_identity;
 #[cfg(feature = "image")]
 mod shape;

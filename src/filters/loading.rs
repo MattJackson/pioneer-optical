@@ -242,6 +242,7 @@ mod tests {
             native_phase: Observation::Unresolved(
                 crate::image::layout::Unresolved::ReaderNotRecognized,
             ),
+            key: None,
         }
     }
     fn limits(closed: u8) -> AtaInput {

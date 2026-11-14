@@ -438,11 +438,56 @@ pub struct Context<'a> {
     /// Independently recognized phase architecture/interface, cached even when
     /// another architecture-specific observation remains unresolved.
     pub native_phase: crate::image::layout::Observation<phase::NativePhase>,
+    /// Content key of `firmware` when the observations were derived from it;
+    /// `None` for a hand-built context, whose derived facts are never memoized.
+    pub(crate) key: Option<crate::memo::Key>,
 }
 impl<'a> Context<'a> {
     /// Inspect native backends without obtaining a family key first.
     /// This retains partial results even when another required filter fails.
+    ///
+    /// The observations are a pure function of the exact hardware tag and
+    /// decoded components, so they are memoized per image: a catalogue scan
+    /// evaluates each package against hundreds of others.
     pub fn new(firmware: Firmware<'a>) -> Self {
+        static OBSERVED: crate::memo::Table<Observed> = crate::memo::Table::new();
+        let key = crate::memo::key(&[
+            Some(firmware.hardware.as_bytes()),
+            Some(firmware.normal),
+            firmware.kernel,
+        ]);
+        let Observed {
+            sat,
+            ata,
+            native_phase,
+        } = Observed::clone(&OBSERVED.cached(key, || Observed::discover(firmware)));
+        Self {
+            firmware,
+            sat,
+            ata,
+            native_phase,
+            key: Some(key),
+        }
+    }
+    /// Run every registered filter in stable registry order.
+    pub fn filters(&self) -> Vec<Assessment> {
+        filters()
+            .iter()
+            .map(|filter| filter.inspect(self))
+            .collect()
+    }
+}
+
+/// Owned per-image observations behind [`Context`].
+#[derive(Clone)]
+struct Observed {
+    sat: Option<SatEvidence>,
+    ata: Vec<AtaEvidence>,
+    native_phase: Observation<phase::NativePhase>,
+}
+
+impl Observed {
+    fn discover(firmware: Firmware<'_>) -> Self {
         let platform = SatPlatform::from_hardware(firmware.hardware);
         let sat = platform
             .map(|platform| SatEvidence::discover(platform, firmware.normal, firmware.kernel));
@@ -456,18 +501,10 @@ impl<'a> Context<'a> {
         }
         let native_phase = phase::observe(firmware);
         Self {
-            firmware,
             sat,
             ata,
             native_phase,
         }
-    }
-    /// Run every registered filter in stable registry order.
-    pub fn filters(&self) -> Vec<Assessment> {
-        filters()
-            .iter()
-            .map(|filter| filter.inspect(self))
-            .collect()
     }
 }
 

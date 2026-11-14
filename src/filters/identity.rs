@@ -171,7 +171,15 @@ pub struct Identity {
 /// Evaluate both projections using the complete production registry.
 /// An unresolved required value never produces a partial family identifier.
 pub fn discover(context: &Context<'_>) -> Option<Identity> {
-    discover_with(context, super::filters())
+    // The default registry is fixed, so its result is a pure function of the
+    // image the context was derived from.
+    static IDENTITY: crate::memo::Table<Option<Identity>> = crate::memo::Table::new();
+    match context.key {
+        Some(key) => {
+            Option::clone(&IDENTITY.cached(key, || discover_with(context, super::filters())))
+        }
+        None => discover_with(context, super::filters()),
+    }
 }
 
 /// Evaluate a supplied registry through the same generic identity path.

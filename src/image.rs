@@ -131,22 +131,49 @@ impl Regions<'_> {
 
 /// Shared checked decoding: malformed COMP never falls back to scanning compressed bytes.
 pub(crate) fn regions(body: &[u8]) -> Option<Regions<'_>> {
-    let streams =
-        crate::comp_streams::read(body, crate::comp::MAX_TOTAL_EXPANDED, &mut || true).ok()?;
-    let Some((_, mut streams)) = streams else {
+    // Inflation is a pure function of `body` and dominates repeated analysis
+    // of one image; keep the owned decode, rebuild the borrowed stored views.
+    static DECODED: crate::memo::Table<Option<Decoded>> = crate::memo::Table::bounded(1024);
+    let decoded = DECODED.cached(crate::memo::key(&[Some(body)]), || decode(body));
+    let Some(Decoded { spans, expanded }) = decoded.as_ref() else {
+        return None;
+    };
+    let Some(spans) = spans else {
         return Some(Regions {
             stored: vec![body],
             expanded: Vec::new(),
         });
     };
+    let stored = stored_regions(body, spans)?;
+    Some(Regions {
+        stored,
+        expanded: expanded.clone(),
+    })
+}
+
+/// Owned result of checked COMP decoding: physical spans in image order (or
+/// `None` for an image without COMP streams) and each stream's expansion.
+struct Decoded {
+    spans: Option<Vec<(usize, usize)>>,
+    expanded: Vec<Vec<u8>>,
+}
+
+fn decode(body: &[u8]) -> Option<Decoded> {
+    let streams =
+        crate::comp_streams::read(body, crate::comp::MAX_TOTAL_EXPANDED, &mut || true).ok()?;
+    let Some((_, mut streams)) = streams else {
+        return Some(Decoded {
+            spans: None,
+            expanded: Vec::new(),
+        });
+    };
     streams.sort_by_key(|s| s.image_offset);
-    let spans: Vec<_> = streams
+    let spans = streams
         .iter()
         .map(|s| (s.image_offset, s.compressed_size))
         .collect();
-    let stored = stored_regions(body, &spans)?;
-    Some(Regions {
-        stored,
+    Some(Decoded {
+        spans: Some(spans),
         expanded: streams.into_iter().map(|s| s.expanded).collect(),
     })
 }

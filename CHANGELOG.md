@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.0.2] - unreleased
+
+Performance only; verdicts and prepared bytes are unchanged.
+
+- `image::layout::h8` walks the reader graph's even offsets as a range instead
+  of stepping a windows iterator through its generic `nth` path.
+- `image::peripheral::m32c_phase` finds every consumer shape's prefix in one
+  pass behind a first-byte table instead of one full-image pass per shape
+  (13), and visits the hits per shape in the same ascending order.
+
+Together about a quarter of a profiled catalogue crossflash scan.
+
 ## [3.0.1] - 2026-11-13
 
 Performance only; verdicts and prepared bytes are unchanged.

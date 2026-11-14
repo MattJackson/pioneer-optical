@@ -71,6 +71,37 @@ fn uniform_ranges_only_report_long_zero_or_ff_runs() {
 }
 
 #[test]
+fn probed_uniform_ranges_match_the_byte_partition() {
+    // Pseudo-random runs of 00/FF/other bytes around every probe boundary.
+    let mut state = 0x2545_f491_4f6c_dd1du64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    for _ in 0..200 {
+        let mut image = Vec::new();
+        while image.len() < 4096 {
+            let byte = [0x00, 0xff, 0x5a, 0x00, 0xff][(next() % 5) as usize];
+            let length = (next() % 600) as usize;
+            image.extend(core::iter::repeat(byte).take(length));
+        }
+        for minimum in [0, 1, 2, 3, 16, 255, 256, 257, 5000] {
+            let fast: Vec<_> = uniform_ranges(&image, minimum)
+                .iter()
+                .map(|r| (r.offset, r.length, r.byte))
+                .collect();
+            let linear: Vec<_> = uniform_ranges_linear(&image, minimum)
+                .iter()
+                .map(|r| (r.offset, r.length, r.byte))
+                .collect();
+            assert_eq!(fast, linear, "minimum {minimum}");
+        }
+    }
+}
+
+#[test]
 fn comp_directory_requires_complete_stream_and_unique_base() {
     let expanded = vec![0x5a; 512];
     let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(6));

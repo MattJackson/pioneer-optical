@@ -780,6 +780,42 @@ pub fn rebuild_last_comp(image: &[u8], expanded: &[u8]) -> Option<Vec<u8>> {
 
 /// Report long runs of erased or zero bytes without inferring that they are unused.
 pub fn uniform_ranges(image: &[u8], minimum: usize) -> Vec<UniformRange> {
+    if minimum < 2 {
+        return uniform_ranges_linear(image, minimum);
+    }
+    // Every maximal run at least `minimum` bytes long covers an offset that is
+    // a multiple of `minimum`, so only those offsets need probing; a probe in
+    // an erased or zero byte expands to its maximal run. Same ranges, in the
+    // same order, as the byte-by-byte partition.
+    let mut ranges = Vec::new();
+    let mut probe = 0;
+    while probe < image.len() {
+        let byte = image[probe];
+        if !matches!(byte, 0x00 | 0xff) {
+            probe += minimum;
+            continue;
+        }
+        let mut start = probe;
+        while start > 0 && image[start - 1] == byte {
+            start -= 1;
+        }
+        let mut end = probe + 1;
+        while end < image.len() && image[end] == byte {
+            end += 1;
+        }
+        if end - start >= minimum {
+            ranges.push(UniformRange {
+                offset: start,
+                length: end - start,
+                byte,
+            });
+        }
+        probe = end.div_ceil(minimum) * minimum;
+    }
+    ranges
+}
+
+fn uniform_ranges_linear(image: &[u8], minimum: usize) -> Vec<UniformRange> {
     let mut ranges = Vec::new();
     let mut start = 0;
     while start < image.len() {
@@ -879,16 +915,24 @@ fn transform_with_policy(
         .chunks_exact(4)
         .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
         .collect();
+    // Membership by binary search over a sorted copy: the same offsets as a
+    // linear `contains`, without rescanning the list for every word.
+    let mut skips = exceptions.to_vec();
+    skips.sort_unstable();
     let mut out = vec![0; data.len()];
+    let mut k = 0;
     for (i, (src, dst)) in data
         .chunks_exact(4)
         .zip(out.chunks_exact_mut(4))
         .enumerate()
     {
-        let k = words[i % words.len()];
         let v = u32::from_le_bytes(src.try_into().unwrap());
-        let skip = exceptions.contains(&((i * 4) as u32));
-        dst.copy_from_slice(&keyed_word(v, k, encode, reverse, skip).to_le_bytes());
+        let skip = !skips.is_empty() && skips.binary_search(&((i * 4) as u32)).is_ok();
+        dst.copy_from_slice(&keyed_word(v, words[k], encode, reverse, skip).to_le_bytes());
+        k += 1;
+        if k == words.len() {
+            k = 0;
+        }
     }
     Some(out)
 }

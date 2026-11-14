@@ -1,6 +1,22 @@
 # Changelog
 
-## [3.0.2] - unreleased
+## [3.0.3] - unreleased
+
+Performance only; verdicts and prepared bytes are unchanged.
+
+- Every production filter assessment, startup word discovery and the startup
+  filter's inspection are memoized per image: catalogue pair planning
+  re-inspected the same installed and target images several times per pair.
+- The retained-copy key comparison probes spread-out bytes before a full
+  comparison, so a near-identical revision is rejected without scanning it.
+- The retained-copy key confirmation compares 64-byte blocks of machine words
+  instead of calling libc `memcmp`, which the static musl build implements a
+  byte at a time.
+- Envelope uniform-run detection probes at minimum-length strides and expands,
+  instead of partitioning every byte; the keyed word transform no longer scans
+  its exception list per word.
+
+## [3.0.2] - 2026-11-14
 
 Performance only; verdicts and prepared bytes are unchanged.
 

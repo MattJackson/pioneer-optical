@@ -105,11 +105,27 @@ fn present<T: PartialEq>(found: &[T], value: &T) -> bool {
 fn bindings(normal: &[u8], normal_base: u32) -> Vec<Binding> {
     let mut found = Vec::new();
     let mut offsets = BTreeSet::new();
+    // One pass finds every offset whose first four bytes begin some consumer
+    // shape; a first-byte table rejects nearly every offset with one lookup.
+    // Offsets are then visited per shape in ascending order, as a per-shape
+    // scan would visit them.
+    let mut first = [false; 256];
     for s in shapes::CONSUMERS {
-        for at in 0..normal.len().saturating_sub(s.bytes.len() - 1) {
-            if normal[at..at + 4] != s.bytes[..4] {
-                continue;
+        first[usize::from(s.bytes[0])] = true;
+    }
+    let mut starts = vec![Vec::new(); shapes::CONSUMERS.len()];
+    for at in 0..normal.len().saturating_sub(3) {
+        if !first[usize::from(normal[at])] {
+            continue;
+        }
+        for (index, s) in shapes::CONSUMERS.iter().enumerate() {
+            if at + s.bytes.len() <= normal.len() && normal[at..at + 4] == s.bytes[..4] {
+                starts[index].push(at);
             }
+        }
+    }
+    for (s, starts) in shapes::CONSUMERS.iter().zip(starts) {
+        for at in starts {
             let mut operands = Vec::new();
             let mut assignment = s.assignment;
             let mut canonical = normal[at..at + s.bytes.len()].to_vec();

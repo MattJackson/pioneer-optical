@@ -292,10 +292,13 @@ fn reader(body: &[u8], cpu_base: u32) -> Option<Observation<(u32, ParameterLayou
         return Some(Observation::Unresolved(Unresolved::TruncatedEvidence));
     }
     let mut result = None;
-    for (at, prefix) in body.windows(8).enumerate().step_by(2) {
-        if !matches!(prefix[0], 0x01 | 0x6d) {
+    // Even offsets of every 8-byte window, as `windows(8).step_by(2)` would
+    // visit them, without the generic iterator's per-step bookkeeping.
+    for at in (0..body.len().saturating_sub(7)).step_by(2) {
+        if !matches!(body[at], 0x01 | 0x6d) {
             continue;
         }
+        let prefix = &body[at..at + 8];
         let mut candidate = false;
         let mut matched = None;
         for graph in GRAPHS {

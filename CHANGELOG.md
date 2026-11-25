@@ -1,5 +1,20 @@
 # Changelog
 
+## [3.0.4] - unreleased
+
+SAT 1xxx loading-input hardware fingerprint (bug fix: a different-tray SAT1
+crossflash was wrongly admitted).
+
+- New registered `sat1-loading-input` owner. SAT 1xxx firmware reads its tray/
+  loading switches inline (bit-test/bit-load on the FF4140xx-FF4142xx port),
+  not through the SAT8/SAT9 wrapped selector predicates, so every SAT1 image
+  carried the same loading value and different-tray drives (e.g. BDR-205 SAT
+  1014, which also reads FF414100, vs BDR-206 SAT 1030) hashed into one family.
+  The owner fingerprints the exact set of loading-port input bit-reads; equal
+  set is a candidate, a different set refuses, an unrecognized reader stays
+  Unresolved. SAT1 family identities change accordingly; other platforms are
+  unchanged except for a positive NotApplicable exclusion entry.
+
 ## [3.0.3] - unreleased
 
 Performance only; verdicts and prepared bytes are unchanged.

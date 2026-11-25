@@ -799,6 +799,7 @@ register_filters!(
     initialization,
     host,
     loading,
+    sat1_tray,
     layout,
     phase,
     startup

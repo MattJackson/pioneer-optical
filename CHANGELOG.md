@@ -1,5 +1,20 @@
 # Changelog
 
+## [3.0.5] - unreleased
+
+"Bypass family" (the Recovery family override) now does exactly what it says:
+it ignores a family-ID mismatch.
+
+- Under the override, a Hardware owner's value mismatch (`Incompatible`) is
+  waived, since every Hardware value is a component of the family ID. The
+  decision still reports `Different` and is marked `waived`. Without the
+  override every filter stays enforced.
+- Still enforced under the override: Operational requirements, unresolved or
+  conflicting evidence, correction/proof errors, and the persistent-bank
+  startup contract.
+- `sat1-loading-input` reports the empty set (not Unresolved) when a SAT1
+  Normal has no loading-port read, so the image keeps a family identity.
+
 ## [3.0.4] - unreleased
 
 SAT 1xxx loading-input hardware fingerprint (bug fix: a different-tray SAT1

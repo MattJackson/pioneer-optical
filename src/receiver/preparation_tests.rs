@@ -657,17 +657,14 @@ fn captured_receiver_evidence_does_not_require_a_distribution_signature() {
 }
 
 #[test]
-fn explicit_family_override_does_not_waive_native_owner_receiver_or_restore_checks() {
+fn explicit_family_override_ignores_a_hardware_mismatch_but_not_receiver_or_restore_checks() {
     let installed = update_with_bound_startup(true, 1, 0x12, true);
     let receiver = Receiver::from_installed(&installed).unwrap();
-    // The family byte is a native loading-input fact. R1A makes this
-    // uncorrectable owner mismatch mandatory even with a family override.
-    assert_eq!(
-        receiver
-            .prepare_without_family_check(update_with_bound_startup(false, 0, 0x13, true))
-            .unwrap_err(),
-        PreparationError::PhaseCorrection(crate::compatibility::Error::Incompatible)
-    );
+    // The family byte is a native loading-input fact and part of the family ID.
+    // Strict refuses it; "bypass family" ignores the mismatch.
+    assert!(receiver
+        .prepare_without_family_check(update_with_bound_startup(false, 0, 0x13, true))
+        .is_ok());
     assert!(receiver
         .prepare_without_family_check(update_with_bound_startup(false, 0, 0x12, true))
         .is_ok());
@@ -709,7 +706,7 @@ fn normal_only_uses_installed_kernel_without_selecting_a_kernel_write() {
 }
 
 #[test]
-fn normal_only_force_preserves_native_owner_authentication_and_missing_evidence_checks() {
+fn normal_only_force_ignores_a_hardware_mismatch_but_keeps_authentication_and_evidence_checks() {
     let installed = update_with_bound_startup(false, 0, 0x12, true);
     let receiver = Receiver::from_installed(&installed).unwrap();
     let other = update_with_bound_startup(false, 0, 0x13, true);
@@ -719,13 +716,10 @@ fn normal_only_force_preserves_native_owner_authentication_and_missing_evidence_
             Error::FamilyMismatch { .. }
         ))
     ));
-    // Broad family override cannot waive the loading-input owner's failure.
-    assert_eq!(
-        receiver
-            .prepare_normal_without_family_check(other.normal_transfer())
-            .unwrap_err(),
-        PreparationError::PhaseCorrection(crate::compatibility::Error::Incompatible)
-    );
+    // "Bypass family" ignores the loading-input owner's family-ID mismatch.
+    assert!(receiver
+        .prepare_normal_without_family_check(other.normal_transfer())
+        .is_ok());
     assert!(receiver
         .prepare_normal_without_family_check(installed.normal_transfer())
         .is_ok());
@@ -1285,8 +1279,9 @@ fn family_override_does_not_admit_unproved_startup_across_layouts() {
     };
     assert_ne!(candidate(&installed), candidate(&target));
     // Both the uncorrectable layout and unproved startup remain blocked.
-    // R1A retains the layout owner's Incompatible refusal ahead of startup's
-    // UnresolvedIdentity. The independent phase rewrite preserves layout bytes.
+    // "Bypass family" ignores the layout owner's Incompatible mismatch; the
+    // startup prerequisite's UnresolvedIdentity remains. The independent phase
+    // rewrite preserves layout bytes.
     for (installed, target) in [(&installed, &target), (&target, &installed)] {
         fn context(pair: &Update) -> crate::filters::Context<'_> {
             crate::filters::Context::new(crate::compatibility::Firmware {
@@ -1302,25 +1297,28 @@ fn family_override_does_not_admit_unproved_startup_across_layouts() {
             crate::filters::runner::Policy::FamilyOverride,
         )
         .unwrap();
-        for (id, error) in [
-            (
-                "persistent-parameter-layout",
-                crate::compatibility::Error::Incompatible,
-            ),
-            (
-                "startup-prerequisite",
-                crate::compatibility::Error::UnresolvedIdentity,
-            ),
-        ] {
-            let decision = plan
-                .decisions()
-                .iter()
-                .find(|decision| decision.id == id)
-                .unwrap();
-            assert_eq!(decision.blocked(), Some(error));
-            assert!(!decision.waived);
-            assert!(decision.operation().is_none());
-        }
+        // The layout owner is Hardware, so its family-ID mismatch is ignored by
+        // "bypass family". The startup prerequisite is Operational and stays
+        // blocked.
+        let layout_decision = plan
+            .decisions()
+            .iter()
+            .find(|decision| decision.id == "persistent-parameter-layout")
+            .unwrap();
+        assert_eq!(layout_decision.blocked(), None);
+        assert!(layout_decision.waived);
+        assert!(layout_decision.operation().is_none());
+        let startup_decision = plan
+            .decisions()
+            .iter()
+            .find(|decision| decision.id == "startup-prerequisite")
+            .unwrap();
+        assert_eq!(
+            startup_decision.blocked(),
+            Some(crate::compatibility::Error::UnresolvedIdentity)
+        );
+        assert!(!startup_decision.waived);
+        assert!(startup_decision.operation().is_none());
         let receiver = Receiver::from_installed(installed).unwrap();
         for result in [
             receiver
@@ -1333,7 +1331,7 @@ fn family_override_does_not_admit_unproved_startup_across_layouts() {
             assert!(matches!(
                 result,
                 Err(PreparationError::PhaseCorrection(
-                    crate::compatibility::Error::Incompatible
+                    crate::compatibility::Error::UnresolvedIdentity
                 ))
             ));
         }

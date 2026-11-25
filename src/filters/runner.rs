@@ -11,8 +11,10 @@ use alloc::{boxed::Box, collections::BTreeSet, vec::Vec};
 pub enum Policy {
     /// Every required owner must establish a compatible native transition.
     Strict,
-    /// Bypass only the broad domain gate. Every native owner decision,
-    /// prerequisite and selected correction proof remains mandatory.
+    /// "Bypass family": ignore a family-ID mismatch — the broad domain gate and
+    /// every Hardware owner's value mismatch. Operational requirements,
+    /// unresolved evidence, prerequisites and selected correction proofs
+    /// remain mandatory.
     FamilyOverride,
 }
 
@@ -27,8 +29,9 @@ pub struct Decision {
     pub target: Assessment,
     /// Actual native comparison; an override never converts this into Match.
     pub comparison: Comparison,
-    /// Retained for compatibility. Evaluation never waives an owner failure
-    /// and always sets this field to `false`.
+    /// True when the family override ("bypass family") ignored this Hardware
+    /// owner's value mismatch, which is a component of the family ID. No other
+    /// refusal is ever waived.
     pub waived: bool,
     operation: Option<Box<dyn Operation>>,
     blocked: Option<Error>,
@@ -367,12 +370,24 @@ pub fn evaluate_with<'a>(
             }
             Err(error) => blocked = Some(error),
         }
+        // "Bypass family" ignores a family-ID mismatch. A Hardware owner's
+        // value is a component of the family ID, so its value mismatch is
+        // waived under the override. Operational requirements, unresolved or
+        // conflicting evidence and correction/proof errors are not family-ID
+        // mismatches and stay enforced; so does the separate persistent-bank
+        // startup contract.
+        let waived = policy == Policy::FamilyOverride
+            && target.role == Role::Hardware
+            && blocked == Some(Error::Incompatible);
+        if waived {
+            blocked = None;
+        }
         decisions.push(Decision {
             id,
             installed,
             target,
             comparison,
-            waived: false,
+            waived,
             operation,
             blocked,
         });
@@ -825,7 +840,7 @@ mod tests {
     }
 
     #[test]
-    fn family_override_refuses_uncorrectable_owner_and_preserves_postconditions() {
+    fn family_override_ignores_hardware_value_mismatch_and_preserves_postconditions() {
         let target = image();
         let mut source = target.clone();
         source[24] = 2;
@@ -836,23 +851,27 @@ mod tests {
         let mut other = Owner::field("other", 26);
         other.correctable = false;
         let registry: &[&dyn Filter] = &[&phase, &other];
-        for policy in [Policy::Strict, Policy::FamilyOverride] {
-            let evaluated = evaluate_with(&a, &b, policy, registry).unwrap();
-            let decision = &evaluated.decisions()[1];
-            assert_eq!(decision.comparison, Comparison::Different);
-            assert_eq!(decision.blocked(), Some(Error::Incompatible));
-            assert!(!decision.waived);
-            assert!(decision.operation().is_none());
-            assert_eq!(evaluated.admit(), Err(Error::Incompatible));
-            assert_eq!(
-                evaluated.prepare_with(&preparation(&b), registry),
-                Err(Error::Incompatible)
-            );
-            assert!(matches!(
-                plan_with(&a, &b, policy, registry),
-                Err(Error::Incompatible)
-            ));
-        }
+        let evaluated = evaluate_with(&a, &b, Policy::Strict, registry).unwrap();
+        let decision = &evaluated.decisions()[1];
+        assert_eq!(decision.comparison, Comparison::Different);
+        assert_eq!(decision.blocked(), Some(Error::Incompatible));
+        assert!(!decision.waived);
+        assert!(decision.operation().is_none());
+        assert_eq!(evaluated.admit(), Err(Error::Incompatible));
+        assert!(matches!(
+            plan_with(&a, &b, Policy::Strict, registry),
+            Err(Error::Incompatible)
+        ));
+
+        // Bypass family ignores a Hardware value mismatch (part of the family
+        // ID); the comparison itself is still reported as Different.
+        let evaluated = evaluate_with(&a, &b, Policy::FamilyOverride, registry).unwrap();
+        let decision = &evaluated.decisions()[1];
+        assert_eq!(decision.comparison, Comparison::Different);
+        assert_eq!(decision.blocked(), None);
+        assert!(decision.waived);
+        assert!(decision.operation().is_none());
+        assert_eq!(evaluated.admit(), Ok(()));
 
         // Admit the supported correction with an actually matching untouched
         // owner, then retain the independent extra-write/postcondition guard.

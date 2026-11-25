@@ -11,9 +11,9 @@
 //!
 //! This owner fingerprints the exact set of loading-port input pins a SAT1
 //! Normal reads. Two SAT1 drives that read the same set are crossflash
-//! candidates; a different set is different loading hardware and refuses. A SAT1
-//! image with no recognized loading-port input read stays `Unresolved` rather
-//! than inventing an empty set, so it is never admitted on absent evidence. On
+//! candidates; a different set is different loading hardware and refuses, unless
+//! the operator bypasses the family check. A SAT1 image with no loading-port
+//! input read reports the empty set, which differs from any set that has one. On
 //! every other platform the loading inputs are owned by `initialization`/
 //! `loading`, so this owner reports `NotApplicable` and contributes no SAT-only
 //! value to those identities.
@@ -42,11 +42,11 @@ static RULES: super::Rules = super::Rules {
     description: "Fingerprints the SAT 1xxx loading/tray input pins the firmware reads inline: every bit-test or bit-load on the FF4140xx-FF4142xx loading port, as the sorted set of (port address, operation, bit). It establishes which physical loading-input pins the firmware reads, not the open/closed predicate roles, timing, debounce or output drive. A different pin set is different loading hardware.",
     role: super::Role::Hardware,
     correctability: super::Correctability::Fixed,
-    correction: "Never corrected. The SAT1 loading-input pin set must match; a different set is different loading hardware and refuses under every policy, including the Recovery family override. An image whose loading-input reads are not recognized stays Unresolved and is never admitted.",
+    correction: "Never corrected. The SAT1 loading-input pin set must match; a different set is different loading hardware and refuses. Like every hardware value, it is part of the family ID, so a deliberate \"bypass family\" ignores the mismatch. An image with no loading-port read reports the empty set.",
     policies: &[
         super::Policy {
             domains: &[Domain::Sat1],
-            text: "SAT1 reads its tray/loading switches inline, not through the SAT8/SAT9 wrapped selector predicates, so the recognized input-pin set is the identity value. Equal set is required; an unrecognized reader stays Unresolved rather than asserting an empty set.",
+            text: "SAT1 reads its tray/loading switches inline, not through the SAT8/SAT9 wrapped selector predicates, so the recognized input-pin set is the identity value. Equal set is required; no recognized read is the empty set.",
         },
         super::Policy {
             domains: &[],
@@ -119,14 +119,18 @@ impl Filter for Sat1LoadingInput {
                 evidence: String::from("non-SAT1 platform; loading inputs owned elsewhere"),
             };
         }
-        let pins = loading_input_pins(context.firmware.normal);
-        if pins.is_empty() {
+        if context.firmware.normal.is_empty() {
             return Assessment::unresolved(
                 ID,
                 Role::Hardware,
-                "No SAT1 loading-port input bit-read recognized on FF4140xx-FF4142xx; the tray input hardware cannot be established",
+                "No Normal image to inspect for SAT1 loading-port inputs",
             );
         }
+        // For a real Normal, an empty set is a positive observation (it reads
+        // nothing from the loading port, as slim/USB drives do): it keeps the
+        // image's family identity and still differs from any image that does
+        // read loading pins.
+        let pins = loading_input_pins(context.firmware.normal);
         let count = pins.len();
         Assessment::known(
             ID,
@@ -202,10 +206,17 @@ mod tests {
     }
 
     #[test]
-    fn unreadable_sat1_is_unresolved_not_admitted() {
-        let assessment = FILTER.inspect(&sat1(&[0u8; 64]));
-        assert!(matches!(assessment.finding, Finding::Unresolved(_)));
-        assert_eq!(assessment.role, Role::Hardware);
+    fn sat1_without_loading_reads_is_the_empty_set() {
+        let empty = FILTER.inspect(&sat1(&[0u8; 64]));
+        assert_eq!(empty.role, Role::Hardware);
+        assert_eq!(empty.finding, Finding::Known(Value::Sequence(vec![])));
+        let mut body = vec![0u8; 8];
+        bitop(&mut body, 0xff41_4000, 0x73, 4);
+        let read = FILTER.inspect(&sat1(&body));
+        assert_eq!(FILTER.compare(&empty, &read), Comparison::Different);
+        // No Normal at all is not an observation.
+        let none = FILTER.inspect(&sat1(&[]));
+        assert!(matches!(none.finding, Finding::Unresolved(_)));
     }
 
     #[test]

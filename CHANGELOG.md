@@ -1,5 +1,20 @@
 # Changelog
 
+## [3.0.5] - unreleased
+
+The SAT1 loading-input owner (3.0.4) is not enforced under the Recovery family
+override.
+
+- New `Filter::family_override_waives` (default false). The runner stops
+  enforcing an owner that returns true when the policy is the family override,
+  the same way it already stops enforcing the broad platform-domain gate. The
+  owner still establishes family identity, so the Strict flow and the website
+  crossflash graph still refuse a difference; only a deliberate Recovery force
+  bypasses it.
+- `sat1-loading-input` opts in, so a tray-incompatible SAT1 pair can still be
+  force-recovered. It now reports a positive empty set (not Unresolved) when no
+  loading read is recognized, so such an image keeps a family identity.
+
 ## [3.0.4] - unreleased
 
 SAT 1xxx loading-input hardware fingerprint (bug fix: a different-tray SAT1

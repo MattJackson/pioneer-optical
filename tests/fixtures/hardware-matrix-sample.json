@@ -231,6 +231,26 @@
     },
     {
       "correctability": "Fixed",
+      "correction": "Never corrected. The SAT1 loading-input pin set must match; a different set is different loading hardware and refuses under every policy, including the Recovery family override. An image whose loading-input reads are not recognized stays Unresolved and is never admitted.",
+      "description": "Fingerprints the SAT 1xxx loading/tray input pins the firmware reads inline: every bit-test or bit-load on the FF4140xx-FF4142xx loading port, as the sorted set of (port address, operation, bit). It establishes which physical loading-input pins the firmware reads, not the open/closed predicate roles, timing, debounce or output drive. A different pin set is different loading hardware.",
+      "id": "sat1-loading-input",
+      "name": "SAT1 loading input",
+      "policies": [
+        {
+          "platforms": [
+            "SAT 1xxx"
+          ],
+          "text": "SAT1 reads its tray/loading switches inline, not through the SAT8/SAT9 wrapped selector predicates, so the recognized input-pin set is the identity value. Equal set is required; an unrecognized reader stays Unresolved rather than asserting an empty set."
+        },
+        {
+          "platforms": [],
+          "text": "Only SAT 1xxx contributes this field. On every other platform the loading inputs are owned by the initialization and loading filters, so this owner reports a positive exclusion."
+        }
+      ],
+      "role": "Hardware"
+    },
+    {
+      "correctability": "Fixed",
       "correction": "Never corrected. Any known layout difference refuses. Where the installed record region overlaps non-erased bytes of the target Normal, the refusal reports that collision.",
       "description": "Compares the parameter read contract: address basis and base, record count and size, header size, word encoding and record selection. It does not prove the writer, erase, rollover, initialization or recovery lifecycle. Layout and geometry can be coupled; changing an address alone is not a relocation recipe. Correction would require the complete persistent-data lifecycle and coupled storage contract to remain valid without writing separate persistent data.",
       "id": "persistent-parameter-layout",
@@ -410,6 +430,21 @@
           "summary": "Not established"
         },
         {
+          "evidence": "non-SAT1 platform; loading inputs owned elsewhere",
+          "finding": {
+            "NotApplicable": {
+              "evidence": "Loading inputs on non-SAT1 platforms are owned by the initialization and loading filters",
+              "proof": 6769
+            }
+          },
+          "id": "sat1-loading-input",
+          "inspection": null,
+          "label": "Not applicable · native proof 6769",
+          "role": "Hardware",
+          "state": "NotApplicable",
+          "summary": "Not applicable"
+        },
+        {
           "evidence": "No complete supported native persistent reader was established",
           "finding": {
             "Unresolved": "No complete supported native persistent reader was established"
@@ -542,6 +577,18 @@
           "summary": "Not established"
         },
         {
+          "evidence": "No SAT1 loading-port input bit-read recognized on FF4140xx-FF4142xx; the tray input hardware cannot be established",
+          "finding": {
+            "Unresolved": "No SAT1 loading-port input bit-read recognized on FF4140xx-FF4142xx; the tray input hardware cannot be established"
+          },
+          "id": "sat1-loading-input",
+          "inspection": null,
+          "label": "Unresolved: No SAT1 loading-port input bit-read recognized on FF4140xx-FF4142xx; the tray input hardware cannot be established",
+          "role": "Hardware",
+          "state": "Unresolved",
+          "summary": "Not established"
+        },
+        {
           "evidence": "No complete supported native persistent reader was established",
           "finding": {
             "Unresolved": "No complete supported native persistent reader was established"
@@ -601,6 +648,7 @@
         "startup-inputs-initialization",
         "host-interface-setup",
         "loading-input-interrupt-setup",
+        "sat1-loading-input",
         "persistent-parameter-layout",
         "phase"
       ]
@@ -672,6 +720,21 @@
           "role": "Hardware",
           "state": "Unresolved",
           "summary": "Not established"
+        },
+        {
+          "evidence": "non-SAT1 platform; loading inputs owned elsewhere",
+          "finding": {
+            "NotApplicable": {
+              "evidence": "Loading inputs on non-SAT1 platforms are owned by the initialization and loading filters",
+              "proof": 6769
+            }
+          },
+          "id": "sat1-loading-input",
+          "inspection": null,
+          "label": "Not applicable · native proof 6769",
+          "role": "Hardware",
+          "state": "NotApplicable",
+          "summary": "Not applicable"
         },
         {
           "evidence": "No complete supported native persistent reader was established",
@@ -790,6 +853,21 @@
           "summary": "Not established"
         },
         {
+          "evidence": "non-SAT1 platform; loading inputs owned elsewhere",
+          "finding": {
+            "NotApplicable": {
+              "evidence": "Loading inputs on non-SAT1 platforms are owned by the initialization and loading filters",
+              "proof": 6769
+            }
+          },
+          "id": "sat1-loading-input",
+          "inspection": null,
+          "label": "Not applicable · native proof 6769",
+          "role": "Hardware",
+          "state": "NotApplicable",
+          "summary": "Not applicable"
+        },
+        {
           "evidence": "No complete supported native persistent reader was established",
           "finding": {
             "Unresolved": "No complete supported native persistent reader was established"
@@ -904,6 +982,21 @@
           "role": "Hardware",
           "state": "Unresolved",
           "summary": "Not established"
+        },
+        {
+          "evidence": "non-SAT1 platform; loading inputs owned elsewhere",
+          "finding": {
+            "NotApplicable": {
+              "evidence": "Loading inputs on non-SAT1 platforms are owned by the initialization and loading filters",
+              "proof": 6769
+            }
+          },
+          "id": "sat1-loading-input",
+          "inspection": null,
+          "label": "Not applicable · native proof 6769",
+          "role": "Hardware",
+          "state": "NotApplicable",
+          "summary": "Not applicable"
         },
         {
           "evidence": "No complete supported native persistent reader was established",
@@ -1093,6 +1186,30 @@
           "role": "Hardware",
           "state": "Known",
           "summary": "0xFFC5 = (old & 0xDF) | 0x00"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U16": 159
+                  },
+                  {
+                    "U16": 65535
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "sat1-loading-input",
+          "inspection": null,
+          "label": "Known native contract · variant 1",
+          "role": "Hardware",
+          "state": "Known",
+          "summary": "Known native contract · variant 1"
         },
         {
           "evidence": "synthetic native evidence",
@@ -1371,6 +1488,30 @@
                 1,
                 [
                   {
+                    "U16": 159
+                  },
+                  {
+                    "U16": 65535
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "sat1-loading-input",
+          "inspection": null,
+          "label": "Known native contract · variant 1",
+          "role": "Hardware",
+          "state": "Known",
+          "summary": "Known native contract · variant 1"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
                     "Sequence": [
                       {
                         "Sequence": [
@@ -1640,6 +1781,30 @@
                 1,
                 [
                   {
+                    "U16": 159
+                  },
+                  {
+                    "U16": 65535
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "sat1-loading-input",
+          "inspection": null,
+          "label": "Known native contract · variant 1",
+          "role": "Hardware",
+          "state": "Known",
+          "summary": "Known native contract · variant 1"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
                     "Sequence": [
                       {
                         "Sequence": [
@@ -1888,6 +2053,30 @@
           "role": "Hardware",
           "state": "Known",
           "summary": "0xFFC5 = (old & 0xDF) | 0x00"
+        },
+        {
+          "evidence": "synthetic native evidence",
+          "finding": {
+            "Known": {
+              "Variant": [
+                1,
+                [
+                  {
+                    "U16": 159
+                  },
+                  {
+                    "U16": 65535
+                  }
+                ]
+              ]
+            }
+          },
+          "id": "sat1-loading-input",
+          "inspection": null,
+          "label": "Known native contract · variant 1",
+          "role": "Hardware",
+          "state": "Known",
+          "summary": "Known native contract · variant 1"
         },
         {
           "evidence": "synthetic native evidence",

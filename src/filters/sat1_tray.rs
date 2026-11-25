@@ -119,9 +119,17 @@ impl Filter for Sat1LoadingInput {
                 evidence: String::from("non-SAT1 platform; loading inputs owned elsewhere"),
             };
         }
-        // An empty set is a positive observation (no loading-port read in this
-        // Normal), not a reader miss: it keeps the image's family identity and
-        // still differs from any image that does read loading pins.
+        if context.firmware.normal.is_empty() {
+            return Assessment::unresolved(
+                ID,
+                Role::Hardware,
+                "No Normal image to inspect for SAT1 loading-port inputs",
+            );
+        }
+        // For a real Normal, an empty set is a positive observation (it reads
+        // nothing from the loading port, as slim/USB drives do): it keeps the
+        // image's family identity and still differs from any image that does
+        // read loading pins.
         let pins = loading_input_pins(context.firmware.normal);
         let count = pins.len();
         Assessment::known(
@@ -206,6 +214,9 @@ mod tests {
         bitop(&mut body, 0xff41_4000, 0x73, 4);
         let read = FILTER.inspect(&sat1(&body));
         assert_eq!(FILTER.compare(&empty, &read), Comparison::Different);
+        // No Normal at all is not an observation.
+        let none = FILTER.inspect(&sat1(&[]));
+        assert!(matches!(none.finding, Finding::Unresolved(_)));
     }
 
     #[test]

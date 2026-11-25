@@ -2,18 +2,18 @@
 
 ## [3.0.5] - unreleased
 
-The SAT1 loading-input owner (3.0.4) is not enforced under the Recovery family
-override.
+"Bypass family" (the Recovery family override) now does exactly what it says:
+it ignores a family-ID mismatch.
 
-- New `Filter::family_override_waives` (default false). The runner stops
-  enforcing an owner that returns true when the policy is the family override,
-  the same way it already stops enforcing the broad platform-domain gate. The
-  owner still establishes family identity, so the Strict flow and the website
-  crossflash graph still refuse a difference; only a deliberate Recovery force
-  bypasses it.
-- `sat1-loading-input` opts in, so a tray-incompatible SAT1 pair can still be
-  force-recovered. It now reports a positive empty set (not Unresolved) when no
-  loading read is recognized, so such an image keeps a family identity.
+- Under the override, a Hardware owner's value mismatch (`Incompatible`) is
+  waived, since every Hardware value is a component of the family ID. The
+  decision still reports `Different` and is marked `waived`. Without the
+  override every filter stays enforced.
+- Still enforced under the override: Operational requirements, unresolved or
+  conflicting evidence, correction/proof errors, and the persistent-bank
+  startup contract.
+- `sat1-loading-input` reports the empty set (not Unresolved) when a SAT1
+  Normal has no loading-port read, so the image keeps a family identity.
 
 ## [3.0.4] - unreleased
 

@@ -4,7 +4,6 @@ on:
     branches: [dev, qa]
   pull_request:
   workflow_call:
-  workflow_dispatch:
 permissions:
   contents: read
   actions: read
@@ -119,14 +118,3 @@ jobs:
           cache-workspace-crates: true
       - run: cargo check --locked --lib --target thumbv7em-none-eabi --no-default-features
       - run: cargo check --locked --lib --target thumbv7em-none-eabi --no-default-features --features drive
-  regen-snapshot:
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: PIONEER_UPDATE_SNAPSHOTS=1 cargo test --locked --all-features --test hardware_matrix_page
-      - uses: actions/upload-artifact@v4
-        with:
-          name: hardware-matrix-sample
-          path: tests/fixtures/hardware-matrix-sample.json

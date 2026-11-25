@@ -129,7 +129,7 @@
   "filters": [
     {
       "correctability": "Fixed",
-      "correction": "Never corrected. Values must match; matching capacity case addresses also requires the receiver's capacity-selection relation. Equal geometry does not authorize bank migration, and differing storage contracts refuse under every policy, including the Recovery family override.",
+      "correction": "Never corrected. Values must match; matching capacity case addresses also requires the receiver's capacity-selection relation. Equal geometry does not authorize bank migration, and differing storage contracts refuse unless the operator bypasses the family check; the persistent-bank startup contract is enforced under every policy.",
       "description": "Compares the observed storage contract: H8 bank markers or addresses and spacing, ATA flash or serial ranges, or SCSI serial records. It does not establish physical flash capacity, erase boundaries or safe migration. Correction requires complete copy, erase, commit and recovery proof.",
       "id": "persistent-storage-geometry",
       "name": "Storage geometry",
@@ -231,7 +231,7 @@
     },
     {
       "correctability": "Fixed",
-      "correction": "Never corrected. The SAT1 loading-input pin set must match; a different set is different loading hardware and refuses under every policy, including the Recovery family override. An image whose loading-input reads are not recognized stays Unresolved and is never admitted.",
+      "correction": "Never corrected. The SAT1 loading-input pin set must match; a different set is different loading hardware and refuses. Like every hardware value, it is part of the family ID, so a deliberate \"bypass family\" ignores the mismatch. An image with no loading-port read reports the empty set.",
       "description": "Fingerprints the SAT 1xxx loading/tray input pins the firmware reads inline: every bit-test or bit-load on the FF4140xx-FF4142xx loading port, as the sorted set of (port address, operation, bit). It establishes which physical loading-input pins the firmware reads, not the open/closed predicate roles, timing, debounce or output drive. A different pin set is different loading hardware.",
       "id": "sat1-loading-input",
       "name": "SAT1 loading input",
@@ -240,7 +240,7 @@
           "platforms": [
             "SAT 1xxx"
           ],
-          "text": "SAT1 reads its tray/loading switches inline, not through the SAT8/SAT9 wrapped selector predicates, so the recognized input-pin set is the identity value. Equal set is required; an unrecognized reader stays Unresolved rather than asserting an empty set."
+          "text": "SAT1 reads its tray/loading switches inline, not through the SAT8/SAT9 wrapped selector predicates, so the recognized input-pin set is the identity value. Equal set is required; no recognized read is the empty set."
         },
         {
           "platforms": [],
@@ -577,16 +577,18 @@
           "summary": "Not established"
         },
         {
-          "evidence": "No SAT1 loading-port input bit-read recognized on FF4140xx-FF4142xx; the tray input hardware cannot be established",
+          "evidence": "0 native SAT1 loading-port input bit-read(s) on FF4140xx-FF4142xx, as the sorted (address, operation, bit) set",
           "finding": {
-            "Unresolved": "No SAT1 loading-port input bit-read recognized on FF4140xx-FF4142xx; the tray input hardware cannot be established"
+            "Known": {
+              "Sequence": []
+            }
           },
           "id": "sat1-loading-input",
           "inspection": null,
-          "label": "Unresolved: No SAT1 loading-port input bit-read recognized on FF4140xx-FF4142xx; the tray input hardware cannot be established",
+          "label": "Sequence([])",
           "role": "Hardware",
-          "state": "Unresolved",
-          "summary": "Not established"
+          "state": "Known",
+          "summary": "Sequence([])"
         },
         {
           "evidence": "No complete supported native persistent reader was established",
@@ -648,7 +650,6 @@
         "startup-inputs-initialization",
         "host-interface-setup",
         "loading-input-interrupt-setup",
-        "sat1-loading-input",
         "persistent-parameter-layout",
         "phase"
       ]

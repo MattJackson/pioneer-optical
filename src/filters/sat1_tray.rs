@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn unreadable_sat1_is_unresolved_not_admitted() {
-        let assessment = FILTER.inspect(&sat1(&vec![0u8; 64]));
+        let assessment = FILTER.inspect(&sat1(&[0u8; 64]));
         assert!(matches!(assessment.finding, Finding::Unresolved(_)));
         assert_eq!(assessment.role, Role::Hardware);
     }

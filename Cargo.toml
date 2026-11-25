@@ -59,7 +59,7 @@ all-features = true
 [dependencies]
 serde_json = { version = "1", optional = true }
 h8-asm = { version = "0.5", optional = true }
-zopfli = { version = "=0.8.2", optional = true, default-features = false, features = ["std", "zlib"] }
+zopfli = { version = "=0.8.4", optional = true, default-features = false, features = ["std", "zlib"] }
 miniz_oxide = { version = "0.9", optional = true, default-features = false, features = ["with-alloc"] }
 serde = { version = "1", features = ["derive"], optional = true }
 sha2 = { version = "0.10", optional = true }
